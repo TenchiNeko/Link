@@ -473,8 +473,9 @@ class Handler(BaseHTTPRequestHandler):
                 str(max_iterations),
             ]
             if worktree:
-                command.append("--worktree")
-
+                # standalone_main.py does not currently accept --worktree.
+                # Keep the UI checkbox harmless until native CLI worktree support exists.
+                pass
             state = RunState(prompt=prompt, command=command)
             with RUNS_LOCK:
                 RUNS[state.id] = state
