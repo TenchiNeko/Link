@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import datetime
 
 
@@ -80,7 +81,12 @@ def should_skip(path: Path) -> bool:
 def redact(text: str) -> str:
     redacted = text.strip()
     for pattern in PATTERNS:
-        redacted = redacted.replace(pattern.needle, f"<{pattern.label}>")
+        redacted = re.sub(
+            re.escape(pattern.needle),
+            f"<{pattern.label}>",
+            redacted,
+            flags=re.IGNORECASE,
+        )
     return redacted.replace("|", "\\|")
 
 
