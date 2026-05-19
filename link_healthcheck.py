@@ -392,6 +392,18 @@ def check_dead_code_audit() -> None:
     print("dead-code audit OK")
 
 
+
+def check_runtime_legacy_audit() -> None:
+    import runtime_legacy_audit
+
+    findings = runtime_legacy_audit.scan_findings()
+    if findings:
+        print("Runtime legacy audit findings:")
+        for finding in findings:
+            print(f"- [{finding.severity}] {finding.label}: {finding.path}:{finding.line_no}")
+        raise SystemExit("runtime legacy audit found findings")
+    print("runtime legacy audit OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -403,6 +415,7 @@ def main() -> None:
     check_context_budget()
     check_queue_status()
     check_dead_code_audit()
+    check_runtime_legacy_audit()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 
