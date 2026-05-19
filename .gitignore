@@ -64,3 +64,22 @@ logs/
 !modern_edit_tools.py
 !modern_test_gate.py
 !standalone_orchestrator.py
+
+# Generated / heavy extracted junk
+research_extracted/
+__MACOSX/
+static/
+tts_cache/
+watermark_backups/
+*.wav
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# Agent runtime outputs
+.agents/artifacts/
+.agents/backups/
+.agents/worktrees/
+.agents/state.json
+*_selfplay.jsonl
