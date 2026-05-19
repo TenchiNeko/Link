@@ -72,6 +72,7 @@ def check_imports() -> None:
     code = """
 import standalone_orchestrator
 import modern_command_guard
+import modern_file_safety  # noqa: F401
 print("imports OK")
 """
     out = run(["python3", "-c", code])
@@ -161,11 +162,43 @@ def check_removed_junk_absent() -> None:
     print("removed junk absent OK")
 
 
+
+def check_file_safety() -> None:
+    import modern_file_safety as fs
+
+    cases = {
+        "standalone_main.py": "allow",
+        "modern_command_guard.py": "allow",
+        "research/link_research_curated_shortlist.md": "caution",
+        ".agents/reports/x.md": "deny",
+        "../outside.txt": "deny",
+    }
+
+    for path, expected in cases.items():
+        result = fs.classify_file_operation(path, "read", ROOT)
+        print(f"{path!r} -> {result.level.value}: {result.reason}")
+        if result.level.value != expected:
+            raise SystemExit(
+                f"file safety mismatch for {path}: expected {expected}, got {result.level.value}"
+            )
+
+    edit_result = fs.classify_file_operation("modern_command_guard.py", "edit", ROOT)
+    if edit_result.level.value != "caution":
+        raise SystemExit("file edit should be caution")
+
+    delete_result = fs.classify_file_operation("modern_command_guard.py", "delete", ROOT)
+    if delete_result.level.value != "deny":
+        raise SystemExit("file delete should be deny")
+
+    print("file safety OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
     check_imports()
     check_command_guard()
+    check_file_safety()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 
