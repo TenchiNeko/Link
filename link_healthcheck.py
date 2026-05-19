@@ -323,6 +323,51 @@ def check_context_budget() -> None:
     print("context budget OK")
 
 
+def check_queue_status() -> None:
+    import modern_queue_status as qs
+
+    items = [
+        qs.QueueItem(id="1", title="queued task", status=qs.QueueStatus.QUEUED, order=2),
+        qs.QueueItem(id="2", title="running task", status=qs.QueueStatus.RUNNING, order=1),
+        qs.QueueItem(id="3", title="blocked task", status=qs.QueueStatus.BLOCKED, detail="needs review", order=3),
+        qs.QueueItem(id="4", title="done task", status=qs.QueueStatus.DONE, order=4),
+    ]
+
+    qs.validate_queue(items)
+    summary = qs.summarize_queue(items)
+
+    if summary["total"] != 4:
+        raise SystemExit("queue summary total mismatch")
+    if summary["active"] != 2:
+        raise SystemExit("queue active count mismatch")
+    if summary["needs_attention"] != 1:
+        raise SystemExit("queue attention count mismatch")
+
+    current = qs.next_active_item(items)
+    if current is None or current.id != "2":
+        raise SystemExit("queue current item selection failed")
+
+    rendered = qs.format_queue_status(items)
+    if "Link Queue Status" not in rendered:
+        raise SystemExit("queue status render missing title")
+    if "[running] 2" not in rendered:
+        raise SystemExit("queue status render missing running item")
+    if "needs_attention: 1" not in rendered:
+        raise SystemExit("queue status render missing attention count")
+
+    try:
+        qs.validate_queue([
+            qs.QueueItem(id="dup", title="one"),
+            qs.QueueItem(id="dup", title="two"),
+        ])
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("queue duplicate validation failed")
+
+    print("queue status OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -332,6 +377,7 @@ def main() -> None:
     check_git_safety()
     check_task_tracker()
     check_context_budget()
+    check_queue_status()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 
