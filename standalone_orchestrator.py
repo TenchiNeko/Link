@@ -1,5 +1,5 @@
 """
-Standalone Orchestrator — Multi-Agent Execution Loop.
+Link Orchestrator — Multi-Agent Execution Loop.
 
 Implements: EXPLORE → PLAN → BUILD → TEST → DECISION GATE
 with recursive self-correction on failures.
@@ -243,7 +243,7 @@ class Orchestrator:
                         headers={
                             "Authorization": f"Bearer {api_key}",
                             "Content-Type": "application/json",
-                            "X-Title": "standalone-orchestrator-admin",
+                            "X-Title": "link-admin",
                         },
                         method="POST",
                     )
@@ -970,7 +970,7 @@ class Orchestrator:
                 "## Exact Research source files reviewed",
                 source_name,
                 "",
-                "## How each idea maps to standalone-orchestrator files/functions",
+                "## How each idea maps to link files/functions",
                 "- `standalone_models.py`: add lightweight `AgentTaskState` / `AgentProgressEvent` dataclasses or extend `TaskState` metadata.",
                 "- `standalone_orchestrator.py`: add a first-pass review/fix lifecycle around existing worktree isolation and `_finalize_task_run`.",
                 "- `standalone_agents.py`: gate reviewer/fixer tool access and require structured status updates before final answer.",
@@ -984,7 +984,7 @@ class Orchestrator:
                 "3. Add a bounded fixer mode for one file or one bug class at a time, always inside worktree isolation.",
                 "4. Add verification gates: py_compile, targeted tests, git status, manifest integrity, no stale worktrees.",
                 "5. Add multi-agent review/fix only after single-agent review/fix is stable.",
-                "6. Use the improved agents to repair standalone-orchestrator first, then switch to the [private-project] main goal.",
+                "6. Use the improved agents to repair link first, then switch to the [private-project] main goal.",
                 "",
                 "## Risks and what not to copy",
                 "- Do not copy TypeScript/React UI structure directly into the Python orchestrator.",
@@ -992,7 +992,7 @@ class Orchestrator:
                 "- Do not allow fixer agents broad shell/write access without a narrow target and verification gate.",
                 "- Do not let report fast paths bypass real implementation work for code tasks.",
                 "- Do not persist large raw logs in memory; store output files and reference them in manifests.",
-                "- Do not move to [private-project] work until standalone-orchestrator can review, patch, verify, archive, and clean up safely.",
+                "- Do not move to [private-project] work until link can review, patch, verify, archive, and clean up safely.",
                 "",
                 "## Source excerpt",
                 "```text",

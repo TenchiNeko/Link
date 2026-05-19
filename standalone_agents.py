@@ -1378,7 +1378,7 @@ class AgentRunner:
         self._llm_clients: Dict[str, LLMClient] = {}
 
         # ACE playbook integration — inject learned patterns into agent prompts
-        _pb_path = "/home/user/standalone-orchestrator/playbook.json"
+        _pb_path = "/home/user/link/playbook.json"
         if not Path(_pb_path).exists():
             _pb_path = str(working_dir.parent / "playbook.json")
         self._playbook = PlaybookReader(playbook_path=_pb_path) if os.environ.get("ORCH_ENABLE_PLAYBOOK") == "1" else None

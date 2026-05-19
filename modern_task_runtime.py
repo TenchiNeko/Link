@@ -1,5 +1,5 @@
 """
-Modern task runtime for standalone-orchestrator.
+Modern task runtime for link.
 
 Inspired by modern CLI-agent task systems, but implemented from scratch in
 plain Python for your local Ollama/vLLM workflow.
