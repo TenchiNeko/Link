@@ -9,8 +9,8 @@ A tiny no-dependency browser UI:
 - audit-only and worktree toggles
 """
 
-from __future__ import annotations
 
+from __future__ import annotations
 import argparse
 import json
 import os
@@ -562,6 +562,124 @@ def main() -> int:
         server.server_close()
     return 0
 
+
+
+
+
+
+# --- Link repo status helper (stdlib HTTP server) ----------------------------
+def _link_status_run(cmd, timeout=8):
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    except Exception as exc:
+        return 1, "", str(exc)
+
+
+def _link_repo_status_payload():
+    branch_code, branch, _ = _link_status_run(["git", "rev-parse", "--abbrev-ref", "HEAD"], timeout=3)
+    hash_code, short_hash, _ = _link_status_run(["git", "rev-parse", "--short", "HEAD"], timeout=3)
+    latest_code, latest_hash, _ = _link_status_run(["git", "rev-parse", "--short", "safe-link-latest"], timeout=3)
+    status_code, dirty_text, _ = _link_status_run(["git", "status", "--porcelain", "--untracked-files=all"], timeout=3)
+    health_code, health_out, health_err = _link_status_run([sys.executable, "link_healthcheck.py"], timeout=30)
+
+    return {
+        "branch": branch if branch_code == 0 else "unknown",
+        "commit": short_hash if hash_code == 0 else "unknown",
+        "safe_link_latest": latest_hash if latest_code == 0 else "missing",
+        "git_clean": status_code == 0 and dirty_text == "",
+        "healthcheck_passed": health_code == 0,
+        "healthcheck_tail": ((health_out or health_err).splitlines()[-1:] or [""])[0],
+    }
+
+
+def _link_send_json(handler, payload):
+    body = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _link_repo_status_box_html():
+    return """
+<div id="link-repo-status-box" style="position:fixed;right:16px;top:16px;z-index:9999;max-width:360px;padding:12px 14px;border:1px solid #334155;border-radius:10px;background:#0f172a;color:#e5e7eb;font-family:system-ui, sans-serif;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.25)">
+  <div style="font-weight:700;margin-bottom:6px">Repo Safety Status</div>
+  <pre id="link-repo-status-text" style="white-space:pre-wrap;margin:0;font-family:ui-monospace, SFMono-Regular, Menlo, monospace">Loading...</pre>
+</div>
+<script>
+async function refreshLinkRepoStatus() {
+  const el = document.getElementById("link-repo-status-text");
+  if (!el) return;
+  try {
+    const res = await fetch("/repo-status", {cache: "no-store"});
+    const s = await res.json();
+    el.textContent =
+      "Branch: " + s.branch + "\\n" +
+      "Commit: " + s.commit + "\\n" +
+      "Clean: " + (s.git_clean ? "yes" : "NO") + "\\n" +
+      "Healthcheck: " + (s.healthcheck_passed ? "PASS" : "FAIL") + "\\n" +
+      "safe-link-latest: " + s.safe_link_latest;
+  } catch (e) {
+    el.textContent = "Status unavailable: " + e;
+  }
+}
+refreshLinkRepoStatus();
+setInterval(refreshLinkRepoStatus, 60000);
+</script>
+"""
+
+
+def _link_install_repo_status_box():
+    global HTML
+    if "link-repo-status-box" in HTML:
+        return
+    box = _link_repo_status_box_html()
+    if "</body>" in HTML:
+        HTML = HTML.replace("</body>", box + "\n</body>", 1)
+    else:
+        HTML += box
+
+
+def _link_install_repo_status_route():
+    for obj in list(globals().values()):
+        if not isinstance(obj, type):
+            continue
+        try:
+            is_handler = issubclass(obj, BaseHTTPRequestHandler) and obj is not BaseHTTPRequestHandler
+        except TypeError:
+            continue
+        if not is_handler:
+            continue
+
+        original_do_get = getattr(obj, "do_GET", None)
+        if original_do_get is None or getattr(original_do_get, "_link_repo_status_wrapped", False):
+            continue
+
+        def patched_do_GET(self, _original_do_get=original_do_get):
+            if urlparse(self.path).path == "/repo-status":
+                _link_send_json(self, _link_repo_status_payload())
+                return
+            return _original_do_get(self)
+
+        patched_do_GET._link_repo_status_wrapped = True
+        obj.do_GET = patched_do_GET
+        return obj.__name__
+
+    return ""
+
+
+_link_install_repo_status_box()
+_LINK_REPO_STATUS_HANDLER = _link_install_repo_status_route()
+# --- end Link repo status helper --------------------------------------------
 
 if __name__ == "__main__":
     raise SystemExit(main())
