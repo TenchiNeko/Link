@@ -437,6 +437,7 @@ def check_runtime_sources_tracked() -> None:
 
     expected = [
         "link_healthcheck.py",
+        "link_web.py",
         "modern_command_guard.py",
         "modern_context_budget.py",
         "modern_dead_code_audit.py",
