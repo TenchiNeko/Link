@@ -32,24 +32,6 @@ try:
     _HAS_PLAYBOOK = True
 except ImportError:
     _HAS_PLAYBOOK = False
-try:
-    from kb_client import KBClient
-except Exception:
-    KBClient = _NullDependency
-try:
-    from librarian import Librarian, build_session_summary
-except Exception:
-    Librarian = _NullDependency
-    build_session_summary = _empty_session_summary
-from librarian_store import init_librarian_tables, get_librarian_stats, get_session_context, add_ast_chunks
-
-# v2.0: Consciousness layer — performance scoring + aspiration drive
-try:
-    from consciousness_integration import ConsciousnessLayer
-    _HAS_CONSCIOUSNESS = True
-except ImportError:
-    _HAS_CONSCIOUSNESS = False
-
 
 class _NullDependencyResult:
     def __bool__(self):
@@ -93,6 +75,51 @@ class _NullDependency:
 
 def _empty_session_summary(*args, **kwargs):
     return ""
+
+
+def init_librarian_tables(*args, **kwargs):
+    return None
+
+
+def get_librarian_stats(*args, **kwargs):
+    return {}
+
+
+def get_session_context(*args, **kwargs):
+    return ""
+
+
+def add_ast_chunks(*args, **kwargs):
+    return 0
+
+
+class ConsciousnessLayer(_NullDependency):
+    pass
+
+
+EXPERIENCER = _NullDependency()
+INTEGRATOR = _NullDependency()
+
+try:
+    from kb_client import KBClient
+except Exception:
+    KBClient = _NullDependency
+try:
+    from librarian import Librarian, build_session_summary
+except Exception:
+    Librarian = _NullDependency
+    build_session_summary = _empty_session_summary
+try:
+    from librarian_store import init_librarian_tables, get_librarian_stats, get_session_context, add_ast_chunks
+except Exception:
+    pass
+# v2.0: Consciousness layer — performance scoring + aspiration drive
+try:
+    from consciousness_integration import ConsciousnessLayer
+    _HAS_CONSCIOUSNESS = True
+except ImportError:
+    _HAS_CONSCIOUSNESS = False
+
 
 
 logger = logging.getLogger(__name__)
@@ -6085,7 +6112,10 @@ Do NOT rewrite from scratch. Start from this code and fix the failing parts.
                            f"reinforcement={scored.reinforcement_signal:+.2f}")
                 # v3.0: Split-brain consciousness — 80B experiences, 7B integrates
                 try:
-                    from consciousness_integration import EXPERIENCER, INTEGRATOR
+                    try:
+                        from consciousness_integration import EXPERIENCER, INTEGRATOR
+                    except Exception:
+                        pass
                     _prompts = self.consciousness.get_post_task_prompts(
                         task_state=task_state, scored=scored, success=True,
                     )
@@ -6278,7 +6308,10 @@ Do NOT rewrite from scratch. Start from this code and fix the failing parts.
                            f"reinforcement={scored.reinforcement_signal:+.2f}")
                 # v3.0: Split-brain consciousness on failure
                 try:
-                    from consciousness_integration import EXPERIENCER, INTEGRATOR
+                    try:
+                        from consciousness_integration import EXPERIENCER, INTEGRATOR
+                    except Exception:
+                        pass
                     _prompts = self.consciousness.get_post_task_prompts(
                         task_state=task_state, scored=scored, success=False,
                     )
