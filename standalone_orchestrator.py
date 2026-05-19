@@ -135,8 +135,10 @@ logger = logging.getLogger(__name__)
 AUDIT_ONLY_MARKERS = (
     "audit only",
     "audit-only",
-    "read only",
-    "read-only",
+    "read-only mode",
+    "read only mode",
+    "read-only task",
+    "read only task",
     "do not modify files",
     "do not patch",
     "do not write files",
@@ -1725,7 +1727,7 @@ This makes failures easier to debug because the handoff can show where the agent
         if self._audit_only_enabled(task_state):
             logger.error("AUDIT_ONLY_BLOCKED: attempted to enter BUILD phase for an audit/read-only task")
             task_state.escalation_reason = "audit-only mode blocked build phase"
-            return False
+            return IterationResult(success=False, phase=ExecutionPhase.BUILD)
 
         logger.info("\n📍 PHASE 3: BUILD")
 

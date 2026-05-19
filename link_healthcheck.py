@@ -128,6 +128,14 @@ def check_audit_only_guard() -> None:
         "AUDIT-ONLY: skipping git commit",
     ]
 
+    forbidden_generic_markers = [
+        '    "read only",',
+        '    "read-only",',
+    ]
+    present_forbidden = [item for item in forbidden_generic_markers if item in src]
+    if present_forbidden:
+        raise SystemExit("audit-only guard has overbroad marker(s): " + ", ".join(present_forbidden))
+
     missing = [item for item in required if item not in src]
     if missing:
         raise SystemExit("audit-only guard missing: " + ", ".join(missing))
