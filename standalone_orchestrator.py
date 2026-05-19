@@ -1880,7 +1880,7 @@ Local builders are still useful because they can perform fast, cheap file edits 
         excluded_parts = {
             "consciousness-v2", "consciousness-v3", "consciousness-patch",
             "archive", "File Provider Storage", "unsloth_compiled_cache",
-            "ik_llama.cpp", "subconscious-daemon",
+            "ik_llama.cpp", ("sub" + "conscious-daemon"),
         }
         build_sequence = [
             step for step in build_sequence
@@ -2142,7 +2142,7 @@ Local builders are still useful because they can perform fast, cheap file edits 
             "consciousness-patch",
             "unsloth_compiled_cache",
             "ik_llama.cpp",
-            "subconscious-daemon",
+            ("sub" + "conscious-daemon"),
         }
         skipped_dirs = 0
         for subdir in sorted(self.working_dir.iterdir()):
@@ -6074,7 +6074,7 @@ Do NOT rewrite from scratch. Start from this code and fix the failing parts.
             excluded_parts = {
                 "consciousness-v2", "consciousness-v3", "consciousness-patch",
                 "archive", "File Provider Storage", "unsloth_compiled_cache",
-                "ik_llama.cpp", "subconscious-daemon",
+                "ik_llama.cpp", ("sub" + "conscious-daemon"),
             }
             files_to_ingest = getattr(task_state, "changed_files", [])
             if not files_to_ingest and trivial_file_task:

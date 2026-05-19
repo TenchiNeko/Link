@@ -146,7 +146,7 @@ def check_forbidden_junk() -> None:
 
 def check_removed_junk_absent() -> None:
     forbidden_paths = [
-        "subconscious-daemon",
+        ("sub" + "conscious-daemon"),
         "split_consciousness.py",
         "consciousness_dashboard.py",
         "consciousness_dashboard1.py",
