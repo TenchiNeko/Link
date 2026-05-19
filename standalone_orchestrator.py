@@ -32,8 +32,15 @@ try:
     _HAS_PLAYBOOK = True
 except ImportError:
     _HAS_PLAYBOOK = False
-from kb_client import KBClient
-from librarian import Librarian, build_session_summary
+try:
+    from kb_client import KBClient
+except Exception:
+    KBClient = _NullDependency
+try:
+    from librarian import Librarian, build_session_summary
+except Exception:
+    Librarian = _NullDependency
+    build_session_summary = _empty_session_summary
 from librarian_store import init_librarian_tables, get_librarian_stats, get_session_context, add_ast_chunks
 
 # v2.0: Consciousness layer — performance scoring + aspiration drive
@@ -42,6 +49,51 @@ try:
     _HAS_CONSCIOUSNESS = True
 except ImportError:
     _HAS_CONSCIOUSNESS = False
+
+
+class _NullDependencyResult:
+    def __bool__(self):
+        return False
+
+    def __iter__(self):
+        return iter(())
+
+    def __len__(self):
+        return 0
+
+    def __str__(self):
+        return ""
+
+    def items(self):
+        return []
+
+    def get(self, *args, **kwargs):
+        return None
+
+
+class _NullDependency:
+    available = False
+    enabled = False
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __bool__(self):
+        return False
+
+    def __getattr__(self, name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+
+        def _noop(*args, **kwargs):
+            return _NullDependencyResult()
+
+        return _noop
+
+
+def _empty_session_summary(*args, **kwargs):
+    return ""
+
 
 logger = logging.getLogger(__name__)
 
