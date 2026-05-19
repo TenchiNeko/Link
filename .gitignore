@@ -83,3 +83,17 @@ watermark_backups/
 .agents/worktrees/
 .agents/state.json
 *_selfplay.jsonl
+
+# Local/generated Python junk
+__pycache__/
+*.pyc
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Probe/output files
+*_probe.md
+*_probe.txt
+feature_list.json
+SPLIT_MANIFEST.json
