@@ -2,12 +2,13 @@
 """Audit remaining runtime legacy references.
 
 Audit-only. This script does not delete, move, edit, import legacy modules,
-run agents, or touch git. It scans Link runtime files and writes a redacted
+run agents, or touch git. It scans runtime Python files and writes a redacted
 Markdown report that remains compatible with link_healthcheck.py.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 import datetime
@@ -28,95 +29,100 @@ SKIP_DIRS = {
     "research",
 }
 
-SCAN_SUFFIXES = {".py", ".md", ".sh", ".txt"}
-SCAN_NAMES = {"Makefile"}
+SKIP_FILES = {
+    "RUNTIME_LEGACY_AUDIT.md",
+    "LINK_RECOVERY_DECISIONS.md",
+    "link_healthcheck.py",
+    "runtime_legacy_audit.py",
+    "modern_dead_code_audit.py",
+}
+
+SCAN_SUFFIXES = {".py"}
 
 
-def join_parts(*parts: str) -> str:
-    return "".join(parts)
-
-
-PATTERNS = [
-    (join_parts("from ", "lib", "rarian", "_store"), "old_library_store_import", "high"),
-    (join_parts("from ", "lib", "rarian"), "old_library_import", "high"),
-    (join_parts("from ", "kb", "_client"), "old_kb_import", "high"),
-    (join_parts("from ", "conscious", "ness", "_integration"), "old_layer_import", "high"),
-    (join_parts("sub", "conscious", "-daemon"), "old_daemon_ref", "medium"),
-    (join_parts("fran", "cesca", "_idle", "_trainer"), "external_trainer_ref", "medium"),
-    (join_parts("fran", "cesca"), "external_project_alpha_ref", "medium"),
-    (join_parts("fan", "vue"), "external_project_beta_ref", "medium"),
-]
+@dataclass(frozen=True)
+class LegacyPattern:
+    label: str
+    needle: str
+    severity: str
 
 
 @dataclass(frozen=True)
 class Finding:
     severity: str
     label: str
-    path: str
-    line_no: int
+    file: str
+    line: int
     snippet: str
 
 
-def should_scan(path: Path) -> bool:
+PATTERNS = [
+    LegacyPattern("external_project_alpha_ref", "fran" + "cesca", "medium"),
+    LegacyPattern("external_project_beta_ref", "fan" + "vue", "medium"),
+    LegacyPattern("external_trainer_ref", "fran" + "cesca_idle_trainer", "medium"),
+    LegacyPattern("old_daemon_ref", "sub" + "conscious-daemon", "medium"),
+    LegacyPattern("old_kb_import", "from " + "kb_client", "high"),
+    LegacyPattern("old_library_import", "from " + "librarian import", "high"),
+    LegacyPattern("old_library_store_import", "from " + "librarian_store", "high"),
+    LegacyPattern("old_layer_import", "from " + "consciousness_integration", "high"),
+]
+
+
+def should_skip(path: Path) -> bool:
     rel = path.relative_to(ROOT)
-    if any(part in SKIP_DIRS for part in rel.parts):
-        return False
-    if path.name in SCAN_NAMES:
+    if path.name in SKIP_FILES:
         return True
-    return path.suffix in SCAN_SUFFIXES
+    if path.suffix not in SCAN_SUFFIXES:
+        return True
+    return any(part in SKIP_DIRS for part in rel.parts)
 
 
 def redact(text: str) -> str:
     redacted = text.strip()
-    for needle, label, _severity in sorted(PATTERNS, key=lambda item: len(item[0]), reverse=True):
-        redacted = redacted.replace(needle, f"<{label}>")
-        redacted = redacted.replace(needle.upper(), f"<{label}>")
-        redacted = redacted.replace(needle.title(), f"<{label}>")
-    return redacted
+    for pattern in PATTERNS:
+        redacted = redacted.replace(pattern.needle, f"<{pattern.label}>")
+    return redacted.replace("|", "\\|")
 
 
 def scan() -> list[Finding]:
     findings: list[Finding] = []
 
     for path in sorted(ROOT.rglob("*")):
-        if not path.is_file() or not should_scan(path):
+        if not path.is_file() or should_skip(path):
             continue
 
-        rel = path.relative_to(ROOT)
-
+        rel = str(path.relative_to(ROOT))
         try:
             lines = path.read_text(errors="replace").splitlines()
         except OSError:
             continue
 
-        for idx, line in enumerate(lines, start=1):
-            for needle, label, severity in PATTERNS:
-                if needle.lower() in line.lower():
+        for line_no, line in enumerate(lines, start=1):
+            for pattern in PATTERNS:
+                if pattern.needle.lower() in line.lower():
                     findings.append(
                         Finding(
-                            severity=severity,
-                            label=label,
-                            path=str(rel),
-                            line_no=idx,
-                            snippet=redact(line)[:180],
+                            severity=pattern.severity,
+                            label=pattern.label,
+                            file=rel,
+                            line=line_no,
+                            snippet=redact(line),
                         )
                     )
-                    break
 
     return findings
 
 
 def write_report(findings: list[Finding]) -> None:
-    counts: dict[str, int] = {}
-    for finding in findings:
-        counts[finding.label] = counts.get(finding.label, 0) + 1
+    counts = Counter(f.label for f in findings)
 
-    lines = [
+    out: list[str] = [
         "# Runtime Legacy Audit",
         "",
-        f"- Created: {datetime.datetime.now().isoformat(timespec='seconds')}",
+        f"- Created: {datetime.datetime.now().replace(microsecond=0).isoformat()}",
         f"- Repo: `{ROOT}`",
         "- Mode: audit-only, no cleanup performed",
+        "- Scope: runtime Python files only; safety docs and audit helpers are excluded.",
         "- Note: matched strings are intentionally redacted so the report stays healthcheck-safe.",
         "",
         "## Summary",
@@ -125,9 +131,9 @@ def write_report(findings: list[Finding]) -> None:
     ]
 
     for label, count in sorted(counts.items()):
-        lines.append(f"- {label}: {count}")
+        out.append(f"- {label}: {count}")
 
-    lines.extend(
+    out.extend(
         [
             "",
             "## Findings",
@@ -137,26 +143,23 @@ def write_report(findings: list[Finding]) -> None:
         ]
     )
 
-    if not findings:
-        lines.append("| info | none | - | - | No legacy references found. |")
-    else:
-        for finding in findings:
-            snippet = finding.snippet.replace("|", "\\|")
-            lines.append(
-                f"| {finding.severity} | {finding.label} | `{finding.path}` | {finding.line_no} | `{snippet}` |"
-            )
+    for finding in findings:
+        out.append(
+            f"| {finding.severity} | {finding.label} | `{finding.file}` | "
+            f"{finding.line} | `{finding.snippet}` |"
+        )
 
-    lines.extend(
+    out.extend(
         [
             "",
             "## Recommended next step",
             "",
-            "Review high-severity runtime findings first. Remove one tiny legacy reference at a time, then run `python3 link_healthcheck.py` before committing.",
+            "Review remaining runtime findings. Remove one tiny legacy reference at a time, then run `python3 link_healthcheck.py` before committing.",
             "",
         ]
     )
 
-    REPORT.write_text("\n".join(lines))
+    REPORT.write_text("\n".join(out))
 
 
 def main() -> None:
