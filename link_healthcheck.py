@@ -275,6 +275,54 @@ def check_task_tracker() -> None:
     print("task tracker OK")
 
 
+def check_context_budget() -> None:
+    import modern_context_budget as cb
+
+    if cb.estimate_tokens("abcd") != 1:
+        raise SystemExit("context token estimate failed")
+    if cb.estimate_tokens("abcde") != 2:
+        raise SystemExit("context token estimate rounding failed")
+
+    budget = cb.ContextBudget(max_tokens=160, reserve_tokens=40)
+    blocks = [
+        cb.ContextBlock(
+            id="low",
+            title="Low priority old logs",
+            text="old log line\n" * 200,
+            priority=cb.ContextPriority.LOW,
+        ),
+        cb.ContextBlock(
+            id="high",
+            title="High priority current task",
+            text="current task details\n" * 20,
+            priority=cb.ContextPriority.HIGH,
+        ),
+        cb.ContextBlock(
+            id="normal",
+            title="Normal notes",
+            text="normal note\n" * 20,
+        ),
+    ]
+
+    result = cb.compact_blocks(blocks, budget)
+    summary = cb.summarize_budget_result(result)
+
+    if not summary["has_text"]:
+        raise SystemExit("context compaction produced empty text")
+    if result.estimated_tokens > cb.usable_token_budget(budget) + 1:
+        raise SystemExit(f"context compaction exceeded budget: {result.estimated_tokens}")
+    if "High priority current task" not in result.text:
+        raise SystemExit("high-priority context was not preserved")
+    if not result.truncated_blocks and not result.omitted_blocks:
+        raise SystemExit("expected at least one omitted or truncated block")
+
+    trimmed, was_trimmed = cb.trim_text("x" * 1000, 50)
+    if not was_trimmed or "[...context omitted...]" not in trimmed:
+        raise SystemExit("trim_text did not mark omitted context")
+
+    print("context budget OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -283,6 +331,7 @@ def main() -> None:
     check_file_safety()
     check_git_safety()
     check_task_tracker()
+    check_context_budget()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 
