@@ -132,8 +132,33 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+AUDIT_ONLY_MARKERS = (
+    "audit only",
+    "audit-only",
+    "read only",
+    "read-only",
+    "do not modify files",
+    "do not patch",
+    "do not write files",
+    "no cleanup performed",
+    "after the report, stop",
+)
+
+
+def is_audit_only_goal(goal: str) -> bool:
+    """Return True when a task prompt explicitly requests audit/read-only behavior."""
+    g = (goal or "").lower()
+    return any(marker in g for marker in AUDIT_ONLY_MARKERS)
+
+
 
 class Orchestrator:
+    def _audit_only_enabled(self, task_state=None) -> bool:
+        if getattr(self, "_audit_only", False):
+            return True
+        goal = getattr(task_state, "goal", "") if task_state is not None else ""
+        return is_audit_only_goal(goal)
+
 
     def _admin_supervisor_enabled(self) -> bool:
         """Return whether the admin/supervisor role is enabled."""
@@ -359,6 +384,10 @@ class Orchestrator:
 
 
     def _write_artifact_manifest(self, task_state: TaskState, *, status: str, reason: str | None = None):
+        if self._audit_only_enabled(task_state):
+            logger.warning("🔒 AUDIT-ONLY: skipping artifact manifest write")
+            return
+
         """Write a stable per-task artifact manifest for success/escalation/review."""
         import json
         from datetime import datetime
@@ -645,6 +674,10 @@ class Orchestrator:
             logger.warning(f"Failed to remove worktree {worktree_info.path}: {e}")
 
     def run(self, goal: str, resume: bool = False) -> bool:
+        self._audit_only = is_audit_only_goal(goal)
+        if self._audit_only:
+            logger.warning("🔒 AUDIT-ONLY mode detected: build, backups, artifacts, self-play, and commits are blocked")
+
         # Deterministic fast-path for trivial file-write tasks.
         m = re.search(r"Write\s+([A-Za-z0-9_./-]+\.py)\s+with exactly:\s*(.+)", goal, re.I)
         if m:
@@ -1689,6 +1722,11 @@ This makes failures easier to debug because the handoff can show where the agent
             return IterationResult(success=True, phase=ExecutionPhase.COMPLETE)
 
         # PHASE 3: BUILD — choose strategy based on task complexity
+        if self._audit_only_enabled(task_state):
+            logger.error("AUDIT_ONLY_BLOCKED: attempted to enter BUILD phase for an audit/read-only task")
+            task_state.escalation_reason = "audit-only mode blocked build phase"
+            return False
+
         logger.info("\n📍 PHASE 3: BUILD")
 
         # Non-code artifact/report jobs must never invoke the local build agent.
@@ -6427,6 +6465,10 @@ python3 standalone_main.py --resume
 """
 
     def _create_backup(self, task_state: TaskState) -> Optional[Path]:
+        if self._audit_only_enabled(task_state):
+            logger.warning("🔒 AUDIT-ONLY: skipping backup creation")
+            return None
+
         """
         Create a timestamped backup of the working directory before build phase.
 
@@ -6526,6 +6568,10 @@ python3 standalone_main.py --resume
         return True
 
     def _git_commit(self, message: str):
+        if self._audit_only_enabled():
+            logger.warning("🔒 AUDIT-ONLY: skipping git commit: %s", message)
+            return
+
         """Run git add -A && git commit with the given message."""
         try:
             self._safe_run(

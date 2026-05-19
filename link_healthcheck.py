@@ -113,6 +113,33 @@ def check_command_guard() -> None:
     print("command guard OK")
 
 
+
+def check_audit_only_guard() -> None:
+    from pathlib import Path
+
+    src = Path("standalone_orchestrator.py").read_text()
+    required = [
+        "AUDIT_ONLY_MARKERS",
+        "is_audit_only_goal",
+        "def _audit_only_enabled",
+        "AUDIT_ONLY_BLOCKED: attempted to enter BUILD phase",
+        "AUDIT-ONLY: skipping artifact manifest write",
+        "AUDIT-ONLY: skipping backup creation",
+        "AUDIT-ONLY: skipping git commit",
+    ]
+
+    missing = [item for item in required if item not in src]
+    if missing:
+        raise SystemExit("audit-only guard missing: " + ", ".join(missing))
+
+    build_pos = src.find("PHASE 3: BUILD")
+    guard_pos = src.find("AUDIT_ONLY_BLOCKED: attempted to enter BUILD phase")
+    if build_pos == -1 or guard_pos == -1 or guard_pos > build_pos:
+        raise SystemExit("audit-only build guard is not positioned before BUILD logging")
+
+    print("audit-only guard OK")
+
+
 def check_forbidden_junk() -> None:
     hits: list[str] = []
 
