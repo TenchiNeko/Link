@@ -97,3 +97,7 @@ venv/
 *_probe.txt
 feature_list.json
 SPLIT_MANIFEST.json
+
+# Keep recovery records tracked
+!LINK_RECOVERY_AUDIT.md
+!LINK_RECOVERY_DECISIONS.md
