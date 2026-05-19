@@ -404,6 +404,48 @@ def check_runtime_legacy_audit() -> None:
         raise SystemExit("runtime legacy audit found findings")
     print("runtime legacy audit OK")
 
+
+def check_runtime_sources_tracked() -> None:
+    import subprocess
+
+    expected = [
+        "link_healthcheck.py",
+        "modern_command_guard.py",
+        "modern_context_budget.py",
+        "modern_dead_code_audit.py",
+        "modern_edit_tools.py",
+        "modern_file_safety.py",
+        "modern_git_safety.py",
+        "modern_queue_status.py",
+        "modern_symbol_index.py",
+        "modern_task_runtime.py",
+        "modern_task_tracker.py",
+        "modern_test_gate.py",
+        "modern_usage_budget.py",
+        "playbook_reader.py",
+        "prompt_interface.py",
+        "runtime_legacy_audit.py",
+        "standalone_agents.py",
+        "standalone_artifacts.py",
+        "standalone_config.py",
+        "standalone_main.py",
+        "standalone_memory.py",
+        "standalone_models.py",
+        "standalone_orchestrator.py",
+        "standalone_session.py",
+        "standalone_trace_collector.py",
+        "standalone_worktree.py",
+    ]
+
+    tracked = set(subprocess.check_output(["git", "ls-files"], text=True).splitlines())
+    missing = [path for path in expected if path not in tracked]
+    if missing:
+        print("Required runtime source files are not tracked:")
+        for path in missing:
+            print(f"- {path}")
+        raise SystemExit("required runtime source files missing from git tracking")
+    print("runtime source tracking OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -416,6 +458,7 @@ def main() -> None:
     check_queue_status()
     check_dead_code_audit()
     check_runtime_legacy_audit()
+    check_runtime_sources_tracked()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 

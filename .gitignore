@@ -104,3 +104,10 @@ SPLIT_MANIFEST.json
 
 # Core compatibility module
 !consciousness_dashboard.py
+
+# Link runtime source files must remain visible to git.
+# A broad ignore rule previously hid required runtime .py files.
+!*.py
+!*.md
+!pyproject.toml
+!requirements*.txt
