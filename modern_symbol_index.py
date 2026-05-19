@@ -55,7 +55,7 @@ def index_file(path: Path, root: Path) -> list[Symbol]:
 
 def build_index(root: Path, *, max_files: int = 500) -> list[Symbol]:
     symbols: list[Symbol] = []
-    skip = {".git", ".agents", "venv", ".venv", "__pycache__", "node_modules", "backups", "ik_llama.cpp", "unsloth_compiled_cache", ".mypy_cache", ".pytest_cache", ".ruff_cache", "consciousness-patch", "consciousness-v2", "consciousness-v3", "[private-name]_backup_20260423", "archive", "watermark_backups"}
+    skip = {".git", ".agents", "venv", ".venv", "__pycache__", "node_modules", "backups", "ik_llama.cpp", "unsloth_compiled_cache", ".mypy_cache", ".pytest_cache", ".ruff_cache", "consciousness-patch", "consciousness-v2", "consciousness-v3", "archive", "watermark_backups"}
     files = [p for p in root.rglob("*.py") if not any(part in skip for part in p.parts)]
     for path in sorted(files)[:max_files]:
         symbols.extend(index_file(path, root))
