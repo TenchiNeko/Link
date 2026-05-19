@@ -101,3 +101,6 @@ SPLIT_MANIFEST.json
 # Keep recovery records tracked
 !LINK_RECOVERY_AUDIT.md
 !LINK_RECOVERY_DECISIONS.md
+
+# Core compatibility module
+!consciousness_dashboard.py
