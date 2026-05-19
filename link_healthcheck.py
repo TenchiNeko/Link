@@ -237,6 +237,44 @@ def check_git_safety() -> None:
     print("git safety OK")
 
 
+def check_task_tracker() -> None:
+    import modern_task_tracker as tt
+
+    board = tt.TaskBoard()
+    first = tt.add_task(board, "Phase 4 task tracking", priority=tt.TaskPriority.HIGH)
+    second = tt.add_task(board, "Next safe improvement")
+
+    tt.update_task_status(board, first.id, tt.TaskStatus.DONE)
+
+    next_task = tt.next_open_task(board)
+    if next_task is None or next_task.id != second.id:
+        raise SystemExit("task tracker next_open_task failed")
+
+    summary = tt.summarize_board(board)
+    expected = {
+        "total": 2,
+        "open": 1,
+        "done": 1,
+        "todo": 1,
+    }
+    for key, value in expected.items():
+        if summary.get(key) != value:
+            raise SystemExit(f"task tracker summary mismatch for {key}: {summary}")
+
+    rendered = tt.format_board(board)
+    if "Phase 4 task tracking" not in rendered or "Next safe improvement" not in rendered:
+        raise SystemExit("task tracker format_board missing task titles")
+
+    try:
+        tt.add_task(board, "")
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("empty task title should be rejected")
+
+    print("task tracker OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -244,6 +282,7 @@ def main() -> None:
     check_command_guard()
     check_file_safety()
     check_git_safety()
+    check_task_tracker()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 
