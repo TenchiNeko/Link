@@ -73,6 +73,7 @@ def check_imports() -> None:
 import standalone_orchestrator
 import modern_command_guard
 import modern_file_safety  # noqa: F401
+import modern_git_safety  # noqa: F401
 print("imports OK")
 """
     out = run(["python3", "-c", code])
@@ -193,12 +194,56 @@ def check_file_safety() -> None:
     print("file safety OK")
 
 
+
+def check_git_safety() -> None:
+    import modern_git_safety as gs
+
+    cases = {
+        "git status --short": "allow",
+        "git diff": "allow",
+        "git log --oneline -5": "allow",
+        "git add -A": "caution",
+        "git commit -m test": "caution",
+        "git checkout main": "caution",
+        "git reset --hard HEAD": "deny",
+        "git clean -fdx": "deny",
+        "git push --force": "deny",
+    }
+
+    for cmd, expected in cases.items():
+        result = gs.classify_git_command(cmd)
+        print(f"{cmd!r} -> {result.level.value}: {result.reason}")
+        if result.level.value != expected:
+            raise SystemExit(
+                f"git safety mismatch for {cmd}: expected {expected}, got {result.level.value}"
+            )
+
+    path_cases = {
+        "standalone_main.py": "allow",
+        ".git/config": "deny",
+        ".agents/worktrees/x": "caution",
+        "research/Research.zip": "caution",
+        "../outside": "deny",
+    }
+
+    for path, expected in path_cases.items():
+        result = gs.classify_worktree_path(path, ROOT)
+        print(f"{path!r} -> {result.level.value}: {result.reason}")
+        if result.level.value != expected:
+            raise SystemExit(
+                f"worktree path mismatch for {path}: expected {expected}, got {result.level.value}"
+            )
+
+    print("git safety OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
     check_imports()
     check_command_guard()
     check_file_safety()
+    check_git_safety()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 
