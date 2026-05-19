@@ -292,6 +292,181 @@ promptEl.addEventListener("keydown", (event) => {
   }
 });
 </script>
+
+<!-- Link human-friendly journal view -->
+<style>
+#link-human-journal {
+  border-top: 1px solid #263244;
+  border-bottom: 1px solid #263244;
+  background: #07111f;
+  color: #e5e7eb;
+  padding: 12px;
+  margin: 10px 0;
+  font-family: system-ui, sans-serif;
+}
+#link-human-journal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+#link-human-journal-title {
+  font-weight: 700;
+}
+#link-human-journal-toggle {
+  border: 1px solid #475569;
+  background: #111827;
+  color: #e5e7eb;
+  border-radius: 8px;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+#link-human-journal-text {
+  white-space: pre-wrap;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  max-height: 45vh;
+  overflow: auto;
+}
+</style>
+<script>
+(function () {
+  const ansiPattern = /\x1b\[[0-9;]*m/g;
+
+  function stripNoisePrefix(line) {
+    return line
+      .replace(ansiPattern, "")
+      .replace(/^\d{2}:\d{2}:\d{2}\s+│\s*(INFO|WARNING|ERROR)\s+│\s*[^│]+│\s*/i, "")
+      .replace(/^\d{2}:\d{2}:\d{2}\s+│\s*/i, "")
+      .trim();
+  }
+
+  function humanize(line) {
+    const l = stripNoisePrefix(line);
+    if (!l) return "";
+
+    const lower = l.toLowerCase();
+
+    if (lower.includes("http request: post")) return "";
+    if (lower.includes("knowledge base:")) return "";
+    if (lower.includes("working directory:")) return "";
+    if (lower.includes("max iterations:")) return "";
+    if (/^[=\-]{10,}$/.test(l)) return "";
+    if (lower.includes("standalone_agents") && lower.includes("progress:")) return "";
+
+    if (l.includes("ORCHESTRATOR STARTING")) return "▶️ Run started";
+    if (l.includes("ITERATION ")) return "🔁 " + l;
+    if (l.includes("PHASE 1: EXPLORE")) return "🔎 Exploring repo";
+    if (l.includes("PHASE 2: PLAN")) return "🧭 Planning changes";
+    if (l.includes("PHASE 3: BUILD")) return "🛠️ Applying patch";
+    if (l.includes("PHASE 4: TEST")) return "✅ Verifying";
+    if (l.includes("TASK COMPLETED SUCCESSFULLY")) return "🎉 Task completed successfully";
+    if (l.includes("TASK ESCALATED TO HUMAN")) return "🚨 Needs human help";
+    if (l.includes("LINK HEALTHCHECK PASSED")) return "✅ Link healthcheck passed";
+    if (l.includes("DoD FAILED")) return "⚠️ " + l;
+    if (l.includes("Stuck loop detected")) return "⚠️ Agent got stuck repeating itself";
+    if (l.includes("Build sequence:")) return "📋 " + l;
+    if (l.includes("Micro-build")) return "🧱 " + l;
+    if (l.includes("verified OK")) return "✅ " + l;
+    if (l.includes("content changed")) return "📝 " + l;
+    if (l.includes("Wrote artifact manifest")) return "📦 Artifact manifest written";
+    if (l.includes("Git commit") || l.includes("commit")) return "🔖 " + l;
+    if (l.includes("Fatal error") || l.includes("Traceback")) return "❌ " + l;
+
+    if (lower.includes("running initializer")) return "Preparing run...";
+    if (lower.includes("running explore")) return "";
+    if (lower.includes("running plan")) return "";
+    if (lower.includes("running build")) return "";
+    if (lower.includes("running test")) return "";
+
+    if (l.length > 220) return "";
+    return l;
+  }
+
+  function findRawJournal() {
+    const candidates = Array.from(document.querySelectorAll("pre, textarea, div"))
+      .filter(el => {
+        if (!el || !el.textContent) return false;
+        if ((el.id || "").startsWith("link-")) return false;
+        const txt = el.textContent;
+        return txt.includes("ORCHESTRATOR") ||
+               txt.includes("PHASE ") ||
+               txt.includes("HTTP Request") ||
+               txt.includes("Run finished") ||
+               txt.includes("standalone_orchestrator");
+      });
+
+    candidates.sort((a, b) => b.textContent.length - a.textContent.length);
+    return candidates[0] || null;
+  }
+
+  function ensurePanel() {
+    let panel = document.getElementById("link-human-journal");
+    if (panel) return panel;
+
+    panel = document.createElement("div");
+    panel.id = "link-human-journal";
+    panel.innerHTML = `
+      <div id="link-human-journal-head">
+        <div id="link-human-journal-title">Agent Journal</div>
+        <button id="link-human-journal-toggle" type="button">Show raw logs</button>
+      </div>
+      <pre id="link-human-journal-text">Waiting for a run...</pre>
+    `;
+
+    const promptBox = document.querySelector("textarea");
+    const anchor = promptBox ? (promptBox.closest("form") || promptBox.parentElement) : null;
+    if (anchor && anchor.parentNode) {
+      anchor.parentNode.insertBefore(panel, anchor);
+    } else {
+      document.body.appendChild(panel);
+    }
+
+    document.getElementById("link-human-journal-toggle").onclick = function () {
+      const raw = findRawJournal();
+      if (!raw) return;
+      const hidden = raw.style.display === "none";
+      raw.style.display = hidden ? "" : "none";
+      this.textContent = hidden ? "Hide raw logs" : "Show raw logs";
+    };
+
+    return panel;
+  }
+
+  function refreshHumanJournal() {
+    const panel = ensurePanel();
+    const output = panel.querySelector("#link-human-journal-text");
+    const raw = findRawJournal();
+
+    if (!raw) return;
+
+    raw.style.display = "none";
+
+    const seen = new Set();
+    const clean = raw.textContent
+      .split(/\n/)
+      .map(humanize)
+      .filter(Boolean)
+      .filter(line => {
+        const key = line.replace(/\d+\/\d+/g, "N/N");
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(-120);
+
+    output.textContent = clean.length ? clean.join("\n") : "Run is active. Waiting for meaningful agent events...";
+    output.scrollTop = output.scrollHeight;
+  }
+
+  setInterval(refreshHumanJournal, 1000);
+  window.addEventListener("load", refreshHumanJournal);
+})();
+</script>
+
 </body>
 </html>
 """
