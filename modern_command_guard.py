@@ -164,3 +164,119 @@ def create_checkpoint(repo: Path, message: str = "agent checkpoint") -> GuardRes
         return GuardResult(False, "blocked", ("git commit failed", commit.stderr.strip()))
 
     return GuardResult(True, "safe-write", ("checkpoint created",))
+
+# ---------------------------------------------------------------------------
+# Link command risk classification
+# Added as a small, dependency-free safety layer for shell/tool execution.
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass as _link_dataclass
+from enum import Enum as _LinkEnum
+import re as _link_re
+import shlex as _link_shlex
+
+
+class CommandRiskLevel(str, _LinkEnum):
+    ALLOW = "allow"
+    CAUTION = "caution"
+    DENY = "deny"
+
+
+@_link_dataclass(frozen=True)
+class CommandRiskAssessment:
+    level: CommandRiskLevel
+    reason: str
+
+
+_DANGEROUS_PATTERNS = [
+    # rm -rf against root/home/user paths. Conservative on purpose.
+    (r"\brm\s+-[^\n\s]*(?:r[^\n\s]*f|f[^\n\s]*r)[^\n]*\s+(?:/|~(?:/|$)|\$home(?:/|$))", "destructive recursive delete against root/home"),
+    (r"\bsudo\s+rm\b", "sudo rm is destructive"),
+
+    # Permission disasters.
+    (r"\bchmod\s+-r\s+777\b", "recursive world-writable chmod"),
+    (r"\b(chown|chmod)\s+-r\s+.*(?:/|~(?:/|$)|\$home(?:/|$))", "recursive permission change against root/home"),
+
+    # Download-and-execute.
+    (r"\b(curl|wget)\b.*\|\s*(bash|sh)\b", "downloaded script piped into shell"),
+
+    # Secret reads/exfiltration.
+    (r"\b(cat|grep|sed|awk)\b.*(\.env|id_rsa|id_ed25519|credentials|token|secret|api_key)", "possible secret access/exfiltration"),
+
+    # Disk destruction.
+    (r">\s*/dev/(sd[a-z]|nvme\d+n\d+)", "direct block-device write"),
+    (r"\bdd\s+.*of=/dev/", "direct disk overwrite"),
+    (r"\bmkfs\b", "filesystem formatting command"),
+]
+
+
+_CAUTION_COMMANDS = {
+    "git add", "git commit", "git reset", "git checkout", "git switch",
+    "mv", "cp", "mkdir", "touch", "python", "python3", "pip", "pip3",
+    "npm", "pnpm", "yarn", "make", "chmod", "chown",
+}
+
+
+_SAFE_READ_ONLY_COMMANDS = {
+    "ls", "pwd", "cat", "head", "tail", "grep", "rg", "find",
+    "sed", "awk", "wc", "du", "df", "tree", "git", "sha256sum",
+}
+
+
+_SAFE_GIT_SUBCOMMANDS = {
+    "status", "diff", "log", "show", "branch", "rev-parse", "ls-files",
+}
+
+
+def classify_command_risk(command: str) -> CommandRiskAssessment:
+    """Classify a shell command as allow/caution/deny.
+
+    This is intentionally conservative. It does not execute anything.
+    """
+
+    raw = (command or "").strip()
+    if not raw:
+        return CommandRiskAssessment(CommandRiskLevel.DENY, "empty command")
+
+    lowered = raw.lower()
+
+    for pattern, reason in _DANGEROUS_PATTERNS:
+        if _link_re.search(pattern, lowered):
+            return CommandRiskAssessment(CommandRiskLevel.DENY, reason)
+
+    try:
+        parts = _link_shlex.split(raw)
+    except ValueError:
+        return CommandRiskAssessment(CommandRiskLevel.CAUTION, "could not parse command safely")
+
+    if not parts:
+        return CommandRiskAssessment(CommandRiskLevel.DENY, "empty command")
+
+    cmd = parts[0]
+    first_two = " ".join(parts[:2]) if len(parts) >= 2 else cmd
+
+    if cmd == "git":
+        sub = parts[1] if len(parts) > 1 else ""
+        if sub in _SAFE_GIT_SUBCOMMANDS:
+            return CommandRiskAssessment(CommandRiskLevel.ALLOW, f"read-only git {sub}")
+        return CommandRiskAssessment(CommandRiskLevel.CAUTION, f"git {sub or 'command'} may modify repo state")
+
+    if first_two in _CAUTION_COMMANDS or cmd in _CAUTION_COMMANDS:
+        return CommandRiskAssessment(CommandRiskLevel.CAUTION, f"{cmd} may modify files or environment")
+
+    if cmd in _SAFE_READ_ONLY_COMMANDS:
+        return CommandRiskAssessment(CommandRiskLevel.ALLOW, f"{cmd} is normally read-only inspection")
+
+    if "|" in raw or ">" in raw or "&&" in raw or ";" in raw:
+        return CommandRiskAssessment(CommandRiskLevel.CAUTION, "compound shell command needs review")
+
+    return CommandRiskAssessment(CommandRiskLevel.CAUTION, "unknown command; review before execution")
+
+
+def command_risk_level(command: str) -> str:
+    """Compatibility helper returning only allow/caution/deny."""
+    return classify_command_risk(command).level.value
+
+
+def command_is_denied(command: str) -> bool:
+    return classify_command_risk(command).level == CommandRiskLevel.DENY
