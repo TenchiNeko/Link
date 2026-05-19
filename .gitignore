@@ -107,7 +107,5 @@ SPLIT_MANIFEST.json
 
 # Link runtime source files must remain visible to git.
 # A broad ignore rule previously hid required runtime .py files.
+# Keep this narrow: docs/dependency files should be explicitly force-added when needed.
 !*.py
-!*.md
-!pyproject.toml
-!requirements*.txt
