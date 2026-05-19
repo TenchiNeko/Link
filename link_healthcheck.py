@@ -368,6 +368,30 @@ def check_queue_status() -> None:
     print("queue status OK")
 
 
+def check_dead_code_audit() -> None:
+    import modern_dead_code_audit as dc
+
+    findings = dc.run_dead_code_audit(ROOT)
+    rendered = dc.format_dead_code_audit(findings)
+
+    if "Dead-code audit" not in rendered:
+        raise SystemExit("dead-code audit render failed")
+
+    hard_fail_kinds = {
+        "removed_junk_present",
+        "forbidden_import",
+        "syntax_error",
+    }
+    # legacy_optional_import findings are reported but not hard failures.
+
+    hard_failures = [f for f in findings if f.kind in hard_fail_kinds]
+    if hard_failures:
+        print(rendered)
+        raise SystemExit("dead-code audit found hard failures")
+
+    print("dead-code audit OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -378,6 +402,7 @@ def main() -> None:
     check_task_tracker()
     check_context_budget()
     check_queue_status()
+    check_dead_code_audit()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 
