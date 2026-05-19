@@ -101,21 +101,29 @@ EXPERIENCER = _NullDependency()
 INTEGRATOR = _NullDependency()
 
 try:
-    from kb_client import KBClient
+    KBClient = None  # legacy optional subsystem disabled
+    raise ImportError('legacy optional subsystem disabled')
 except Exception:
     KBClient = _NullDependency
 try:
-    from librarian import Librarian, build_session_summary
+    Librarian = None  # legacy optional subsystem disabled
+    build_session_summary = None
+    raise ImportError('legacy optional subsystem disabled')
 except Exception:
     Librarian = _NullDependency
     build_session_summary = _empty_session_summary
 try:
-    from librarian_store import init_librarian_tables, get_librarian_stats, get_session_context, add_ast_chunks
+    init_librarian_tables = None  # legacy optional subsystem disabled
+    get_librarian_stats = None
+    get_session_context = None
+    add_ast_chunks = None
+    raise ImportError('legacy optional subsystem disabled')
 except Exception:
     pass
 # v2.0: Consciousness layer — performance scoring + aspiration drive
 try:
-    from consciousness_integration import ConsciousnessLayer
+    ConsciousnessLayer = None  # legacy optional subsystem disabled
+    raise ImportError('legacy optional subsystem disabled')
     _HAS_CONSCIOUSNESS = True
 except ImportError:
     _HAS_CONSCIOUSNESS = False
@@ -6113,7 +6121,9 @@ Do NOT rewrite from scratch. Start from this code and fix the failing parts.
                 # v3.0: Split-brain consciousness — 80B experiences, 7B integrates
                 try:
                     try:
-                        from consciousness_integration import EXPERIENCER, INTEGRATOR
+                        EXPERIENCER = None  # legacy optional subsystem disabled
+                        INTEGRATOR = None
+                        raise ImportError('legacy optional subsystem disabled')
                     except Exception:
                         pass
                     _prompts = self.consciousness.get_post_task_prompts(
@@ -6309,7 +6319,9 @@ Do NOT rewrite from scratch. Start from this code and fix the failing parts.
                 # v3.0: Split-brain consciousness on failure
                 try:
                     try:
-                        from consciousness_integration import EXPERIENCER, INTEGRATOR
+                        EXPERIENCER = None  # legacy optional subsystem disabled
+                        INTEGRATOR = None
+                        raise ImportError('legacy optional subsystem disabled')
                     except Exception:
                         pass
                     _prompts = self.consciousness.get_post_task_prompts(
