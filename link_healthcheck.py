@@ -165,6 +165,10 @@ def check_web_engine_wiring() -> None:
     forbidden = [
         'command.append("--worktree")',
         'str(ROOT / "standalone_main.py")',
+        'id="worktree"',
+        'document.getElementById("worktree")',
+        'Use worktree',
+        'worktree = bool(data.get("worktree"',
     ]
     present = [item for item in forbidden if item in src]
     if present:

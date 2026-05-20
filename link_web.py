@@ -6,7 +6,7 @@ A tiny no-dependency browser UI:
 - prompt box at bottom
 - live agent journal above
 - Run / Stop buttons
-- audit-only and worktree toggles
+- audit-only toggle and engine safety wrapper
 """
 
 from __future__ import annotations
@@ -182,7 +182,7 @@ kbd {
     <button id="run" class="primary">Run</button>
     <button id="stop" class="danger" disabled>Stop</button>
     <label><input id="auditOnly" type="checkbox" checked /> Audit/read-only mode</label>
-    <label><input id="worktree" type="checkbox" checked /> Use worktree</label>
+    <span title="Runs are supervised by link_engine.py with postflight checks and auto-restore.">Engine safety mode: on</span>
     <label>Max iterations <input id="maxIterations" type="number" min="1" max="20" value="1" /></label>
     <span class="small">Tip: Ctrl/Cmd + Enter runs.</span>
   </div>
@@ -234,7 +234,6 @@ async function runTask() {
   const payload = {
     prompt,
     audit_only: document.getElementById("auditOnly").checked,
-    worktree: document.getElementById("worktree").checked,
     max_iterations: Number(document.getElementById("maxIterations").value || "1")
   };
 
@@ -455,7 +454,6 @@ class Handler(BaseHTTPRequestHandler):
             max_iterations = int(data.get("max_iterations", 1))
             max_iterations = max(1, min(max_iterations, 20))
             audit_only = bool(data.get("audit_only", True))
-            worktree = bool(data.get("worktree", True))
 
             if audit_only:
                 audit_prefix = (
@@ -483,11 +481,6 @@ class Handler(BaseHTTPRequestHandler):
                 "1200",
                 "--auto-restore-on-failure",
             ]
-            if worktree:
-                # link_engine owns safety. Keep the checkbox accepted for UI compatibility.
-                # Native isolated worktree mode can be wired later.
-                pass
-
             state = RunState(prompt=prompt, command=command)
             with RUNS_LOCK:
                 RUNS[state.id] = state
