@@ -426,6 +426,39 @@ class Handler(BaseHTTPRequestHandler):
 
         text_response(self, 404, "not found")
 
+    def find_engine_report_for_run(self, run) -> tuple[str | None, dict[str, object] | None]:
+        report_root = ROOT / ".agents" / "engine_runs"
+        if not report_root.exists():
+            return None, None
+
+        run_started = float(getattr(run, "started_at", 0) or 0)
+        run_ended = float(getattr(run, "ended_at", 0) or time.time())
+
+        candidates = sorted(
+            report_root.glob("*/engine_report.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+
+        for report_path in candidates[:30]:
+            try:
+                data = json.loads(report_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            report_started = float(data.get("started_at") or 0)
+            report_ended = float(data.get("ended_at") or report_started or 0)
+
+            # Match reports created during this web run window, with small clock/process slack.
+            if report_started and report_started < run_started - 10:
+                continue
+            if run_ended and report_ended and report_ended > run_ended + 10:
+                continue
+
+            return str(report_path), data
+
+        return None, None
+
     def run_status(self, run_id: str) -> None:
         with RUNS_LOCK:
             run = RUNS.get(run_id)
@@ -444,6 +477,29 @@ class Handler(BaseHTTPRequestHandler):
                 "ts": getattr(event, "ts", None),
             })
 
+        engine_report_path, engine_report = self.find_engine_report_for_run(run)
+        engine_events = []
+        if engine_report:
+            raw_engine_events = engine_report.get("events", [])
+            if isinstance(raw_engine_events, list):
+                engine_events = raw_engine_events
+
+            # If the web RunState has no events, expose engine events as the main events list.
+            if not events:
+                events = [
+                    {
+                        "kind": str(item.get("level", "")),
+                        "message": str(item.get("title", "")),
+                        "raw": str(item.get("raw", "")),
+                        "visible": True,
+                        "ts": item.get("ts"),
+                        "detail": item.get("detail", ""),
+                        "phase": item.get("phase", ""),
+                    }
+                    for item in engine_events
+                    if isinstance(item, dict)
+                ]
+
         payload = {
             "run_id": getattr(run, "id", run_id),
             "status": getattr(run, "status", "unknown"),
@@ -453,6 +509,10 @@ class Handler(BaseHTTPRequestHandler):
             "prompt": getattr(run, "prompt", ""),
             "command": getattr(run, "command", []),
             "events": events,
+            "engine_report_path": engine_report_path,
+            "engine_status": engine_report.get("status") if engine_report else None,
+            "engine_phase": engine_report.get("phase") if engine_report else None,
+            "engine_exit_code": engine_report.get("exit_code") if engine_report else None,
         }
         json_response(self, 200, payload)
 

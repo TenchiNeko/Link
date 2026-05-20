@@ -159,6 +159,9 @@ def check_web_engine_wiring() -> None:
         '"--auto-restore-on-failure"',
         'parsed.path.startswith("/api/run/")',
         "def run_status",
+        "def find_engine_report_for_run",
+        '"engine_report_path"',
+        '"engine_status"',
     ]
     missing = [item for item in required if item not in src]
     if missing:
