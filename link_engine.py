@@ -95,10 +95,12 @@ class EngineConfig:
     worktree: bool = False
     timeout_seconds: int = 1800
     max_changed_files: int = 8
+    min_changed_files: int = 0
     max_diff_lines: int = 1200
     auto_restore_on_failure: bool = False
     allow_protected_changes: bool = False
     protected_files: set[str] = field(default_factory=lambda: set(DEFAULT_PROTECTED_FILES))
+    expected_changed_files: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -254,6 +256,18 @@ class LinkEngine:
 
         if len(all_changed) > config.max_changed_files:
             violations.append(f"changed too many files: {len(all_changed)} > {config.max_changed_files}")
+
+        if len(all_changed) < config.min_changed_files:
+            violations.append(f"changed too few files: {len(all_changed)} < {config.min_changed_files}")
+
+        if config.expected_changed_files:
+            changed_set = set(all_changed)
+            missing_expected = sorted(config.expected_changed_files - changed_set)
+            unexpected = sorted(changed_set - config.expected_changed_files)
+            if missing_expected:
+                violations.append("expected files not changed: " + ", ".join(missing_expected[:12]))
+            if unexpected:
+                violations.append("unexpected files changed: " + ", ".join(unexpected[:12]))
 
         if state.diff_lines > config.max_diff_lines:
             violations.append(f"diff too large: {state.diff_lines} > {config.max_diff_lines}")
@@ -480,6 +494,8 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument("--max-changed-files", type=int, default=8)
     run_p.add_argument("--max-diff-lines", type=int, default=1200)
     run_p.add_argument("--auto-restore-on-failure", action="store_true")
+    run_p.add_argument("--min-changed-files", type=int, default=0)
+    run_p.add_argument("--expect-changed-file", action="append", default=[])
     run_p.add_argument("--allow-protected-changes", action="store_true")
 
     sub.add_parser("self-test")
@@ -500,9 +516,11 @@ def main(argv: list[str] | None = None) -> int:
         worktree=args.worktree,
         timeout_seconds=args.timeout_seconds,
         max_changed_files=args.max_changed_files,
+        min_changed_files=args.min_changed_files,
         max_diff_lines=args.max_diff_lines,
         auto_restore_on_failure=args.auto_restore_on_failure,
         allow_protected_changes=args.allow_protected_changes,
+        expected_changed_files=set(args.expect_changed_file or []),
     )
 
     state = LinkEngine(ROOT).run(config)
