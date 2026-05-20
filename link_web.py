@@ -438,7 +438,7 @@ def run_process(state: RunState) -> None:
             state.log(line, classify_line(line))
 
         state.exit_code = process.wait()
-        state.status = "done" if state.exit_code == 0 else "failed"
+        state.status = "completed" if state.exit_code == 0 else "failed"
         state.log(f"Run finished with exit code {state.exit_code}.", "system" if state.exit_code == 0 else "error")
     except Exception as exc:
         state.exit_code = 1

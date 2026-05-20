@@ -651,6 +651,20 @@ def check_micro_patch_fastpath() -> None:
             raise SystemExit(f"micro patch fastpath missing markers in {filename}: {missing}")
     print("micro patch fastpath OK")
 
+
+def check_web_status_normalization() -> None:
+    web_src = (ROOT / "link_web.py").read_text()
+    bad_markers = [
+        'state.status = "done"',
+        "state.status = 'done'",
+    ]
+    found = [marker for marker in bad_markers if marker in web_src]
+    if found:
+        raise SystemExit("web run status still uses done: " + ", ".join(found))
+    if 'state.status = "completed"' not in web_src and "state.status = 'completed'" not in web_src:
+        raise SystemExit("web run status normalization missing completed assignment")
+    print("web status normalization OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -669,6 +683,7 @@ def main() -> None:
     check_upgrade_pack()
     check_policy_upgrade_pack()
     check_micro_patch_fastpath()
+    check_web_status_normalization()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 
