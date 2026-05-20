@@ -23,7 +23,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
-from link_runtime_policy import build_policy_prompt, compact_status_event, is_micro_patch_prompt
+from link_runtime_policy import build_policy_prompt, compact_status_event, is_micro_patch_prompt, is_read_only_prompt
 
 
 ROOT = Path(__file__).resolve().parent
@@ -618,7 +618,7 @@ class Handler(BaseHTTPRequestHandler):
             raw_prompt = prompt
             use_micro_patch = (not audit_only) and is_micro_patch_prompt(raw_prompt)
 
-            if audit_only:
+            if audit_only or is_read_only_prompt(prompt):
                 audit_prefix = (
                     "Audit only. Do not modify files. Do not patch. Do not write files. "
                     "After the report, stop.\n\n"

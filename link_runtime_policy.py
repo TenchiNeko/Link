@@ -205,6 +205,70 @@ NON-TRIVIAL CHANGE RULE:
     return policy + "\n\n" + prompt
 
 
+def _strip_link_engine_policy_block(prompt: str) -> str:
+    text = str(prompt or "")
+    upper = text.upper()
+    marker = "[/LINK_ENGINE_POLICY_V2]"
+    pos = upper.find(marker)
+    if pos >= 0:
+        return text[pos + len(marker):]
+    return re.sub(r"\[LINK_ENGINE_POLICY_V2\].*?\[/LINK_ENGINE_POLICY_V2\]", "", text, flags=re.I | re.S)
+
+
+def is_read_only_prompt(prompt: str) -> bool:
+    """Return True for inspection/report/plan-only prompts that should use audit fastpath.
+
+    This catches cases where the UI toggle is accidentally left off but the
+    prompt itself clearly says not to modify/write/commit files.
+    """
+    body = _strip_link_engine_policy_block(prompt)
+    lower = body.lower()
+
+    write_intent_markers = [
+        "create or update",
+        "write a single line",
+        "single line saying",
+        "single line containing",
+        "replace contents",
+        "update the file",
+        "patch ",
+        "implement ",
+    ]
+    if any(marker in lower for marker in write_intent_markers):
+        return False
+
+    read_only_markers = [
+        "audit only",
+        "read-only",
+        "read only",
+        "do not modify",
+        "do not write",
+        "do not commit",
+        "no file changes",
+        "without changing files",
+        "plan only",
+        "report only",
+        "inspect only",
+    ]
+
+    inspection_markers = [
+        "inspect",
+        "audit",
+        "plan",
+        "report",
+        "confirm",
+        "show",
+        "list",
+        "summarize",
+        "diagnose",
+        "explain",
+        "which path",
+        "which runner",
+    ]
+
+    return any(marker in lower for marker in read_only_markers) and any(marker in lower for marker in inspection_markers)
+
+
 _MICRO_PATCH_FILE_RE = re.compile(r"`([^`]+\.(?:md|txt|json|csv))`|(?<![\w./-])([A-Za-z0-9_./-]+\.(?:md|txt|json|csv))", re.I)
 
 def is_micro_patch_prompt(prompt: str) -> bool:

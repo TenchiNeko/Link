@@ -697,6 +697,29 @@ def check_loop_controller() -> None:
             raise SystemExit(f"loop controller missing markers in {filename}: {missing}")
     print("loop controller OK")
 
+
+def check_readonly_fastpath() -> None:
+    runtime_src = (ROOT / "link_runtime_policy.py").read_text()
+    web_src = (ROOT / "link_web.py").read_text()
+
+    required_runtime = [
+        "def is_read_only_prompt",
+        "def _strip_link_engine_policy_block",
+    ]
+    missing_runtime = [marker for marker in required_runtime if marker not in runtime_src]
+    if missing_runtime:
+        raise SystemExit(f"read-only fastpath missing runtime markers: {missing_runtime}")
+
+    required_web = [
+        "is_read_only_prompt",
+        "link_audit_fast.py",
+    ]
+    missing_web = [marker for marker in required_web if marker not in web_src]
+    if missing_web:
+        raise SystemExit(f"read-only fastpath missing web markers: {missing_web}")
+
+    print("read-only fastpath OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -714,6 +737,7 @@ def main() -> None:
     check_runtime_sources_tracked()
     check_upgrade_pack()
     check_policy_upgrade_pack()
+    check_readonly_fastpath()
     check_micro_patch_fastpath()
     check_web_status_normalization()
     check_loop_controller()
