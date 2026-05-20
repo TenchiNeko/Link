@@ -23,6 +23,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
+from link_runtime_policy import build_policy_prompt, compact_status_event
 
 
 ROOT = Path(__file__).resolve().parent
@@ -561,6 +562,8 @@ class Handler(BaseHTTPRequestHandler):
                     if isinstance(item, dict)
                 ]
 
+        events = [compact_status_event(ROOT, run_id, item) for item in events]
+
         payload = {
             "run_id": getattr(run, "id", run_id),
             "status": getattr(run, "status", "unknown"),
@@ -620,23 +623,34 @@ class Handler(BaseHTTPRequestHandler):
                 if "audit only" not in lowered and "read-only" not in lowered and "read only" not in lowered:
                     prompt = audit_prefix + prompt
 
+            prompt = build_policy_prompt(prompt, audit_only=audit_only)
+
             prompt_file = Path(tempfile.gettempdir()) / f"link-web-prompt-{uuid.uuid4().hex}.txt"
             prompt_file.write_text(prompt, encoding="utf-8")
 
-            command = [
-                sys.executable,
-                str(ROOT / "link_engine.py"),
-                "run",
-                "--prompt-file",
-                str(prompt_file),
-                "--max-iterations",
-                str(max_iterations),
-                "--max-changed-files",
-                "8",
-                "--max-diff-lines",
-                "1200",
-                "--auto-restore-on-failure",
-            ]
+            if audit_only:
+                command = [
+                    sys.executable,
+                    str(ROOT / "link_audit_fast.py"),
+                    "--prompt-file",
+                    str(prompt_file),
+                ]
+            else:
+                command = [
+                    sys.executable,
+                    str(ROOT / "link_engine.py"),
+                    "run",
+                    "--prompt-file",
+                    str(prompt_file),
+                    "--max-iterations",
+                    str(max_iterations),
+                    "--max-changed-files",
+                    "8",
+                    "--max-diff-lines",
+                    "1200",
+                    "--auto-restore-on-failure",
+                ]
+
             state = RunState(prompt=prompt, command=command)
             with RUNS_LOCK:
                 RUNS[state.id] = state

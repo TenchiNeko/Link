@@ -29,6 +29,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Literal
+from link_runtime_policy import build_policy_prompt, compact_engine_report_payload, requires_nontrivial_verification
 
 ROOT = Path(__file__).resolve().parent
 RUNS_DIR = ROOT / ".agents" / "engine_runs"
@@ -126,6 +127,87 @@ class EngineError(RuntimeError):
 
 class LinkEngine:
 
+    def _run_nontrivial_verification(self, state) -> None:
+        """Run an extra deterministic verification pass for large/API/infra edits."""
+        try:
+            changed_cp = subprocess.run(
+                ["git", "diff", "--name-only", "HEAD"],
+                cwd=self.root,
+                text=True,
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            changed_files = [line.strip() for line in changed_cp.stdout.splitlines() if line.strip()]
+
+            numstat_cp = subprocess.run(
+                ["git", "diff", "--numstat", "HEAD"],
+                cwd=self.root,
+                text=True,
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+
+            diff_lines = 0
+            for line in numstat_cp.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                    diff_lines += int(parts[0]) + int(parts[1])
+
+            if not requires_nontrivial_verification(changed_files, diff_lines):
+                return
+
+            self.emit_event(
+                state,
+                "info",
+                "Non-trivial verification started",
+                f"{len(changed_files)} changed files; {diff_lines} diff lines",
+                phase="verifying",
+            )
+
+            cp = subprocess.run(
+                [sys.executable, str(self.root / "link_healthcheck.py")],
+                cwd=self.root,
+                text=True,
+                capture_output=True,
+                timeout=120,
+                check=False,
+            )
+
+            raw = "\n".join(part for part in [cp.stdout, cp.stderr] if part).strip()
+            if cp.returncode != 0:
+                self.emit_event(
+                    state,
+                    "error",
+                    "Non-trivial verification failed",
+                    f"link_healthcheck.py exited {cp.returncode}",
+                    phase="verifying",
+                    raw=raw,
+                )
+                raise EngineError("non-trivial verification healthcheck failed")
+
+            self.emit_event(
+                state,
+                "success",
+                "Non-trivial verification passed",
+                "Second healthcheck pass completed",
+                phase="verifying",
+                raw=raw,
+            )
+        except EngineError:
+            raise
+        except Exception as exc:
+            self.emit_event(
+                state,
+                "error",
+                "Non-trivial verification crashed",
+                str(exc),
+                phase="verifying",
+            )
+            raise EngineError(f"non-trivial verification crashed: {exc}") from exc
+
+
     def _write_live_report(self, state) -> None:
         """Best-effort live engine_report.json snapshot for web status polling."""
         try:
@@ -172,6 +254,7 @@ class LinkEngine:
 
             report_path = Path(report_path)
             report_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = compact_engine_report_payload(self.root, payload)
             report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         except Exception:
             # Never let diagnostics break the supervised engine.

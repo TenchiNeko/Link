@@ -510,6 +510,8 @@ def check_runtime_sources_tracked() -> None:
         "link_rules.py",
         "link_doctor.py",
         "link_common.py",
+        "link_audit_fast.py",
+        "link_runtime_policy.py",
         "modern_command_guard.py",
         "modern_context_budget.py",
         "modern_dead_code_audit.py",
@@ -588,6 +590,40 @@ def check_upgrade_pack() -> None:
 
     print("upgrade pack OK")
 
+
+def check_policy_upgrade_pack() -> None:
+    required_files = [
+        "link_runtime_policy.py",
+        "link_audit_fast.py",
+    ]
+    missing = [name for name in required_files if not (ROOT / name).exists()]
+    if missing:
+        raise SystemExit("policy upgrade files missing: " + ", ".join(missing))
+
+    web_src = (ROOT / "link_web.py").read_text()
+    web_required = [
+        "build_policy_prompt",
+        "link_audit_fast.py",
+        "compact_status_event",
+    ]
+    missing_web = [item for item in web_required if item not in web_src]
+    if missing_web:
+        raise SystemExit("policy web support missing: " + ", ".join(missing_web))
+
+    engine_src = (ROOT / "link_engine.py").read_text()
+    engine_required = [
+        "build_policy_prompt",
+        "compact_engine_report_payload",
+        "requires_nontrivial_verification",
+        "def _run_nontrivial_verification",
+        "self._run_nontrivial_verification(state)",
+    ]
+    missing_engine = [item for item in engine_required if item not in engine_src]
+    if missing_engine:
+        raise SystemExit("policy engine support missing: " + ", ".join(missing_engine))
+
+    print("policy upgrade pack OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -604,6 +640,7 @@ def main() -> None:
     check_engine_expected_change_guard()
     check_runtime_sources_tracked()
     check_upgrade_pack()
+    check_policy_upgrade_pack()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 
