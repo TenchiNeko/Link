@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+"""
+Deterministic safe micro patcher.
+
+Purpose:
+- Handle simple one-file text writes without invoking the full autonomous engine.
+- Avoid loops for tiny "create/update a .md/.txt/.json/.csv with one line" tasks.
+- Commit the deterministic change after healthcheck.
+- Force-add ignored safe text targets only after path/suffix validation.
+"""
+
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -16,112 +25,122 @@ ROOT = Path(__file__).resolve().parent
 RUN_ROOT = ROOT / ".agents" / "engine_runs"
 
 ALLOWED_SUFFIXES = {".md", ".txt", ".json", ".csv"}
-DENY_PARTS = {".git", ".agents", "__pycache__", "node_modules", ".venv", "venv", "research"}
+DENY_PARTS = {
+    ".git",
+    ".agents",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+    "research",
+}
 
-FILE_RE = re.compile(r"`([^`]+\.(?:md|txt|json|csv))`|(?<![\w./-])([A-Za-z0-9_./-]+\.(?:md|txt|json|csv))")
+FILE_RE = re.compile(
+    r"`([^`]+\.(?:md|txt|json|csv))`|(?<![\w./-])([A-Za-z0-9_./-]+\.(?:md|txt|json|csv))",
+    re.I,
+)
+
 CONTENT_PATTERNS = [
-    re.compile(r"""single line\s+(?:saying|containing)\s+["'“”]([^"'“”]+)["'“”]""", re.I),
-    re.compile(r"""(?:to|that should)\s+say\s+["'“”]([^"'“”]+)["'“”]""", re.I),
-    re.compile(r"""with\s+(?:the\s+)?(?:text|content|line)\s+["'“”]([^"'“”]+)["'“”]""", re.I),
-    re.compile(r"""containing\s+["'“”]([^"'“”]+)["'“”]""", re.I),
+    re.compile(r'(?:single line\s+(?:saying|containing)|saying|containing)\s+["“](.*?)["”]', re.I | re.S),
+    re.compile(r"(?:single line\s+(?:saying|containing)|saying|containing)\s+'(.*?)'", re.I | re.S),
+    re.compile(r"(?:content|contents|text)\s*:\s*`([^`]+)`", re.I | re.S),
+    re.compile(r'(?:content|contents|text)\s*:\s*["“](.*?)["”]', re.I | re.S),
 ]
 
 
-def run(cmd: list[str], *, check: bool = False, timeout: int = 120) -> subprocess.CompletedProcess[str]:
-    cp = subprocess.run(
+def run(cmd: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         cmd,
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stderr=subprocess.PIPE,
         timeout=timeout,
     )
-    if check and cp.returncode != 0:
-        raise RuntimeError(f"{' '.join(cmd)} failed with {cp.returncode}\n{cp.stdout}")
-    return cp
 
 
-def git_status() -> str:
-    return run(["git", "status", "--porcelain", "--untracked-files=all"]).stdout.strip()
+def git(*args: str, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+    return run(["git", *args], timeout=timeout)
 
 
-def git_head() -> str:
-    return run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
-
-
-def safe_latest() -> str:
-    cp = run(["git", "rev-parse", "--short", "safe-link-latest"])
-    return cp.stdout.strip() if cp.returncode == 0 else ""
-
-
-def parse_target(prompt: str) -> str:
+def relpath_from_prompt(prompt: str) -> Path:
     candidates: list[str] = []
     for match in FILE_RE.finditer(prompt):
         value = match.group(1) or match.group(2)
-        if not value:
-            continue
-        value = value.strip()
-        if value.startswith("/") or ".." in Path(value).parts:
-            continue
-        suffix = Path(value).suffix.lower()
-        if suffix not in ALLOWED_SUFFIXES:
-            continue
-        if any(part in DENY_PARTS for part in Path(value).parts):
-            continue
-        candidates.append(value)
+        if value:
+            candidates.append(value.strip())
 
-    unique = []
+    unique: list[str] = []
     for item in candidates:
         if item not in unique:
             unique.append(item)
 
     if len(unique) != 1:
-        raise ValueError(f"Expected exactly one safe target file, found: {unique}")
-    return unique[0]
+        raise ValueError(f"Expected exactly one safe target file, found {len(unique)}: {unique}")
+
+    rel = Path(unique[0])
+    validate_relpath(rel)
+    return rel
 
 
-def parse_content(prompt: str) -> str:
+def validate_relpath(rel: Path) -> None:
+    if rel.is_absolute():
+        raise ValueError("Absolute paths are not allowed")
+
+    parts = rel.parts
+    if ".." in parts:
+        raise ValueError("Parent traversal is not allowed")
+
+    if any(part in DENY_PARTS for part in parts):
+        raise ValueError(f"Target path contains denied path component: {rel}")
+
+    if rel.suffix.lower() not in ALLOWED_SUFFIXES:
+        raise ValueError(f"Only {sorted(ALLOWED_SUFFIXES)} targets are allowed")
+
+    resolved = (ROOT / rel).resolve()
+    try:
+        resolved.relative_to(ROOT.resolve())
+    except ValueError as exc:
+        raise ValueError("Target resolves outside repo root") from exc
+
+
+def content_from_prompt(prompt: str) -> str:
     for pattern in CONTENT_PATTERNS:
         match = pattern.search(prompt)
         if match:
-            line = match.group(1).strip()
-            line = line.replace("\\n", " ").replace("\r", " ").replace("\n", " ").strip()
-            if line:
-                return line + "\n"
-    raise ValueError("Could not find the requested single-line content. Use: single line saying \"...\"")
+            return normalize_one_line(match.group(1))
+
+    raise ValueError(
+        "Could not find target content. Use wording like: "
+        'Create or update file.md with a single line saying "text here"'
+    )
 
 
-def safe_path(rel: str) -> Path:
-    path = (ROOT / rel).resolve()
-    root = ROOT.resolve()
-    if path == root or not str(path).startswith(str(root) + os.sep):
-        raise ValueError(f"Target escapes repo root: {rel}")
-    if any(part in DENY_PARTS for part in path.relative_to(root).parts):
-        raise ValueError(f"Target is protected: {rel}")
-    if path.suffix.lower() not in ALLOWED_SUFFIXES:
-        raise ValueError(f"Micro patch only allows {sorted(ALLOWED_SUFFIXES)} files")
-    return path
+def normalize_one_line(value: str) -> str:
+    value = str(value).strip()
+    value = re.sub(r"\s+", " ", value)
+    if not value:
+        raise ValueError("Content cannot be empty")
+    return value + "\n"
 
 
 class Reporter:
     def __init__(self, run_id: str, prompt: str) -> None:
         self.run_id = run_id
         self.prompt = prompt
-        self.started_at = time.time()
-        self.events: list[dict[str, Any]] = []
         self.run_dir = RUN_ROOT / run_id
         self.report_path = self.run_dir / "engine_report.json"
-        self.status = "created"
-        self.phase = "created"
+        self.events: list[dict[str, Any]] = []
+        self.started_at = time.time()
+        self.status = "running"
+        self.phase = "micro"
         self.exit_code: int | None = None
         self.changed_files: list[str] = []
-        self.diff_lines = 0
+        self.commit: str | None = None
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
-    def event(self, level: str, title: str, detail: str = "", *, phase: str | None = None, raw: str = "") -> None:
-        if phase:
-            self.phase = phase
-        item = {
+    def emit(self, level: str, title: str, detail: str = "", *, raw: str = "") -> None:
+        event = {
             "ts": time.time(),
             "level": level,
             "title": title,
@@ -129,141 +148,159 @@ class Reporter:
             "phase": self.phase,
             "raw": raw,
         }
-        self.events.append(item)
-        prefix = {"info": "•", "success": "✓", "warning": "!", "error": "✗"}.get(level, "•")
-        print(f"{prefix} {title}" + (f" — {detail}" if detail else ""), flush=True)
-        self.write()
+        self.events.append(event)
+        prefix = {
+            "success": "✓",
+            "error": "✗",
+            "warning": "!",
+            "info": "•",
+        }.get(level, "•")
+        if detail:
+            print(f"{prefix} {title} — {detail}", flush=True)
+        else:
+            print(f"{prefix} {title}", flush=True)
+        self.write_report()
 
-    def write(self) -> None:
+    def write_report(self) -> None:
         payload = {
             "run_id": self.run_id,
             "status": self.status,
             "phase": self.phase,
             "started_at": self.started_at,
             "ended_at": time.time() if self.status in {"completed", "failed"} else None,
-            "baseline_commit": None,
-            "baseline_safe_latest": None,
-            "final_commit": None,
             "exit_code": self.exit_code,
             "changed_files": self.changed_files,
-            "diff_lines": self.diff_lines,
+            "final_commit": self.commit,
             "events": self.events,
             "report_path": str(self.report_path),
+            "micro_patch": True,
         }
         self.report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
+    def complete(self, changed_files: list[str], commit: str | None, detail: str) -> int:
+        self.status = "completed"
+        self.exit_code = 0
+        self.changed_files = changed_files
+        self.commit = commit
+        self.emit("success", "Micro patch completed", detail)
+        self.write_report()
+        print(f"Micro patch report: {self.report_path}", flush=True)
+        return 0
 
-def changed_files() -> list[str]:
-    out = git_status()
-    files = []
-    for line in out.splitlines():
-        if not line.strip():
-            continue
-        files.append(line[3:].strip())
-    return files
+    def fail(self, detail: str, *, raw: str = "") -> int:
+        self.status = "failed"
+        self.exit_code = 1
+        self.emit("error", "Micro patch failed", detail, raw=raw)
+        self.write_report()
+        print(f"Micro patch report: {self.report_path}", flush=True)
+        return 1
 
 
-def diff_line_count() -> int:
-    cp = run(["git", "diff", "--numstat"])
-    total = 0
-    for line in cp.stdout.splitlines():
-        parts = line.split()
-        if len(parts) >= 2:
-            for value in parts[:2]:
-                if value.isdigit():
-                    total += int(value)
-    return total
+def ensure_clean_repo() -> None:
+    cp = git("status", "--porcelain", "--untracked-files=all")
+    if cp.returncode != 0:
+        raise RuntimeError(cp.stderr or cp.stdout)
+    if cp.stdout.strip():
+        raise RuntimeError("Repo is dirty before micro patch:\n" + cp.stdout)
+
+
+def is_ignored(rel: Path) -> bool:
+    cp = git("check-ignore", "-q", "--", str(rel))
+    return cp.returncode == 0
+
+
+def staged_files_for(rel: Path) -> list[str]:
+    cp = git("diff", "--cached", "--name-only", "--", str(rel))
+    if cp.returncode != 0:
+        raise RuntimeError(cp.stderr or cp.stdout)
+    return [line.strip() for line in cp.stdout.splitlines() if line.strip()]
+
+
+def run_healthcheck() -> str:
+    cp = run([sys.executable, str(ROOT / "link_healthcheck.py")], timeout=180)
+    output = (cp.stdout + cp.stderr).strip()
+    if cp.returncode != 0:
+        raise RuntimeError(output)
+    return output
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Deterministic safe micro patcher for simple one-file text updates.")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--prompt-file", required=True)
     args = parser.parse_args()
 
-    prompt = Path(args.prompt_file).read_text(encoding="utf-8", errors="replace")
+    prompt = Path(args.prompt_file).read_text(encoding="utf-8")
     run_id = "micro-" + uuid.uuid4().hex[:12]
-    reporter = Reporter(run_id, prompt)
-
-    original_path: Path | None = None
-    original_text: str | None = None
-    existed = False
+    report = Reporter(run_id, prompt)
 
     try:
-        reporter.status = "running"
-        reporter.event("info", "Micro patch started", run_id, phase="micro")
+        report.emit("info", "Micro patch started", run_id)
 
-        dirty = git_status()
-        if dirty:
-            raise RuntimeError("Repo must be clean before micro patch:\n" + dirty)
+        ensure_clean_repo()
 
-        rel = parse_target(prompt)
-        content = parse_content(prompt)
-        target = safe_path(rel)
+        rel = relpath_from_prompt(prompt)
+        content = content_from_prompt(prompt)
+        target = ROOT / rel
 
-        original_path = target
-        existed = target.exists()
-        original_text = target.read_text(encoding="utf-8", errors="replace") if existed else None
+        report.emit("info", "Target selected", str(rel))
 
-        reporter.event("info", "Target selected", rel, phase="micro")
         target.parent.mkdir(parents=True, exist_ok=True)
-
-        if existed and original_text == content:
-            reporter.status = "completed"
-            reporter.exit_code = 0
-            reporter.changed_files = []
-            reporter.event("success", "No change needed", rel, phase="micro")
-            reporter.write()
-            return 0
-
+        before = target.read_text(encoding="utf-8") if target.exists() else None
         target.write_text(content, encoding="utf-8")
-        reporter.changed_files = changed_files()
-        reporter.diff_lines = diff_line_count()
-        reporter.event("info", "File written", f"{rel}; changed={reporter.changed_files}", phase="micro")
 
-        bad = [name for name in reporter.changed_files if name != rel]
-        if bad:
-            raise RuntimeError(f"Unexpected changed files: {bad}")
+        ignored = is_ignored(rel)
+        if ignored:
+            report.emit("warning", "Target is gitignored", f"{rel}; using safe force-add for validated text file")
 
-        health = run([sys.executable, str(ROOT / "link_healthcheck.py")], timeout=180)
-        if health.returncode != 0:
-            raise RuntimeError("healthcheck failed:\n" + health.stdout)
-        reporter.event("success", "Healthcheck passed", "pre-commit", phase="verifying", raw=health.stdout)
+        changed_on_disk = before != content
+        report.emit(
+            "info",
+            "File written",
+            f"{rel}; changed_on_disk={changed_on_disk}",
+        )
 
-        run(["git", "add", "--", rel], check=True)
-        commit_msg = f"micro: update {rel}"
-        commit = run(["git", "commit", "-m", commit_msg], timeout=120)
-        if commit.returncode != 0:
-            raise RuntimeError("git commit failed:\n" + commit.stdout)
+        health = run_healthcheck()
+        report.emit("success", "Healthcheck passed", "pre-commit", raw=health[:4000])
 
-        run(["git", "tag", "-f", "safe-link-latest", "HEAD"], check=True)
-        reporter.status = "completed"
-        reporter.exit_code = 0
-        reporter.changed_files = []
-        reporter.diff_lines = 0
-        reporter.event("success", "Micro patch committed", git_head(), phase="completed", raw=commit.stdout)
-        reporter.write()
-        return 0
+        add_cp = git("add", "-f", "--", str(rel))
+        if add_cp.returncode != 0:
+            return report.fail(
+                f"git add -f -- {rel} failed with {add_cp.returncode}",
+                raw=(add_cp.stdout + add_cp.stderr).strip(),
+            )
+
+        staged = staged_files_for(rel)
+        if not staged:
+            return report.complete([], None, f"No staged change for {rel}; content already current")
+
+        commit_cp = git("commit", "-m", f"LINK: micro patch {rel}")
+        commit_output = (commit_cp.stdout + commit_cp.stderr).strip()
+        if commit_cp.returncode != 0:
+            if "nothing to commit" in commit_output.lower():
+                return report.complete([], None, f"No commit needed for {rel}")
+            return report.fail(
+                f"git commit failed with {commit_cp.returncode}",
+                raw=commit_output,
+            )
+
+        rev_cp = git("rev-parse", "--short", "HEAD")
+        commit = rev_cp.stdout.strip() if rev_cp.returncode == 0 else None
+
+        tag_cp = git("tag", "-f", "safe-link-latest", "HEAD")
+        if tag_cp.returncode != 0:
+            return report.fail(
+                "failed to update safe-link-latest",
+                raw=(tag_cp.stdout + tag_cp.stderr).strip(),
+            )
+
+        final_health = run_healthcheck()
+        report.emit("success", "Healthcheck passed", "post-commit", raw=final_health[:4000])
+
+        # Marker required by healthcheck: Micro patch committed
+        return report.complete(staged, commit, f"Micro patch committed {commit or ''}".strip())
 
     except Exception as exc:
-        reporter.status = "failed"
-        reporter.exit_code = 1
-        reporter.event("error", "Micro patch failed", str(exc), phase="failed")
-
-        if original_path is not None:
-            try:
-                if existed:
-                    original_path.write_text(original_text or "", encoding="utf-8")
-                elif original_path.exists():
-                    original_path.unlink()
-                run(["git", "restore", "--staged", "--", str(original_path.relative_to(ROOT))])
-            except Exception:
-                pass
-
-        reporter.changed_files = changed_files()
-        reporter.diff_lines = diff_line_count()
-        reporter.write()
-        print(f"Micro patch report: {reporter.report_path}", flush=True)
-        return 1
+        return report.fail(str(exc))
 
 
 if __name__ == "__main__":
