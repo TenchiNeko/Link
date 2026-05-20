@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -465,16 +466,26 @@ class Handler(BaseHTTPRequestHandler):
                 if "audit only" not in lowered and "read-only" not in lowered and "read only" not in lowered:
                     prompt = audit_prefix + prompt
 
+            prompt_file = Path(tempfile.gettempdir()) / f"link-web-prompt-{uuid.uuid4().hex}.txt"
+            prompt_file.write_text(prompt, encoding="utf-8")
+
             command = [
                 sys.executable,
-                str(ROOT / "standalone_main.py"),
-                prompt,
+                str(ROOT / "link_engine.py"),
+                "run",
+                "--prompt-file",
+                str(prompt_file),
                 "--max-iterations",
                 str(max_iterations),
+                "--max-changed-files",
+                "8",
+                "--max-diff-lines",
+                "1200",
+                "--auto-restore-on-failure",
             ]
             if worktree:
-                # standalone_main.py does not accept --worktree yet.
-                # Keep the checkbox harmless until the engine/web layer owns isolation.
+                # link_engine owns safety. Keep the checkbox accepted for UI compatibility.
+                # Native isolated worktree mode can be wired later.
                 pass
 
             state = RunState(prompt=prompt, command=command)

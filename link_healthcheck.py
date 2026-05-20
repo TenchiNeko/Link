@@ -148,6 +148,49 @@ def check_audit_only_guard() -> None:
     print("audit-only guard OK")
 
 
+
+def check_web_engine_wiring() -> None:
+    src = (ROOT / "link_web.py").read_text()
+
+    required = [
+        'str(ROOT / "link_engine.py")',
+        '"run"',
+        '"--prompt-file"',
+        '"--auto-restore-on-failure"',
+    ]
+    missing = [item for item in required if item not in src]
+    if missing:
+        raise SystemExit("web engine wiring missing: " + ", ".join(missing))
+
+    forbidden = [
+        'command.append("--worktree")',
+        'str(ROOT / "standalone_main.py")',
+    ]
+    present = [item for item in forbidden if item in src]
+    if present:
+        raise SystemExit("web still bypasses engine or passes bad worktree flag: " + ", ".join(present))
+
+    print("web engine wiring OK")
+
+
+def check_engine_expected_change_guard() -> None:
+    src = (ROOT / "link_engine.py").read_text()
+
+    required = [
+        "min_changed_files",
+        "expected_changed_files",
+        '"--min-changed-files"',
+        '"--expect-changed-file"',
+        "changed too few files",
+        "expected files not changed",
+        "unexpected files changed",
+    ]
+    missing = [item for item in required if item not in src]
+    if missing:
+        raise SystemExit("engine expected-change guard missing: " + ", ".join(missing))
+
+    print("engine expected-change guard OK")
+
 def check_forbidden_junk() -> None:
     hits: list[str] = []
 
@@ -446,6 +489,8 @@ def check_runtime_sources_tracked() -> None:
     expected = [
         "link_healthcheck.py",
         "link_web.py",
+        "link_engine.py",
+        "link_run_engine.py",
         "modern_command_guard.py",
         "modern_context_budget.py",
         "modern_dead_code_audit.py",
@@ -494,6 +539,8 @@ def main() -> None:
     check_queue_status()
     check_dead_code_audit()
     check_runtime_legacy_audit()
+    check_web_engine_wiring()
+    check_engine_expected_change_guard()
     check_runtime_sources_tracked()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
