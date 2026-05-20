@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 from link_runtime_policy import build_policy_prompt, compact_status_event, is_micro_patch_prompt, is_read_only_prompt
+from link_route_intelligence import decide_route
 
 
 ROOT = Path(__file__).resolve().parent
@@ -616,8 +617,9 @@ class Handler(BaseHTTPRequestHandler):
             audit_only = bool(data.get("audit_only", True))
 
             raw_prompt = prompt
-            use_read_only_fastpath = audit_only or is_read_only_prompt(raw_prompt)
-            use_micro_patch = (not use_read_only_fastpath) and is_micro_patch_prompt(raw_prompt)
+            route_decision = decide_route(raw_prompt, audit_only=audit_only, run_fanout=True)
+            use_read_only_fastpath = route_decision.get("route") == "audit_fastpath"
+            use_micro_patch = route_decision.get("route") == "micro_patch"
 
             if use_read_only_fastpath:
                 audit_prefix = (

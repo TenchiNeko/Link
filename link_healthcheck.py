@@ -711,16 +711,32 @@ def check_readonly_fastpath() -> None:
     if missing_runtime:
         raise SystemExit(f"read-only fastpath missing runtime markers: {missing_runtime}")
 
-    required_web = [
+    required_common_web = [
+        "link_audit_fast.py",
+        "if use_read_only_fastpath:",
+    ]
+    missing_common_web = [marker for marker in required_common_web if marker not in web_src]
+    if missing_common_web:
+        raise SystemExit(f"read-only fastpath missing common web markers: {missing_common_web}")
+
+    legacy_web_markers = [
         "is_read_only_prompt",
         "use_read_only_fastpath = audit_only or is_read_only_prompt(raw_prompt)",
         "use_micro_patch = (not use_read_only_fastpath) and is_micro_patch_prompt(raw_prompt)",
-        "if use_read_only_fastpath:",
-        "link_audit_fast.py",
     ]
-    missing_web = [marker for marker in required_web if marker not in web_src]
-    if missing_web:
-        raise SystemExit(f"read-only fastpath missing web markers: {missing_web}")
+
+    route_intelligence_web_markers = [
+        "from link_route_intelligence import decide_route",
+        "route_decision = decide_route",
+        "route_decision.get(\"route\") == \"audit_fastpath\"",
+        "route_decision.get(\"route\") == \"micro_patch\"",
+    ]
+
+    has_legacy_route = all(marker in web_src for marker in legacy_web_markers)
+    has_intelligent_route = all(marker in web_src for marker in route_intelligence_web_markers)
+
+    if not (has_legacy_route or has_intelligent_route):
+        raise SystemExit("read-only fastpath missing legacy or route-intelligence web markers")
 
     print("read-only fastpath OK")
 
@@ -769,6 +785,35 @@ def check_specialist_fanout() -> None:
         raise SystemExit("specialist fanout summary missing")
 
     print("specialist fanout OK")
+
+
+def check_route_intelligence() -> None:
+    route_src = (ROOT / "link_route_intelligence.py").read_text()
+    web_src = (ROOT / "link_web.py").read_text()
+
+    required_route = [
+        "def decide_route",
+        "def run_specialist_fanout_for_route",
+        "audit_fastpath",
+        "micro_patch",
+        "autonomous",
+        "ROUTE_RUNNERS",
+    ]
+    missing_route = [marker for marker in required_route if marker not in route_src]
+    if missing_route:
+        raise SystemExit(f"route intelligence missing route markers: {missing_route}")
+
+    required_web = [
+        "from link_route_intelligence import decide_route",
+        "route_decision = decide_route(raw_prompt, audit_only=audit_only, run_fanout=True)",
+        "use_read_only_fastpath = route_decision.get(\"route\") == \"audit_fastpath\"",
+        "use_micro_patch = route_decision.get(\"route\") == \"micro_patch\"",
+    ]
+    missing_web = [marker for marker in required_web if marker not in web_src]
+    if missing_web:
+        raise SystemExit(f"route intelligence missing web markers: {missing_web}")
+
+    print("route intelligence OK")
 
 def main() -> None:
     check_removed_junk_absent()
