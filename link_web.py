@@ -473,7 +473,9 @@ class Handler(BaseHTTPRequestHandler):
                 str(max_iterations),
             ]
             if worktree:
-                command.append("--worktree")
+                # standalone_main.py does not accept --worktree yet.
+                # Keep the checkbox harmless until the engine/web layer owns isolation.
+                pass
 
             state = RunState(prompt=prompt, command=command)
             with RUNS_LOCK:
