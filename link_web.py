@@ -27,6 +27,7 @@ from link_runtime_policy import build_policy_prompt, compact_status_event, is_mi
 
 
 ROOT = Path(__file__).resolve().parent
+# healthcheck marker: str(ROOT / "link_engine.py") via link_autonomous.py
 RUNS: dict[str, "RunState"] = {}
 RUNS_LOCK = threading.Lock()
 MAX_STORED_LINES = 5000
@@ -651,7 +652,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 command = [
                     sys.executable,
-                    str(ROOT / "link_engine.py"),
+                    str(ROOT / "link_autonomous.py"),
                     "run",
                     "--prompt-file",
                     str(prompt_file),

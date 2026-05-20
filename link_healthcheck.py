@@ -512,6 +512,8 @@ def check_runtime_sources_tracked() -> None:
         "link_common.py",
         "link_audit_fast.py",
         "link_micro_patch.py",
+        "link_autonomous.py",
+        "link_loop_state.py",
         "link_runtime_policy.py",
         "modern_command_guard.py",
         "modern_context_budget.py",
@@ -665,6 +667,36 @@ def check_web_status_normalization() -> None:
         raise SystemExit("web run status normalization missing completed assignment")
     print("web status normalization OK")
 
+
+
+def check_loop_controller() -> None:
+    required = {
+        "link_loop_state.py": [
+            "Link Loop controller",
+            "def evaluate_loop_risk",
+            "def write_loop_handoff",
+        ],
+        "link_autonomous.py": [
+            "Autonomous wrapper for Link full-engine runs",
+            "evaluate_loop_risk",
+            "link_engine.py",
+        ],
+        "link_web.py": [
+            "link_autonomous.py",
+            "link_micro_patch.py",
+            "link_audit_fast.py",
+        ],
+    }
+    for filename, markers in required.items():
+        path = ROOT / filename
+        if not path.exists():
+            raise SystemExit(f"loop controller missing file: {filename}")
+        src = path.read_text()
+        missing = [marker for marker in markers if marker not in src]
+        if missing:
+            raise SystemExit(f"loop controller missing markers in {filename}: {missing}")
+    print("loop controller OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -684,6 +716,7 @@ def main() -> None:
     check_policy_upgrade_pack()
     check_micro_patch_fastpath()
     check_web_status_normalization()
+    check_loop_controller()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 
