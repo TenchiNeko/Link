@@ -371,6 +371,9 @@ class LinkEngine:
         state.status = "verifying"
         state.phase = "verifying"
         self._event(state, "info", "Postflight started", "Inspecting changed files and healthcheck")
+        if requires_nontrivial_verification(getattr(state, 'prompt', '')):
+            self._run_nontrivial_verification(state)
+
 
         state.final_commit = self._git(["rev-parse", "--short", "HEAD"], check=False) or "unknown"
 
