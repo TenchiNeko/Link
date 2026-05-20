@@ -125,6 +125,59 @@ class EngineError(RuntimeError):
 
 
 class LinkEngine:
+
+    def _write_live_report(self, state) -> None:
+        """Best-effort live engine_report.json snapshot for web status polling."""
+        try:
+            run_id = getattr(state, "run_id", None) or getattr(state, "id", None) or "unknown"
+            report_path = getattr(state, "report_path", None)
+            if not report_path:
+                run_dir = getattr(state, "run_dir", None)
+                if run_dir:
+                    report_path = Path(run_dir) / "engine_report.json"
+                else:
+                    report_path = self.root / ".agents" / "engine_runs" / str(run_id) / "engine_report.json"
+
+            events = []
+            for event in list(getattr(state, "events", [])):
+                if isinstance(event, dict):
+                    events.append(event)
+                    continue
+                events.append({
+                    "ts": getattr(event, "ts", None),
+                    "level": getattr(event, "level", ""),
+                    "title": getattr(event, "title", ""),
+                    "detail": getattr(event, "detail", ""),
+                    "phase": getattr(event, "phase", ""),
+                    "raw": getattr(event, "raw", ""),
+                })
+
+            payload = {
+                "run_id": run_id,
+                "status": getattr(state, "status", None),
+                "phase": getattr(state, "phase", None),
+                "started_at": getattr(state, "started_at", None),
+                "ended_at": getattr(state, "ended_at", None),
+                "baseline_commit": getattr(state, "baseline_commit", None),
+                "baseline_safe_latest": getattr(state, "baseline_safe_latest", None),
+                "final_commit": getattr(state, "final_commit", None),
+                "exit_code": getattr(state, "exit_code", None),
+                "changed_files": list(getattr(state, "changed_files", []) or []),
+                "diff_lines": getattr(state, "diff_lines", None),
+                "events": events,
+                "report_path": str(report_path),
+                "live_snapshot": True,
+                "live_snapshot_at": time.time(),
+            }
+
+            report_path = Path(report_path)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception:
+            # Never let diagnostics break the supervised engine.
+            return
+
+
     def __init__(self, root: Path = ROOT) -> None:
         self.root = root
         RUNS_DIR.mkdir(parents=True, exist_ok=True)
@@ -376,6 +429,7 @@ class LinkEngine:
             raw=raw,
         )
         state.events.append(event)
+        self._write_live_report(state)
 
         icon = {
             "debug": "·",

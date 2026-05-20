@@ -503,6 +503,13 @@ def check_runtime_sources_tracked() -> None:
         "link_web.py",
         "link_engine.py",
         "link_run_engine.py",
+        "link_config_conflicts.py",
+        "link_status.py",
+        "link_agents.py",
+        "link_loop_report.py",
+        "link_rules.py",
+        "link_doctor.py",
+        "link_common.py",
         "modern_command_guard.py",
         "modern_context_budget.py",
         "modern_dead_code_audit.py",
@@ -538,6 +545,48 @@ def check_runtime_sources_tracked() -> None:
             print(f"- {path}")
         raise SystemExit("required runtime source files missing from git tracking")
     print("runtime source tracking OK")
+
+
+def check_upgrade_pack() -> None:
+    required_files = [
+        "link_common.py",
+        "link_doctor.py",
+        "link_rules.py",
+        "link_loop_report.py",
+        "link_agents.py",
+        "link_status.py",
+        "link_config_conflicts.py",
+    ]
+    missing = [name for name in required_files if not (ROOT / name).exists()]
+    if missing:
+        raise SystemExit("upgrade pack files missing: " + ", ".join(missing))
+
+    web_src = (ROOT / "link_web.py").read_text()
+    web_required = [
+        'parsed.path.startswith("/api/run/")',
+        "def run_status",
+        "def find_engine_report_for_run",
+        '"engine_report_path"',
+        "startStatusPoller",
+        "pollRunStatus",
+        'fetch("/api/run/"',
+    ]
+    missing_web = [item for item in web_required if item not in web_src]
+    if missing_web:
+        raise SystemExit("upgrade web status support missing: " + ", ".join(missing_web))
+
+    engine_src = (ROOT / "link_engine.py").read_text()
+    engine_required = [
+        "def _write_live_report",
+        "self._write_live_report(state)",
+        "expected_changed_files",
+        "min_changed_files",
+    ]
+    missing_engine = [item for item in engine_required if item not in engine_src]
+    if missing_engine:
+        raise SystemExit("upgrade engine support missing: " + ", ".join(missing_engine))
+
+    print("upgrade pack OK")
 
 def main() -> None:
     check_removed_junk_absent()
