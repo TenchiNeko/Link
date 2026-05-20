@@ -616,9 +616,10 @@ class Handler(BaseHTTPRequestHandler):
             audit_only = bool(data.get("audit_only", True))
 
             raw_prompt = prompt
-            use_micro_patch = (not audit_only) and is_micro_patch_prompt(raw_prompt)
+            use_read_only_fastpath = audit_only or is_read_only_prompt(raw_prompt)
+            use_micro_patch = (not use_read_only_fastpath) and is_micro_patch_prompt(raw_prompt)
 
-            if audit_only or is_read_only_prompt(prompt):
+            if use_read_only_fastpath:
                 audit_prefix = (
                     "Audit only. Do not modify files. Do not patch. Do not write files. "
                     "After the report, stop.\n\n"
