@@ -6,6 +6,7 @@ import, compile, keep junk out, and classify dangerous shell commands correctly.
 """
 
 from __future__ import annotations
+from pathlib import Path
 
 import pathlib
 import re
@@ -115,7 +116,6 @@ def check_command_guard() -> None:
 
 
 def check_audit_only_guard() -> None:
-    from pathlib import Path
 
     src = Path("standalone_orchestrator.py").read_text()
     required = [
@@ -514,6 +514,7 @@ def check_runtime_sources_tracked() -> None:
         "link_micro_patch.py",
         "link_autonomous.py",
         "link_loop_state.py",
+        "link_specialist_fanout.py",
         "link_runtime_policy.py",
         "modern_command_guard.py",
         "modern_context_budget.py",
@@ -723,6 +724,52 @@ def check_readonly_fastpath() -> None:
 
     print("read-only fastpath OK")
 
+
+def check_specialist_fanout() -> None:
+    import json
+    import subprocess
+    import sys
+    import uuid
+
+    script = ROOT / "link_specialist_fanout.py"
+    if not script.exists():
+        raise SystemExit("specialist fanout missing link_specialist_fanout.py")
+
+    run_id = "healthcheck-fanout-" + uuid.uuid4().hex[:8]
+    proc = subprocess.run(
+        [sys.executable, str(script), "--run-id", run_id],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+    if proc.returncode != 0:
+        raise SystemExit(
+            "specialist fanout failed: "
+            + (proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}")
+        )
+
+    json_path = ROOT / ".agents" / "tool_results" / run_id / "specialist_fanout.json"
+    if not json_path.exists():
+        raise SystemExit(f"specialist fanout JSON missing: {json_path}")
+
+    data = json.loads(json_path.read_text())
+    required = ["repo_state", "route_map", "latest_failures", "safety_status"]
+    missing = [key for key in required if key not in data]
+    if missing:
+        raise SystemExit(f"specialist fanout JSON missing keys: {missing}")
+
+    if not isinstance(data.get("route_map"), list):
+        raise SystemExit("specialist fanout route_map must be a list")
+
+    summary = data.get("summary_path")
+    if not summary or not Path(summary).exists():
+        raise SystemExit("specialist fanout summary missing")
+
+    print("specialist fanout OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -740,6 +787,7 @@ def main() -> None:
     check_runtime_sources_tracked()
     check_upgrade_pack()
     check_policy_upgrade_pack()
+    check_specialist_fanout()
     check_readonly_fastpath()
     check_micro_patch_fastpath()
     check_web_status_normalization()

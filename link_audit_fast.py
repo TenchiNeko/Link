@@ -116,5 +116,28 @@ def main() -> int:
     return exit_code
 
 
+
+# SPECIALIST_FANOUT_AUDIT_EXIT_HOOK_V1
+def _link_audit_fast_specialist_fanout_exit_hook():
+    """Run deterministic read-only specialist fanout at the end of audit fastpath."""
+    try:
+        import uuid
+        from link_specialist_fanout import run_fanout
+
+        fanout_run_id = "audit-fanout-" + uuid.uuid4().hex[:10]
+        data = run_fanout(run_id=fanout_run_id, write_markdown=True)
+        print("SPECIALIST FANOUT: OK")
+        print("SPECIALIST FANOUT JSON:", data.get("json_path"))
+        print("SPECIALIST FANOUT SUMMARY:", data.get("summary_path"))
+    except Exception as exc:
+        print("SPECIALIST FANOUT: FAILED:", repr(exc))
+
+
+if __name__ == "__main__":
+    import atexit as _link_fanout_atexit
+    _link_fanout_atexit.register(_link_audit_fast_specialist_fanout_exit_hook)
+
+# END SPECIALIST_FANOUT_AUDIT_EXIT_HOOK_V1
+
 if __name__ == "__main__":
     raise SystemExit(main())
