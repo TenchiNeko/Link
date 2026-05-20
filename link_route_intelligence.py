@@ -165,6 +165,83 @@ def _looks_like_retry_or_diagnosis(prompt: str) -> bool:
     )
 
 
+
+
+def _explicit_micro_patch_prompt(prompt: str) -> bool:
+    lower = str(prompt or "").lower()
+    return any(
+        marker in lower
+        for marker in [
+            "micro patch",
+            "micro-patch",
+            "micro_patch",
+            "[micro_patch]",
+            "small patch",
+            "surgical patch",
+        ]
+    )
+
+
+def _looks_like_specific_implementation_request(prompt: str) -> bool:
+    """Return True only when prompt is specific enough to risk autonomous build."""
+    lower = str(prompt or "").lower()
+
+    action_markers = [
+        "implement ",
+        "patch ",
+        "fix ",
+        "add ",
+        "modify ",
+        "edit ",
+        "create ",
+        "write ",
+        "refactor ",
+        "wire ",
+    ]
+    specificity_markers = [
+        ".py",
+        ".js",
+        ".html",
+        ".css",
+        ".md",
+        "function",
+        "class",
+        "def ",
+        "requirements:",
+        "goal:",
+        "file:",
+        "files:",
+        "run ",
+        "commit",
+        "healthcheck",
+        "doctor",
+    ]
+
+    return any(marker in lower for marker in action_markers) and any(
+        marker in lower for marker in specificity_markers
+    )
+
+
+def _looks_like_broad_continuation_prompt(prompt: str) -> bool:
+    lower = str(prompt or "").lower().strip()
+    return any(
+        marker in lower
+        for marker in [
+            "continue",
+            "continue updates",
+            "keep going",
+            "next update",
+            "do the update",
+            "let's continue",
+            "lets continue",
+            "advance this",
+            "finish it",
+            "more updates",
+            "run the update",
+            "do it",
+        ]
+    )
+
 def decide_route(
     prompt: str,
     audit_only: bool = False,
@@ -182,24 +259,35 @@ def decide_route(
         reasons.append("specialist_fanout_skipped")
 
     read_only = bool(audit_only) or is_read_only_prompt(raw_prompt)
-    micro_patch = (not read_only) and is_micro_patch_prompt(raw_prompt)
+    explicit_micro_patch = _explicit_micro_patch_prompt(raw_prompt)
+    micro_patch = (not read_only) and (is_micro_patch_prompt(raw_prompt) or explicit_micro_patch)
+    broad_continuation = (
+        (not read_only)
+        and (not micro_patch)
+        and _looks_like_broad_continuation_prompt(raw_prompt)
+        and not _looks_like_specific_implementation_request(raw_prompt)
+    )
 
     if audit_only:
         route = "audit_fastpath"
-        confidence = "high"
         reasons.append("ui_audit_only_true")
+        confidence = "high"
     elif read_only:
         route = "audit_fastpath"
-        confidence = "high"
         reasons.append("prompt_read_only_detected")
+        confidence = "high"
     elif micro_patch:
         route = "micro_patch"
-        confidence = "high"
         reasons.append("micro_patch_prompt_detected")
+        confidence = "high"
+    elif broad_continuation:
+        route = "audit_fastpath"
+        reasons.append("broad_prompt_guard_routed_to_audit")
+        confidence = "high"
     else:
         route = "autonomous"
-        confidence = "medium"
         reasons.append("default_full_autonomous")
+        confidence = "medium"
 
     latest_failure = _latest_failure_hint(fanout)
     repo_dirty = _repo_dirty_hint(fanout)
@@ -209,10 +297,15 @@ def decide_route(
         confidence = "high"
         reasons.append("repo_dirty_guard_routed_to_audit")
 
-    if latest_failure == "stuck_loop" and route == "autonomous" and _looks_like_retry_or_diagnosis(raw_prompt):
-        route = "audit_fastpath"
-        confidence = "high"
-        reasons.append("latest_stuck_loop_diagnosis_guard")
+    if latest_failure == "stuck_loop" and route == "autonomous":
+        if _looks_like_retry_or_diagnosis(raw_prompt):
+            route = "audit_fastpath"
+            confidence = "high"
+            reasons.append("latest_stuck_loop_diagnosis_guard")
+        elif not _looks_like_specific_implementation_request(raw_prompt):
+            route = "audit_fastpath"
+            confidence = "high"
+            reasons.append("latest_stuck_loop_broad_prompt_guard")
 
     return {
         "route": route,
