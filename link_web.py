@@ -399,6 +399,11 @@ class Handler(BaseHTTPRequestHandler):
             text_response(self, 200, HTML, "text/html")
             return
 
+        if parsed.path.startswith("/api/run/"):
+            run_id = parsed.path.rsplit("/", 1)[-1]
+            self.run_status(run_id)
+            return
+
         if parsed.path.startswith("/events/"):
             run_id = parsed.path.rsplit("/", 1)[-1]
             self.stream_events(run_id)
@@ -420,6 +425,36 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         text_response(self, 404, "not found")
+
+    def run_status(self, run_id: str) -> None:
+        with RUNS_LOCK:
+            run = RUNS.get(run_id)
+
+        if not run:
+            json_response(self, 404, {"error": "run not found", "run_id": run_id})
+            return
+
+        events = []
+        for event in list(getattr(run, "events", [])):
+            events.append({
+                "kind": getattr(event, "kind", ""),
+                "message": getattr(event, "message", ""),
+                "raw": getattr(event, "raw", ""),
+                "visible": getattr(event, "visible", True),
+                "ts": getattr(event, "ts", None),
+            })
+
+        payload = {
+            "run_id": getattr(run, "id", run_id),
+            "status": getattr(run, "status", "unknown"),
+            "started_at": getattr(run, "started_at", None),
+            "ended_at": getattr(run, "ended_at", None),
+            "exit_code": getattr(run, "exit_code", None),
+            "prompt": getattr(run, "prompt", ""),
+            "command": getattr(run, "command", []),
+            "events": events,
+        }
+        json_response(self, 200, payload)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
