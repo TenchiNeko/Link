@@ -614,6 +614,9 @@ class Handler(BaseHTTPRequestHandler):
             max_iterations = max(1, min(max_iterations, 20))
             audit_only = bool(data.get("audit_only", True))
 
+            raw_prompt = prompt
+            use_micro_patch = (not audit_only) and is_micro_patch_prompt(raw_prompt)
+
             if audit_only:
                 audit_prefix = (
                     "Audit only. Do not modify files. Do not patch. Do not write files. "
@@ -622,8 +625,11 @@ class Handler(BaseHTTPRequestHandler):
                 lowered = prompt.lower()
                 if "audit only" not in lowered and "read-only" not in lowered and "read only" not in lowered:
                     prompt = audit_prefix + prompt
-
-            prompt = build_policy_prompt(prompt, audit_only=audit_only)
+                prompt = build_policy_prompt(prompt, audit_only=True)
+            elif use_micro_patch:
+                prompt = raw_prompt
+            else:
+                prompt = build_policy_prompt(prompt, audit_only=False)
 
             prompt_file = Path(tempfile.gettempdir()) / f"link-web-prompt-{uuid.uuid4().hex}.txt"
             prompt_file.write_text(prompt, encoding="utf-8")
@@ -635,7 +641,7 @@ class Handler(BaseHTTPRequestHandler):
                     "--prompt-file",
                     str(prompt_file),
                 ]
-            elif is_micro_patch_prompt(prompt):
+            elif use_micro_patch:
                 command = [
                     sys.executable,
                     str(ROOT / "link_micro_patch.py"),
