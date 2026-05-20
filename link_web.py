@@ -190,6 +190,8 @@ kbd {
 
 <script>
 let currentRunId = null;
+let statusPollTimer = null;
+let seenStatusEventKeys = new Set();
 let eventSource = null;
 
 const journal = document.getElementById("journal");
@@ -216,6 +218,64 @@ function closeStream() {
     eventSource.close();
     eventSource = null;
   }
+}
+
+function clearStatusPoller() {
+  if (statusPollTimer) {
+    clearInterval(statusPollTimer);
+    statusPollTimer = null;
+  }
+}
+
+function statusEventKey(event, index) {
+  return [
+    event.ts || "",
+    event.kind || "",
+    event.message || "",
+    event.detail || "",
+    event.raw || "",
+    index
+  ].join("|");
+}
+
+function appendStatusEvent(event) {
+  const kind = event.kind || "system";
+  const message = event.raw || [event.message, event.detail].filter(Boolean).join(" — ");
+  if (message) {
+    appendLine(message, kind);
+  }
+}
+
+async function pollRunStatus() {
+  if (!currentRunId) return;
+
+  try {
+    const res = await fetch("/api/run/" + currentRunId);
+    if (!res.ok) return;
+
+    const data = await res.json();
+    const events = Array.isArray(data.events) ? data.events : [];
+
+    events.forEach((event, index) => {
+      const key = statusEventKey(event, index);
+      if (seenStatusEventKeys.has(key)) return;
+      seenStatusEventKeys.add(key);
+      appendStatusEvent(event);
+    });
+
+    if (["completed", "failed", "stopped"].includes(data.status)) {
+      clearStatusPoller();
+    }
+  } catch (err) {
+    // SSE remains primary; polling is a fallback.
+  }
+}
+
+function startStatusPoller() {
+  clearStatusPoller();
+  seenStatusEventKeys = new Set();
+  statusPollTimer = setInterval(pollRunStatus, 1500);
+  pollRunStatus();
 }
 
 async function runTask() {
@@ -255,6 +315,7 @@ async function runTask() {
   const data = await res.json();
   currentRunId = data.run_id;
   appendLine("Started run " + currentRunId, "system");
+  startStatusPoller();
 
   eventSource = new EventSource("/events/" + currentRunId);
   eventSource.onmessage = (event) => {
