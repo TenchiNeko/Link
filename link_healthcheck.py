@@ -603,6 +603,7 @@ def main() -> None:
     check_web_engine_wiring()
     check_engine_expected_change_guard()
     check_runtime_sources_tracked()
+    check_upgrade_pack()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 

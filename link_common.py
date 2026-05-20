@@ -116,7 +116,7 @@ def latest_engine_reports(limit: int = 10) -> list[dict[str, Any]]:
     root = ROOT / ".agents" / "engine_runs"
     if not root.exists():
         return []
-    paths = sorted(root.glob("*/engine_report.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    paths = sorted([p for p in root.glob("*/engine_report.json") if p.parent.name != "selftest"], key=lambda p: p.stat().st_mtime, reverse=True)
     out = []
     for path in paths[:limit]:
         data = read_json(path)
