@@ -23,7 +23,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
-from link_runtime_policy import build_policy_prompt, compact_status_event
+from link_runtime_policy import build_policy_prompt, compact_status_event, is_micro_patch_prompt
 
 
 ROOT = Path(__file__).resolve().parent
@@ -632,6 +632,13 @@ class Handler(BaseHTTPRequestHandler):
                 command = [
                     sys.executable,
                     str(ROOT / "link_audit_fast.py"),
+                    "--prompt-file",
+                    str(prompt_file),
+                ]
+            elif is_micro_patch_prompt(prompt):
+                command = [
+                    sys.executable,
+                    str(ROOT / "link_micro_patch.py"),
                     "--prompt-file",
                     str(prompt_file),
                 ]

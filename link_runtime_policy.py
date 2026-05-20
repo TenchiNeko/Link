@@ -203,3 +203,62 @@ NON-TRIVIAL CHANGE RULE:
 """.strip()
 
     return policy + "\n\n" + prompt
+
+
+_MICRO_PATCH_FILE_RE = re.compile(r"`([^`]+\.(?:md|txt|json|csv))`|(?<![\w./-])([A-Za-z0-9_./-]+\.(?:md|txt|json|csv))", re.I)
+
+def is_micro_patch_prompt(prompt: str) -> bool:
+    """Return True for safe deterministic one-file text updates.
+
+    This intentionally avoids code/backend/infra edits. Those still go through
+    the supervised engine path.
+    """
+    text = str(prompt or "")
+    lower = text.lower()
+
+    if "audit only" in lower or "read-only" in lower or "read only" in lower:
+        return False
+
+    allowed_action = any(phrase in lower for phrase in [
+        "single line saying",
+        "single line containing",
+        "create or update",
+        "write a single line",
+        "replace contents",
+        "update the file",
+    ])
+    if not allowed_action:
+        return False
+
+    if any(word in lower for word in [
+        "refactor",
+        "implement all",
+        "backend",
+        "api",
+        "healthcheck",
+        "engine",
+        "orchestrator",
+        "standalone_main",
+        "multiple files",
+        "all files",
+    ]):
+        return False
+
+    targets = []
+    for match in _MICRO_PATCH_FILE_RE.finditer(text):
+        value = match.group(1) or match.group(2)
+        if not value:
+            continue
+        value = value.strip()
+        if value.startswith("/") or ".." in Path(value).parts:
+            continue
+        if any(part in {".git", ".agents", "__pycache__", "node_modules", "research"} for part in Path(value).parts):
+            continue
+        targets.append(value)
+
+    unique = []
+    for target in targets:
+        if target not in unique:
+            unique.append(target)
+
+    return len(unique) == 1

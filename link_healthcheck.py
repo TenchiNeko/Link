@@ -511,6 +511,7 @@ def check_runtime_sources_tracked() -> None:
         "link_doctor.py",
         "link_common.py",
         "link_audit_fast.py",
+        "link_micro_patch.py",
         "link_runtime_policy.py",
         "modern_command_guard.py",
         "modern_context_budget.py",
@@ -624,6 +625,32 @@ def check_policy_upgrade_pack() -> None:
 
     print("policy upgrade pack OK")
 
+
+def check_micro_patch_fastpath() -> None:
+    required = {
+        "link_micro_patch.py": [
+            "Deterministic safe micro patcher",
+            "Micro patch committed",
+        ],
+        "link_runtime_policy.py": [
+            "def is_micro_patch_prompt",
+            "_MICRO_PATCH_FILE_RE",
+        ],
+        "link_web.py": [
+            "link_micro_patch.py",
+            "is_micro_patch_prompt",
+        ],
+    }
+    for filename, markers in required.items():
+        path = ROOT / filename
+        if not path.exists():
+            raise SystemExit(f"micro patch fastpath missing file: {filename}")
+        src = path.read_text()
+        missing = [marker for marker in markers if marker not in src]
+        if missing:
+            raise SystemExit(f"micro patch fastpath missing markers in {filename}: {missing}")
+    print("micro patch fastpath OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -641,6 +668,7 @@ def main() -> None:
     check_runtime_sources_tracked()
     check_upgrade_pack()
     check_policy_upgrade_pack()
+    check_micro_patch_fastpath()
     check_forbidden_junk()
     print("LINK HEALTHCHECK PASSED")
 
