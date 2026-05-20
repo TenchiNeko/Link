@@ -636,7 +636,7 @@ class Handler(BaseHTTPRequestHandler):
             prompt_file = Path(tempfile.gettempdir()) / f"link-web-prompt-{uuid.uuid4().hex}.txt"
             prompt_file.write_text(prompt, encoding="utf-8")
 
-            if audit_only:
+            if use_read_only_fastpath:
                 command = [
                     sys.executable,
                     str(ROOT / "link_audit_fast.py"),

@@ -714,6 +714,7 @@ def check_readonly_fastpath() -> None:
         "is_read_only_prompt",
         "use_read_only_fastpath = audit_only or is_read_only_prompt(raw_prompt)",
         "use_micro_patch = (not use_read_only_fastpath) and is_micro_patch_prompt(raw_prompt)",
+        "if use_read_only_fastpath:",
         "link_audit_fast.py",
     ]
     missing_web = [marker for marker in required_web if marker not in web_src]
