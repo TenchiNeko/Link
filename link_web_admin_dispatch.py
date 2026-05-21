@@ -30,6 +30,19 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent
 
 
+def explicit_delegate_providers(prompt: str) -> list[str]:
+    """Honor explicit provider names in the admin/user prompt."""
+    text = prompt.lower()
+    providers = []
+
+    if "local_qwen" in text or "local qwen" in text or "qwen" in text:
+        providers.append("local_qwen")
+
+    if "deepseek" in text or "deep seek" in text:
+        providers.append("deepseek")
+
+    return providers
+
 def _read_prompt(display_prompt: str | None, prompt_file: str | None, prompt_override: str | None) -> str:
     if prompt_override:
         return prompt_override
@@ -120,6 +133,11 @@ def _audit_prompt(prompt: str, plan: dict[str, Any]) -> str:
     reason = classification.get("reason")
     targets = plan.get("target_files") or []
     delegates = plan.get("delegate_to") or []
+
+    explicit = explicit_delegate_providers(prompt)
+    if explicit:
+        delegates = list(dict.fromkeys([*delegates, *explicit]))
+        plan["delegate_to"] = delegates
 
     return (
         "ADMIN PLANNER ROUTED THIS WEB REQUEST TO AUDIT/REVIEW.\n\n"
