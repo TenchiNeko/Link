@@ -152,12 +152,13 @@ def _select_providers(requested: list[str], plan: dict[str, Any]) -> list[str]:
 
     if task_type in {"patch_draft", "delegated_patch_review", "patch_review"}:
         selected.extend(["local_qwen", "deepseek"])
-    elif "deepseek" in delegates:
-        selected.append("deepseek")
-    elif "local_qwen" in delegates:
-        selected.append("local_qwen")
     else:
-        selected.append("local_qwen")
+        for provider in ("local_qwen", "deepseek"):
+            if provider in delegates and provider not in selected:
+                selected.append(provider)
+
+        if not selected:
+            selected.append("local_qwen")
 
     if risk == "high" and "deepseek" not in selected:
         selected.append("deepseek")
