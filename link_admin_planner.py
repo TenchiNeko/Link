@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent
+DELEGATE_RUNNER = "link_delegate_runner.py"
 
 SAFETY_GATES = [
     "command_guard",
@@ -34,6 +35,7 @@ SAFETY_GATES = [
     "healthcheck",
     "doctor",
     "backup_bundle",
+    "delegate_runner",
 ]
 
 TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv"}
@@ -364,6 +366,7 @@ def build_plan(prompt: str) -> dict[str, Any]:
             "deepseek": "patch_draft_or_second_opinion_review",
             "local_qwen": "cheap_local_audit_patch_draft_review",
             "link": "only_executor_after_safety_gates",
+        "delegate_runner": "non_executing_bridge_to_deepseek_and_local_qwen",
         },
         "safety_gates": SAFETY_GATES,
         "required_verification": required_verification,

@@ -156,6 +156,20 @@ def _audit_cmd(prompt: str, plan: dict[str, Any]) -> list[str]:
     ]
 
 
+
+def _delegates_enabled() -> bool:
+    value = os.environ.get("LINK_ENABLE_MODEL_DELEGATES", "true").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _delegate_cmd(prompt: str, plan: dict[str, object]) -> list[str]:
+    return [
+        sys.executable,
+        str(ROOT / "link_delegate_runner.py"),
+        "--prompt",
+        prompt,
+    ]
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("display_prompt", nargs="?")
@@ -196,6 +210,8 @@ def main() -> int:
         return _stream(_micro_cmd(args.display_prompt, prompt_file, prompt))
 
     if route in {"audit_fastpath", "read_only", "delegated_patch_review", "patch_review"}:
+        if _delegates_enabled():
+            return _stream(_delegate_cmd(prompt, plan))
         return _stream(_audit_cmd(prompt, plan))
 
     print("Admin dispatcher refused to execute this route directly.")

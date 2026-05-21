@@ -889,6 +889,62 @@ def check_admin_planner() -> None:
 
 
 
+
+def check_delegate_runner() -> None:
+    runner = ROOT / "link_delegate_runner.py"
+    if not runner.exists():
+        raise AssertionError("link_delegate_runner.py missing")
+
+    src = runner.read_text()
+    for needle in [
+        "Link Delegate Runner",
+        "local_qwen",
+        "deepseek",
+        "DEEPSEEK_API_KEY",
+        "LINK_LOCAL_QWEN_MODEL",
+        "LINK_LOCAL_QWEN_CMD",
+        "LINK_DEEPSEEK_CMD",
+        "no_write",
+        "model_suggested_commands_not_executed",
+    ]:
+        if needle not in src:
+            raise AssertionError(f"link_delegate_runner.py missing {needle!r}")
+
+    web_dispatch_src = (ROOT / "link_web_admin_dispatch.py").read_text()
+    for needle in [
+        "link_delegate_runner.py",
+        "LINK_ENABLE_MODEL_DELEGATES",
+        "_delegate_cmd",
+    ]:
+        if needle not in web_dispatch_src:
+            raise AssertionError(f"link_web_admin_dispatch.py missing delegate hook {needle!r}")
+
+    admin_src = (ROOT / "link_admin_planner.py").read_text()
+    if "link_delegate_runner.py" not in admin_src and "delegate_runner" not in admin_src:
+        raise AssertionError("link_admin_planner.py missing delegate runner marker")
+
+    out = subprocess.check_output(
+        [
+            sys.executable,
+            str(runner),
+            "--prompt",
+            "Audit only: delegate runner healthcheck",
+            "--providers",
+            "none",
+            "--dry-run",
+            "--json",
+            "--no-report",
+        ],
+        text=True,
+        cwd=ROOT,
+    )
+    data = json.loads(out)
+    if data.get("schema_version") != "link_delegate_report_v1":
+        raise AssertionError("delegate runner returned wrong schema")
+    if data.get("safety", {}).get("no_write") is not True:
+        raise AssertionError("delegate runner must be no-write")
+    print("delegate runner OK")
+
 def check_web_admin_dispatch() -> None:
     web_src = (ROOT / "link_web.py").read_text()
     dispatch_src = (ROOT / "link_web_admin_dispatch.py").read_text()
@@ -991,6 +1047,7 @@ def main() -> None:
     check_forbidden_junk()
     check_progress_planner()
     check_admin_planner()
+    check_delegate_runner()
     check_web_admin_dispatch()
     print("LINK HEALTHCHECK PASSED")
 
