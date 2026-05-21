@@ -912,24 +912,58 @@ def check_web_admin_dispatch() -> None:
         if needle not in dispatch_src:
             raise AssertionError(f"link_web_admin_dispatch.py missing {needle!r}")
 
+    tmp_prompt = Path("/tmp/link-web-admin-dispatch-healthcheck-prompt.txt")
+    tmp_prompt.write_text("Let's continue on the updates", encoding="utf-8")
     out = subprocess.check_output(
         [
             sys.executable,
             str(ROOT / "link_web_admin_dispatch.py"),
-            "--prompt",
-            "Let's continue on the updates",
+            "--prompt-file",
+            str(tmp_prompt),
             "--json",
             "--plan-only",
         ],
         text=True,
         cwd=ROOT,
     )
+    try:
+        tmp_prompt.unlink()
+    except OSError:
+        pass
     data = json.loads(out)
     route = data.get("classification", {}).get("route")
     if route != "audit_fastpath":
         raise AssertionError(f"broad web admin prompt should route audit_fastpath, got {route!r}")
     if data.get("human_confirmation_required") is not True:
         raise AssertionError("web admin dispatch planner must require human confirmation")
+
+    safe_text_micro = subprocess.check_output(
+        [
+            sys.executable,
+            str(ROOT / "link_web_admin_dispatch.py"),
+            "--prompt",
+            "MICRO PATCH: target file: README.md content: `Link web admin dispatch smoke`",
+            "--json",
+            "--plan-only",
+        ],
+        text=True,
+        cwd=ROOT,
+    )
+    micro_data = json.loads(safe_text_micro)
+    micro_class = micro_data.get("classification", {})
+    repo_dirty = bool(micro_data.get("repo", {}).get("dirty"))
+
+    if repo_dirty:
+        if micro_class.get("route") != "audit_fastpath":
+            raise AssertionError("dirty repo safe text micro prompt should be guarded to audit_fastpath")
+        if micro_class.get("reason") != "repo_dirty_never_execute_or_delegate_patch":
+            raise AssertionError("dirty repo safe text micro prompt should explain dirty guard")
+    else:
+        if micro_class.get("route") != "micro_patch":
+            raise AssertionError("clean repo safe text micro prompt should route to micro_patch")
+        if micro_class.get("risk") == "high":
+            raise AssertionError("safe text micro prompt should not become high risk from content words")
+
     print("web admin dispatch OK")
 
 def main() -> None:

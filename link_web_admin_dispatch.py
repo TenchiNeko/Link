@@ -160,12 +160,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("display_prompt", nargs="?")
     parser.add_argument("prompt_file", nargs="?")
+    parser.add_argument("--prompt-file", dest="prompt_file_opt")
     parser.add_argument("--prompt", dest="prompt_override")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
 
-    prompt = _read_prompt(args.display_prompt, args.prompt_file, args.prompt_override)
+    prompt_file = args.prompt_file_opt or args.prompt_file
+    prompt = _read_prompt(args.display_prompt, prompt_file, args.prompt_override)
     plan = _admin_plan(prompt)
     classification = plan.get("classification", {})
     route = classification.get("route")
@@ -191,7 +193,7 @@ def main() -> int:
     print("")
 
     if route == "micro_patch" and risk in {"low", "medium"}:
-        return _stream(_micro_cmd(args.display_prompt, args.prompt_file, prompt))
+        return _stream(_micro_cmd(args.display_prompt, prompt_file, prompt))
 
     if route in {"audit_fastpath", "read_only", "delegated_patch_review", "patch_review"}:
         return _stream(_audit_cmd(prompt, plan))

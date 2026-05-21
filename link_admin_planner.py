@@ -199,6 +199,11 @@ def _specific_action(prompt: str) -> bool:
 
 
 def _risk_for_targets(targets: list[str], prompt: str) -> str:
+    # Explicit safe text targets should not become high-risk merely because
+    # their replacement content mentions words like "web" or "engine".
+    if targets and all(Path(t).suffix.lower() in TEXT_SUFFIXES for t in targets):
+        return "low"
+
     lower = str(prompt or "").lower()
     risky_words = [
         "engine",
