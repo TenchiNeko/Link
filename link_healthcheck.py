@@ -848,6 +848,46 @@ def check_progress_planner() -> None:
         raise SystemExit("progress planner failed broad prompt autonomous refusal")
     print("progress planner OK")
 
+
+def check_admin_planner() -> None:
+    src = (ROOT / "link_admin_planner.py").read_text()
+    for needle in [
+        "Link Admin Planner",
+        "execution_allowed",
+        "delegate_to",
+        "deepseek",
+        "local_qwen",
+        "command_guard",
+        "file_safety",
+        "git_safety",
+        "backup_bundle",
+    ]:
+        if needle not in src:
+            raise AssertionError(f"link_admin_planner.py missing {needle!r}")
+
+    out = subprocess.check_output(
+        [
+            sys.executable,
+            str(ROOT / "link_admin_planner.py"),
+            "--prompt",
+            "Let's continue on the updates",
+            "--json",
+        ],
+        text=True,
+        cwd=ROOT,
+    )
+    data = json.loads(out)
+    if data.get("execution_allowed") is not False:
+        raise AssertionError("admin planner must never allow direct execution")
+    if data.get("human_confirmation_required") is not True:
+        raise AssertionError("admin planner must require human confirmation")
+    if data.get("classification", {}).get("route") != "audit_fastpath":
+        raise AssertionError("broad admin prompt must route to audit_fastpath")
+    if "link_healthcheck.py" not in " ".join(data.get("required_verification", [])):
+        raise AssertionError("admin planner verification must include link_healthcheck.py")
+    print("admin planner OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -872,6 +912,7 @@ def main() -> None:
     check_loop_controller()
     check_forbidden_junk()
     check_progress_planner()
+    check_admin_planner()
     print("LINK HEALTHCHECK PASSED")
 
 
