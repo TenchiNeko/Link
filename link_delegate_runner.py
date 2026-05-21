@@ -130,6 +130,46 @@ def _parse_providers(value: str) -> list[str]:
     return parts or ["auto"]
 
 
+def _sanitize_stale_failure_context(plan: dict[str, Any]) -> dict[str, Any]:
+    """
+    Prevent read-only delegate reports from over-weighting stale failed micro runs.
+
+    If the current repo/health state is clean, old failed engine runs should be
+    preserved as historical context only, not treated as active blockers.
+    """
+    plan = dict(plan)
+
+    route = str(plan.get("route", ""))
+    risk = str(plan.get("risk", ""))
+    dirty = bool(plan.get("dirty") or plan.get("repo_dirty"))
+    health_ok = bool(
+        plan.get("healthcheck_ok")
+        or plan.get("healthcheck") == "OK"
+        or plan.get("healthcheck_status") == "OK"
+    )
+
+    latest = plan.get("latest_engine_reports")
+    failure_memory = plan.get("most_recent_failure_memory")
+
+    read_onlyish = route in {"audit_fastpath", "read_only", "delegated_patch_review", "patch_review"}
+
+    if read_onlyish and not dirty:
+        if latest:
+            plan["historical_engine_reports"] = latest
+            plan["latest_engine_reports"] = []
+        if failure_memory:
+            plan["historical_failure_memory"] = failure_memory
+            plan["most_recent_failure_memory"] = None
+
+        plan["stale_failure_context_note"] = (
+            "Historical failed micro runs were omitted from active delegate context "
+            "because this is a read-only/audit route and the repo is currently clean. "
+            "Do not treat old micro failures as current blockers unless the current "
+            "run fails or healthcheck/doctor reports an active problem."
+        )
+
+    return plan
+
 def _select_providers(requested: list[str], plan: dict[str, Any]) -> list[str]:
     if "none" in requested:
         return []
@@ -446,6 +486,7 @@ def build_report(
     dry_run: bool,
 ) -> dict[str, Any]:
     plan = _admin_plan(prompt)
+    plan = _sanitize_stale_failure_context(plan)
     selected = _select_providers(providers_requested, plan)
 
     provider_results = [
