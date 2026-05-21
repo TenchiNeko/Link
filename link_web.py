@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Link web admin dispatch note: link_web_admin_dispatch.py delegates explicit safe micro-patch requests to link_micro_patch.py.
 """
 Local Link web console.
 
@@ -648,7 +649,7 @@ class Handler(BaseHTTPRequestHandler):
             elif use_micro_patch:
                 command = [
                     sys.executable,
-                    str(ROOT / "link_micro_patch.py"),
+                    str(ROOT / "link_web_admin_dispatch.py"),
                     "--prompt-file",
                     str(prompt_file),
                 ]

@@ -888,6 +888,50 @@ def check_admin_planner() -> None:
     print("admin planner OK")
 
 
+
+def check_web_admin_dispatch() -> None:
+    web_src = (ROOT / "link_web.py").read_text()
+    dispatch_src = (ROOT / "link_web_admin_dispatch.py").read_text()
+
+    for needle in [
+        "link_web_admin_dispatch.py",
+        "link_micro_patch.py",
+    ]:
+        if needle not in web_src:
+            raise AssertionError(f"link_web.py missing {needle!r}")
+
+    for needle in [
+        "Web admin dispatcher",
+        "link_admin_planner.py",
+        "link_micro_patch.py",
+        "link_audit_fast.py",
+        "--plan-only",
+        "audit_fastpath",
+        "micro_patch",
+    ]:
+        if needle not in dispatch_src:
+            raise AssertionError(f"link_web_admin_dispatch.py missing {needle!r}")
+
+    out = subprocess.check_output(
+        [
+            sys.executable,
+            str(ROOT / "link_web_admin_dispatch.py"),
+            "--prompt",
+            "Let's continue on the updates",
+            "--json",
+            "--plan-only",
+        ],
+        text=True,
+        cwd=ROOT,
+    )
+    data = json.loads(out)
+    route = data.get("classification", {}).get("route")
+    if route != "audit_fastpath":
+        raise AssertionError(f"broad web admin prompt should route audit_fastpath, got {route!r}")
+    if data.get("human_confirmation_required") is not True:
+        raise AssertionError("web admin dispatch planner must require human confirmation")
+    print("web admin dispatch OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -913,6 +957,7 @@ def main() -> None:
     check_forbidden_junk()
     check_progress_planner()
     check_admin_planner()
+    check_web_admin_dispatch()
     print("LINK HEALTHCHECK PASSED")
 
 
