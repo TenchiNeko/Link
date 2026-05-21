@@ -97,7 +97,8 @@ def print_human(data: dict[str, Any]) -> None:
         print("- none found")
 
     summary = data.get("latest_failure_summary")
-    print("\nLatest failure summary:")
+    print("\nMost recent failure memory:")
+    print("- note: this may predate the latest completed engine run")
     if summary:
         print(f"- failure_type: {summary.get('failure_type')}")
         print(f"- phase: {summary.get('phase')}")
