@@ -36,7 +36,7 @@ DENY_PARTS = {
 }
 
 FILE_RE = re.compile(
-    r"`([^`]+\.(?:md|txt|json|csv))`|(?<![\w./-])([A-Za-z0-9_./-]+\.(?:md|txt|json|csv))",
+    r"`([^`]+\.(?:md|txt|json|csv))`|(?:\b(?:target\s+file|target|file|path)\s*(?::|=|-|is|should be)?\s*`?|(?<![\w./-]))([A-Za-z0-9_./-]+\.(?:md|txt|json|csv))`?",
     re.I,
 )
 
