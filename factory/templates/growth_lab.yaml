@@ -1,0 +1,15 @@
+project: growth_lab
+purpose: Build a managed factory system for growth, experimentation, QA, and reporting.
+phase_1_policy:
+  model_calls: false
+  external_actions: false
+  posting: false
+  human_approval_required: true
+departments:
+  - strategy
+  - market_research
+  - model_incubator
+  - creative_production
+  - growth
+  - qa
+  - analytics
