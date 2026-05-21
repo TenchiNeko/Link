@@ -111,4 +111,13 @@ SPLIT_MANIFEST.json
 !*.py
 
 # Local Link browser console
-!link_web.py
+!link_web.py\n\n# Link Factory generated runtime state
+factory/projects/*/state/
+factory/work_orders/*
+!factory/work_orders/.gitkeep
+factory/approvals/*
+!factory/approvals/.gitkeep
+factory/outputs/*
+!factory/outputs/.gitkeep
+factory/rejected_outputs/*
+!factory/rejected_outputs/.gitkeep
