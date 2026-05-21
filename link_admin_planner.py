@@ -323,6 +323,21 @@ def build_plan(prompt: str) -> dict[str, Any]:
 
     if risk == "high" and "deepseek" not in delegates:
         delegates.append("deepseek")
+    explicit_delegate_text = prompt.lower()
+    if (
+        "deepseek" in explicit_delegate_text
+        or "deep seek" in explicit_delegate_text
+        or "both model delegates" in explicit_delegate_text
+        or "both delegates" in explicit_delegate_text
+    ) and "deepseek" not in delegates:
+        delegates.append("deepseek")
+
+    if (
+        "local_qwen" in explicit_delegate_text
+        or "local qwen" in explicit_delegate_text
+        or "qwen" in explicit_delegate_text
+    ) and "local_qwen" not in delegates:
+        delegates.insert(0, "local_qwen")
 
     required_verification = [
         "python3 -m py_compile link_admin_planner.py",
