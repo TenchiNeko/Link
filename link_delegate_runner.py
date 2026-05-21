@@ -132,43 +132,90 @@ def _parse_providers(value: str) -> list[str]:
 
 def _sanitize_stale_failure_context(plan: dict[str, Any]) -> dict[str, Any]:
     """
-    Prevent read-only delegate reports from over-weighting stale failed micro runs.
+    For clean read-only/audit delegate runs, remove stale engine failure memory entirely.
 
-    If the current repo/health state is clean, old failed engine runs should be
-    preserved as historical context only, not treated as active blockers.
+    Old micro-* failures are useful for link_doctor, but they confuse non-executing
+    reviewer delegates into treating historical failures as active blockers.
     """
-    plan = dict(plan)
-
     route = str(plan.get("route", ""))
-    risk = str(plan.get("risk", ""))
     dirty = bool(plan.get("dirty") or plan.get("repo_dirty"))
-    health_ok = bool(
-        plan.get("healthcheck_ok")
-        or plan.get("healthcheck") == "OK"
-        or plan.get("healthcheck_status") == "OK"
-    )
-
-    latest = plan.get("latest_engine_reports")
-    failure_memory = plan.get("most_recent_failure_memory")
-
     read_onlyish = route in {"audit_fastpath", "read_only", "delegated_patch_review", "patch_review"}
 
-    if read_onlyish and not dirty:
-        if latest:
-            plan["historical_engine_reports"] = latest
-            plan["latest_engine_reports"] = []
-        if failure_memory:
-            plan["historical_failure_memory"] = failure_memory
-            plan["most_recent_failure_memory"] = None
+    if not read_onlyish or dirty:
+        return plan
 
-        plan["stale_failure_context_note"] = (
-            "Historical failed micro runs were omitted from active delegate context "
-            "because this is a read-only/audit route and the repo is currently clean. "
-            "Do not treat old micro failures as current blockers unless the current "
-            "run fails or healthcheck/doctor reports an active problem."
-        )
+    blocked_key_parts = (
+        "latest_engine_reports",
+        "engine_reports",
+        "failure_memory",
+        "recent_failure",
+        "failed_runs",
+        "last_failure",
+    )
 
-    return plan
+    blocked_text_parts = (
+        ".agents/engine_runs",
+        "latest_engine_reports",
+        "most_recent_failure_memory",
+        "historical_engine_reports",
+        "historical_failure_memory",
+        "micro-",
+        "5 consecutive",
+    )
+
+    def scrub(obj):
+        if isinstance(obj, dict):
+            clean = {}
+            for key, value in obj.items():
+                lower_key = str(key).lower()
+                if any(part in lower_key for part in blocked_key_parts):
+                    continue
+                clean[key] = scrub(value)
+            return clean
+
+        if isinstance(obj, list):
+            cleaned = []
+            for item in obj:
+                if isinstance(item, str) and any(part in item for part in blocked_text_parts):
+                    continue
+                cleaned.append(scrub(item))
+            return cleaned
+
+        if isinstance(obj, str):
+            if any(part in obj for part in blocked_text_parts):
+                return "[omitted stale historical engine-failure context for clean read-only audit]"
+            return obj
+
+        return obj
+
+    cleaned = scrub(dict(plan))
+    cleaned["active_failure_context"] = "none"
+    cleaned["delegate_context_rule"] = (
+        "Repo is clean for this read-only/audit delegate run. Do not mention, infer, "
+        "or treat old micro-* engine failures as active blockers unless they are "
+        "present in active_failure_context."
+    )
+    return cleaned
+
+
+def _sanitize_delegate_text(text: str) -> str:
+    """
+    Final guardrail before sending text to delegates.
+    Strips stale failure breadcrumbs that local models tend to over-weight.
+    """
+    blocked = (
+        ".agents/engine_runs",
+        "latest_engine_reports",
+        "most_recent_failure_memory",
+        "historical_engine_reports",
+        "historical_failure_memory",
+        "micro-",
+        "5 consecutive",
+    )
+    return "\n".join(
+        line for line in text.splitlines()
+        if not any(part in line for part in blocked)
+    )
 
 def _select_providers(requested: list[str], plan: dict[str, Any]) -> list[str]:
     if "none" in requested:
@@ -409,6 +456,8 @@ def _run_deepseek(prompt: str, dry_run: bool) -> dict[str, Any]:
 
 def _run_provider(provider: str, prompt: str, plan: dict[str, Any], dry_run: bool) -> dict[str, Any]:
     delegate_input = _delegate_prompt(prompt, plan, provider)
+
+    delegate_input = _sanitize_delegate_text(delegate_input)
 
     if provider == "local_qwen":
         return _run_local_qwen(delegate_input, dry_run)
