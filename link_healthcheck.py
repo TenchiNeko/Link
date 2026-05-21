@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pathlib
 import re
+import json
 import subprocess
 import sys
 
@@ -815,6 +816,38 @@ def check_route_intelligence() -> None:
 
     print("route intelligence OK")
 
+
+def check_progress_planner() -> None:
+    src = (ROOT / "link_progress_planner.py").read_text()
+    required = [
+        "def choose_next_action",
+        "broad_prompt_refuses_autonomous",
+        "decide_route",
+        "latest_engine_reports",
+        "latest_fanout_reports",
+    ]
+    missing = [marker for marker in required if marker not in src]
+    if missing:
+        raise SystemExit(f"progress planner missing markers: {missing}")
+
+    out = subprocess.check_output(
+        [
+            sys.executable,
+            str(ROOT / "link_progress_planner.py"),
+            "--prompt",
+            "Let's continue on the updates",
+            "--json",
+        ],
+        cwd=ROOT,
+        text=True,
+    )
+    data = json.loads(out)
+    if data.get("route", {}).get("route") != "audit_fastpath":
+        raise SystemExit("progress planner failed broad prompt audit route")
+    if not data.get("broad_prompt_refuses_autonomous"):
+        raise SystemExit("progress planner failed broad prompt autonomous refusal")
+    print("progress planner OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -838,6 +871,7 @@ def main() -> None:
     check_web_status_normalization()
     check_loop_controller()
     check_forbidden_junk()
+    check_progress_planner()
     print("LINK HEALTHCHECK PASSED")
 
 
