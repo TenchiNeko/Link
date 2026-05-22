@@ -16,7 +16,7 @@ from typing import Any
 
 OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api").rstrip("/")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("LINK_OPENROUTER_API_KEY")
-SITE_URL = os.environ.get("OPENROUTER_SITE_URL", "https://[private-name]chat.com")
+SITE_URL = os.environ.get("OPENROUTER_SITE_URL") or os.environ.get("LINK_FACTORY_SITE_URL", "http://localhost")
 APP_TITLE = os.environ.get("OPENROUTER_APP_TITLE", "Link Factory")
 
 
