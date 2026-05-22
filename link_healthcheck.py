@@ -7,7 +7,7 @@ import, compile, keep junk out, and classify dangerous shell commands correctly.
 
 from __future__ import annotations
 from pathlib import Path
-from link_healthcheck_contracts import check_context_truncation_contract
+from link_healthcheck_contracts import check_context_truncation_contract, check_context_manifest_integrity_contract
 
 import pathlib
 import re
@@ -1044,6 +1044,7 @@ def main() -> None:
     check_imports()
     check_command_guard()
     check_context_truncation_contract()
+    check_context_manifest_integrity_contract()
     check_file_safety()
     check_git_safety()
     check_task_tracker()

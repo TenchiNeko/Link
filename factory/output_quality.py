@@ -59,3 +59,50 @@ def assess_output_quality(text: str) -> list[dict]:
         issues.append(QualityIssue("warning", "missing_approval_language", "Output may be missing internal-only / human-approval language."))
 
     return [asdict(issue) for issue in issues]
+
+
+# === LU01 context/truncation hardening ===
+def evaluate_context_integrity(manifest: dict) -> dict:
+    """
+    Surface context manifest integrity for QA summaries.
+
+    Returns a compact quality result:
+    {
+      "status": "PASS"|"WARN"|"FAIL",
+      "errors": [...],
+      "warnings": [...]
+    }
+    """
+    manifest = manifest or {}
+    status = manifest.get("integrity_status", "FAIL")
+    flags = list(manifest.get("blocking_flags", []) or [])
+    warnings = list(manifest.get("manifest_warnings", []) or [])
+
+    if not manifest:
+        return {
+            "status": "FAIL",
+            "errors": ["no_context_manifest_provided"],
+            "warnings": [],
+        }
+
+    if status == "FAIL" or flags:
+        return {
+            "status": "FAIL",
+            "errors": flags or ["context_integrity_failure"],
+            "warnings": warnings,
+        }
+
+    if status == "WARN":
+        return {
+            "status": "WARN",
+            "errors": [],
+            "warnings": warnings or ["non_blocking_truncation_detected"],
+        }
+
+    return {"status": "PASS", "errors": [], "warnings": warnings}
+
+def context_manifest_quality_findings(manifest: dict) -> dict:
+    """Alias used by healthcheck and final-gate code."""
+    return evaluate_context_integrity(manifest)
+# === end LU01 context/truncation hardening ===
+

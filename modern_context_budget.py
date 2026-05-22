@@ -148,3 +148,39 @@ def summarize_budget_result(result: CompactedContext) -> dict[str, object]:
         "truncated_blocks": list(result.truncated_blocks),
         "has_text": bool(result.text.strip()),
     }
+
+
+# === LU01 context/truncation hardening ===
+def estimate_context_tokens_from_chars(total_chars: int) -> int:
+    """Small deterministic char→token estimate used for manifest budgeting."""
+    return max(0, int((int(total_chars or 0) + 3) // 4))
+
+def get_context_budget_summary(content=None, files=None, total_chars=None, total_tokens_est=None) -> dict:
+    """
+    Normalize context budget data for context manifests.
+
+    Accepts raw content, file records, or explicit totals.
+    Returns: {"total_chars": int, "total_tokens_est": int}
+    """
+    if total_chars is None:
+        if content is not None:
+            total_chars = len(str(content))
+        elif files is not None:
+            total_chars = 0
+            for f in files:
+                if isinstance(f, dict):
+                    total_chars += int(f.get("size_bytes", f.get("chars", 0)) or 0)
+                else:
+                    total_chars += len(str(f))
+        else:
+            total_chars = 0
+
+    if total_tokens_est is None:
+        total_tokens_est = estimate_context_tokens_from_chars(int(total_chars or 0))
+
+    return {
+        "total_chars": int(total_chars or 0),
+        "total_tokens_est": int(total_tokens_est or 0),
+    }
+# === end LU01 context/truncation hardening ===
+
