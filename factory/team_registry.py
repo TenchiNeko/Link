@@ -218,3 +218,50 @@ def role_dicts() -> list[dict]:
 
 def model_ids() -> list[str]:
     return sorted({role.model for role in TEAM.values() if not role.model.startswith("local:")})
+
+# Reasoning policy:
+# - default workers stay cheap/fast with no extended thinking
+# - expensive reasoning is reserved for CEO/advisors/final judgment
+ROLE_REASONING = {
+    "ceo": {
+        "mode": "effort",
+        "effort": "high",
+        "note": "Use only for major strategy, final direction, and go/no-go decisions.",
+    },
+    "chief_of_staff": {
+        "mode": "effort",
+        "effort": "low",
+        "note": "Light reasoning for routing/synthesis without burning premium tokens.",
+    },
+    "finance_advisor": {
+        "mode": "effort",
+        "effort": "high",
+        "note": "Use for pricing, ROI, budget risk, and go/no-go financial judgment.",
+    },
+    "research_advisor": {
+        "mode": "effort",
+        "effort": "high",
+        "note": "Use for market thesis, interpretation, and strategic research judgment.",
+    },
+    "qa_advisor": {
+        "mode": "max_tokens",
+        "max_tokens": 4000,
+        "note": "Claude/Anthropic-style advisor reasoning budget for final QA gate.",
+    },
+}
+
+
+def reasoning_for_role(role_id: str) -> dict:
+    """Return OpenRouter reasoning settings for a factory role."""
+    return ROLE_REASONING.get(role_id, {"mode": "none", "note": "No extended reasoning."})
+
+
+def reasoning_label_for_role(role_id: str) -> str:
+    cfg = reasoning_for_role(role_id)
+    mode = cfg.get("mode", "none")
+    if mode == "effort":
+        return f"effort:{cfg.get('effort', 'low')}"
+    if mode == "max_tokens":
+        return f"max_tokens:{cfg.get('max_tokens', 0)}"
+    return "none"
+

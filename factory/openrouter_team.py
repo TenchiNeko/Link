@@ -28,6 +28,29 @@ class ModelReply:
     usage: dict[str, Any]
 
 
+
+def _apply_reasoning_to_payload(payload: dict, role) -> dict:
+    """Attach OpenRouter reasoning controls only for roles that need them."""
+    try:
+        from factory.team_registry import reasoning_for_role
+    except Exception:
+        return payload
+
+    role_id = getattr(role, "role_id", "")
+    cfg = reasoning_for_role(role_id)
+    mode = cfg.get("mode", "none")
+
+    if mode == "effort":
+        effort = cfg.get("effort")
+        if effort:
+            payload["reasoning"] = {"effort": effort}
+    elif mode == "max_tokens":
+        max_tokens = int(cfg.get("max_tokens") or 0)
+        if max_tokens > 0:
+            payload["reasoning"] = {"max_tokens": max_tokens}
+
+    return payload
+
 def _headers() -> dict[str, str]:
     headers = {
         "Content-Type": "application/json",
