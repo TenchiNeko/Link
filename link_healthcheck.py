@@ -1164,6 +1164,23 @@ def check_web_admin_dispatch() -> None:
 
     print("web admin dispatch OK")
 
+
+def check_upgrade_registry() -> None:
+    import link_upgrade_registry
+
+    problems = link_upgrade_registry.validate_registry()
+    if problems:
+        raise SystemExit("upgrade registry failures:\n" + "\n".join(problems))
+
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05"}
+    implemented = set(link_upgrade_registry.implemented_upgrade_ids())
+    missing = sorted(required - implemented)
+    if missing:
+        raise SystemExit("upgrade registry missing implemented upgrades: " + ", ".join(missing))
+
+    print("upgrade registry OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1175,6 +1192,7 @@ def main() -> None:
     check_execution_receipts()
     check_execution_snapshots()
     check_web_admin_snapshot_wiring()
+    check_upgrade_registry()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
