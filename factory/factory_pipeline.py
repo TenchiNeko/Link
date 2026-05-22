@@ -1,3 +1,4 @@
+from factory.team_registry import tier_roles, FACTORY_TIERS
 """Factory pipeline orchestration.
 
 Draft-only model collaboration:
@@ -178,3 +179,9 @@ def run_pipeline(
         "roles": roles,
         "execute_models": execute_models,
     }
+
+# Registry-backed tier map override.
+try:
+    PIPELINES = FACTORY_TIERS
+except NameError:
+    pass

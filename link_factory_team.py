@@ -18,6 +18,7 @@ from dataclasses import asdict
 from factory.team_registry import TEAM, PIPELINES, model_ids, role_dicts
 from factory.openrouter_team import validate_model_ids
 from factory.factory_pipeline import run_pipeline
+from factory.team_registry import tier_names
 
 
 def cmd_roster(args) -> int:

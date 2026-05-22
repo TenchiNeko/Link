@@ -343,3 +343,8 @@ def tier_roles(tier: str) -> list[str]:
 
     return role_ids
 
+
+
+def get_role(role_id: str) -> RoleSpec:
+    """Compatibility helper for callers that need a role by id."""
+    return TEAM[role_id]
