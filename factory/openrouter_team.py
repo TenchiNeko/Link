@@ -107,6 +107,7 @@ def chat(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    payload = _apply_reasoning_to_payload(payload, role)
 
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
