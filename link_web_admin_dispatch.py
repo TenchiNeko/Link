@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 from capability_gate import classify_command as capability_classify_command
+from execution_snapshots import create_execution_snapshot
 
 ROOT = Path(__file__).resolve().parent
 
@@ -126,6 +127,16 @@ def _stream(cmd: list[str]) -> int:
     if gate.decision == "deny":
         print(f"capability gate denied command: {gate.reason}")
         return 2
+
+    snapshot = create_execution_snapshot(
+        action="web_admin_dispatch",
+        target=cmd,
+        gate_decision=gate.decision,
+        gate_reason=gate.reason,
+        actor="link_web_admin_dispatch",
+    )
+    print(f"execution snapshot: {snapshot}")
+
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
     p = subprocess.Popen(cmd, cwd=ROOT, env=env)

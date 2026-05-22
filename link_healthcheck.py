@@ -230,6 +230,19 @@ def check_execution_snapshots() -> None:
     print("execution snapshots OK")
 
 
+
+def check_web_admin_snapshot_wiring() -> None:
+    src = Path("link_web_admin_dispatch.py").read_text(encoding="utf-8")
+    required = [
+        "from execution_snapshots import create_execution_snapshot",
+        "create_execution_snapshot(",
+        'action="web_admin_dispatch"',
+    ]
+    missing = [needle for needle in required if needle not in src]
+    if missing:
+        raise SystemExit("web admin snapshot wiring missing: " + ", ".join(missing))
+    print("web admin snapshot wiring OK")
+
 def check_audit_only_guard() -> None:
 
     src = Path("standalone_orchestrator.py").read_text()
@@ -1161,6 +1174,7 @@ def main() -> None:
     check_context_manifest_integrity_contract()
     check_execution_receipts()
     check_execution_snapshots()
+    check_web_admin_snapshot_wiring()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
