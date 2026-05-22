@@ -117,6 +117,31 @@ def check_command_guard() -> None:
 
 
 
+
+def check_capability_gate() -> None:
+    import capability_gate
+
+    cases = [
+        ("command", "ls -la", "allow"),
+        ("command", "rm -rf /", "deny"),
+        ("git", "git status --short", "allow"),
+        ("git", "git reset --hard HEAD", "deny"),
+        ("path", "standalone_main.py", "allow"),
+        ("path", "../outside", "deny"),
+    ]
+
+    failures = []
+    for kind, target, expected in cases:
+        result = capability_gate.classify_request(kind, target)
+        print(f"capability {kind} {target!r} -> {result.decision}: {result.reason}")
+        if result.decision != expected:
+            failures.append(f"{kind} {target!r}: expected {expected}, got {result.decision}")
+
+    if failures:
+        raise SystemExit("capability gate failures:\n" + "\n".join(failures))
+
+    print("capability gate OK")
+
 def check_audit_only_guard() -> None:
 
     src = Path("standalone_orchestrator.py").read_text()
@@ -1043,6 +1068,7 @@ def main() -> None:
     check_compile()
     check_imports()
     check_command_guard()
+    check_capability_gate()
     check_context_truncation_contract()
     check_context_manifest_integrity_contract()
     check_file_safety()

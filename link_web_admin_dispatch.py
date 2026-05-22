@@ -26,6 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from capability_gate import classify_command as capability_classify_command
 
 ROOT = Path(__file__).resolve().parent
 
@@ -121,6 +122,10 @@ def _admin_plan(prompt: str) -> dict[str, Any]:
 
 
 def _stream(cmd: list[str]) -> int:
+    gate = capability_classify_command(cmd)
+    if gate.decision == "deny":
+        print(f"capability gate denied command: {gate.reason}")
+        return 2
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
     p = subprocess.Popen(cmd, cwd=ROOT, env=env)
