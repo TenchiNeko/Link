@@ -265,3 +265,81 @@ def reasoning_label_for_role(role_id: str) -> str:
         return f"max_tokens:{cfg.get('max_tokens', 0)}"
     return "none"
 
+
+# Factory execution tiers:
+# - cheap: everyday worker loop
+# - balanced: worker loop plus final QA advisor
+# - premium: CEO/advisor board plus workers
+# - board-review: expensive judgment pass only
+FACTORY_TIERS = {
+    "cheap": [
+        "chief_of_staff",
+        "research_worker",
+        "web_researcher",
+        "seo_researcher",
+        "marketing_lead",
+        "finance_worker",
+        "production_lead",
+        "production_worker",
+        "qa_worker",
+        "chief_of_staff",
+    ],
+    "balanced": [
+        "chief_of_staff",
+        "research_worker",
+        "web_researcher",
+        "seo_researcher",
+        "marketing_lead",
+        "finance_worker",
+        "production_lead",
+        "production_worker",
+        "qa_worker",
+        "qa_advisor",
+        "chief_of_staff",
+    ],
+    "premium": [
+        "ceo",
+        "chief_of_staff",
+        "research_worker",
+        "web_researcher",
+        "seo_researcher",
+        "research_advisor",
+        "marketing_lead",
+        "finance_worker",
+        "finance_advisor",
+        "production_lead",
+        "production_worker",
+        "qa_worker",
+        "qa_advisor",
+        "ceo",
+        "chief_of_staff",
+    ],
+    "board-review": [
+        "ceo",
+        "research_advisor",
+        "finance_advisor",
+        "qa_advisor",
+        "chief_of_staff",
+    ],
+}
+
+
+def tier_names() -> list[str]:
+    return sorted(FACTORY_TIERS)
+
+
+def tier_roles(tier: str) -> list[str]:
+    normalized = (tier or "cheap").strip().lower()
+    if normalized not in FACTORY_TIERS:
+        raise ValueError(
+            f"Unknown factory tier: {tier!r}. "
+            f"Valid tiers: {', '.join(tier_names())}"
+        )
+
+    role_ids = list(FACTORY_TIERS[normalized])
+    missing = [role_id for role_id in role_ids if role_id not in TEAM]
+    if missing:
+        raise ValueError(f"Factory tier {normalized!r} references missing roles: {missing}")
+
+    return role_ids
+
