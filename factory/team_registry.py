@@ -322,6 +322,13 @@ FACTORY_TIERS = {
         "chief_of_staff",
     ],
 
+    "repair-micro": [
+        "chief_of_staff",
+        "production_lead",
+        "qa_worker",
+        "qa_advisor",
+        "chief_of_staff",
+    ],
     "repair": [
         "chief_of_staff",
         "qa_worker",
