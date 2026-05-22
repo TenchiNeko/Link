@@ -28,7 +28,7 @@ def h(value) -> str:
 
 
 def safe_project(project: str) -> str:
-    project = (project or "[private-name]_growth").strip()
+    project = (project or os.environ.get("LINK_FACTORY_DEFAULT_PROJECT", "growth_lab")).strip()
     if not PROJECT_RE.match(project):
         raise ValueError("Invalid project name")
     return project
@@ -134,7 +134,7 @@ def build_repair_goal(project: str, run: Path, note: str) -> str:
         "Do not restart with a generic plan.",
         "Complete missing or truncated sections only.",
         "Preserve useful prior work.",
-        "Use the real [private-name] platform context: TikTok, X/Twitter, Instagram, [private-project], [private-name]chat.com, and Pixastack.",
+        "Use the real Project platform context: TikTok, X/Twitter, Instagram, [private-project], Projectchat.com, and Platform Automation.",
         "No posting, publishing, DMing, sending, buying, scheduling, or external action.",
         "",
         f"Previous run: {run.name}",
@@ -314,7 +314,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         qs = parse_qs(parsed.query)
-        project = form_value(qs, "project", "[private-name]_growth")
+        project = form_value(qs, "project", "growth_lab")
         run_id = form_value(qs, "run", "")
         try:
             send_html(self, render_page(project, run_id or None))
@@ -328,10 +328,10 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             if parsed.path == "/run":
-                project = safe_project(form_value(params, "project", "[private-name]_growth"))
+                project = safe_project(form_value(params, "project", "growth_lab"))
                 goal = form_value(params, "goal", "").strip() or (
-                    "Create an internal-only growth factory plan using the real [private-name] platforms: "
-                    "TikTok, X/Twitter, Instagram, [private-project], [private-name]chat.com, and Pixastack. No external actions."
+                    "Create an internal-only growth factory plan using the real Project platforms: "
+                    "TikTok, X/Twitter, Instagram, [private-project], Projectchat.com, and Platform Automation. No external actions."
                 )
                 tier = form_value(params, "tier", "balanced")
                 execute = form_value(params, "execute", "") == "1"
@@ -347,7 +347,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if parsed.path == "/approve":
-                project = safe_project(form_value(params, "project", "[private-name]_growth"))
+                project = safe_project(form_value(params, "project", "growth_lab"))
                 run = get_run(project, form_value(params, "run", ""))
                 if not run:
                     raise ValueError("Run not found")
@@ -364,7 +364,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if parsed.path == "/repair":
-                project = safe_project(form_value(params, "project", "[private-name]_growth"))
+                project = safe_project(form_value(params, "project", "growth_lab"))
                 run = get_run(project, form_value(params, "run", ""))
                 if not run:
                     raise ValueError("Run not found")
@@ -390,7 +390,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=18081)
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"Link Factory Dashboard: http://{args.host}:{args.port}/?project=[private-name]_growth", flush=True)
+    print(f"Link Factory Dashboard: http://{args.host}:{args.port}/?project=growth_lab", flush=True)
     server.serve_forever()
     return 0
 

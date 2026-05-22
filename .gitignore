@@ -121,3 +121,4 @@ factory/outputs/*
 !factory/outputs/.gitkeep
 factory/rejected_outputs/*
 !factory/rejected_outputs/.gitkeep
+factory/external/
