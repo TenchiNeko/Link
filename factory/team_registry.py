@@ -321,6 +321,16 @@ FACTORY_TIERS = {
         "qa_advisor",
         "chief_of_staff",
     ],
+
+    "repair": [
+        "chief_of_staff",
+        "qa_worker",
+        "production_lead",
+        "production_worker",
+        "research_worker",
+        "qa_advisor",
+        "chief_of_staff",
+    ],
 }
 
 

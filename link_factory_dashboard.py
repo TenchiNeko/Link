@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Link Factory Dashboard.
-
-Standalone stdlib web UI for:
-- prompting a factory team run
-- viewing role outputs by position
-- seeing model + reasoning policy per role
-- recording human approval: yes / no / try_again
-
-No posting, publishing, sending, buying, or external platform actions happen here.
-"""
+"""Link Factory Dashboard."""
 
 from __future__ import annotations
 
@@ -28,325 +19,378 @@ ROOT = Path(__file__).resolve().parent
 PROJECT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 STEP_RE = re.compile(r"^(\d+)-(.+)\.md$")
 
-try:
-    from factory.team_registry import TEAM, tier_names, reasoning_label_for_role
-except Exception:
-    TEAM = {}
-    tier_names = lambda: ["cheap", "balanced", "premium", "board-review"]  # noqa: E731
-    reasoning_label_for_role = lambda role_id: "unknown"  # noqa: E731
+from factory.output_quality import assess_output_quality
+from factory.team_registry import TEAM, reasoning_label_for_role, tier_names
 
 
-def safe_project(value: str) -> str:
-    value = (value or "growth_lab").strip()
-    if not PROJECT_RE.match(value):
-        raise ValueError("Project names may only contain letters, numbers, dot, dash, and underscore.")
-    return value
+def h(value) -> str:
+    return html.escape(str(value or ""), quote=True)
+
+
+def safe_project(project: str) -> str:
+    project = (project or "[private-name]_growth").strip()
+    if not PROJECT_RE.match(project):
+        raise ValueError("Invalid project name")
+    return project
 
 
 def project_root(project: str) -> Path:
-    return ROOT / "factory" / "projects" / project
+    return ROOT / "factory" / "projects" / safe_project(project)
+
+
+def runs_root(project: str) -> Path:
+    return project_root(project) / "runs"
 
 
 def latest_run(project: str) -> Path | None:
-    runs = project_root(project) / "runs"
-    if not runs.exists():
+    root = runs_root(project)
+    if not root.exists():
         return None
-    dirs = sorted([p for p in runs.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True)
-    return dirs[0] if dirs else None
+    runs = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True)
+    return runs[0] if runs else None
 
 
-def run_dirs(project: str) -> list[Path]:
-    runs = project_root(project) / "runs"
-    if not runs.exists():
-        return []
-    return sorted([p for p in runs.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True)
+def get_run(project: str, run_id: str | None) -> Path | None:
+    if run_id:
+        candidate = runs_root(project) / run_id
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+    return latest_run(project)
+
+
+def role_id_from_file(path: Path) -> str:
+    m = STEP_RE.match(path.name)
+    return m.group(2) if m else path.stem
+
+
+def role_meta(role_id: str) -> tuple[str, str, str]:
+    spec = TEAM.get(role_id)
+    if not spec:
+        return role_id.replace("_", " ").title(), "unknown", "none"
+    return spec.title, spec.model, reasoning_label_for_role(role_id)
+
+
+def load_json(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def save_json(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def approvals_path(run: Path) -> Path:
+    return run / "approvals.json"
+
+
+def load_approvals(run: Path) -> dict:
+    return load_json(approvals_path(run), {"qa_gate": {}, "files": {}})
 
 
 def read_text(path: Path, limit: int = 60000) -> str:
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except FileNotFoundError:
-        return ""
+        text = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return f"[could not read file: {exc}]"
     if len(text) > limit:
-        return text[:limit] + "\n\n[truncated]"
+        return text[:limit] + "\n\n[dashboard display truncated]"
     return text
 
 
-def read_json(path: Path) -> dict:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+def markdown_files(run: Path) -> list[Path]:
+    return sorted([p for p in run.glob("*.md") if p.name != "SUMMARY.md"], key=lambda p: p.name)
 
 
-def approval_file(project: str, run_name: str, step_file: str) -> Path:
-    base = project_root(project) / "approvals" / run_name
-    base.mkdir(parents=True, exist_ok=True)
-    return base / f"{step_file}.approval.json"
-
-
-def read_approval(project: str, run_name: str, step_file: str) -> dict:
-    return read_json(approval_file(project, run_name, step_file))
-
-
-def write_approval(project: str, run_name: str, step_file: str, decision: str, note: str = "") -> None:
-    if decision not in {"yes", "no", "try_again"}:
-        raise ValueError("Invalid approval decision.")
-    payload = {
-        "project": project,
-        "run": run_name,
-        "step_file": step_file,
-        "decision": decision,
-        "note": note,
-        "updated_at": int(time.time()),
-    }
-    approval_file(project, run_name, step_file).write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
-def role_meta(role_id: str) -> tuple[str, str, str]:
-    role = TEAM.get(role_id) if isinstance(TEAM, dict) else None
-    title = getattr(role, "title", role_id.replace("_", " ").title())
-    model = getattr(role, "model", "unknown")
-    reasoning = reasoning_label_for_role(role_id)
-    return title, model, reasoning
-
-
-def output_steps(run_dir: Path) -> list[tuple[int, str, str, Path]]:
-    items = []
-    for p in sorted(run_dir.glob("*.md")):
-        if p.name == "SUMMARY.md":
-            continue
-        m = STEP_RE.match(p.name)
-        if not m:
-            continue
-        items.append((int(m.group(1)), m.group(2), p.name, p))
-    return sorted(items)
-
-
-def run_factory(project: str, goal: str, tier: str, execute: bool, max_tokens: int) -> subprocess.CompletedProcess:
-    args = [
+def run_factory(project: str, goal: str, tier: str, execute: bool, max_tokens: int) -> tuple[int, str]:
+    cmd = [
         sys.executable,
         str(ROOT / "link_factory_team.py"),
         "run",
-        "--project",
-        project,
-        "--goal",
-        goal,
-        "--tier",
-        tier,
-        "--max-tokens",
-        str(max_tokens),
+        "--project", project,
+        "--goal", goal,
+        "--tier", tier,
+        "--max-tokens", str(max_tokens),
     ]
-    args.append("--execute-models" if execute else "--dry-run")
-    return subprocess.run(
-        args,
-        cwd=str(ROOT),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=900,
-        env=os.environ.copy(),
-    )
+    cmd.append("--execute-models" if execute else "--dry-run")
+
+    env = os.environ.copy()
+    env["LINK_FACTORY_ACTIVE_PROJECT"] = project
+
+    try:
+        proc = subprocess.run(cmd, cwd=ROOT, env=env, text=True, capture_output=True, timeout=1800)
+        out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return proc.returncode, out
+    except Exception as exc:
+        return 1, f"Dashboard failed to start factory run: {exc}"
 
 
-def page(project: str, message: str = "") -> str:
-    run = latest_run(project)
+def build_repair_goal(project: str, run: Path, note: str) -> str:
+    chunks = [
+        f"REPAIR PASS for project `{project}`.",
+        "Use the prior run outputs, QA findings, quality warnings, and human note below.",
+        "Do not restart with a generic plan.",
+        "Complete missing or truncated sections only.",
+        "Preserve useful prior work.",
+        "Use the real [private-name] platform context: TikTok, X/Twitter, Instagram, [private-project], [private-name]chat.com, and Pixastack.",
+        "No posting, publishing, DMing, sending, buying, scheduling, or external action.",
+        "",
+        f"Previous run: {run.name}",
+    ]
+
+    if note.strip():
+        chunks += ["", "Human note:", note.strip()]
+
+    for file in markdown_files(run):
+        text = read_text(file, limit=10000)
+        issues = assess_output_quality(text)
+        if issues or "qa" in file.name or "chief_of_staff" in file.name:
+            chunks.append(f"\n\n---\nFile: {file.name}\n")
+            if issues:
+                chunks.append("Quality warnings:\n" + json.dumps(issues, indent=2))
+            chunks.append(text)
+
+    return "\n".join(chunks)
+
+
+def form_value(params: dict, key: str, default: str = "") -> str:
+    values = params.get(key)
+    return values[0] if values else default
+
+
+def redirect(handler: BaseHTTPRequestHandler, location: str) -> None:
+    handler.send_response(303)
+    handler.send_header("Location", location)
+    handler.end_headers()
+
+
+def send_html(handler: BaseHTTPRequestHandler, body: str, status: int = 200) -> None:
+    data = body.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    if handler.command != "HEAD":
+        handler.wfile.write(data)
+
+
+def decision_buttons(project: str, run: Path, target: str, current: dict) -> str:
+    decision = current.get("decision", "pending")
+    return f'''
+    <form class="buttons" method="post" action="/approve">
+      <input type="hidden" name="project" value="{h(project)}">
+      <input type="hidden" name="run" value="{h(run.name)}">
+      <input type="hidden" name="target" value="{h(target)}">
+      <span class="decision decision-{h(decision)}">{h(decision)}</span>
+      <button name="decision" value="approved" class="yes">Approve</button>
+      <button name="decision" value="rejected" class="no">Reject</button>
+      <button name="decision" value="revise" class="try">Revise / Try Again</button>
+    </form>
+    '''
+
+
+def render_page(project: str, run_id: str | None = None) -> str:
+    project = safe_project(project)
+    run = get_run(project, run_id)
     tiers = tier_names()
-    run_options = run_dirs(project)
+    selected_tier = "balanced" if "balanced" in tiers else (tiers[0] if tiers else "cheap")
+    tier_options = "".join(f'<option value="{h(t)}" {"selected" if t == selected_tier else ""}>{h(t)}</option>' for t in tiers)
 
-    parts = []
-    parts.append("""<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Link Factory Dashboard</title>
+    parts = ["""<!doctype html>
+<html><head><meta charset="utf-8"><title>Link Factory Dashboard</title>
 <style>
-body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 24px; background: #0f1115; color: #eef0f5; }
-h1, h2, h3 { margin-bottom: 8px; }
-a { color: #9ecbff; }
-.panel { background: #171a21; border: 1px solid #2a2f3a; border-radius: 14px; padding: 16px; margin-bottom: 18px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(390px, 1fr)); gap: 16px; }
-.card { background: #171a21; border: 1px solid #2a2f3a; border-radius: 14px; padding: 16px; }
-.meta { color: #aab3c5; font-size: 13px; line-height: 1.5; }
-pre { white-space: pre-wrap; background: #0b0d11; border: 1px solid #2a2f3a; padding: 12px; border-radius: 10px; max-height: 520px; overflow: auto; }
-textarea, input, select { width: 100%; box-sizing: border-box; background: #0b0d11; color: #eef0f5; border: 1px solid #2a2f3a; border-radius: 8px; padding: 10px; }
-button { border: 0; border-radius: 8px; padding: 9px 12px; margin: 4px 4px 0 0; cursor: pointer; font-weight: 650; }
-.yes { background: #238636; color: white; }
-.no { background: #da3633; color: white; }
-.try { background: #d29922; color: #111; }
-.run { background: #2f81f7; color: white; }
-.badge { display: inline-block; background: #222938; border: 1px solid #3b4457; border-radius: 999px; padding: 3px 8px; margin: 2px; font-size: 12px; }
-.msg { background: #13233a; border: 1px solid #2f81f7; border-radius: 10px; padding: 10px; margin-bottom: 16px; }
-</style>
-</head>
-<body>
-<h1>Link Factory Dashboard</h1>
-""")
-
-    if message:
-        parts.append(f'<div class="msg">{html.escape(message)}</div>')
+body{font-family:Arial,sans-serif;margin:0;background:#0b0d12;color:#eef1f7}
+header{padding:18px 24px;background:#151925;border-bottom:1px solid #2a3144;position:sticky;top:0;z-index:2}
+h1{margin:0;font-size:24px}.wrap{padding:20px;max-width:1500px;margin:auto}
+.panel,.card{background:#151925;border:1px solid #2a3144;border-radius:14px;padding:16px;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px}
+.card h2{font-size:18px;margin:0 0 8px}.meta{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px}
+.tag{background:#222a3c;border:1px solid #33405b;border-radius:999px;padding:4px 8px;font-size:12px;color:#c8d2e8}
+pre{white-space:pre-wrap;background:#080a0f;border:1px solid #222a3c;border-radius:10px;padding:12px;max-height:560px;overflow:auto;color:#dce5f8}
+textarea,input,select{width:100%;box-sizing:border-box;background:#090c13;color:#eef1f7;border:1px solid #33405b;border-radius:10px;padding:10px}
+textarea{min-height:110px}button{border:0;border-radius:10px;padding:9px 12px;margin:4px;cursor:pointer;font-weight:700}
+.yes{background:#1f8f4d;color:white}.no{background:#9b2c2c;color:white}.try{background:#b7791f;color:white}.run{background:#4263eb;color:white}
+.buttons{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.decision{padding:5px 8px;border-radius:999px;background:#2a3144;font-size:12px}
+.decision-approved{background:#1f8f4d}.decision-rejected{background:#9b2c2c}.decision-revise{background:#b7791f}
+.issue{border-left:4px solid #b7791f;padding:7px 10px;background:#1c1520;margin:6px 0;border-radius:8px}
+.issue-critical{border-left-color:#e03131;background:#251218}.small{color:#aebad3;font-size:13px}
+.row{display:grid;grid-template-columns:1fr 180px 140px 120px;gap:10px;align-items:end}@media(max-width:800px){.row{grid-template-columns:1fr}}
+</style></head><body><header><h1>🏭 Link Factory Dashboard</h1></header><div class="wrap">
+"""]
 
     parts.append(f"""
 <div class="panel">
-<h2>Run the team</h2>
-<form method="POST" action="/run">
-<label>Project</label>
-<input name="project" value="{html.escape(project)}">
-<br><br>
-<label>Tier</label>
-<select name="tier">
-""")
-    for t in tiers:
-        selected = "selected" if t == "balanced" else ""
-        parts.append(f'<option value="{html.escape(t)}" {selected}>{html.escape(t)}</option>')
-    parts.append("""
-</select>
-<br><br>
-<label>Goal / Job Prompt</label>
-<textarea name="goal" rows="5">Create a short internal project plan. Do not post, publish, send, buy, DM, or take external actions. Only produce internal planning output.</textarea>
-<br><br>
-<label>Max tokens per role</label>
-<input name="max_tokens" value="1800">
-<br><br>
-<label><input type="checkbox" name="execute" value="1"> Execute models through OpenRouter</label>
-<br><br>
-<button class="run" type="submit">Run Factory Team</button>
-</form>
+  <form method="post" action="/run">
+    <div class="row">
+      <label>Project<input name="project" value="{h(project)}"></label>
+      <label>Tier<select name="tier">{tier_options}</select></label>
+      <label>Max tokens<input name="max_tokens" value="5500"></label>
+      <label class="small"><input type="checkbox" name="execute" value="1" style="width:auto"> execute</label>
+    </div>
+    <p class="small">Prompt the team. External posting/sending/buying remains forbidden unless separately approved.</p>
+    <textarea name="goal" placeholder="Give the factory a job..."></textarea>
+    <button class="run" type="submit">Run Team</button>
+  </form>
 </div>
 """)
 
-    parts.append('<div class="panel"><h2>Latest run</h2>')
-    if run is None:
-        parts.append("<p>No run found yet.</p></div></body></html>")
-        return "".join(parts)
+    last_error = project_root(project) / "dashboard_last_error.log"
+    if last_error.exists():
+        parts.append(f'<div class="panel"><h2>Last dashboard run log</h2><pre>{h(read_text(last_error, 12000))}</pre></div>')
 
-    manifest = read_json(run / "manifest.json")
-    summary = read_text(run / "SUMMARY.md")
-    parts.append(f'<div class="meta">Project: <b>{html.escape(project)}</b><br>Run: <b>{html.escape(run.name)}</b><br>')
-    parts.append(f'Tier: <b>{html.escape(str(manifest.get("tier", "")))}</b><br>')
-    parts.append(f'Execute models: <b>{html.escape(str(manifest.get("execute_models", "")))}</b></div>')
-    if run_options:
-        parts.append('<p class="meta">Recent runs: ')
-        for r in run_options[:8]:
-            parts.append(f'<span class="badge">{html.escape(r.name)}</span>')
-        parts.append('</p>')
-    parts.append(f"<pre>{html.escape(summary)}</pre></div>")
+    if not run:
+        parts.append(f'<div class="panel">No runs found for <b>{h(project)}</b>.</div></div></body></html>')
+        return "\n".join(parts)
+
+    approvals = load_approvals(run)
+    qa_gate = approvals.get("qa_gate", {})
+
+    parts.append(f"""
+<div class="panel">
+  <h2>Latest Run: {h(run.name)}</h2>
+  <div class="meta">
+    <span class="tag">project: {h(project)}</span>
+    <span class="tag">run: {h(run.name)}</span>
+    <span class="tag">approval gate: QA → Router → Human</span>
+  </div>
+  <p class="small">Recommended flow: review QA/QA Advisor and final Chief of Staff, then use the run-level gate.</p>
+  {decision_buttons(project, run, "__qa_gate__", qa_gate)}
+  <form method="post" action="/repair" class="panel" style="margin-top:12px">
+    <input type="hidden" name="project" value="{h(project)}">
+    <input type="hidden" name="run" value="{h(run.name)}">
+    <p class="small">Repair pass sends QA findings, quality warnings, and your note back to the Router/repair tier.</p>
+    <textarea name="note" placeholder="Optional repair instruction..."></textarea>
+    <button class="try" type="submit">Run Repair Pass</button>
+  </form>
+</div>
+""")
+
+    summary = run / "SUMMARY.md"
+    if summary.exists():
+        parts.append(f'<div class="panel"><h2>Summary</h2><pre>{h(read_text(summary, 12000))}</pre></div>')
 
     parts.append('<div class="grid">')
-    for step_num, role_id, step_file, path in output_steps(run):
+    for file in markdown_files(run):
+        role_id = role_id_from_file(file)
         title, model, reasoning = role_meta(role_id)
-        body = read_text(path)
-        approval = read_approval(project, run.name, step_file)
-        decision = approval.get("decision", "pending")
-        note = approval.get("note", "")
-
-        parts.append('<div class="card">')
-        parts.append(f"<h3>{step_num:02d}. {html.escape(title)}</h3>")
-        parts.append('<div class="meta">')
-        parts.append(f'role: <b>{html.escape(role_id)}</b><br>')
-        parts.append(f'model: <b>{html.escape(model)}</b><br>')
-        parts.append(f'reasoning: <b>{html.escape(reasoning)}</b><br>')
-        parts.append(f'approval: <b>{html.escape(decision)}</b>')
-        if note:
-            parts.append(f'<br>note: {html.escape(note)}')
-        parts.append('</div>')
-
-        parts.append(f"<pre>{html.escape(body)}</pre>")
+        text = read_text(file)
+        issues = assess_output_quality(text)
+        current = approvals.get("files", {}).get(file.name, {})
+        issue_html = ""
+        if issues:
+            issue_html = "<h3>Quality / completeness warnings</h3>" + "\n".join(
+                f'<div class="issue issue-{h(i.get("severity"))}"><b>{h(i.get("code"))}</b>: {h(i.get("message"))}</div>'
+                for i in issues
+            )
 
         parts.append(f"""
-<form method="POST" action="/approve">
-<input type="hidden" name="project" value="{html.escape(project)}">
-<input type="hidden" name="run" value="{html.escape(run.name)}">
-<input type="hidden" name="step_file" value="{html.escape(step_file)}">
-<textarea name="note" rows="2" placeholder="Optional note for this decision"></textarea>
-<button class="yes" name="decision" value="yes">Yes</button>
-<button class="no" name="decision" value="no">No</button>
-<button class="try" name="decision" value="try_again">Try Again</button>
-</form>
+<div class="card">
+  <h2>{h(file.name)} — {h(title)}</h2>
+  <div class="meta">
+    <span class="tag">role: {h(role_id)}</span>
+    <span class="tag">model: {h(model)}</span>
+    <span class="tag">reasoning: {h(reasoning)}</span>
+  </div>
+  {decision_buttons(project, run, file.name, current)}
+  {issue_html}
+  <pre>{h(text)}</pre>
+</div>
 """)
-        parts.append("</div>")
-    parts.append("</div></body></html>")
-    return "".join(parts)
+
+    parts.append("</div></div></body></html>")
+    return "\n".join(parts)
 
 
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):
-        sys.stderr.write("factory-dashboard: " + (fmt % args) + "\n")
+    server_version = "LinkFactoryDashboard/1.1"
 
-    def send_html(self, body: str, status: int = 200):
-        data = body.encode("utf-8")
-        self.send_response(status)
+    def do_HEAD(self):
+        self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
-
-    def redirect(self, project: str, message: str = ""):
-        q = {"project": project}
-        if message:
-            q["message"] = message
-        self.send_response(303)
-        self.send_header("Location", "/?" + urlencode(q))
-        self.end_headers()
-
-    def read_form(self) -> dict[str, str]:
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        raw = self.rfile.read(length).decode("utf-8", errors="replace")
-        parsed = parse_qs(raw)
-        return {k: v[-1] if v else "" for k, v in parsed.items()}
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        q = parse_qs(parsed.query)
-        project = safe_project((q.get("project") or ["growth_lab"])[0])
-        message = (q.get("message") or [""])[0]
-        if parsed.path not in {"/", "/dashboard"}:
-            self.send_html("<h1>Not found</h1>", 404)
-            return
-        self.send_html(page(project, message))
+        qs = parse_qs(parsed.query)
+        project = form_value(qs, "project", "[private-name]_growth")
+        run_id = form_value(qs, "run", "")
+        try:
+            send_html(self, render_page(project, run_id or None))
+        except Exception as exc:
+            send_html(self, f"<pre>{h(type(exc).__name__)}: {h(exc)}</pre>", 500)
 
     def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        params = parse_qs(self.rfile.read(length).decode("utf-8", errors="replace"))
+        parsed = urlparse(self.path)
+
         try:
-            form = self.read_form()
-            if self.path == "/approve":
-                project = safe_project(form.get("project", "growth_lab"))
-                run_name = form.get("run", "")
-                step_file = form.get("step_file", "")
-                decision = form.get("decision", "")
-                note = form.get("note", "")
-                if not run_name or not step_file:
-                    raise ValueError("Missing run or step file.")
-                write_approval(project, run_name, step_file, decision, note)
-                self.redirect(project, f"Saved approval: {decision} for {step_file}")
+            if parsed.path == "/run":
+                project = safe_project(form_value(params, "project", "[private-name]_growth"))
+                goal = form_value(params, "goal", "").strip() or (
+                    "Create an internal-only growth factory plan using the real [private-name] platforms: "
+                    "TikTok, X/Twitter, Instagram, [private-project], [private-name]chat.com, and Pixastack. No external actions."
+                )
+                tier = form_value(params, "tier", "balanced")
+                execute = form_value(params, "execute", "") == "1"
+                max_tokens = int(form_value(params, "max_tokens", "5500") or "5500")
+                code, out = run_factory(project, goal, tier, execute, max_tokens)
+                log = project_root(project) / "dashboard_last_error.log"
+                if code != 0:
+                    log.parent.mkdir(parents=True, exist_ok=True)
+                    log.write_text(out, encoding="utf-8")
+                elif log.exists():
+                    log.unlink()
+                redirect(self, "/?" + urlencode({"project": project}))
                 return
 
-            if self.path == "/run":
-                project = safe_project(form.get("project", "growth_lab"))
-                goal = form.get("goal", "").strip()
-                tier = form.get("tier", "cheap").strip()
-                execute = form.get("execute") == "1"
-                max_tokens = int(form.get("max_tokens", "1800") or "1800")
-                if not goal:
-                    raise ValueError("Goal cannot be blank.")
-
-                result = run_factory(project, goal, tier, execute, max_tokens)
-                msg = f"Factory run exit={result.returncode}. " + result.stdout[-600:].replace("\n", " | ")
-                self.redirect(project, msg)
+            if parsed.path == "/approve":
+                project = safe_project(form_value(params, "project", "[private-name]_growth"))
+                run = get_run(project, form_value(params, "run", ""))
+                if not run:
+                    raise ValueError("Run not found")
+                target = form_value(params, "target", "")
+                decision = form_value(params, "decision", "pending")
+                approvals = load_approvals(run)
+                record = {"decision": decision, "ts": int(time.time())}
+                if target == "__qa_gate__":
+                    approvals["qa_gate"] = record
+                else:
+                    approvals.setdefault("files", {})[target] = record
+                save_json(approvals_path(run), approvals)
+                redirect(self, "/?" + urlencode({"project": project, "run": run.name}))
                 return
 
-            self.send_html("<h1>Not found</h1>", 404)
-        except Exception as e:
-            self.send_html(f"<h1>Error</h1><pre>{html.escape(str(e))}</pre>", 500)
+            if parsed.path == "/repair":
+                project = safe_project(form_value(params, "project", "[private-name]_growth"))
+                run = get_run(project, form_value(params, "run", ""))
+                if not run:
+                    raise ValueError("Run not found")
+                goal = build_repair_goal(project, run, form_value(params, "note", ""))
+                code, out = run_factory(project, goal, "repair", True, 6500)
+                log = project_root(project) / "dashboard_last_error.log"
+                if code != 0:
+                    log.parent.mkdir(parents=True, exist_ok=True)
+                    log.write_text(out, encoding="utf-8")
+                elif log.exists():
+                    log.unlink()
+                redirect(self, "/?" + urlencode({"project": project}))
+                return
+
+            send_html(self, "Not found", 404)
+        except Exception as exc:
+            send_html(self, f"<pre>{h(type(exc).__name__)}: {h(exc)}</pre>", 500)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Link Factory Dashboard")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18081)
     args = parser.parse_args()
-
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"Factory dashboard listening on http://{args.host}:{args.port}")
+    print(f"Link Factory Dashboard: http://{args.host}:{args.port}/?project=[private-name]_growth", flush=True)
     server.serve_forever()
     return 0
 

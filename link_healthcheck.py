@@ -215,6 +215,7 @@ def check_forbidden_junk() -> None:
         except Exception:
             _factory_rel = str(path).replace('\\', '/')
         if _factory_rel.startswith((
+            'factory/context/',
             'factory/projects/',
             'factory/work_orders/',
             'factory/outputs/',

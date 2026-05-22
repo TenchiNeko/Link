@@ -8,6 +8,7 @@ Draft-only model collaboration:
 """
 
 from __future__ import annotations
+import os
 from factory.team_registry import tier_roles, FACTORY_TIERS
 
 import json
@@ -88,6 +89,7 @@ def run_pipeline(
     execute_models: bool = False,
     max_tokens: int = 1600,
 ) -> dict[str, Any]:
+    os.environ["LINK_FACTORY_ACTIVE_PROJECT"] = str(project)
     if tier not in PIPELINES:
         raise ValueError(f"unknown tier {tier!r}; expected one of {sorted(PIPELINES)}")
 

@@ -54,6 +54,41 @@ def _apply_reasoning_to_payload(payload: dict, role) -> dict:
 
     return payload
 
+
+def _inject_project_context_payload(payload: dict) -> dict:
+    """Add project/platform context to every factory model call."""
+    project = os.environ.get("LINK_FACTORY_ACTIVE_PROJECT", "")
+    if not project:
+        return payload
+
+    try:
+        from factory.project_context import load_project_context
+    except Exception:
+        return payload
+
+    context = load_project_context(project)
+    if not context:
+        return payload
+
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return payload
+
+    context_text = (
+        "FACTORY PROJECT CONTEXT AND GOVERNANCE\n"
+        "Use this as high-priority operating context. Do not ignore the real platforms/tools.\n\n"
+        + context
+    )
+
+    if messages and messages[0].get("role") == "system":
+        messages[0]["content"] = str(messages[0].get("content", "")) + "\n\n" + context_text
+    else:
+        messages.insert(0, {"role": "system", "content": context_text})
+
+    payload["messages"] = messages
+    return payload
+
+
 def _headers() -> dict[str, str]:
     headers = {
         "Content-Type": "application/json",
@@ -115,6 +150,7 @@ def chat(
         locals().get("role") or locals().get("role_spec") or locals().get("spec") or locals().get("role_id") or "",
     )
 
+    payload = _inject_project_context_payload(payload)
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         f"{OPENROUTER_BASE_URL}/v1/chat/completions",
