@@ -36,7 +36,10 @@ def _apply_reasoning_to_payload(payload: dict, role) -> dict:
     except Exception:
         return payload
 
-    role_id = getattr(role, "role_id", "")
+    if isinstance(role, str):
+        role_id = role
+    else:
+        role_id = getattr(role, "role_id", "")
     cfg = reasoning_for_role(role_id)
     mode = cfg.get("mode", "none")
 
@@ -107,7 +110,10 @@ def chat(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    payload = _apply_reasoning_to_payload(payload, role)
+    payload = _apply_reasoning_to_payload(
+        payload,
+        locals().get("role") or locals().get("role_spec") or locals().get("spec") or locals().get("role_id") or "",
+    )
 
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
