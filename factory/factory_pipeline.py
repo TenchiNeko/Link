@@ -1,4 +1,3 @@
-from factory.team_registry import tier_roles, FACTORY_TIERS
 """Factory pipeline orchestration.
 
 Draft-only model collaboration:
@@ -9,6 +8,7 @@ Draft-only model collaboration:
 """
 
 from __future__ import annotations
+from factory.team_registry import tier_roles, FACTORY_TIERS
 
 import json
 import re

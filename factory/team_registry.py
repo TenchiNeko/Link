@@ -348,3 +348,7 @@ def tier_roles(tier: str) -> list[str]:
 def get_role(role_id: str) -> RoleSpec:
     """Compatibility helper for callers that need a role by id."""
     return TEAM[role_id]
+
+
+# Backward-compatible pipeline name used by the CLI/pipeline.
+PIPELINES = FACTORY_TIERS
