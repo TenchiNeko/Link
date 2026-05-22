@@ -208,6 +208,20 @@ def check_forbidden_junk() -> None:
     hits: list[str] = []
 
     for path in ROOT.rglob("*"):
+        # Generated factory runtime state is allowed to contain project names.
+        # Keep scanning factory source/templates, but ignore per-project output/state.
+        try:
+            _factory_rel = str(path.relative_to(ROOT)).replace('\\', '/')
+        except Exception:
+            _factory_rel = str(path).replace('\\', '/')
+        if _factory_rel.startswith((
+            'factory/projects/',
+            'factory/work_orders/',
+            'factory/outputs/',
+            'factory/rejected_outputs/',
+            'factory/approvals/',
+        )):
+            continue
         if not path.is_file():
             continue
         if should_skip(path):
