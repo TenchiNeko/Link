@@ -1,0 +1,15 @@
+{
+  "fixture_id": "HF-01-context-truncation-contract",
+  "purpose": "Verify that future context bundling exposes included/omitted/truncated metadata and required tail sentinels.",
+  "required_files": [
+    "00_required_intro.md",
+    "10_oversized_body.md",
+    "99_required_tail.md"
+  ],
+  "required_sentinels": [
+    "LINK_HC_CONTEXT_HEAD_SENTINEL",
+    "LINK_HC_CONTEXT_OVERSIZED_SENTINEL",
+    "LINK_HC_CONTEXT_TAIL_SENTINEL"
+  ],
+  "strict_env": "LINK_HEALTHCHECK_STRICT_CONTEXT_CONTRACT"
+}
