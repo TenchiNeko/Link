@@ -190,6 +190,46 @@ def check_capability_gate() -> None:
 
     print("capability gate OK")
 
+
+def check_execution_snapshots() -> None:
+    import os
+    import tempfile
+    from pathlib import Path
+
+    from execution_snapshots import create_execution_snapshot
+
+    old_dir = os.environ.get("LINK_EXECUTION_SNAPSHOT_DIR")
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["LINK_EXECUTION_SNAPSHOT_DIR"] = tmp
+        try:
+            snap = create_execution_snapshot(
+                action="healthcheck_snapshot",
+                target=["git", "status", "--short"],
+                gate_decision="allow",
+                gate_reason="healthcheck",
+                actor="link_healthcheck",
+            )
+        finally:
+            if old_dir is None:
+                os.environ.pop("LINK_EXECUTION_SNAPSHOT_DIR", None)
+            else:
+                os.environ["LINK_EXECUTION_SNAPSHOT_DIR"] = old_dir
+
+        required = [
+            "metadata.json",
+            "HEAD.txt",
+            "git_status.txt",
+            "git_diff.patch",
+            "git_diff_cached.patch",
+            "untracked_files.txt",
+        ]
+        missing = [name for name in required if not (Path(snap) / name).exists()]
+        if missing:
+            raise SystemExit("execution snapshot missing files: " + ", ".join(missing))
+
+    print("execution snapshots OK")
+
+
 def check_audit_only_guard() -> None:
 
     src = Path("standalone_orchestrator.py").read_text()
@@ -1120,6 +1160,7 @@ def main() -> None:
     check_context_truncation_contract()
     check_context_manifest_integrity_contract()
     check_execution_receipts()
+    check_execution_snapshots()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
