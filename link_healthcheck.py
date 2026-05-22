@@ -83,6 +83,54 @@ print("imports OK")
     print(out.strip())
 
 
+
+def check_execution_receipts() -> None:
+    import tempfile
+    import capability_gate
+    from execution_receipts import build_execution_receipt, write_execution_receipt, verify_execution_receipt
+
+    gate = capability_gate.classify_command("ls -la")
+    receipt = build_execution_receipt(
+        action="healthcheck",
+        target="ls -la",
+        gate_decision=gate,
+        outcome="simulated",
+        actor="link_healthcheck",
+    )
+
+    required = {
+        "receipt_version",
+        "receipt_id",
+        "created_at",
+        "actor",
+        "action",
+        "target",
+        "target_sha256",
+        "gate",
+        "outcome",
+        "receipt_sha256",
+    }
+    missing = required - set(receipt)
+    if missing:
+        raise SystemExit("execution receipt missing fields: " + ", ".join(sorted(missing)))
+
+    if receipt["gate"]["decision"] != "allow":
+        raise SystemExit("execution receipt did not preserve gate decision")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write_execution_receipt(
+            action="healthcheck",
+            target="ls -la",
+            gate_decision=gate,
+            outcome="simulated",
+            actor="link_healthcheck",
+            receipt_dir=tmp,
+        )
+        if not verify_execution_receipt(path):
+            raise SystemExit("execution receipt hash verification failed")
+
+    print("execution receipts OK")
+
 def check_command_guard() -> None:
     import modern_command_guard
 
@@ -1071,6 +1119,7 @@ def main() -> None:
     check_capability_gate()
     check_context_truncation_contract()
     check_context_manifest_integrity_contract()
+    check_execution_receipts()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
