@@ -1392,6 +1392,40 @@ def check_upgrade_evidence_bundle() -> None:
     print("upgrade evidence bundle OK")
 
 
+
+def check_healthcheck_evidence_archive() -> None:
+    import tempfile
+
+    from healthcheck_evidence_archive import (
+        archive_healthcheck_output,
+        validate_healthcheck_archive,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        latest = None
+        for i in range(4):
+            latest = archive_healthcheck_output(
+                output=f"fake healthcheck output {i}\nLINK HEALTHCHECK PASSED\n",
+                exit_code=0,
+                archive_root=tmp,
+                retain=2,
+                label="healthcheck_test",
+            )
+
+        if latest is None:
+            raise SystemExit("healthcheck evidence archive did not create archive")
+
+        problems = validate_healthcheck_archive(latest)
+        if problems:
+            raise SystemExit("healthcheck evidence archive failures:\n" + "\n".join(problems))
+
+        remaining = [p for p in __import__("pathlib").Path(tmp).iterdir() if p.is_dir()]
+        if len(remaining) != 2:
+            raise SystemExit(f"healthcheck evidence archive retention failed: {len(remaining)} archives remain")
+
+    print("healthcheck evidence archive OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1409,6 +1443,7 @@ def main() -> None:
     check_upgrade_diff_receipt_crosscheck()
     check_qa_repair_routing_contract()
     check_upgrade_evidence_bundle()
+    check_healthcheck_evidence_archive()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
