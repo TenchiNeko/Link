@@ -1166,6 +1166,41 @@ def check_web_admin_dispatch() -> None:
 
 
 
+
+def check_upgrade_status_badges() -> None:
+    from pathlib import Path
+    from link_upgrade_status import render_upgrade_badges, upgrade_status_rows
+
+    rows = upgrade_status_rows()
+    ids = {row["id"] for row in rows}
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07"}
+    missing = sorted(required - ids)
+    if missing:
+        raise SystemExit("upgrade status badges missing ids: " + ", ".join(missing))
+
+    html = render_upgrade_badges()
+    required_html = [
+        "upgrade-status-panel",
+        "upgrade-badge-implemented",
+        "LU07",
+        "Implementation status dashboard badges",
+    ]
+    missing_html = [needle for needle in required_html if needle not in html]
+    if missing_html:
+        raise SystemExit("upgrade status badge html missing: " + ", ".join(missing_html))
+
+    dashboard_src = Path("link_factory_dashboard.py").read_text()
+    dashboard_needles = [
+        "from link_upgrade_status import render_upgrade_badges",
+        "/upgrade-status",
+        "render_upgrade_badges()",
+    ]
+    missing_dashboard = [needle for needle in dashboard_needles if needle not in dashboard_src]
+    if missing_dashboard:
+        raise SystemExit("dashboard upgrade status wiring missing: " + ", ".join(missing_dashboard))
+
+    print("upgrade status badges OK")
+
 def check_planner_acceptance_contract() -> None:
     import tempfile
     from pathlib import Path
@@ -1282,6 +1317,7 @@ def main() -> None:
     check_web_admin_snapshot_wiring()
     check_upgrade_registry()
     check_planner_acceptance_contract()
+    check_upgrade_status_badges()
     check_file_safety()
     check_git_safety()
     check_task_tracker()

@@ -14,6 +14,7 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from link_upgrade_status import render_upgrade_badges
 from urllib.parse import parse_qs, urlencode, urlparse
 
 ROOT = Path(__file__).resolve().parent
@@ -313,6 +314,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if urlparse(self.path).path == "/upgrade-status":
+            body = (
+                "<!doctype html><html><head><meta charset='utf-8'>"
+                "<title>Link Upgrade Status</title></head><body>"
+                + render_upgrade_badges()
+                + "</body></html>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(body.encode("utf-8"))
+            return
+
         parsed = urlparse(self.path)
         qs = parse_qs(parsed.query)
         project = form_value(qs, "project", DEFAULT_FACTORY_PROJECT)

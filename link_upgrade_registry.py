@@ -9,11 +9,12 @@ UPGRADES = [
     ("LU04", "Rollback execution snapshots", "execution snapshots OK"),
     ("LU05", "Upgrade registry", "upgrade registry OK"),
     ("LU06", "Planner-to-implementation acceptance contract", "planner acceptance contract OK"),
+    ("LU07", "Implementation status dashboard badges", "upgrade status badges OK"),
 ]
 
 NEXT_UPGRADE = {
-    "id": "LU07",
-    "title": "Implementation status dashboard badges",
+    "id": "LU08",
+    "title": "Upgrade diff/receipt cross-check",
 }
 
 
