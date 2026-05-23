@@ -186,9 +186,15 @@ UPGRADES = [{'commit_subject': '',
  {'id': 'LU38',
   'status': 'implemented',
   'title': 'Workflow preflight receipt index',
-  'healthcheck_markers': 'workflow preflight receipt index OK'}]
+  'healthcheck_markers': 'workflow preflight receipt index OK'},
+ {'id': 'LU39',
+  'status': 'implemented',
+  'title': 'Workflow preflight receipt index web admin route',
+  'healthcheck_markers': 'workflow preflight receipt index web admin route OK'}]
 
-NEXT_UPGRADE = {'id': 'LU39', 'status': 'planned', 'title': 'Workflow preflight receipt index web admin route'}
+NEXT_UPGRADE = {'id': 'LU40',
+ 'status': 'planned',
+ 'title': 'Workflow preflight receipt index web admin integration'}
 
 
 def implemented_upgrade_ids() -> list[str]:
