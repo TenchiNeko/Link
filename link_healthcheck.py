@@ -1165,6 +1165,94 @@ def check_web_admin_dispatch() -> None:
     print("web admin dispatch OK")
 
 
+
+def check_planner_acceptance_contract() -> None:
+    import tempfile
+    from pathlib import Path
+
+    from planner_acceptance_contract import (
+        build_acceptance_contract,
+        evaluate_acceptance_contract,
+        validate_acceptance_contract,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "implemented.txt").write_text("done", encoding="utf-8")
+
+        contract = build_acceptance_contract(
+            upgrade_id="LUXX",
+            title="Example accepted upgrade",
+            required_files=["implemented.txt"],
+            required_healthcheck_markers=["example marker OK"],
+            required_commit_subject="feat: example accepted upgrade",
+            registry_id="LUXX",
+        )
+
+        clean = validate_acceptance_contract(
+            contract,
+            repo_root=root,
+            healthcheck_output="example marker OK\nLINK HEALTHCHECK PASSED",
+            git_log_output="abc123 feat: example accepted upgrade",
+            registry_ids={"LUXX"},
+        )
+        if clean:
+            raise SystemExit("planner acceptance contract clean case failed:\n" + "\n".join(clean))
+
+        checks = [
+            (
+                {**contract, "required_files": ["missing.txt"]},
+                "example marker OK",
+                "abc123 feat: example accepted upgrade",
+                {"LUXX"},
+                "missing required file",
+            ),
+            (
+                contract,
+                "LINK HEALTHCHECK PASSED",
+                "abc123 feat: example accepted upgrade",
+                {"LUXX"},
+                "missing healthcheck marker",
+            ),
+            (
+                contract,
+                "example marker OK",
+                "abc123 other commit",
+                {"LUXX"},
+                "missing expected commit subject",
+            ),
+            (
+                contract,
+                "example marker OK",
+                "abc123 feat: example accepted upgrade",
+                set(),
+                "missing registry id",
+            ),
+        ]
+
+        for test_contract, health, log, registry_ids, expected in checks:
+            problems = validate_acceptance_contract(
+                test_contract,
+                repo_root=root,
+                healthcheck_output=health,
+                git_log_output=log,
+                registry_ids=registry_ids,
+            )
+            if not any(expected in p for p in problems):
+                raise SystemExit("planner acceptance contract failed to catch: " + expected)
+
+        result = evaluate_acceptance_contract(
+            contract,
+            repo_root=root,
+            healthcheck_output="example marker OK",
+            git_log_output="abc123 feat: example accepted upgrade",
+            registry_ids={"LUXX"},
+        )
+        if not result.get("accepted"):
+            raise SystemExit("planner acceptance contract evaluate() did not accept clean contract")
+
+    print("planner acceptance contract OK")
+
 def check_upgrade_registry() -> None:
     import link_upgrade_registry
 
@@ -1172,7 +1260,7 @@ def check_upgrade_registry() -> None:
     if problems:
         raise SystemExit("upgrade registry failures:\n" + "\n".join(problems))
 
-    required = {"LU01", "LU02", "LU03", "LU04", "LU05"}
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06"}
     implemented = set(link_upgrade_registry.implemented_upgrade_ids())
     missing = sorted(required - implemented)
     if missing:
@@ -1193,6 +1281,7 @@ def main() -> None:
     check_execution_snapshots()
     check_web_admin_snapshot_wiring()
     check_upgrade_registry()
+    check_planner_acceptance_contract()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
