@@ -1368,7 +1368,7 @@ def check_upgrade_registry() -> None:
     if problems:
         raise SystemExit("upgrade registry failures:\n" + "\n".join(problems))
 
-    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13", "LU14", "LU15", "LU16", "LU17"}
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13", "LU14", "LU15", "LU16", "LU17", "LU18"}
     implemented = set(link_upgrade_registry.implemented_upgrade_ids())
     missing = sorted(required - implemented)
     if missing:
@@ -1534,6 +1534,32 @@ def check_rollback_recovery_plan_exporter() -> None:
     print("rollback recovery plan exporter OK")
 
 
+
+def check_rollback_recovery_plan_web_admin_route() -> None:
+    from rollback_recovery_plan_web_admin_route import (
+        build_route_result,
+        rollback_recovery_plan_web_admin_command,
+        self_test,
+    )
+
+    problems = self_test()
+    if problems:
+        raise SystemExit("rollback recovery plan web admin route failures:\n" + "\n".join(problems))
+
+    command = rollback_recovery_plan_web_admin_command("export rollback recovery plan as json")
+    expected = ["python3", "rollback_recovery_plan.py", "--json"]
+    if command != expected:
+        raise SystemExit(f"rollback recovery plan web route command mismatch: {command!r}")
+
+    result = build_route_result("guarded recovery plan")
+    if not result.get("guarded"):
+        raise SystemExit("rollback recovery plan web route is not guarded")
+    if result.get("destructive"):
+        raise SystemExit("rollback recovery plan web route should not be destructive")
+
+    print("rollback recovery plan web admin route OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1558,6 +1584,7 @@ def main() -> None:
     check_rollback_advisor_cli()
     check_rollback_advisor_web_admin_route()
     check_rollback_recovery_plan_exporter()
+    check_rollback_recovery_plan_web_admin_route()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
