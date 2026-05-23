@@ -136,13 +136,22 @@ UPGRADES = [
         "id": "LU15",
         "status": "implemented",
         "title": "Rollback advisor CLI command integration"
+    },
+    {
+        "commit_subject": "feat: add rollback advisor web admin command routing LU16",
+        "healthcheck_markers": [
+            "rollback advisor web admin route OK"
+        ],
+        "id": "LU16",
+        "status": "implemented",
+        "title": "Rollback advisor web admin command routing"
     }
 ]
 
 NEXT_UPGRADE = {
-    "id": "LU16",
+    "id": "LU17",
     "status": "planned",
-    "title": "Rollback advisor web admin command routing"
+    "title": "Rollback advisor guarded recovery plan exporter"
 }
 
 

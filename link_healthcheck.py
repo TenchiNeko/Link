@@ -1368,7 +1368,7 @@ def check_upgrade_registry() -> None:
     if problems:
         raise SystemExit("upgrade registry failures:\n" + "\n".join(problems))
 
-    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13", "LU14", "LU15"}
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13", "LU14", "LU15", "LU16"}
     implemented = set(link_upgrade_registry.implemented_upgrade_ids())
     missing = sorted(required - implemented)
     if missing:
@@ -1470,6 +1470,32 @@ def check_rollback_advisor_cli() -> None:
     print("rollback advisor CLI OK")
 
 
+
+def check_rollback_advisor_web_admin_route() -> None:
+    from pathlib import Path
+
+    from rollback_advisor_web_admin_route import rollback_advisor_web_admin_command, self_test
+
+    problems = self_test()
+    if problems:
+        raise SystemExit("rollback advisor web admin route failures:\n" + "\n".join(problems))
+
+    dispatch = Path("link_web_admin_dispatch.py").read_text()
+    required = [
+        "from rollback_advisor_web_admin_route import rollback_advisor_web_admin_plan",
+        "rollback_advisor_web_admin_plan(prompt)",
+    ]
+    missing = [needle for needle in required if needle not in dispatch]
+    if missing:
+        raise SystemExit("rollback advisor web admin dispatch wiring missing: " + ", ".join(missing))
+
+    dashboard = rollback_advisor_web_admin_command("rollback advisor dashboard json")
+    if dashboard != ["python3", "link_rollback_advisor.py", "dashboard", "--json"]:
+        raise SystemExit("rollback advisor web admin dashboard route failed")
+
+    print("rollback advisor web admin route OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1492,6 +1518,7 @@ def main() -> None:
     check_evidence_rollback_advisor()
     check_rollback_advisor_dashboard()
     check_rollback_advisor_cli()
+    check_rollback_advisor_web_admin_route()
     check_file_safety()
     check_git_safety()
     check_task_tracker()

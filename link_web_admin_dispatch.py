@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 from capability_gate import classify_command as capability_classify_command
+from rollback_advisor_web_admin_route import rollback_advisor_web_admin_plan
 from execution_snapshots import create_execution_snapshot
 
 ROOT = Path(__file__).resolve().parent
@@ -73,6 +74,10 @@ def _run_capture(cmd: list[str], timeout: int = 30) -> tuple[int, str, str]:
 
 
 def _admin_plan(prompt: str) -> dict[str, Any]:
+    rollback_plan = rollback_advisor_web_admin_plan(prompt)
+    if rollback_plan is not None:
+        return rollback_plan
+
     cmd = [
         sys.executable,
         str(ROOT / "link_admin_planner.py"),
