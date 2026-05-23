@@ -1848,6 +1848,17 @@ def check_link_workflow_spec_layer() -> None:
         )
     print("workflow spec layer OK")
 
+def check_link_workflow_preflight_executor() -> None:
+    from link_workflow_preflight_executor import validate_link_workflow_preflight_executor
+
+    problems = validate_link_workflow_preflight_executor()
+    if problems:
+        raise SystemExit(
+            "workflow spec preflight executor failures:\n"
+            + "\n".join(problems)
+        )
+    print("workflow spec preflight executor OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1891,6 +1902,7 @@ def main() -> None:
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_web_admin_route()
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_web_admin_integration()
     check_link_workflow_spec_layer()
+    check_link_workflow_preflight_executor()
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_execution_receipt()
     check_file_safety()
     check_git_safety()
