@@ -1662,6 +1662,16 @@ def check_lu22_upgrade_finalizer_and_safe_apply_workflow() -> None:
     subprocess.check_call(["python3", "link_upgrade_finalizer.py", "--self-test"])
     print("upgrade finalizer OK")
 
+
+def check_latest_recovery_plan_dashboard_execution_receipts() -> None:
+    from latest_recovery_plan_dashboard_receipts import validate_latest_recovery_dashboard_receipts
+
+    problems = validate_latest_recovery_dashboard_receipts()
+    if problems:
+        raise SystemExit("latest recovery plan dashboard execution receipts failures:\\n" + "\\n".join(problems))
+
+    print("latest recovery plan dashboard execution receipts OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1693,6 +1703,7 @@ def main() -> None:
     print("recovery plan dashboard latest-plan loader OK")
     check_recovery_plan_dashboard_latest_plan_integration()
     check_lu22_upgrade_finalizer_and_safe_apply_workflow()
+    check_latest_recovery_plan_dashboard_execution_receipts()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
