@@ -1377,6 +1377,21 @@ def check_upgrade_registry() -> None:
     print("upgrade registry OK")
 
 
+
+def check_upgrade_evidence_bundle() -> None:
+    import tempfile
+
+    from upgrade_evidence_bundle import export_upgrade_evidence_bundle, validate_evidence_bundle
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bundle = export_upgrade_evidence_bundle("LU09", tmp)
+        problems = validate_evidence_bundle(bundle)
+        if problems:
+            raise SystemExit("upgrade evidence bundle failures:\n" + "\n".join(problems))
+
+    print("upgrade evidence bundle OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1393,6 +1408,7 @@ def main() -> None:
     check_upgrade_status_badges()
     check_upgrade_diff_receipt_crosscheck()
     check_qa_repair_routing_contract()
+    check_upgrade_evidence_bundle()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
