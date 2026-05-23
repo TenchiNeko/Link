@@ -36,6 +36,15 @@ def _wants_json(prompt: str) -> bool:
 
 def recovery_plan_dashboard_web_admin_command(prompt: str) -> list[str] | None:
 
+    from latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_web_admin import (
+        latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_web_admin_command as _lu33_execution_receipt_evidence_index_command,
+    )
+
+    lu33_execution_receipt_evidence_index_command = _lu33_execution_receipt_evidence_index_command(prompt)
+    if lu33_execution_receipt_evidence_index_command:
+        return lu33_execution_receipt_evidence_index_command
+
+
     try:
         from latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_web_admin import (
             build_execution_receipt_command as _build_execution_receipt_command,
