@@ -11,11 +11,12 @@ UPGRADES = [
     ("LU06", "Planner-to-implementation acceptance contract", "planner acceptance contract OK"),
     ("LU07", "Implementation status dashboard badges", "upgrade status badges OK"),
     ("LU08", "Upgrade diff/receipt cross-check", "upgrade diff receipt cross-check OK"),
+    ("LU09", "Automated QA repair routing contract", "qa repair routing contract OK"),
 ]
 
 NEXT_UPGRADE = {
-    "id": "LU09",
-    "title": "Automated QA repair routing contract",
+    "id": "LU10",
+    "title": "Upgrade evidence bundle exporter",
 }
 
 

@@ -1168,6 +1168,43 @@ def check_web_admin_dispatch() -> None:
 
 
 
+
+def check_qa_repair_routing_contract() -> None:
+    from qa_repair_routing_contract import (
+        route_qa_result,
+        validate_qa_repair_route,
+    )
+
+    repair = route_qa_result(
+        "REVISE",
+        "BLOCKING-1: Missing healthcheck update. Must fix before approval.",
+        ["link_healthcheck.py"],
+    )
+    repair_problems = validate_qa_repair_route(repair)
+
+    if repair["route"] != "repair_required":
+        raise SystemExit("qa repair routing failed to route blocking QA to repair")
+    if repair["allowed_to_commit"]:
+        raise SystemExit("qa repair routing allowed commit despite blocking QA")
+    if repair_problems:
+        raise SystemExit("qa repair routing repair-case failures:\n" + "\n".join(repair_problems))
+
+    approval = route_qa_result(
+        "APPROVE",
+        "QA PASS. Ready for senior review.",
+        ["link_healthcheck.py"],
+    )
+    approval_problems = validate_qa_repair_route(approval)
+
+    if approval["route"] != "approval_ready":
+        raise SystemExit("qa repair routing failed to route approval to approval_ready")
+    if not approval["allowed_to_commit"]:
+        raise SystemExit("qa repair routing did not allow clean approval")
+    if approval_problems:
+        raise SystemExit("qa repair routing approval-case failures:\n" + "\n".join(approval_problems))
+
+    print("qa repair routing contract OK")
+
 def check_upgrade_diff_receipt_crosscheck() -> None:
     from upgrade_diff_receipt_crosscheck import (
         crosscheck_diff_receipt,
@@ -1209,7 +1246,7 @@ def check_upgrade_status_badges() -> None:
 
     rows = upgrade_status_rows()
     ids = {row["id"] for row in rows}
-    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08"}
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09"}
     missing = sorted(required - ids)
     if missing:
         raise SystemExit("upgrade status badges missing ids: " + ", ".join(missing))
@@ -1355,6 +1392,7 @@ def main() -> None:
     check_planner_acceptance_contract()
     check_upgrade_status_badges()
     check_upgrade_diff_receipt_crosscheck()
+    check_qa_repair_routing_contract()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
