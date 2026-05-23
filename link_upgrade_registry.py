@@ -127,13 +127,22 @@ UPGRADES = [
         "id": "LU14",
         "status": "implemented",
         "title": "Rollback advisor dashboard integration"
+    },
+    {
+        "commit_subject": "feat: add rollback advisor CLI command integration LU15",
+        "healthcheck_markers": [
+            "rollback advisor CLI OK"
+        ],
+        "id": "LU15",
+        "status": "implemented",
+        "title": "Rollback advisor CLI command integration"
     }
 ]
 
 NEXT_UPGRADE = {
-    "id": "LU15",
+    "id": "LU16",
     "status": "planned",
-    "title": "Rollback advisor CLI command integration"
+    "title": "Rollback advisor web admin command routing"
 }
 
 

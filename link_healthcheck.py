@@ -1368,7 +1368,7 @@ def check_upgrade_registry() -> None:
     if problems:
         raise SystemExit("upgrade registry failures:\n" + "\n".join(problems))
 
-    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06"}
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13", "LU14", "LU15"}
     implemented = set(link_upgrade_registry.implemented_upgrade_ids())
     missing = sorted(required - implemented)
     if missing:
@@ -1459,6 +1459,17 @@ def check_rollback_advisor_dashboard() -> None:
     print("rollback advisor dashboard OK")
 
 
+
+def check_rollback_advisor_cli() -> None:
+    from link_rollback_advisor import self_test
+
+    problems = self_test()
+    if problems:
+        raise SystemExit("rollback advisor CLI failures:\n" + "\n".join(problems))
+
+    print("rollback advisor CLI OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1480,6 +1491,7 @@ def main() -> None:
     check_healthcheck_evidence_index()
     check_evidence_rollback_advisor()
     check_rollback_advisor_dashboard()
+    check_rollback_advisor_cli()
     check_file_safety()
     check_git_safety()
     check_task_tracker()

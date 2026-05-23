@@ -256,3 +256,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# LU15 CLI available:
+#   python3 link_rollback_advisor.py advise
+#   python3 link_rollback_advisor.py dashboard
