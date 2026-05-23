@@ -1167,13 +1167,49 @@ def check_web_admin_dispatch() -> None:
 
 
 
+
+def check_upgrade_diff_receipt_crosscheck() -> None:
+    from upgrade_diff_receipt_crosscheck import (
+        crosscheck_diff_receipt,
+        synthetic_lu08_receipt,
+    )
+
+    required = [
+        "upgrade_diff_receipt_crosscheck.py",
+        "link_healthcheck.py",
+        "link_upgrade_registry.py",
+        "UPGRADES.md",
+    ]
+
+    problems = crosscheck_diff_receipt(
+        synthetic_lu08_receipt(),
+        required_files=required,
+        required_subject_contains="LU08",
+        required_upgrade_id="LU08",
+    )
+    if problems:
+        raise SystemExit("upgrade diff receipt cross-check failures:\n" + "\n".join(problems))
+
+    bad = dict(synthetic_lu08_receipt())
+    bad["changed_files"] = ["link_healthcheck.py"]
+    bad_problems = crosscheck_diff_receipt(
+        bad,
+        required_files=required,
+        required_subject_contains="LU08",
+        required_upgrade_id="LU08",
+    )
+    if not any(item.startswith("changed_file_missing::upgrade_diff_receipt_crosscheck.py") for item in bad_problems):
+        raise SystemExit("upgrade diff receipt cross-check negative test did not catch missing file")
+
+    print("upgrade diff receipt cross-check OK")
+
 def check_upgrade_status_badges() -> None:
     from pathlib import Path
     from link_upgrade_status import render_upgrade_badges, upgrade_status_rows
 
     rows = upgrade_status_rows()
     ids = {row["id"] for row in rows}
-    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07"}
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08"}
     missing = sorted(required - ids)
     if missing:
         raise SystemExit("upgrade status badges missing ids: " + ", ".join(missing))
@@ -1318,6 +1354,7 @@ def main() -> None:
     check_upgrade_registry()
     check_planner_acceptance_contract()
     check_upgrade_status_badges()
+    check_upgrade_diff_receipt_crosscheck()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
