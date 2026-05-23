@@ -1672,6 +1672,43 @@ def check_latest_recovery_plan_dashboard_execution_receipts() -> None:
 
     print("latest recovery plan dashboard execution receipts OK")
 
+def check_latest_recovery_plan_dashboard_receipt_web_admin_route() -> None:
+    from latest_recovery_plan_dashboard_receipt_web_admin import (
+        build_latest_recovery_plan_dashboard_receipt_web_response,
+        latest_recovery_plan_dashboard_receipt_web_admin_command,
+        render_latest_recovery_plan_dashboard_receipt_web_response,
+        self_test as latest_receipt_web_admin_self_test,
+    )
+
+    problems = latest_receipt_web_admin_self_test()
+    if problems:
+        raise SystemExit(
+            "latest recovery plan dashboard receipt web admin route failures:\n"
+            + "\n".join(problems)
+        )
+
+    command = latest_recovery_plan_dashboard_receipt_web_admin_command(
+        "show latest recovery plan dashboard receipt"
+    )
+    if not command:
+        raise SystemExit("latest recovery plan dashboard receipt web admin command routing failed")
+
+    response = build_latest_recovery_plan_dashboard_receipt_web_response(write=False)
+    if response.get("non_destructive") is not True:
+        raise SystemExit("latest recovery plan dashboard receipt web admin response must be non-destructive")
+
+    rendered = render_latest_recovery_plan_dashboard_receipt_web_response(response)
+    if "latest-recovery-dashboard-receipt" not in rendered:
+        raise SystemExit("latest recovery plan dashboard receipt web admin marker missing")
+
+    forbidden = ("<form", "method=\"post\"", "rm -rf", "git reset --hard", "git clean -fdx")
+    lowered = rendered.lower()
+    for item in forbidden:
+        if item in lowered:
+            raise SystemExit(f"latest recovery plan dashboard receipt web admin contains forbidden text: {item}")
+
+    print("latest recovery plan dashboard receipt web admin route OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1704,6 +1741,7 @@ def main() -> None:
     check_recovery_plan_dashboard_latest_plan_integration()
     check_lu22_upgrade_finalizer_and_safe_apply_workflow()
     check_latest_recovery_plan_dashboard_execution_receipts()
+    check_latest_recovery_plan_dashboard_receipt_web_admin_route()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
