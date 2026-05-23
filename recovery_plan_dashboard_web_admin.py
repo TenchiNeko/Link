@@ -35,6 +35,17 @@ def _wants_json(prompt: str) -> bool:
 
 
 def recovery_plan_dashboard_web_admin_command(prompt: str) -> list[str] | None:
+    try:
+        from link_workflow_preflight_receipt_index_web_admin import (
+            workflow_preflight_receipt_index_web_admin_command,
+        )
+
+        workflow_preflight_receipt_index_command = workflow_preflight_receipt_index_web_admin_command(prompt)
+        if workflow_preflight_receipt_index_command:
+            return workflow_preflight_receipt_index_command
+    except Exception:
+        pass
+
 
     from latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_web_admin import (
         latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_web_admin_command as _lu33_execution_receipt_evidence_index_command,
