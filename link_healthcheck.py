@@ -1368,7 +1368,7 @@ def check_upgrade_registry() -> None:
     if problems:
         raise SystemExit("upgrade registry failures:\n" + "\n".join(problems))
 
-    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13", "LU14", "LU15", "LU16"}
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13", "LU14", "LU15", "LU16", "LU17"}
     implemented = set(link_upgrade_registry.implemented_upgrade_ids())
     missing = sorted(required - implemented)
     if missing:
@@ -1496,6 +1496,44 @@ def check_rollback_advisor_web_admin_route() -> None:
     print("rollback advisor web admin route OK")
 
 
+
+def check_rollback_recovery_plan_exporter() -> None:
+    import tempfile
+
+    from rollback_recovery_plan import (
+        export_rollback_recovery_plan,
+        self_test,
+        validate_recovery_plan,
+    )
+
+    problems = self_test()
+    if problems:
+        raise SystemExit("rollback recovery plan exporter failures:\n" + "\n".join(problems))
+
+    sample = {
+        "recommendation": "ADVISE_ROLLBACK_TO_LAST_PASS",
+        "reason": "healthcheck sample failure",
+        "current_head": "HEADSHA",
+        "rollback_candidate": "GOODSHA",
+        "latest_archive": "sample_archive",
+        "latest_status": "failed",
+    }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        plan_dir = export_rollback_recovery_plan(tmp, sample)
+        json_path = plan_dir / "rollback_recovery_plan.json"
+        md_path = plan_dir / "rollback_recovery_plan.md"
+        if not json_path.exists():
+            raise SystemExit("rollback recovery plan JSON missing")
+        if not md_path.exists():
+            raise SystemExit("rollback recovery plan markdown missing")
+        text = md_path.read_text()
+        if "# REVIEW ONLY: git reset --hard GOODSHA" not in text:
+            raise SystemExit("rollback recovery plan hard reset is not guarded")
+
+    print("rollback recovery plan exporter OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1519,6 +1557,7 @@ def main() -> None:
     check_rollback_advisor_dashboard()
     check_rollback_advisor_cli()
     check_rollback_advisor_web_admin_route()
+    check_rollback_recovery_plan_exporter()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
