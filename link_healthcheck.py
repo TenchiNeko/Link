@@ -1612,6 +1612,17 @@ def check_recovery_plan_dashboard_web_admin_integration() -> None:
     print("recovery plan dashboard web admin integration OK")
 
 
+
+def check_latest_recovery_plan_loader() -> None:
+    from latest_recovery_plan_loader import validate_latest_recovery_plan_loader
+
+    problems = validate_latest_recovery_plan_loader()
+    if problems:
+        raise SystemExit("latest recovery plan loader failures:\n" + "\n".join(problems))
+
+    print("latest recovery plan loader OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1639,6 +1650,8 @@ def main() -> None:
     check_rollback_recovery_plan_web_admin_route()
     check_recovery_plan_dashboard_card()
     check_recovery_plan_dashboard_web_admin_integration()
+    check_latest_recovery_plan_loader()
+    print("recovery plan dashboard latest-plan loader OK")
     check_file_safety()
     check_git_safety()
     check_task_tracker()
