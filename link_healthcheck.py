@@ -1709,6 +1709,19 @@ def check_latest_recovery_plan_dashboard_receipt_web_admin_route() -> None:
 
     print("latest recovery plan dashboard receipt web admin route OK")
 
+def check_latest_recovery_plan_dashboard_receipt_evidence_index() -> None:
+    from latest_recovery_plan_dashboard_receipt_evidence_index import (
+        validate_latest_recovery_plan_dashboard_receipt_evidence_index,
+    )
+
+    problems = validate_latest_recovery_plan_dashboard_receipt_evidence_index()
+    if problems:
+        raise SystemExit(
+            "latest recovery plan dashboard receipt evidence index failures:\n"
+            + "\n".join(problems)
+        )
+    print("latest recovery plan dashboard receipt evidence index OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1742,6 +1755,7 @@ def main() -> None:
     check_lu22_upgrade_finalizer_and_safe_apply_workflow()
     check_latest_recovery_plan_dashboard_execution_receipts()
     check_latest_recovery_plan_dashboard_receipt_web_admin_route()
+    check_latest_recovery_plan_dashboard_receipt_evidence_index()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
