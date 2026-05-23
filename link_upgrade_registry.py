@@ -109,13 +109,22 @@ UPGRADES = [
         "id": "LU12",
         "status": "implemented",
         "title": "Healthcheck evidence index and search"
+    },
+    {
+        "commit_subject": "feat: add evidence-aware rollback advisor LU13",
+        "healthcheck_markers": [
+            "evidence rollback advisor OK"
+        ],
+        "id": "LU13",
+        "status": "implemented",
+        "title": "Evidence-aware rollback advisor"
     }
 ]
 
 NEXT_UPGRADE = {
-    "id": "LU13",
+    "id": "LU14",
     "status": "planned",
-    "title": "Evidence-aware rollback advisor"
+    "title": "Rollback advisor dashboard integration"
 }
 
 

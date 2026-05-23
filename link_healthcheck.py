@@ -1246,7 +1246,7 @@ def check_upgrade_status_badges() -> None:
 
     rows = upgrade_status_rows()
     ids = {row["id"] for row in rows}
-    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12"}
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13"}
     missing = sorted(required - ids)
     if missing:
         raise SystemExit("upgrade status badges missing ids: " + ", ".join(missing))
@@ -1437,6 +1437,17 @@ def check_healthcheck_evidence_index() -> None:
     print("healthcheck evidence index OK")
 
 
+
+def check_evidence_rollback_advisor() -> None:
+    from evidence_rollback_advisor import self_test
+
+    problems = self_test()
+    if problems:
+        raise SystemExit("evidence rollback advisor failures:\n" + "\n".join(problems))
+
+    print("evidence rollback advisor OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1456,6 +1467,7 @@ def main() -> None:
     check_upgrade_evidence_bundle()
     check_healthcheck_evidence_archive()
     check_healthcheck_evidence_index()
+    check_evidence_rollback_advisor()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
