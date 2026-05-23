@@ -1623,6 +1623,12 @@ def check_latest_recovery_plan_loader() -> None:
     print("latest recovery plan loader OK")
 
 
+
+def check_lu22_upgrade_finalizer_and_safe_apply_workflow() -> None:
+    import subprocess
+    subprocess.check_call(["python3", "link_upgrade_finalizer.py", "--self-test"])
+    print("upgrade finalizer OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1652,6 +1658,7 @@ def main() -> None:
     check_recovery_plan_dashboard_web_admin_integration()
     check_latest_recovery_plan_loader()
     print("recovery plan dashboard latest-plan loader OK")
+    check_lu22_upgrade_finalizer_and_safe_apply_workflow()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
