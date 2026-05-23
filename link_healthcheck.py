@@ -1837,6 +1837,17 @@ def check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receip
         )
     print("latest recovery plan dashboard receipt evidence index execution receipt evidence index execution receipt OK")
 
+def check_link_workflow_spec_layer() -> None:
+    from link_workflow_spec import validate_link_workflow_spec_layer
+
+    problems = validate_link_workflow_spec_layer()
+    if problems:
+        raise SystemExit(
+            "workflow spec layer failures:\n"
+            + "\n".join(problems)
+        )
+    print("workflow spec layer OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1879,6 +1890,7 @@ def main() -> None:
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index()
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_web_admin_route()
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_web_admin_integration()
+    check_link_workflow_spec_layer()
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_execution_receipt()
     check_file_safety()
     check_git_safety()
