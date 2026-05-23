@@ -35,6 +35,19 @@ def _wants_json(prompt: str) -> bool:
 
 
 def recovery_plan_dashboard_web_admin_command(prompt: str) -> list[str] | None:
+    try:
+        from latest_recovery_plan_dashboard_receipt_evidence_index_web_admin import (
+            latest_recovery_plan_dashboard_receipt_evidence_index_web_admin_command,
+        )
+
+        evidence_index_command = (
+            latest_recovery_plan_dashboard_receipt_evidence_index_web_admin_command(prompt)
+        )
+        if evidence_index_command is not None:
+            return evidence_index_command
+    except Exception:
+        pass
+
     text = (prompt or "").strip().lower()
     if not text:
         return None
