@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+from recovery_plan_dashboard_web_admin import recovery_plan_dashboard_web_admin_command
 
 """
 Web admin dispatcher for Link.

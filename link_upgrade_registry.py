@@ -172,13 +172,22 @@ UPGRADES = [
         "id": "LU19",
         "status": "implemented",
         "title": "Recovery plan dashboard card"
+    },
+    {
+        "commit_subject": "feat: add recovery plan dashboard web admin integration LU20",
+        "healthcheck_markers": [
+            "recovery plan dashboard web admin integration OK"
+        ],
+        "id": "LU20",
+        "status": "implemented",
+        "title": "Recovery plan dashboard web admin integration"
     }
 ]
 
 NEXT_UPGRADE = {
-    "id": "LU20",
+    "id": "LU21",
     "status": "planned",
-    "title": "Recovery plan dashboard web admin integration"
+    "title": "Recovery plan dashboard latest-plan loader"
 }
 
 

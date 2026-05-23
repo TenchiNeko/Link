@@ -1368,7 +1368,7 @@ def check_upgrade_registry() -> None:
     if problems:
         raise SystemExit("upgrade registry failures:\n" + "\n".join(problems))
 
-    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13", "LU14", "LU15", "LU16", "LU17", "LU18", "LU19"}
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13", "LU14", "LU15", "LU16", "LU17", "LU18", "LU19", "LU20"}
     implemented = set(link_upgrade_registry.implemented_upgrade_ids())
     missing = sorted(required - implemented)
     if missing:
@@ -1587,6 +1587,31 @@ def check_recovery_plan_dashboard_card() -> None:
     print("recovery plan dashboard card OK")
 
 
+
+def check_recovery_plan_dashboard_web_admin_integration() -> None:
+    from recovery_plan_dashboard_web_admin import (
+        build_recovery_plan_dashboard_web_response,
+        recovery_plan_dashboard_web_admin_command,
+        self_test,
+    )
+
+    problems = self_test()
+    if problems:
+        raise SystemExit("recovery plan dashboard web admin integration failures:\n" + "\n".join(problems))
+
+    command = recovery_plan_dashboard_web_admin_command("show recovery plan dashboard")
+    if command != ["python3", "recovery_plan_dashboard_card.py", "--sample"]:
+        raise SystemExit("recovery plan dashboard web admin command routing failed")
+
+    response = build_recovery_plan_dashboard_web_response()
+    if response.get("destructive"):
+        raise SystemExit("recovery plan dashboard web admin response must be non-destructive")
+    if 'data-link-card="recovery-plan"' not in str(response.get("html", "")):
+        raise SystemExit("recovery plan dashboard web admin card marker missing")
+
+    print("recovery plan dashboard web admin integration OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1613,6 +1638,7 @@ def main() -> None:
     check_rollback_recovery_plan_exporter()
     check_rollback_recovery_plan_web_admin_route()
     check_recovery_plan_dashboard_card()
+    check_recovery_plan_dashboard_web_admin_integration()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
