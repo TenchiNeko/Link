@@ -412,3 +412,9 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# LU14 dashboard component available:
+#   from rollback_advisor_dashboard import dashboard_payload, render_live_panel
+# This is intentionally import-on-demand so the existing dashboard cannot fail
+# if evidence archives are absent.
