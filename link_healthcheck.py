@@ -1368,7 +1368,7 @@ def check_upgrade_registry() -> None:
     if problems:
         raise SystemExit("upgrade registry failures:\n" + "\n".join(problems))
 
-    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13", "LU14", "LU15", "LU16", "LU17", "LU18"}
+    required = {"LU01", "LU02", "LU03", "LU04", "LU05", "LU06", "LU07", "LU08", "LU09", "LU10", "LU11", "LU12", "LU13", "LU14", "LU15", "LU16", "LU17", "LU18", "LU19"}
     implemented = set(link_upgrade_registry.implemented_upgrade_ids())
     missing = sorted(required - implemented)
     if missing:
@@ -1560,6 +1560,33 @@ def check_rollback_recovery_plan_web_admin_route() -> None:
     print("rollback recovery plan web admin route OK")
 
 
+
+def check_recovery_plan_dashboard_card() -> None:
+    from recovery_plan_dashboard_card import (
+        recovery_plan_dashboard_payload,
+        render_recovery_plan_dashboard_card,
+        sample_plan,
+        self_test,
+    )
+
+    problems = self_test()
+    if problems:
+        raise SystemExit("recovery plan dashboard card failures:\n" + "\n".join(problems))
+
+    plan = sample_plan()
+    payload = recovery_plan_dashboard_payload(plan)
+    html = render_recovery_plan_dashboard_card(plan)
+
+    if payload.get("destructive"):
+        raise SystemExit("recovery plan dashboard payload should be non-destructive")
+    if 'data-link-card="recovery-plan"' not in html:
+        raise SystemExit("recovery plan dashboard card marker missing")
+    if "<form" in html.lower():
+        raise SystemExit("recovery plan dashboard card must not expose a destructive form")
+
+    print("recovery plan dashboard card OK")
+
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1585,6 +1612,7 @@ def main() -> None:
     check_rollback_advisor_web_admin_route()
     check_rollback_recovery_plan_exporter()
     check_rollback_recovery_plan_web_admin_route()
+    check_recovery_plan_dashboard_card()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
