@@ -35,6 +35,18 @@ def _wants_json(prompt: str) -> bool:
 
 
 def recovery_plan_dashboard_web_admin_command(prompt: str) -> list[str] | None:
+
+    try:
+        from latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_web_admin import (
+            build_execution_receipt_command as _build_execution_receipt_command,
+        )
+
+        _execution_receipt_command = _build_execution_receipt_command(prompt)
+        if _execution_receipt_command:
+            return _execution_receipt_command
+    except Exception:
+        pass
+
     try:
         from latest_recovery_plan_dashboard_receipt_evidence_index_web_admin import (
             latest_recovery_plan_dashboard_receipt_evidence_index_web_admin_command,

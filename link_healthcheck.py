@@ -1772,6 +1772,19 @@ def check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receip
         )
     print("latest recovery plan dashboard receipt evidence index execution receipt web admin route OK")
 
+def check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_web_admin_integration() -> None:
+    from latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_web_admin_integration import (
+        validate_latest_recovery_receipt_evidence_index_execution_receipt_web_admin_integration,
+    )
+
+    problems = validate_latest_recovery_receipt_evidence_index_execution_receipt_web_admin_integration()
+    if problems:
+        raise SystemExit(
+            "latest recovery plan dashboard receipt evidence index execution receipt web admin integration failures:\n"
+            + "\n".join(problems)
+        )
+    print("latest recovery plan dashboard receipt evidence index execution receipt web admin integration OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1810,6 +1823,7 @@ def main() -> None:
     check_latest_recovery_plan_dashboard_receipt_evidence_index_web_admin_integration()
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt()
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_web_admin_route()
+    check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_web_admin_integration()
     check_file_safety()
     check_git_safety()
     check_task_tracker()
