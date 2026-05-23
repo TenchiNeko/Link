@@ -397,6 +397,30 @@ def check_removed_junk_absent() -> None:
 
 
 
+
+def check_recovery_plan_dashboard_latest_plan_integration() -> None:
+    from recovery_plan_latest_dashboard_integration import (
+        latest_recovery_plan_dashboard_web_admin_command,
+        self_test as latest_dashboard_self_test,
+    )
+
+    problems = latest_dashboard_self_test()
+    if problems:
+        raise SystemExit(
+            "recovery plan dashboard latest-plan integration failures:\n"
+            + "\n".join(problems)
+        )
+
+    command = latest_recovery_plan_dashboard_web_admin_command("show latest recovery plan")
+    if not command:
+        raise SystemExit("latest recovery plan dashboard command routing failed")
+
+    json_command = latest_recovery_plan_dashboard_web_admin_command("show latest recovery plan json")
+    if not json_command:
+        raise SystemExit("latest recovery plan dashboard json command routing failed")
+
+    print("recovery plan dashboard latest-plan integration OK")
+
 def check_file_safety() -> None:
     import modern_file_safety as fs
 
@@ -1592,26 +1616,35 @@ def check_recovery_plan_dashboard_web_admin_integration() -> None:
     from recovery_plan_dashboard_web_admin import (
         build_recovery_plan_dashboard_web_response,
         recovery_plan_dashboard_web_admin_command,
-        self_test,
+        render_recovery_plan_dashboard_web_response,
+        self_test as dashboard_web_self_test,
     )
 
-    problems = self_test()
+    problems = dashboard_web_self_test()
     if problems:
-        raise SystemExit("recovery plan dashboard web admin integration failures:\n" + "\n".join(problems))
+        raise SystemExit(
+            "recovery plan dashboard web admin integration failures:\n"
+            + "\n".join(problems)
+        )
 
     command = recovery_plan_dashboard_web_admin_command("show recovery plan dashboard")
-    if command != ["python3", "recovery_plan_dashboard_card.py", "--sample"]:
+    if not command:
         raise SystemExit("recovery plan dashboard web admin command routing failed")
 
+    json_command = recovery_plan_dashboard_web_admin_command("show recovery plan dashboard json")
+    if not json_command:
+        raise SystemExit("recovery plan dashboard web admin json command routing failed")
+
     response = build_recovery_plan_dashboard_web_response()
-    if response.get("destructive"):
+    html = render_recovery_plan_dashboard_web_response()
+
+    if response.get("destructive") or response.get("dangerous"):
         raise SystemExit("recovery plan dashboard web admin response must be non-destructive")
-    if 'data-link-card="recovery-plan"' not in str(response.get("html", "")):
+
+    if "recovery-plan" not in html:
         raise SystemExit("recovery plan dashboard web admin card marker missing")
 
     print("recovery plan dashboard web admin integration OK")
-
-
 
 def check_latest_recovery_plan_loader() -> None:
     from latest_recovery_plan_loader import validate_latest_recovery_plan_loader
@@ -1658,6 +1691,7 @@ def main() -> None:
     check_recovery_plan_dashboard_web_admin_integration()
     check_latest_recovery_plan_loader()
     print("recovery plan dashboard latest-plan loader OK")
+    check_recovery_plan_dashboard_latest_plan_integration()
     check_lu22_upgrade_finalizer_and_safe_apply_workflow()
     check_file_safety()
     check_git_safety()

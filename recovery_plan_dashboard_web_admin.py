@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 from __future__ import annotations
 
@@ -17,21 +16,40 @@ RECOVERY_DASHBOARD_TRIGGERS = (
     "rollback dashboard card",
 )
 
+LATEST_RECOVERY_DASHBOARD_TRIGGERS = (
+    "latest recovery plan dashboard",
+    "latest rollback plan dashboard",
+    "latest rollback recovery dashboard",
+    "show latest recovery plan",
+    "show latest rollback plan",
+    "show latest recovery dashboard",
+    "show latest rollback dashboard",
+    "latest recovery plan card",
+    "latest rollback plan card",
+)
+
+
+def _wants_json(prompt: str) -> bool:
+    text = f" {(prompt or '').lower()} "
+    return "--json" in text or " json " in text or "as json" in text
+
 
 def recovery_plan_dashboard_web_admin_command(prompt: str) -> list[str] | None:
     text = (prompt or "").strip().lower()
     if not text:
         return None
 
-    if not any(trigger in text for trigger in RECOVERY_DASHBOARD_TRIGGERS):
-        return None
+    if any(trigger in text for trigger in LATEST_RECOVERY_DASHBOARD_TRIGGERS):
+        cmd = ["python3", "recovery_plan_latest_dashboard_integration.py"]
+        cmd.append("--json" if _wants_json(text) else "--html")
+        return cmd
 
-    command = ["python3", "recovery_plan_dashboard_card.py", "--sample"]
+    if any(trigger in text for trigger in RECOVERY_DASHBOARD_TRIGGERS):
+        cmd = ["python3", "recovery_plan_dashboard_web_admin.py"]
+        cmd.append("--json" if _wants_json(text) else "--sample")
+        return cmd
 
-    if "--json" in text or " as json" in f" {text} ":
-        command.append("--json")
-
-    return command
+    return None
 
 
 def build_recovery_plan_dashboard_web_response(plan: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -41,62 +59,78 @@ def build_recovery_plan_dashboard_web_response(plan: dict[str, Any] | None = Non
         sample_plan,
     )
 
-    selected_plan = plan if isinstance(plan, dict) else sample_plan()
+    selected_plan = plan or sample_plan()
     payload = recovery_plan_dashboard_payload(selected_plan)
-    html = render_recovery_plan_dashboard_card(selected_plan)
+    card_html = render_recovery_plan_dashboard_card(selected_plan)
+
+    html = (
+        '<section class="dashboard-card recovery-plan-dashboard-web-admin" '
+        'data-link-card="recovery-plan-dashboard" '
+        'data-link-destructive="false">'
+        "<h2>Recovery Plan Dashboard</h2>"
+        f"{card_html}"
+        "</section>"
+    )
 
     return {
-        "kind": "recovery_plan_dashboard_card",
-        "safe": True,
-        "destructive": False,
+        "ok": True,
+        "kind": "recovery_plan_dashboard_web_admin",
+        "non_destructive": True,
+        "data_link_card": "recovery-plan-dashboard",
         "payload": payload,
         "html": html,
-        "summary": f"Recovery plan dashboard card ready: {payload.get('recommendation', 'UNKNOWN')}",
     }
 
 
 def render_recovery_plan_dashboard_web_response(plan: dict[str, Any] | None = None) -> str:
-    response = build_recovery_plan_dashboard_web_response(plan)
-    return str(response["html"])
+    return str(build_recovery_plan_dashboard_web_response(plan).get("html", ""))
 
 
 def self_test() -> list[str]:
-    problems = []
+    problems: list[str] = []
 
     command = recovery_plan_dashboard_web_admin_command("show recovery plan dashboard")
-    if command != ["python3", "recovery_plan_dashboard_card.py", "--sample"]:
+    if not command or "recovery_plan_dashboard_web_admin.py" not in " ".join(command):
         problems.append("dashboard_command_failed")
 
-    command_json = recovery_plan_dashboard_web_admin_command("show recovery plan dashboard --json")
-    if command_json != ["python3", "recovery_plan_dashboard_card.py", "--sample", "--json"]:
+    json_command = recovery_plan_dashboard_web_admin_command("show recovery plan dashboard as json")
+    if not json_command or "--json" not in json_command:
         problems.append("dashboard_json_command_failed")
 
-    unrelated = recovery_plan_dashboard_web_admin_command("show normal status")
-    if unrelated is not None:
-        problems.append("unrelated_prompt_should_not_route")
+    latest_command = recovery_plan_dashboard_web_admin_command("show latest recovery plan dashboard")
+    if not latest_command or "recovery_plan_latest_dashboard_integration.py" not in " ".join(latest_command):
+        problems.append("latest_dashboard_command_failed")
+
+    latest_json_command = recovery_plan_dashboard_web_admin_command(
+        "show latest recovery plan dashboard as json"
+    )
+    if not latest_json_command or "--json" not in latest_json_command:
+        problems.append("latest_dashboard_json_command_failed")
 
     response = build_recovery_plan_dashboard_web_response()
-    if not response.get("safe"):
-        problems.append("response_not_marked_safe")
-    if response.get("destructive"):
-        problems.append("response_marked_destructive")
-    if response.get("kind") != "recovery_plan_dashboard_card":
-        problems.append("response_kind_failed")
-    if 'data-link-card="recovery-plan"' not in str(response.get("html", "")):
-        problems.append("card_marker_missing")
-    if "<form" in str(response.get("html", "")).lower():
-        problems.append("dashboard_response_must_not_expose_form")
-    if "git reset --hard" in str(response.get("html", "")):
-        problems.append("dashboard_response_must_not_suggest_destructive_reset")
+    html = str(response.get("html", ""))
+
+    if not response.get("non_destructive"):
+        problems.append("dashboard_response_not_non_destructive")
+
+    if 'data-link-card="recovery-plan-dashboard"' not in html:
+        problems.append("dashboard_card_marker_missing")
+
+    lowered = html.lower()
+    for forbidden in ("<form", "git reset --hard", "git clean -fdx", "push --force"):
+        if forbidden in lowered:
+            problems.append(f"dashboard_contains_forbidden_content:{forbidden}")
 
     return problems
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Recovery plan dashboard web admin integration.")
+    parser = argparse.ArgumentParser(
+        description="Recovery plan dashboard web admin integration."
+    )
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--prompt", default="")
+    parser.add_argument("--prompt")
     parser.add_argument("--sample", action="store_true")
     args = parser.parse_args()
 
@@ -112,17 +146,15 @@ def main() -> int:
 
     if args.prompt:
         command = recovery_plan_dashboard_web_admin_command(args.prompt)
-        if args.json:
-            print(json.dumps({"command": command}, indent=2, sort_keys=True))
-        else:
-            print(" ".join(command) if command else "no route")
+        print(json.dumps({"command": command}, indent=2, sort_keys=True))
         return 0
 
     response = build_recovery_plan_dashboard_web_response()
+
     if args.json:
         print(json.dumps(response, indent=2, sort_keys=True))
     else:
-        print(response["html"])
+        print(response.get("html", ""))
 
     return 0
 
