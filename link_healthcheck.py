@@ -2137,6 +2137,21 @@ def check_research_archive_candidate_shortlist_dashboard_integration() -> None:
 
     print("research archive candidate shortlist dashboard integration OK")
 
+
+def check_research_archive_candidate_shortlist_dashboard_web_admin_route() -> None:
+    from link_research_archive_candidate_shortlist_dashboard_web_admin_route import (
+        validate_research_candidate_shortlist_dashboard_web_admin_route,
+    )
+
+    failures = validate_research_candidate_shortlist_dashboard_web_admin_route()
+    if failures:
+        print("research archive candidate shortlist dashboard web admin route FAILED")
+        for failure in failures:
+            print(f"- {failure}")
+        raise SystemExit(1)
+
+    print("research archive candidate shortlist dashboard web admin route OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -2194,6 +2209,7 @@ def main() -> None:
     check_research_archive_intake_miner()
     check_research_archive_candidate_shortlist_web_admin_integration()
     check_research_archive_candidate_shortlist_dashboard_integration()
+    check_research_archive_candidate_shortlist_dashboard_web_admin_route()
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_execution_receipt()
     check_file_safety()
     check_git_safety()
