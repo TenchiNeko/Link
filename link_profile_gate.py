@@ -34,7 +34,30 @@ class ProfileToolDecision:
 
 
 def _tool_map() -> dict[str, Any]:
-    return {tool.name: tool for tool in all_tools()}
+    raw = all_tools()
+
+    if isinstance(raw, dict):
+        values = raw.values()
+    else:
+        values = raw
+
+    tools: dict[str, Any] = {}
+    for tool in values:
+        if hasattr(tool, "name"):
+            tools[str(tool.name)] = tool
+            continue
+
+        if isinstance(tool, dict) and tool.get("name"):
+            tools[str(tool["name"])] = tool
+            continue
+
+    return tools
+
+
+def _spec_value(spec: Any, key: str, default: Any = None) -> Any:
+    if isinstance(spec, dict):
+        return spec.get(key, default)
+    return getattr(spec, key, default)
 
 
 def classify_profile_tool(
@@ -90,13 +113,13 @@ def classify_profile_tool(
             "tool is not enabled for this worker profile",
             metadata={
                 "enabled_tool_names": sorted(enabled),
-                "toolset": spec.toolset,
-                "risk": spec.risk,
-                "requires_approval": spec.requires_approval,
+                "toolset": _spec_value(spec, "toolset"),
+                "risk": _spec_value(spec, "risk"),
+                "requires_approval": _spec_value(spec, "requires_approval", False),
             },
         )
 
-    if spec.requires_approval and not approval_confirmed:
+    if _spec_value(spec, "requires_approval", False) and not approval_confirmed:
         return ProfileToolDecision(
             profile_name,
             tool,
@@ -104,9 +127,9 @@ def classify_profile_tool(
             "tool is enabled for this profile but still requires explicit approval",
             metadata={
                 "enabled_tool_names": sorted(enabled),
-                "toolset": spec.toolset,
-                "risk": spec.risk,
-                "requires_approval": spec.requires_approval,
+                "toolset": _spec_value(spec, "toolset"),
+                "risk": _spec_value(spec, "risk"),
+                "requires_approval": _spec_value(spec, "requires_approval", False),
             },
         )
 
@@ -117,9 +140,9 @@ def classify_profile_tool(
         "tool is enabled for this worker profile",
         metadata={
             "enabled_tool_names": sorted(enabled),
-            "toolset": spec.toolset,
-            "risk": spec.risk,
-            "requires_approval": spec.requires_approval,
+            "toolset": _spec_value(spec, "toolset"),
+            "risk": _spec_value(spec, "risk"),
+            "requires_approval": _spec_value(spec, "requires_approval", False),
             "approval_confirmed": approval_confirmed,
         },
     )
