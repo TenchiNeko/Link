@@ -82,8 +82,8 @@ def _decision(kind: str, target: str, raw: Any, source: str) -> GateDecision:
     )
 
 
-def classify_command(command: str | list[str]) -> GateDecision:
-    if isinstance(command, list):
+def classify_command(command: str | list[str] | tuple[str, ...]) -> GateDecision:
+    if isinstance(command, (list, tuple)):
         target = " ".join(shlex.quote(str(x)) for x in command)
     else:
         target = str(command)
@@ -120,10 +120,17 @@ def _fallback_path_gate(path: str) -> GateDecision:
     return GateDecision("path", target, "allow", "path is inside Link repo")
 
 
-def classify_path(path: str) -> GateDecision:
+def classify_path(path: str, operation: str = "read") -> GateDecision:
     target = str(path)
+    op = str(operation or "read").strip().lower()
+
     try:
         import modern_file_safety
+
+        file_op = getattr(modern_file_safety, "classify_file_operation", None)
+        if file_op:
+            raw = file_op(target, operation=op, root=ROOT)
+            return _decision("path", target, raw, "modern_file_safety.classify_file_operation")
 
         for name in (
             "classify_path_risk",
@@ -146,8 +153,12 @@ def classify_path(path: str) -> GateDecision:
     return _fallback_path_gate(target)
 
 
-def classify_git_command(command: str | list[str]) -> GateDecision:
-    if isinstance(command, list):
+def classify_file_operation(path: str, operation: str = "read") -> GateDecision:
+    return classify_path(path, operation=operation)
+
+
+def classify_git_command(command: str | list[str] | tuple[str, ...]) -> GateDecision:
+    if isinstance(command, (list, tuple)):
         target = " ".join(shlex.quote(str(x)) for x in command)
     else:
         target = str(command)
@@ -185,6 +196,10 @@ def classify_request(kind: str, target: str | list[str]) -> GateDecision:
         return classify_command(target)
     if normalized in {"path", "file", "filesystem"}:
         return classify_path(str(target))
+    if normalized in {"read", "write", "edit", "delete", "remove", "move", "copy"}:
+        return classify_path(str(target), operation=normalized)
+    if normalized in {"read", "write", "edit", "delete", "remove", "move", "copy"}:
+        return classify_path(str(target), operation=normalized)
     if normalized in {"git", "git_command"}:
         return classify_git_command(target)
     return GateDecision(normalized or "unknown", str(target), "deny", "unknown capability kind")
