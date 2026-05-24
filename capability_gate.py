@@ -198,8 +198,6 @@ def classify_request(kind: str, target: str | list[str]) -> GateDecision:
         return classify_path(str(target))
     if normalized in {"read", "write", "edit", "delete", "remove", "move", "copy"}:
         return classify_path(str(target), operation=normalized)
-    if normalized in {"read", "write", "edit", "delete", "remove", "move", "copy"}:
-        return classify_path(str(target), operation=normalized)
     if normalized in {"git", "git_command"}:
         return classify_git_command(target)
     return GateDecision(normalized or "unknown", str(target), "deny", "unknown capability kind")
