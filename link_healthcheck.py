@@ -2484,6 +2484,39 @@ def check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_rece
 
     print("research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin dispatch receipt evidence index web admin dispatch receipt evidence index OK")
 
+
+def check_link_tool_profile_upgrades() -> None:
+    from link_tool_registry import validate_registry
+    from link_worker_profiles import validate_profiles
+    from link_profile_gate import classify_profile_tool
+
+    registry_check = validate_registry()
+    if not registry_check.get("ok"):
+        raise AssertionError(f"tool registry invalid: {registry_check}")
+
+    profile_check = validate_profiles()
+    if not profile_check.get("ok"):
+        raise AssertionError(f"worker profiles invalid: {profile_check}")
+
+    read_decision = classify_profile_tool("read_only_auditor", "file_read")
+    denied_decision = classify_profile_tool("read_only_auditor", "file_write")
+    caution_decision = classify_profile_tool("patch_worker", "file_write")
+
+    if read_decision.decision != "allow":
+        raise AssertionError(read_decision)
+    if denied_decision.decision != "deny":
+        raise AssertionError(denied_decision)
+    if caution_decision.decision != "caution":
+        raise AssertionError(caution_decision)
+
+    print("self-update preflight runner OK")
+    print("Link-native tool registry OK")
+    print("restricted worker profiles OK")
+    print("profile-aware self-update receipts OK")
+    print("profile tool access gate OK")
+    print("profile gate smoke coverage OK")
+
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -2675,40 +2708,9 @@ def main() -> None:
     check_admin_planner()
     check_delegate_runner()
     check_web_admin_dispatch()
+    check_link_tool_profile_upgrades()
+    print("LINK HEALTHCHECK PASSED")
     
-# LU82-LU87 Link tool/profile registry checks
-try:
-    from link_tool_registry import validate_registry
-    from link_worker_profiles import validate_profiles
-    from link_profile_gate import classify_profile_tool
-
-    registry_check = validate_registry()
-    if not registry_check.get("ok"):
-        raise AssertionError(f"tool registry invalid: {registry_check}")
-
-    profile_check = validate_profiles()
-    if not profile_check.get("ok"):
-        raise AssertionError(f"worker profiles invalid: {profile_check}")
-
-    read_decision = classify_profile_tool("read_only_auditor", "file_read")
-    denied_decision = classify_profile_tool("read_only_auditor", "file_write")
-    caution_decision = classify_profile_tool("patch_worker", "file_write")
-
-    if read_decision.decision != "allow":
-        raise AssertionError(read_decision)
-    if denied_decision.decision != "deny":
-        raise AssertionError(denied_decision)
-    if caution_decision.decision != "caution":
-        raise AssertionError(caution_decision)
-
-    print("self-update preflight runner OK")
-    print("Link-native tool registry OK")
-    print("restricted worker profiles OK")
-    print("profile-aware self-update receipts OK")
-    print("profile tool access gate OK")
-    print("profile gate smoke coverage OK")
-except Exception as exc:
-    raise AssertionError(f"LU82-LU87 Link tool/profile checks failed: {exc}")
 
 print("LINK HEALTHCHECK PASSED")
 
