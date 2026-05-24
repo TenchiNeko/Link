@@ -35,6 +35,12 @@ def _wants_json(prompt: str) -> bool:
 
 
 def recovery_plan_dashboard_web_admin_command(prompt: str) -> list[str] | None:
+    from link_workflow_step_receipt_index_web_admin import route_workflow_step_receipt_index_prompt
+
+    workflow_step_receipt_index_response = route_workflow_step_receipt_index_prompt(prompt)
+    if workflow_step_receipt_index_response is not None:
+        return workflow_step_receipt_index_response
+
     try:
         from link_workflow_preflight_receipt_index_web_admin import (
             workflow_preflight_receipt_index_web_admin_command,
