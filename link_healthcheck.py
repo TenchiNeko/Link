@@ -1983,6 +1983,17 @@ def check_link_workflow_step_receipt_index_execution_receipt_web_admin_integrati
         )
     print("workflow step execution receipt index execution receipt web admin integration OK")
 
+def check_research_archive_intake_miner() -> None:
+    from link_research_archive_miner import validate_research_archive_miner
+
+    problems = validate_research_archive_miner()
+    if problems:
+        raise SystemExit(
+            "research archive intake miner failures:\n"
+            + "\n".join(problems)
+        )
+    print("research archive intake miner OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -2037,6 +2048,7 @@ def main() -> None:
     check_link_workflow_step_receipt_index_execution_receipt()
     check_link_workflow_step_receipt_index_execution_receipt_web_admin_route()
     check_link_workflow_step_receipt_index_execution_receipt_web_admin_integration()
+    check_research_archive_intake_miner()
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_execution_receipt()
     check_file_safety()
     check_git_safety()
