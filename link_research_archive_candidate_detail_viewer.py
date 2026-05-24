@@ -39,6 +39,29 @@ def matches_research_candidate_detail_prompt(prompt: str) -> bool:
     return any(trigger in lowered for trigger in TRIGGERS)
 
 
+def normalize_direct_candidate_detail_prompt(prompt: str, explicit_candidate: str | None = None) -> str:
+    """Make direct CLI shorthand like `--json top 1` route as a matched detail request."""
+    text = (prompt or "").strip()
+    if not text:
+        return "show research archive candidate detail"
+
+    if matches_research_candidate_detail_prompt(text):
+        return text
+
+    # Direct CLI callers often pass only a selector/path because the script name
+    # already implies the research archive candidate detail action.
+    if explicit_candidate:
+        return f"show research archive candidate detail {text}".strip()
+
+    if re.search(r"\b(?:top|rank|candidate)\s*#?\s*\d+\b", text.lower()):
+        return f"show research archive candidate detail {text}"
+
+    if re.search(r"[A-Za-z0-9_.-]+\.(?:tsx|ts|jsx|js|py|md|txt|json|jsonl|yaml|yml|sh|html|css)", text):
+        return f"show research archive candidate detail {text}"
+
+    return text
+
+
 def parse_limit(prompt: str, default: int = 20_000) -> int:
     lowered = prompt.lower()
     match = re.search(r"\b(?:limit|chars?|characters?)\s+(\d+)\b", lowered)
@@ -113,7 +136,11 @@ def load_candidates(run_dir: Path, *, max_count: int = 5000) -> list[str]:
         return []
 
     candidates: list[str] = []
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    text = path.read_text(encoding="utf-8", errors="replace")
+    # Be tolerant of accidental literal backslash-n entries emitted by earlier
+    # fixture/diagnostic scripts.
+    text = text.replace("\\n", "\n")
+    for raw in text.splitlines():
         value = raw.strip()
         if not value or value.startswith("#"):
             continue
@@ -157,12 +184,16 @@ def select_candidate(prompt: str, candidates: list[str], explicit_candidate: str
             if q.lower() in candidate.lower():
                 return candidate
 
-    # Finally, match by basename if the user provides only a file name.
-    tokens = re.findall(r"[A-Za-z0-9_.-]+\.(?:tsx|ts|jsx|js|py|md|txt|json|jsonl|yaml|yml|sh|html|css)", prompt)
+    # Finally, match by basename or path suffix if the user provides only a file
+    # name/path-like token.
+    tokens = re.findall(r"[A-Za-z0-9_./-]+\.(?:tsx|ts|jsx|js|py|md|txt|json|jsonl|yaml|yml|sh|html|css)", prompt)
     for token in tokens:
-        t = token.lower()
+        t = token.strip().strip("'\\\"").lower()
         for candidate in candidates:
-            if Path(candidate).name.lower() == t:
+            c = candidate.lower()
+            if Path(candidate).name.lower() == Path(t).name.lower():
+                return candidate
+            if c.endswith(t) or t.endswith(c):
                 return candidate
 
     return candidates[0]
@@ -463,7 +494,11 @@ def main() -> int:
         print(MARKER)
         return 0
 
-    prompt = " ".join(args.prompt) if args.prompt else "show research archive candidate detail"
+    raw_prompt = " ".join(args.prompt) if args.prompt else "show research archive candidate detail"
+    prompt = normalize_direct_candidate_detail_prompt(
+        raw_prompt,
+        explicit_candidate=args.candidate,
+    )
     if args.json and " json" not in f" {prompt.lower()} ":
         prompt = f"{prompt} json"
 

@@ -2064,6 +2064,21 @@ def check_research_archive_intake_miner() -> None:
 
     print("research archive intake candidate detail viewer OK")
 
+    from link_research_archive_candidate_detail_web_admin_integration import (
+        validate_research_archive_candidate_detail_web_admin_integration,
+    )
+
+    research_archive_candidate_detail_integration_problems = (
+        validate_research_archive_candidate_detail_web_admin_integration()
+    )
+    if research_archive_candidate_detail_integration_problems:
+        raise SystemExit(
+            "research archive candidate detail web admin integration failures:\n- "
+            + "\n- ".join(research_archive_candidate_detail_integration_problems)
+        )
+
+    print("research archive candidate detail web admin integration OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
