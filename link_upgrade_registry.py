@@ -228,9 +228,14 @@ UPGRADES = [{'commit_subject': '',
  {'id': 'LU48',
   'status': 'implemented',
   'title': 'Research archive intake miner',
-  'healthcheck_markers': 'research archive intake miner OK'}]
+  'healthcheck_markers': 'research archive intake miner OK'},
+ {'id': 'LU49',
+  'status': 'implemented',
+  'title': 'Research archive intake miner web admin route',
+  'healthcheck_markers': 'research archive intake miner web admin route OK'}
+]
 
-NEXT_UPGRADE = {'id': 'LU49', 'status': 'planned', 'title': 'Research archive intake miner web admin route'}
+NEXT_UPGRADE = {'id': 'LU50', 'status': 'planned', 'title': 'Research archive intake miner web admin integration'}
 
 
 def implemented_upgrade_ids() -> list[str]:

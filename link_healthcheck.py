@@ -1994,6 +1994,34 @@ def check_research_archive_intake_miner() -> None:
         )
     print("research archive intake miner OK")
 
+    from link_research_archive_intake_web_admin import (
+        validate_research_archive_intake_web_admin_route,
+    )
+
+    research_archive_intake_web_admin_problems = (
+        validate_research_archive_intake_web_admin_route()
+    )
+    if research_archive_intake_web_admin_problems:
+        raise SystemExit(
+            "research archive intake miner web admin route failures:\n- "
+            + "\n- ".join(research_archive_intake_web_admin_problems)
+        )
+
+    from recovery_plan_dashboard_web_admin import recovery_plan_dashboard_web_admin_command
+
+    routed_research_archive_intake = recovery_plan_dashboard_web_admin_command(
+        "show research archive intake json"
+    )
+    if not routed_research_archive_intake:
+        raise SystemExit("research archive intake miner web admin route did not dispatch")
+    joined_research_archive_intake_route = "\n".join(routed_research_archive_intake)
+    if "research_archive_intake_web_admin" not in joined_research_archive_intake_route:
+        raise SystemExit("research archive intake miner web admin route payload missing kind")
+    if "research archive intake" not in joined_research_archive_intake_route.lower():
+        raise SystemExit("research archive intake miner web admin route payload missing title")
+
+    print("research archive intake miner web admin route OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()

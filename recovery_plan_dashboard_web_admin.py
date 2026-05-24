@@ -35,6 +35,19 @@ def _wants_json(prompt: str) -> bool:
 
 
 def recovery_plan_dashboard_web_admin_command(prompt: str) -> list[str] | None:
+    # LU49 research archive intake miner priority route BEGIN
+    try:
+        from link_research_archive_intake_web_admin import (
+            route_research_archive_intake_prompt,
+        )
+
+        research_archive_intake_response = route_research_archive_intake_prompt(prompt)
+        if research_archive_intake_response is not None:
+            return research_archive_intake_response
+    except Exception:
+        pass
+    # LU49 research archive intake miner priority route END
+
     # LU47 workflow step receipt index execution receipt priority route BEGIN
     try:
         from link_workflow_step_receipt_index_receipts_web_admin import (
