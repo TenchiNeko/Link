@@ -35,6 +35,7 @@ _READ_ONLY_GIT_OPS = {
     "branch",
     "tag",
     "remote",
+    "ls-files",
 }
 
 _MUTATING_GIT_OPS = {
@@ -115,7 +116,7 @@ def classify_git_command(command: str) -> GitSafetyAssessment:
             return GitSafetyAssessment(GitRiskLevel.CAUTION, "git tag mutation needs review")
         return GitSafetyAssessment(GitRiskLevel.ALLOW, "read-only git tag inspection")
 
-    if op in {"status", "diff", "log", "show", "rev-parse", "remote"}:
+    if op in {"status", "diff", "log", "show", "rev-parse", "remote", "ls-files"}:
         return GitSafetyAssessment(GitRiskLevel.ALLOW, f"read-only git {op}")
 
     if op in _MUTATING_GIT_OPS:

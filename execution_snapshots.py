@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from capability_gate import classify_git_command
+
 ROOT = Path(__file__).resolve().parent
 DEFAULT_SNAPSHOT_DIR = ROOT / ".agents" / "execution_snapshots"
 
@@ -36,8 +38,13 @@ def _snapshot_root() -> Path:
 
 
 def _run_git(args: list[str]) -> tuple[int, str]:
+    command = ["git", *args]
+    decision = classify_git_command(command)
+    if decision.denied:
+        raise PermissionError(f"snapshot git command blocked: {decision.reason}")
+
     proc = subprocess.run(
-        ["git", *args],
+        command,
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,
