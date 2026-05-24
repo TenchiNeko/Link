@@ -2105,6 +2105,22 @@ def check_research_archive_intake_miner() -> None:
 
     print("research archive candidate shortlist exporter OK")
 
+
+
+def check_research_archive_candidate_shortlist_web_admin_integration() -> None:
+    from link_research_archive_candidate_shortlist_web_admin_integration import (
+        validate_research_candidate_shortlist_web_admin_integration,
+    )
+
+    failures = validate_research_candidate_shortlist_web_admin_integration()
+    if failures:
+        print("research archive candidate shortlist web admin integration FAILED")
+        for failure in failures:
+            print(f"- {failure}")
+        raise SystemExit(1)
+
+    print("research archive candidate shortlist web admin integration OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -2160,6 +2176,7 @@ def main() -> None:
     check_link_workflow_step_receipt_index_execution_receipt_web_admin_route()
     check_link_workflow_step_receipt_index_execution_receipt_web_admin_integration()
     check_research_archive_intake_miner()
+    check_research_archive_candidate_shortlist_web_admin_integration()
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_execution_receipt()
     check_file_safety()
     check_git_safety()

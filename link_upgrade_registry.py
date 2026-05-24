@@ -253,9 +253,13 @@ UPGRADES = [{'commit_subject': '',
   'status': 'implemented',
   'title': 'Research archive candidate shortlist web admin route',
   'healthcheck_markers': 'research archive candidate shortlist web admin route OK'},
+ {'id': 'LU55',
+  'status': 'implemented',
+  'title': 'Research archive candidate shortlist web admin integration',
+  'healthcheck_markers': 'research archive candidate shortlist web admin integration OK'},
 ]
 
-NEXT_UPGRADE = {'id': 'LU55', 'status': 'planned', 'title': 'Research archive candidate shortlist web admin integration'}
+NEXT_UPGRADE = {'id': 'LU56', 'status': 'planned', 'title': 'Research archive candidate shortlist dashboard integration'}
 def implemented_upgrade_ids() -> list[str]:
     return [item["id"] if isinstance(item, dict) else item[0] for item in UPGRADES]
 
