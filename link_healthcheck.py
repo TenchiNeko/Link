@@ -2167,9 +2167,30 @@ def check_research_archive_candidate_shortlist_dashboard_web_admin_integration()
 
     print("research archive candidate shortlist dashboard web admin integration OK")
 
+
+def check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch() -> None:
+    from link_research_archive_candidate_shortlist_dashboard_web_admin_dispatch import (
+        validate_research_candidate_shortlist_dashboard_web_admin_dispatch,
+    )
+
+    failures = validate_research_candidate_shortlist_dashboard_web_admin_dispatch()
+    if failures:
+        print("research archive candidate shortlist dashboard web admin dispatch FAILED")
+        for failure in failures:
+            print(f"- {failure}")
+        raise SystemExit(1)
+
+    print("research archive candidate shortlist dashboard web admin dispatch OK")
+
 def main() -> None:
+    if "--self-test59" in sys.argv:
+        check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch()
+        return
     if "--self-test58" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_integration()
+        return
+    if "--self-test59" in sys.argv:
+        check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch()
         return
     check_removed_junk_absent()
     check_compile()
