@@ -2022,6 +2022,20 @@ def check_research_archive_intake_miner() -> None:
 
     print("research archive intake miner web admin route OK")
 
+    from link_research_archive_intake_web_admin_integration import (
+        validate_research_archive_intake_web_admin_integration,
+    )
+
+    research_archive_intake_web_admin_integration_problems = (
+        validate_research_archive_intake_web_admin_integration()
+    )
+    if research_archive_intake_web_admin_integration_problems:
+        raise SystemExit(
+            "research archive intake miner web admin integration failures:\n- "
+            + "\n- ".join(research_archive_intake_web_admin_integration_problems)
+        )
+    print("research archive intake miner web admin integration OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
