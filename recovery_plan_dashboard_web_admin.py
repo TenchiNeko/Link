@@ -35,6 +35,21 @@ def _wants_json(prompt: str) -> bool:
 
 
 def recovery_plan_dashboard_web_admin_command(prompt: str) -> list[str] | None:
+    # LU51 research archive candidate detail priority route BEGIN
+    try:
+        from link_research_archive_candidate_detail_viewer import (
+            route_research_archive_candidate_detail_prompt,
+        )
+
+        research_archive_candidate_detail_response = (
+            route_research_archive_candidate_detail_prompt(prompt)
+        )
+        if research_archive_candidate_detail_response is not None:
+            return research_archive_candidate_detail_response
+    except Exception:
+        pass
+    # LU51 research archive candidate detail priority route END
+
     # LU49 research archive intake miner priority route BEGIN
     try:
         from link_research_archive_intake_web_admin import (

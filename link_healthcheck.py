@@ -2036,6 +2036,34 @@ def check_research_archive_intake_miner() -> None:
         )
     print("research archive intake miner web admin integration OK")
 
+    from link_research_archive_candidate_detail_viewer import (
+        validate_research_archive_candidate_detail_viewer,
+    )
+
+    research_archive_candidate_detail_problems = (
+        validate_research_archive_candidate_detail_viewer()
+    )
+    if research_archive_candidate_detail_problems:
+        raise SystemExit(
+            "research archive intake candidate detail viewer failures:\n- "
+            + "\n- ".join(research_archive_candidate_detail_problems)
+        )
+
+    from recovery_plan_dashboard_web_admin import recovery_plan_dashboard_web_admin_command
+
+    routed_research_candidate_detail = recovery_plan_dashboard_web_admin_command(
+        "show research archive candidate detail json top 1"
+    )
+    if not routed_research_candidate_detail:
+        raise SystemExit("research archive candidate detail viewer did not dispatch")
+    joined_research_candidate_detail = "\n".join(routed_research_candidate_detail)
+    if "research_archive_candidate_detail_viewer" not in joined_research_candidate_detail:
+        raise SystemExit("research archive candidate detail viewer payload missing kind")
+    if "research archive candidate detail" not in joined_research_candidate_detail.lower():
+        raise SystemExit("research archive candidate detail viewer payload missing title")
+
+    print("research archive intake candidate detail viewer OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
