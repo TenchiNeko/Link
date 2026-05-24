@@ -2212,7 +2212,25 @@ def check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_rece
 
     print("research archive candidate shortlist dashboard web admin dispatch receipt OK")
 
+
+def check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_web_admin_route() -> None:
+    from link_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_web_admin_route import (
+        validate_research_candidate_shortlist_dashboard_web_admin_dispatch_receipt_web_admin_route,
+    )
+
+    failures = validate_research_candidate_shortlist_dashboard_web_admin_dispatch_receipt_web_admin_route()
+    if failures:
+        print("research archive candidate shortlist dashboard web admin dispatch receipt web admin route FAILED")
+        for failure in failures:
+            print(f"- {failure}")
+        raise SystemExit(1)
+
+    print("research archive candidate shortlist dashboard web admin dispatch receipt web admin route OK")
+
 def main() -> None:
+    if "--self-test62" in sys.argv:
+        check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_web_admin_route()
+        return
     if "--self-test61" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt()
         return
@@ -2227,6 +2245,8 @@ def main() -> None:
         return
     check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_integration()
     check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt()
+# LU62 dispatch receipt web admin route healthcheck
+    check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_web_admin_route()
     check_removed_junk_absent()
     check_compile()
     check_imports()
