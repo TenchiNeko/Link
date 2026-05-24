@@ -2400,7 +2400,24 @@ def check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_rece
 
     print("research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin dispatch receipt evidence index web admin integration OK")
 
+
+def check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch() -> None:
+    import importlib
+
+    mod = importlib.import_module("link_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch")
+    failures = mod.validate_research_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch()
+    if failures:
+        print("research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin dispatch receipt evidence index web admin dispatch FAILED")
+        for failure in failures:
+            print(f"- {failure}")
+        raise SystemExit(1)
+
+    print("research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin dispatch receipt evidence index web admin dispatch OK")
+
 def main() -> None:
+    if "--self-test75" in sys.argv:
+        check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch()
+        return
     if "--self-test74" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_integration()
         return
@@ -2480,6 +2497,8 @@ def main() -> None:
     check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_route()
 # LU74 dispatch receipt evidence index web admin dispatch receipt evidence index web admin integration healthcheck
     check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_integration()
+# LU75 dispatch receipt evidence index web admin dispatch receipt evidence index web admin dispatch healthcheck
+    check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch()
     check_removed_junk_absent()
     check_compile()
     check_imports()
