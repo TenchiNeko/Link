@@ -1944,6 +1944,19 @@ def check_link_workflow_step_receipt_index_web_admin_integration() -> None:
         )
     print("workflow step execution receipt index web admin integration OK")
 
+def check_link_workflow_step_receipt_index_execution_receipt() -> None:
+    from link_workflow_step_receipt_index_receipts import (
+        validate_workflow_step_receipt_index_execution_receipt,
+    )
+
+    problems = validate_workflow_step_receipt_index_execution_receipt()
+    if problems:
+        raise SystemExit(
+            "workflow step execution receipt index execution receipt failures:\n"
+            + "\n".join(problems)
+        )
+    print("workflow step execution receipt index execution receipt OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
@@ -1995,6 +2008,7 @@ def main() -> None:
     check_link_workflow_step_receipt_index()
     check_link_workflow_step_receipt_index_web_admin_route()
     check_link_workflow_step_receipt_index_web_admin_integration()
+    check_link_workflow_step_receipt_index_execution_receipt()
     check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receipt_evidence_index_execution_receipt()
     check_file_safety()
     check_git_safety()
