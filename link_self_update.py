@@ -10,6 +10,7 @@ from typing import Any
 
 from capability_gate import classify_git_command
 from execution_snapshots import create_execution_snapshot
+from link_worker_profiles import profile_summary, validate_profiles
 
 ROOT = Path(__file__).resolve().parent
 RECEIPT_DIR = ROOT / ".agents" / "self_update_receipts"
@@ -35,51 +36,70 @@ def run_git(args: list[str]) -> tuple[int, str]:
 def git_text(args: list[str]) -> str:
     code, out = run_git(args)
     if code != 0:
-        raise RuntimeError(f"git command failed: git {' '.join(args)}\n{out}")
+        joined = " ".join(args)
+        raise RuntimeError(f"git command failed: git {joined}\n{out}")
     return out.strip()
 
 
-def write_json(path: Path, data: dict[str, Any]) -> None:
+def write_json(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
-def build_self_update_receipt(goal: str, mode: str) -> Path:
+def create_preflight_receipt(goal: str, profile: str = "self_update_preflight") -> Path:
+    created_at = time.strftime("%Y%m%d-%H%M%S")
+
+    validation = validate_profiles()
+    if not validation.get("ok"):
+        raise RuntimeError(f"worker profile validation failed: {validation}")
+
+    profile_payload = profile_summary(profile)
+
     branch = git_text(["branch", "--show-current"])
-    status = git_text(["status", "--short"])
     head = git_text(["rev-parse", "--verify", "HEAD"])
-    latest = git_text(["log", "--oneline", "-1"])
-
-    if branch in {"main", "master"}:
-        raise PermissionError("self-update runner refuses to operate directly on main or master")
+    latest_commit = git_text(["log", "--oneline", "-1"])
+    status_before = git_text(["status", "--short"])
 
     snapshot = create_execution_snapshot(
         action="self_update_preflight",
-        target={"goal": goal, "mode": mode},
+        target={
+            "goal": goal,
+            "profile": profile,
+            "enabled_tools": profile_payload["enabled_tool_names"],
+        },
         gate_decision="allow",
-        gate_reason="safe preflight receipt only",
+        gate_reason="preflight inspection only",
         actor="link_self_update",
         details={
             "branch": branch,
             "head": head,
-            "status_before": status,
+            "status_before": status_before,
+            "worker_profile": profile_payload,
         },
     )
 
-    now = time.strftime("%Y%m%d-%H%M%S")
     receipt = {
-        "receipt_version": 1,
-        "created_at": now,
+        "receipt_version": 2,
         "runner": "link_self_update",
-        "mode": mode,
+        "mode": "preflight",
+        "created_at": created_at,
         "goal": goal,
         "branch": branch,
         "head": head,
-        "latest_commit": latest,
-        "status_before": status,
+        "latest_commit": latest_commit,
+        "status_before": status_before,
+        "worker_profile": profile,
+        "enabled_tools": profile_payload["enabled_tool_names"],
+        "profile_details": profile_payload["profile"],
+        "profile_validation": validation,
         "snapshot_path": str(snapshot),
         "allowed_actions": [
             "inspect repository state",
+            "resolve restricted worker profile",
             "create execution snapshot",
             "write self-update receipt",
         ],
@@ -88,24 +108,27 @@ def build_self_update_receipt(goal: str, mode: str) -> Path:
             "run destructive git commands",
             "apply patches without later test evidence",
             "copy external project code wholesale",
+            "use tools outside the resolved worker profile",
         ],
         "next_step": "review receipt, then implement the smallest safe Link-native patch",
     }
 
-    safe_name = now + "-self-update-preflight.json"
-    receipt_path = RECEIPT_DIR / safe_name
-    write_json(receipt_path, receipt)
-    return receipt_path
+    filename = f"{created_at}-self-update-preflight-{profile}.json"
+    return write_json(RECEIPT_DIR / filename, receipt)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Link self-update preflight runner")
-    parser.add_argument("--goal", required=True, help="Self-update goal or upgrade objective")
-    parser.add_argument("--mode", default="preflight", choices=["preflight", "inspect"])
+    parser = argparse.ArgumentParser(description="Run Link self-update preflight.")
+    parser.add_argument("--goal", required=True, help="Self-update goal being evaluated.")
+    parser.add_argument(
+        "--profile",
+        default="self_update_preflight",
+        help="Worker profile to resolve for this preflight.",
+    )
     args = parser.parse_args()
 
-    receipt = build_self_update_receipt(goal=args.goal, mode=args.mode)
-    print(receipt)
+    path = create_preflight_receipt(goal=args.goal, profile=args.profile)
+    print(path)
     return 0
 
 
