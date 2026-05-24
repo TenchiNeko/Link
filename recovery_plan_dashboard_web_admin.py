@@ -35,6 +35,21 @@ def _wants_json(prompt: str) -> bool:
 
 
 def recovery_plan_dashboard_web_admin_command(prompt: str) -> list[str] | None:
+    # LU47 workflow step receipt index execution receipt priority route BEGIN
+    try:
+        from link_workflow_step_receipt_index_receipts_web_admin import (
+            command_for_workflow_step_receipt_index_execution_receipt,
+        )
+
+        workflow_step_receipt_index_execution_receipt_command = (
+            command_for_workflow_step_receipt_index_execution_receipt(prompt)
+        )
+        if workflow_step_receipt_index_execution_receipt_command is not None:
+            return workflow_step_receipt_index_execution_receipt_command
+    except Exception:
+        pass
+    # LU47 workflow step receipt index execution receipt priority route END
+
     from link_workflow_step_receipt_index_web_admin import route_workflow_step_receipt_index_prompt
 
     workflow_step_receipt_index_response = route_workflow_step_receipt_index_prompt(prompt)
