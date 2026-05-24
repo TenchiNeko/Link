@@ -2079,6 +2079,19 @@ def check_research_archive_intake_miner() -> None:
 
     print("research archive candidate detail web admin integration OK")
 
+    from link_research_archive_candidate_shortlist_exporter import (
+        validate_research_candidate_shortlist_exporter,
+    )
+
+    research_candidate_shortlist_problems = validate_research_candidate_shortlist_exporter()
+    if research_candidate_shortlist_problems:
+        raise SystemExit(
+            "research archive candidate shortlist exporter failures:\n- "
+            + "\n- ".join(research_candidate_shortlist_problems)
+        )
+
+    print("research archive candidate shortlist exporter OK")
+
 def main() -> None:
     check_removed_junk_absent()
     check_compile()
