@@ -1835,6 +1835,19 @@ def check_latest_recovery_plan_dashboard_receipt_evidence_index_execution_receip
             "latest recovery plan dashboard receipt evidence index execution receipt evidence index execution receipt failures:\n"
             + "\n".join(problems)
         )
+    from link_research_archive_candidate_shortlist_web_admin_route import (
+        MARKER as research_candidate_shortlist_web_admin_route_marker,
+        validate_research_candidate_shortlist_web_admin_route,
+    )
+
+    research_candidate_shortlist_web_admin_route_failures = validate_research_candidate_shortlist_web_admin_route()
+    if research_candidate_shortlist_web_admin_route_failures:
+        raise AssertionError(
+            "research archive candidate shortlist web admin route failed: "
+            + "; ".join(research_candidate_shortlist_web_admin_route_failures)
+        )
+    print(research_candidate_shortlist_web_admin_route_marker)
+
     print("latest recovery plan dashboard receipt evidence index execution receipt evidence index execution receipt OK")
 
 def check_link_workflow_spec_layer() -> None:
