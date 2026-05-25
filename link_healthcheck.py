@@ -2583,6 +2583,27 @@ def check_link_grade_command() -> None:
 
     print("link grade command OK")
 
+
+def check_task_patch_runner_command() -> None:
+    from pathlib import Path
+    from link_task_patch_runner import build_plan, render_markdown
+
+    plan = build_plan(Path.cwd(), "Add a guarded task-to-patch smoke plan")
+    rendered = render_markdown(plan)
+
+    if plan.get("receipt_version") != "LU90-task-to-patch-plan-v1":
+        raise AssertionError("unexpected task-to-patch receipt version")
+    if not plan.get("goal"):
+        raise AssertionError("task-to-patch plan did not preserve goal")
+    if "required_gates" not in plan or not plan["required_gates"]:
+        raise AssertionError("task-to-patch plan missing required gates")
+    if "recommended_tests" not in plan or not plan["recommended_tests"]:
+        raise AssertionError("task-to-patch plan missing recommended tests")
+    if "# Link Task-to-Patch Plan" not in rendered:
+        raise AssertionError("task-to-patch markdown render failed")
+
+    print("guarded task-to-patch planner OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -2777,6 +2798,7 @@ def main() -> None:
     check_link_tool_profile_upgrades()
     check_research_source_inventory_command()
     check_link_grade_command()
+    check_task_patch_runner_command()
     print("LINK HEALTHCHECK PASSED")
     
 
