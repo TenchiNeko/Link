@@ -3164,6 +3164,25 @@ def check_autonomous_tick_runner() -> None:
 
     print("autonomous tick runner OK")
 
+
+def check_self_learning_dashboard_web_admin():
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "link_self_learning_dashboard_web_admin.py", "--smoke"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise AssertionError(result.stdout)
+    if "self-learning dashboard web admin smoke OK" not in result.stdout:
+        raise AssertionError(result.stdout)
+    print("self-learning dashboard web admin OK")
+
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3378,6 +3397,7 @@ def main() -> None:
     check_autonomous_tick_runner()
     check_approval_gated_patch_draft_queue()
     check_self_learning_dashboard()
+    check_self_learning_dashboard_web_admin()
     print("LINK HEALTHCHECK PASSED")
     
 
