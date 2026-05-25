@@ -2636,6 +2636,32 @@ def check_task_patch_executor_command() -> None:
 
     print("guarded task-to-patch executor OK")
 
+
+
+def check_concise_task_receipt_format() -> None:
+    from pathlib import Path
+    from link_task_receipt import build_concise_task_receipt, render_concise_task_receipt
+
+    receipt = build_concise_task_receipt(Path.cwd(), "Plan concise receipt smoke test")
+
+    if receipt.get("receipt_version") != "LU92-concise-task-receipt-v1":
+        raise AssertionError("unexpected concise task receipt version")
+
+    if receipt.get("goal") != "Plan concise receipt smoke test":
+        raise AssertionError("concise task receipt did not preserve goal")
+
+    if "readiness" not in receipt or "score" not in receipt["readiness"]:
+        raise AssertionError("concise task receipt missing readiness summary")
+
+    if "top_tests" not in receipt or not receipt["top_tests"]:
+        raise AssertionError("concise task receipt missing top tests")
+
+    rendered = render_concise_task_receipt(receipt)
+    if "# Link Concise Task Receipt" not in rendered:
+        raise AssertionError("concise task receipt markdown render failed")
+
+    print("concise task receipt format OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -2832,6 +2858,7 @@ def main() -> None:
     check_link_grade_command()
     check_task_patch_runner_command()
     check_task_patch_executor_command()
+    check_concise_task_receipt_format()
     print("LINK HEALTHCHECK PASSED")
     
 
