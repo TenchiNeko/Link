@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import argparse
 import datetime as dt
 import json
@@ -631,6 +632,471 @@ def main() -> None:
         print(json.dumps(rec, indent=2, sort_keys=True, default=str))
     else:
         print(format_markdown(rec))
+
+
+
+# BEGIN LINK NONSELF DYNAMIC FALLBACK
+NONSELF_DYNAMIC_IDEAS = [
+    {
+        "title": "approval queue orphan markdown cleanup",
+        "why": "The pending folder can contain orphan .md files with no matching JSON, which makes troubleshooting look like there are pending drafts when the queue is actually empty.",
+        "plan": [
+            "Scan pending approval markdown files for missing matching JSON files.",
+            "Move orphan markdown files to an archived orphan folder with a receipt.",
+            "Show orphan cleanup counts in dashboard receipts.",
+            "Keep real pending JSON drafts untouched.",
+        ],
+        "files": [
+            "link_dashboard_proposal_refill.py",
+            "link_self_learning_dashboard.py",
+            "link_healthcheck.py",
+        ],
+    },
+    {
+        "title": "approval target single source renderer",
+        "why": "The dashboard previously showed different approval text in different boxes. The approval target should be rendered from one canonical source.",
+        "plan": [
+            "Create one canonical approval markdown builder.",
+            "Use the same builder for the copy box, visible approval block, and full dashboard receipt.",
+            "Fail healthcheck if visible approval target blocks disagree.",
+            "Keep YES disabled if identity fields cannot be synced.",
+        ],
+        "files": [
+            "link_self_learning_dashboard.py",
+            "link_self_learning_dashboard_web_admin.py",
+            "link_dashboard_approval_contract.py",
+            "link_healthcheck.py",
+        ],
+    },
+    {
+        "title": "dashboard action result receipt panel",
+        "why": "Button actions are hard to verify unless the result is shown directly in the dashboard after each click.",
+        "plan": [
+            "Persist the latest dashboard action result as a small receipt.",
+            "Render the latest action, exit code, and output tail above the approval target.",
+            "Add coverage for YES, NO, TRY AGAIN, clear bugged, and generate new draft actions.",
+            "Avoid relying only on server logs for button confirmation.",
+        ],
+        "files": [
+            "link_self_learning_dashboard_web_admin.py",
+            "link_self_learning_dashboard.py",
+            "link_healthcheck.py",
+        ],
+    },
+    {
+        "title": "approval decision idempotency guard",
+        "why": "Double-clicking or refreshing after a decision should not create confusing duplicate receipts or stale dashboard state.",
+        "plan": [
+            "Detect already-decided drafts before running a second decision.",
+            "Return a clear already-decided receipt instead of failing silently.",
+            "Re-render the dashboard from current disk state after every decision.",
+            "Add healthcheck coverage for repeat decision behavior.",
+        ],
+        "files": [
+            "link_approval_patch_draft_queue.py",
+            "link_self_learning_dashboard_web_admin.py",
+            "link_healthcheck.py",
+        ],
+    },
+    {
+        "title": "approval proposal hash persistence guard",
+        "why": "Proposal hashes should be stable on disk so the dashboard does not need to repair missing or mismatched hash values after render.",
+        "plan": [
+            "Persist proposal_hash into newly created draft JSON files.",
+            "Backfill missing proposal_hash only when a draft is otherwise valid.",
+            "Fail healthcheck if YES is enabled with a blank hash.",
+            "Keep all visible approval blocks synced to the persisted hash.",
+        ],
+        "files": [
+            "link_dashboard_proposal_refill.py",
+            "link_dashboard_approval_contract.py",
+            "link_self_learning_dashboard.py",
+            "link_healthcheck.py",
+        ],
+    },
+    {
+        "title": "approval queue duplicate title blocker",
+        "why": "The queue should not keep generating the same proposal with a new LU number after the old one was approved, rejected, retried, or blocked.",
+        "plan": [
+            "Normalize proposal titles before comparing them across approval folders.",
+            "Treat LU-prefixed and non-LU-prefixed versions of the same title as duplicates.",
+            "Write skipped-duplicate receipts for transparency.",
+            "Add healthcheck coverage using a duplicate dynamic proposal fixture.",
+        ],
+        "files": [
+            "link_dashboard_proposal_refill.py",
+            "link_healthcheck.py",
+        ],
+    },
+    {
+        "title": "dashboard no-pending recovery explainer",
+        "why": "When no pending draft exists, the dashboard should explain whether generation is blocked, exhausted, or waiting for real input.",
+        "plan": [
+            "Render the latest no-useful-proposal receipt when no draft exists.",
+            "Show why generation was blocked or exhausted.",
+            "Keep generate-new controls visible.",
+            "Add a direct command hint for the next recovery action.",
+        ],
+        "files": [
+            "link_self_learning_dashboard.py",
+            "link_self_learning_dashboard_web_admin.py",
+            "link_dashboard_proposal_refill.py",
+        ],
+    },
+    {
+        "title": "approval refill external candidate loader",
+        "why": "Hardcoded proposal lists eventually run out. The refill system should be able to load concrete candidates from a small local candidate file.",
+        "plan": [
+            "Add an optional .link/approval_candidates.jsonl source.",
+            "Validate candidate fields before creating a draft.",
+            "Skip candidates already seen in approval history.",
+            "Fall back to built-in maintenance ideas only when the candidate file is empty.",
+        ],
+        "files": [
+            "link_dashboard_proposal_refill.py",
+            "link_healthcheck.py",
+        ],
+    },
+]
+
+
+def _nf_norm(value: object) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"\blu\d+\b", "", text)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
+
+
+def _nf_text_from_json(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _nf_used_state(root: Path) -> tuple[set[int], set[str]]:
+    numbers: set[int] = set()
+    titles: set[str] = set()
+
+    bases = [
+        root / ".link/patch_drafts/pending",
+        root / ".link/patch_drafts/approved",
+        root / ".link/patch_drafts/rejected",
+        root / ".link/patch_drafts/retry",
+        root / ".link/patch_drafts/blocked",
+        root / ".link/patch_drafts/receipts",
+        root / ".link/growth_receipts",
+        root / ".link/agent_queue/receipts",
+    ]
+
+    for base in bases:
+        if not base.exists():
+            continue
+        for path in list(base.glob("*.json")) + list(base.glob("*.md")):
+            text = _nf_text_from_json(path)
+            for m in re.finditer(r"\bLU(\d+)\b", text, re.I):
+                try:
+                    numbers.add(int(m.group(1)))
+                except ValueError:
+                    pass
+
+            try:
+                data = json.loads(text)
+            except Exception:
+                data = {}
+
+            candidates = [
+                data.get("title"),
+                data.get("task_title"),
+                data.get("reason"),
+            ]
+
+            task = data.get("task")
+            if isinstance(task, dict):
+                candidates.append(task.get("title"))
+            elif isinstance(task, str):
+                candidates.append(task)
+
+            for item in candidates:
+                n = _nf_norm(item)
+                if n:
+                    titles.add(n)
+
+            # Also catch markdown-style task lines.
+            for m in re.finditer(r"Task:\s*`?LU\d+`?\s*[—-]\s*\*\*([^*\n]+)\*\*", text):
+                n = _nf_norm(m.group(1))
+                if n:
+                    titles.add(n)
+
+    return numbers, titles
+
+
+def _nf_next_lu(root: Path) -> str:
+    numbers, _ = _nf_used_state(root)
+    return f"LU{(max(numbers) if numbers else 120) + 1}"
+
+
+def _nf_choose_idea(root: Path, task_id: str) -> dict[str, Any]:
+    _, used_titles = _nf_used_state(root)
+
+    forbidden = {
+        _nf_norm("dynamic approval proposal source fallback"),
+        _nf_norm("LU dynamic approval proposal source fallback"),
+        _nf_norm("next autonomous growth proposal"),
+    }
+
+    for idea in NONSELF_DYNAMIC_IDEAS:
+        n = _nf_norm(idea["title"])
+        if n in forbidden:
+            continue
+        if n not in used_titles:
+            return dict(idea)
+
+    # Last-resort concrete task, still non-self and unique by LU number.
+    return {
+        "title": f"approval queue maintenance audit {task_id.lower()}",
+        "why": "All built-in dynamic fallback ideas have already been used, so Link needs a concrete maintenance audit proposal instead of looping on the fallback system itself.",
+        "plan": [
+            "Audit approval queue folders for stale, duplicate, orphan, or malformed records.",
+            "Write a receipt summarizing queue health and cleanup recommendations.",
+            "Keep generic LU113-style refill proposals blocked.",
+            "Add a healthcheck marker for the specific maintenance audit path.",
+        ],
+        "files": [
+            "link_dashboard_proposal_refill.py",
+            "link_self_learning_dashboard.py",
+            "link_healthcheck.py",
+        ],
+    }
+
+
+def _nf_slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug[:80] or "dynamic-approval-proposal"
+
+
+def _nf_stable_hash(data: dict[str, Any]) -> str:
+    import hashlib
+    payload = dict(data)
+    payload.pop("proposal_hash", None)
+    payload.pop("hash", None)
+    payload.pop("generated", None)
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _nf_render_markdown(root: Path, proposal: dict[str, Any]) -> str:
+    draft_id = proposal["draft_id"]
+    draft_file = root / ".link/patch_drafts/pending" / f"{draft_id}.json"
+    md_file = root / ".link/patch_drafts/pending" / f"{draft_id}.md"
+    task_id = proposal["task_id"]
+    title = proposal["title"]
+
+    lines = [
+        "## Approval Target",
+        "",
+        "Contract version: `LU110-dashboard-approval-contract-v1`",
+        "",
+        f"- Draft ID: `{draft_id}`",
+        f"- Draft file: `{draft_file}`",
+        f"- Markdown file: `{md_file}`",
+        f"- Proposal hash: `{proposal['proposal_hash']}`",
+        "- Status: **waiting_approval**",
+        f"- Task: `{task_id}` — **{title}**",
+        "- Risk: **medium**",
+        "- YES enabled: **True**",
+        "",
+        "### Why",
+        "",
+        proposal["why"],
+        "",
+        "### Proposed Plan",
+    ]
+
+    for item in proposal["plan"]:
+        lines.append(f"- {item}")
+
+    lines += ["", "### Files / Areas Affected"]
+    for item in proposal["files"]:
+        lines.append(f"- `{item}`")
+
+    tests = proposal["tests"]
+    lines += ["", "### Tests / Checks"]
+    for item in tests:
+        lines.append(f"- `{item}`")
+
+    lines += [
+        "",
+        "### Receipts",
+        "- `.link/patch_drafts/pending/`",
+        "- `.link/patch_drafts/receipts/`",
+        "- `.link/growth_receipts/`",
+        "- `.link/agent_queue/receipts/`",
+        "",
+        "### Button Meaning",
+        "- **YES** approves this exact visible draft/hash only.",
+        "- **NO** rejects this exact visible draft and stores feedback.",
+        "- **TRY AGAIN** moves this exact visible draft to retry with feedback.",
+        "",
+        "### Exact Commands",
+        f"- YES: `python3 link_approval_patch_draft_queue.py decide --action yes --draft-id '{draft_id}' --feedback 'Approved from dashboard.' --format markdown`",
+        f"- NO: `python3 link_approval_patch_draft_queue.py decide --action no --draft-id '{draft_id}' --feedback 'Rejected from dashboard.' --format markdown`",
+        f"- TRY AGAIN: `python3 link_approval_patch_draft_queue.py decide --action try_again --draft-id '{draft_id}' --feedback 'Try again with Brandon feedback.' --format markdown`",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _nf_move_pending_json(root: Path, reason: str) -> list[dict[str, Any]]:
+    pending = root / ".link/patch_drafts/pending"
+    retry = root / ".link/patch_drafts/retry"
+    retry.mkdir(parents=True, exist_ok=True)
+    moved: list[dict[str, Any]] = []
+
+    for src in sorted(pending.glob("*.json")) if pending.exists() else []:
+        dst = retry / src.name
+        shutil.move(str(src), str(dst))
+        md = src.with_suffix(".md")
+        if md.exists():
+            shutil.move(str(md), str(retry / md.name))
+        moved.append({"source": str(src), "target": str(dst), "reason": reason})
+
+    return moved
+
+
+def _nf_archive_orphan_pending_markdown(root: Path) -> int:
+    pending = root / ".link/patch_drafts/pending"
+    archive = root / ".link/patch_drafts/orphan_markdown"
+    archive.mkdir(parents=True, exist_ok=True)
+    count = 0
+
+    for md in sorted(pending.glob("*.md")) if pending.exists() else []:
+        if not md.with_suffix(".json").exists():
+            shutil.move(str(md), str(archive / md.name))
+            count += 1
+    return count
+
+
+def _nf_create_dynamic_concrete(root: Path, write: bool, moved: list[dict[str, Any]]) -> dict[str, Any]:
+    task_id = _nf_next_lu(root)
+    idea = _nf_choose_idea(root, task_id)
+    title = idea["title"]
+
+    ts = now().replace("-", "").replace(":", "").replace("T", "-")[:15]
+    draft_id = f"{ts}-manual-{task_id.lower()}-{_nf_slug(title)}"
+
+    tests = [
+        "python3 -m py_compile link_dashboard_proposal_refill.py link_self_learning_dashboard.py link_self_learning_dashboard_web_admin.py link_dashboard_approval_contract.py link_healthcheck.py",
+        "python3 link_dashboard_proposal_refill.py --clear-bugged --force-new --write --format markdown",
+        "python3 link_self_learning_dashboard.py render --format markdown",
+        "python3 link_self_learning_dashboard.py render --format html --write",
+        "python3 link_self_learning_dashboard_web_admin.py --smoke",
+        "python3 link_healthcheck.py",
+        "git diff --check",
+    ]
+
+    proposal: dict[str, Any] = {
+        "contract_version": "LU110-dashboard-approval-contract-v1",
+        "receipt_version": REFILL_VERSION,
+        "draft_id": draft_id,
+        "status": "waiting_approval",
+        "task_id": task_id,
+        "task": {"id": task_id, "title": title},
+        "title": title,
+        "risk": "medium",
+        "why": idea["why"],
+        "plan": idea["plan"],
+        "proposed_plan": idea["plan"],
+        "files": idea["files"],
+        "files_affected": idea["files"],
+        "tests": tests,
+        "checks": tests,
+        "yes_enabled": True,
+        "generated": now(),
+        "source": "nonself_dynamic_fallback",
+        "moved_pending_before_create": moved,
+    }
+    proposal["proposal_hash"] = _nf_stable_hash(proposal)
+
+    draft_dir = root / ".link/patch_drafts/pending"
+    receipt_dir = root / ".link/patch_drafts/receipts"
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+
+    draft_path = draft_dir / f"{draft_id}.json"
+    md_path = draft_dir / f"{draft_id}.md"
+    receipt_path = receipt_dir / f"{draft_id}-created.json"
+
+    if write:
+        draft_path.write_text(json.dumps(proposal, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+        md_path.write_text(_nf_render_markdown(root, proposal), encoding="utf-8")
+        receipt_path.write_text(json.dumps({
+            "receipt_version": REFILL_VERSION,
+            "action": "created_nonself_dynamic_proposal",
+            "status": "ok",
+            "draft_id": draft_id,
+            "task_id": task_id,
+            "title": title,
+            "draft_path": str(draft_path),
+            "markdown_path": str(md_path),
+            "proposal_hash": proposal["proposal_hash"],
+            "moved_pending_before_create": moved,
+            "generated": now(),
+        }, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+
+    return {
+        "receipt_version": REFILL_VERSION,
+        "status": "ok",
+        "action": "created_nonself_dynamic_proposal",
+        "draft_id": draft_id,
+        "task_id": task_id,
+        "title": title,
+        "draft_path": str(draft_path),
+        "markdown_path": str(md_path),
+        "proposal_hash": proposal["proposal_hash"],
+        "reason": "Created a concrete non-self dynamic proposal after static candidates were exhausted.",
+        "moved_pending_before_create": moved,
+    }
+
+
+def ensure_pending_approval_draft(
+    root: Path | str = ".",
+    write: bool = True,
+    force_new: bool = False,
+    clear_bugged: bool = True,
+    **_: Any,
+) -> dict[str, Any]:
+    root = Path(root).resolve()
+    pending = root / ".link/patch_drafts/pending"
+    pending.mkdir(parents=True, exist_ok=True)
+
+    _nf_archive_orphan_pending_markdown(root)
+
+    json_pending = sorted(pending.glob("*.json"))
+
+    if json_pending and not force_new:
+        latest = json_pending[-1]
+        try:
+            data = json.loads(latest.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        return {
+            "receipt_version": REFILL_VERSION,
+            "status": "ok",
+            "action": "already_pending",
+            "draft_id": data.get("draft_id") or latest.stem,
+            "task_id": get_task_id(data) if "get_task_id" in globals() else data.get("task_id"),
+            "title": get_title(data) if "get_title" in globals() else data.get("title"),
+            "draft_path": str(latest),
+            "proposal_hash": data.get("proposal_hash") or data.get("hash") or "",
+            "reason": "Valid pending approval draft already exists.",
+        }
+
+    moved: list[dict[str, Any]] = []
+    if json_pending and force_new:
+        moved = _nf_move_pending_json(root, "force_new requested before creating nonself dynamic proposal")
+
+    return _nf_create_dynamic_concrete(root, write=write, moved=moved)
+# END LINK NONSELF DYNAMIC FALLBACK
 
 
 if __name__ == "__main__":
