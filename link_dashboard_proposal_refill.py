@@ -1474,5 +1474,218 @@ def ensure_pending_approval_draft(root: Path | str = ".", write: bool = True, fo
 # END LINK TITLE DEDUPE HARD FIX
 
 
+
+# BEGIN LINK AUTHORITATIVE DRAFT WRITER
+
+def _adw_lines(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, tuple):
+        return [str(x).strip() for x in value if str(x).strip()]
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _adw_slug(value: str) -> str:
+    value = re.sub(r"\bLU\s*[-_ ]*\d+\b", "", str(value), flags=re.I)
+    value = re.sub(r"\bLU\d+\b", "", value, flags=re.I)
+    value = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower())
+    value = re.sub(r"-+", "-", value).strip("-")
+    return value[:90] or "approval-proposal"
+
+
+def _adw_stable_hash(data: dict) -> str:
+    payload = dict(data)
+    for k in ["proposal_hash", "hash", "generated", "created", "created_at", "updated", "updated_at", "written"]:
+        payload.pop(k, None)
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _adw_markdown(data: dict, draft_path: Path, markdown_path: Path) -> str:
+    task = data.get("task") if isinstance(data.get("task"), dict) else {}
+    task_id = str(data.get("task_id") or task.get("id") or "").strip()
+    title = str(data.get("title") or task.get("title") or "").strip()
+    proposal_hash = str(data.get("proposal_hash") or data.get("hash") or "").strip()
+
+    plan = _adw_lines(data.get("plan") or data.get("proposed_plan") or data.get("proposal_plan"))
+    files = _adw_lines(data.get("files") or data.get("files_affected") or data.get("areas_affected"))
+    tests = _adw_lines(data.get("tests") or data.get("checks") or data.get("test_commands"))
+    receipts = _adw_lines(data.get("receipts") or [
+        ".link/patch_drafts/pending/",
+        ".link/patch_drafts/receipts/",
+        ".link/growth_receipts/",
+        ".link/agent_queue/receipts/",
+    ])
+
+    out = []
+    out.append("## Approval Target")
+    out.append("")
+    out.append("Contract version: `LU110-dashboard-approval-contract-v1`")
+    out.append("")
+    out.append(f"- Draft ID: `{data.get('draft_id')}`")
+    out.append(f"- Draft file: `{draft_path}`")
+    out.append(f"- Markdown file: `{markdown_path}`")
+    out.append(f"- Proposal hash: `{proposal_hash}`")
+    out.append("- Status: **waiting_approval**")
+    out.append(f"- Task: `{task_id}` — **{title}**")
+    out.append(f"- Risk: **{data.get('risk', 'medium')}**")
+    out.append("- YES enabled: **True**")
+    out.append("")
+    out.append("### Why")
+    out.append("")
+    out.append(str(data.get("why") or "This proposal describes a concrete Link maintenance improvement.").strip())
+    out.append("")
+    out.append("### Proposed Plan")
+    for item in plan:
+        out.append(f"- {item}")
+    out.append("")
+    out.append("### Files / Areas Affected")
+    for item in files:
+        out.append(f"- `{item}`")
+    out.append("")
+    out.append("### Tests / Checks")
+    for item in tests:
+        out.append(f"- `{item}`")
+    out.append("")
+    out.append("### Receipts")
+    for item in receipts:
+        out.append(f"- `{item}`")
+    out.append("")
+    out.append("### Button Meaning")
+    out.append("- **YES** approves this exact visible draft/hash only.")
+    out.append("- **NO** rejects this exact visible draft and stores feedback.")
+    out.append("- **TRY AGAIN** moves this exact visible draft to retry with feedback.")
+    out.append("")
+    out.append("### Exact Commands")
+    out.append(f"- YES: `python3 link_approval_patch_draft_queue.py decide --action yes --draft-id '{data.get('draft_id')}' --feedback 'Approved from dashboard.' --format markdown`")
+    out.append(f"- NO: `python3 link_approval_patch_draft_queue.py decide --action no --draft-id '{data.get('draft_id')}' --feedback 'Rejected from dashboard.' --format markdown`")
+    out.append(f"- TRY AGAIN: `python3 link_approval_patch_draft_queue.py decide --action try_again --draft-id '{data.get('draft_id')}' --feedback 'Try again with Brandon feedback.' --format markdown`")
+    return "\n".join(out) + "\n"
+
+
+def create_concrete(root: Path, c: dict, write: bool, moved: list[dict] | None = None) -> dict:
+    """Authoritative concrete draft writer.
+
+    This intentionally overrides older create_concrete definitions that produced
+    drafts with missing files/plan fields or unstable hashes.
+    """
+    root = Path(root)
+    moved = moved or []
+
+    task_id = str(c.get("task_id") or (c.get("task") or {}).get("id") or "").strip()
+    if not task_id:
+        task_id = "LU0"
+
+    title = str(c.get("title") or (c.get("task") or {}).get("title") or "concrete approval proposal").strip()
+
+    # Never put LU number in the title; task_id owns that identity.
+    title = re.sub(r"^\s*LU\s*[-_ ]*\d+\s+", "", title, flags=re.I)
+    title = re.sub(r"\s+\bLU\s*[-_ ]*\d+\s*$", "", title, flags=re.I).strip()
+
+    plan = _adw_lines(
+        c.get("plan")
+        or c.get("proposed_plan")
+        or [
+            "Apply the smallest useful approved patch.",
+            "Keep the change limited to the listed files.",
+            "Run compile, smoke, dashboard render, and healthcheck gates.",
+            "Commit and push only after verification passes.",
+        ]
+    )
+
+    files = _adw_lines(
+        c.get("files")
+        or c.get("files_affected")
+        or c.get("areas_affected")
+        or ["link_dashboard_proposal_refill.py", "link_healthcheck.py"]
+    )
+
+    tests = _adw_lines(
+        c.get("tests")
+        or c.get("checks")
+        or [
+            "python3 -m py_compile link_dashboard_proposal_refill.py link_self_learning_dashboard.py link_self_learning_dashboard_web_admin.py link_dashboard_approval_contract.py link_healthcheck.py",
+            "python3 link_dashboard_proposal_refill.py --clear-bugged --force-new --write --format markdown",
+            "python3 link_self_learning_dashboard.py render --format markdown",
+            "python3 link_self_learning_dashboard.py render --format html --write",
+            "python3 link_self_learning_dashboard_web_admin.py --smoke",
+            "python3 link_healthcheck.py",
+            "git diff --check",
+        ]
+    )
+
+    ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    slug = _adw_slug(title)
+    draft_id = f"{ts}-manual-{task_id.lower()}-{slug}"
+
+    pending = root / ".link/patch_drafts/pending"
+    receipts_dir = root / ".link/patch_drafts/receipts"
+    pending.mkdir(parents=True, exist_ok=True)
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+
+    draft_path = pending / f"{draft_id}.json"
+    markdown_path = pending / f"{draft_id}.md"
+
+    data = {
+        "receipt_version": "LU116-dashboard-recovery-refill-v2",
+        "action": "created_dynamic_concrete_recovery_proposal",
+        "status": "waiting_approval",
+        "draft_id": draft_id,
+        "task_id": task_id,
+        "task": {"id": task_id, "title": title},
+        "title": title,
+        "risk": str(c.get("risk") or "medium"),
+        "why": str(c.get("why") or "Created a concrete non-self dynamic proposal after static candidates were exhausted."),
+        "plan": plan,
+        "proposed_plan": plan,
+        "files": files,
+        "files_affected": files,
+        "areas_affected": files,
+        "tests": tests,
+        "checks": tests,
+        "receipts": _adw_lines(c.get("receipts") or [
+            ".link/patch_drafts/pending/",
+            ".link/patch_drafts/receipts/",
+            ".link/growth_receipts/",
+            ".link/agent_queue/receipts/",
+        ]),
+        "generated": dt.datetime.now().isoformat(timespec="seconds"),
+        "moved_bugged_drafts": moved,
+    }
+    data["proposal_hash"] = _adw_stable_hash(data)
+    data["hash"] = data["proposal_hash"]
+
+    markdown = _adw_markdown(data, draft_path.resolve(), markdown_path.resolve())
+
+    receipt = {
+        "receipt_version": "LU116-dashboard-recovery-refill-v2",
+        "status": "ok",
+        "action": "created_dynamic_concrete_recovery_proposal",
+        "draft_id": draft_id,
+        "task_id": task_id,
+        "title": title,
+        "proposal_hash": data["proposal_hash"],
+        "draft_path": str(draft_path.resolve()),
+        "markdown_path": str(markdown_path.resolve()),
+        "generated": data["generated"],
+        "reason": "Created a concrete non-self dynamic proposal after static candidates were exhausted.",
+        "moved_bugged_drafts": moved,
+    }
+
+    if write:
+        draft_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        markdown_path.write_text(markdown, encoding="utf-8")
+        receipt_path = receipts_dir / f"{draft_id}-created.json"
+        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True), encoding="utf-8")
+        receipt["receipt_path"] = str(receipt_path.resolve())
+
+    return receipt
+
+# END LINK AUTHORITATIVE DRAFT WRITER
+
+
 if __name__ == "__main__":
     main()

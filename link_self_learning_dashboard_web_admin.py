@@ -667,5 +667,65 @@ def rebuild_dashboard() -> str:
     return page
 # END LINK FINAL APPROVAL NORMALIZER
 
+
+# BEGIN LINK WEB ADMIN READONLY RENDER
+
+def rebuild_dashboard() -> str:
+    """Render dashboard without mutating approval queues.
+
+    Page loads and --smoke must not create, clear, reject, retry, or replace
+    drafts. Only explicit /action handlers such as generate_new_draft should
+    call link_dashboard_proposal_refill.py with --write.
+    """
+    code, out = run_cmd(
+        ["python3", "link_self_learning_dashboard.py", "render", "--format", "html", "--write"],
+        timeout=180,
+    )
+
+    if DASHBOARD_HTML.exists():
+        try:
+            page = DASHBOARD_HTML.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            page = ""
+    else:
+        page = ""
+
+    if not page:
+        escaped = html.escape(out)
+        page = f"""<!doctype html>
+<html><body>
+<h1>Link Self-Learning Dashboard</h1>
+<div class="card">
+<h2>Render failed</h2>
+<p>Exit code: <code>{code}</code></p>
+<pre>{escaped}</pre>
+</div>
+</body></html>
+"""
+
+    # Preserve existing final normalizers/injectors if this file defines them.
+    for name in [
+        "final_normalize_dashboard_page",
+        "final_normalize_approval_identity",
+        "normalize_approval_identity",
+        "inject_hard_link_controls",
+        "inject_emergency_hard_link_controls",
+        "inject_action_fetch_script",
+        "inject_action_result",
+    ]:
+        fn = globals().get(name)
+        if callable(fn):
+            try:
+                page = fn(page)
+            except TypeError:
+                pass
+            except Exception:
+                pass
+
+    return page
+
+# END LINK WEB ADMIN READONLY RENDER
+
+
 if __name__ == "__main__":
     main()
