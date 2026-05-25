@@ -2972,6 +2972,44 @@ def check_worker_dashboard_evidence_index_execution_receipt() -> None:
 
     print("worker dashboard evidence index execution receipt OK")
 
+
+def check_worker_dashboard_evidence_index_execution_receipt_web_admin_route() -> None:
+    from link_worker_dashboard_evidence_index_execution_receipt_web_admin import (
+        WORKER_DASHBOARD_EVIDENCE_INDEX_EXECUTION_RECEIPT_WEB_ADMIN_VERSION,
+        build_worker_dashboard_evidence_index_execution_receipt_web_response,
+        render_worker_dashboard_evidence_index_execution_receipt_web_response,
+        validate_worker_dashboard_evidence_index_execution_receipt_web_admin_route,
+        worker_dashboard_evidence_index_execution_receipt_web_admin_command,
+    )
+
+    problems = validate_worker_dashboard_evidence_index_execution_receipt_web_admin_route()
+    if problems:
+        raise AssertionError(
+            f"worker dashboard evidence index execution receipt web admin route failed: {problems}"
+        )
+
+    command = worker_dashboard_evidence_index_execution_receipt_web_admin_command(
+        "show worker dashboard evidence index execution receipt json"
+    )
+    if command[-2:] != ["--format", "json"]:
+        raise AssertionError(f"worker dashboard evidence index execution receipt json route failed: {command}")
+
+    response = build_worker_dashboard_evidence_index_execution_receipt_web_response(write=False)
+    if response.get("receipt_version") != WORKER_DASHBOARD_EVIDENCE_INDEX_EXECUTION_RECEIPT_WEB_ADMIN_VERSION:
+        raise AssertionError("worker dashboard evidence index execution receipt web-admin version mismatch")
+
+    if response.get("ok") is not True:
+        raise AssertionError(f"worker dashboard evidence index execution receipt web-admin response failed: {response}")
+
+    rendered = render_worker_dashboard_evidence_index_execution_receipt_web_response(response)
+    if "link-worker-dashboard-evidence-index-execution-receipt-web-admin" not in rendered:
+        raise AssertionError("worker dashboard evidence index execution receipt web-admin marker missing")
+
+    if "link-worker-dashboard-evidence-index-execution-receipt" not in rendered:
+        raise AssertionError("worker dashboard evidence index execution receipt inner marker missing")
+
+    print("worker dashboard evidence index execution receipt web admin route OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3178,6 +3216,7 @@ def main() -> None:
     check_worker_dashboard_evidence_index_web_admin_route()
     check_worker_dashboard_evidence_index_web_admin_integration()
     check_worker_dashboard_evidence_index_execution_receipt()
+    check_worker_dashboard_evidence_index_execution_receipt_web_admin_route()
     print("LINK HEALTHCHECK PASSED")
     
 
