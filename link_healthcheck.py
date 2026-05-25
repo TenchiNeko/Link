@@ -3111,6 +3111,14 @@ def check_research_archive_comparison() -> None:
 
     print("research archive comparison OK")
 
+def check_autonomous_research_reflection() -> None:
+    from link_autonomous_research_reflection import validate_autonomous_research_reflection
+
+    problems = validate_autonomous_research_reflection()
+    if problems:
+        raise SystemExit("autonomous research reflection failures:\n" + "\n".join(problems))
+    print("autonomous research reflection OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3321,6 +3329,7 @@ def main() -> None:
     check_autonomous_growth_receipt()
     check_autonomous_task_queue_seed()
     check_research_archive_comparison()
+    check_autonomous_research_reflection()
     print("LINK HEALTHCHECK PASSED")
     
 
