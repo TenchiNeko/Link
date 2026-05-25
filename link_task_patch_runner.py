@@ -11,6 +11,7 @@ from typing import Any
 
 
 RECEIPT_VERSION = "LU90-task-to-patch-plan-v1"
+EXECUTOR_RECEIPT_VERSION = "LU91-task-to-patch-exec-v1"
 
 
 def run(cmd: list[str], root: Path, timeout: int = 90) -> tuple[int, str]:
@@ -269,33 +270,230 @@ def render_markdown(plan: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+
+def split_execution_command(command: str) -> list[str]:
+    import shlex
+
+    return shlex.split(command)
+
+
+def is_allowed_execution_command(command: str) -> tuple[bool, str]:
+    try:
+        tokens = split_execution_command(command)
+    except ValueError as exc:
+        return False, f"could not parse command: {exc}"
+
+    if not tokens:
+        return False, "empty command"
+
+    if any(part in command for part in [";", "&&", "||", "`", "$(", ">", "<", "|"]):
+        return False, "shell chaining/redirection is not allowed"
+
+    if tokens[:3] == ["python3", "-m", "py_compile"]:
+        allowed_files = {
+            "link_task_patch_runner.py",
+            "link_healthcheck.py",
+            "link_upgrade_registry.py",
+            "link_grade.py",
+            "link_research_source_inventory.py",
+        }
+        files = tokens[3:]
+        if files and all(item in allowed_files for item in files):
+            return True, "allowlisted Python compile check"
+        return False, "py_compile target is not allowlisted"
+
+    if tokens == ["python3", "link_healthcheck.py"]:
+        return True, "allowlisted Link healthcheck"
+
+    if tokens == ["python3", "link_grade.py", "--format", "json"]:
+        return True, "allowlisted Link grade JSON smoke check"
+
+    if (
+        len(tokens) >= 5
+        and tokens[0] == "python3"
+        and tokens[1] == "link_task_patch_runner.py"
+        and "--execute" not in tokens
+        and "--format" in tokens
+        and "json" in tokens
+    ):
+        return True, "allowlisted task-to-patch planner smoke check"
+
+    if tokens == ["git", "diff", "--check"]:
+        return True, "allowlisted whitespace diff check"
+
+    if tokens == ["git", "status", "--short"]:
+        return True, "allowlisted read-only git status"
+
+    return False, "command is not in the task-to-patch executor allowlist"
+
+
+def command_success(command: str, exit_code: int, output: str) -> bool:
+    if exit_code == 0:
+        return True
+
+    # The planner intentionally returns 2 when the working tree is dirty.
+    # During an in-progress guarded patch, that can still be a valid smoke result.
+    if command.startswith("python3 link_task_patch_runner.py") and exit_code == 2:
+        try:
+            parsed = json.loads(output)
+            return parsed.get("receipt_version") == RECEIPT_VERSION
+        except Exception:
+            return False
+
+    return False
+
+
+def execute_plan(
+    root: Path,
+    goal: str,
+    approved: bool = False,
+    include_full_healthcheck: bool = True,
+) -> dict[str, Any]:
+    plan = build_plan(root, goal)
+    commands = list(plan.get("recommended_tests", []))
+
+    if not include_full_healthcheck:
+        commands = [cmd for cmd in commands if cmd != "python3 link_healthcheck.py"]
+
+    receipt: dict[str, Any] = {
+        "receipt_version": EXECUTOR_RECEIPT_VERSION,
+        "generated": dt.datetime.now().isoformat(timespec="seconds"),
+        "repo": str(root),
+        "goal": goal,
+        "approved": approved,
+        "plan_receipt_version": plan.get("receipt_version"),
+        "working_tree_clean_at_start": plan.get("working_tree_clean"),
+        "branch": plan.get("branch"),
+        "head": plan.get("head"),
+        "status": "blocked",
+        "blockers": [],
+        "commands": [],
+    }
+
+    if not approved:
+        receipt["blockers"].append("executor requires --approved")
+        return receipt
+
+    all_ok = True
+
+    for command in commands:
+        allowed, reason = is_allowed_execution_command(command)
+        item: dict[str, Any] = {
+            "command": command,
+            "decision": "allow" if allowed else "deny",
+            "reason": reason,
+        }
+
+        if not allowed:
+            item["exit_code"] = None
+            item["output_tail"] = ""
+            all_ok = False
+            receipt["commands"].append(item)
+            continue
+
+        tokens = split_execution_command(command)
+        exit_code, output = run(tokens, root, timeout=240)
+        ok = command_success(command, exit_code, output)
+
+        item["exit_code"] = exit_code
+        item["ok"] = ok
+        item["output_tail"] = "\n".join(output.splitlines()[-20:])
+
+        if not ok:
+            all_ok = False
+
+        receipt["commands"].append(item)
+
+    receipt["status"] = "success" if all_ok else "failed"
+    return receipt
+
+
+def render_execution_markdown(receipt: dict[str, Any]) -> str:
+    lines: list[str] = []
+    lines.append("# Link Task-to-Patch Execution Receipt")
+    lines.append("")
+    lines.append(f"Generated: {receipt['generated']}")
+    lines.append(f"Receipt version: `{receipt['receipt_version']}`")
+    lines.append(f"Repository: `{receipt['repo']}`")
+    lines.append(f"Branch: `{receipt.get('branch', '')}`")
+    lines.append(f"HEAD: `{receipt.get('head', '')}`")
+    lines.append(f"Approved: **{'yes' if receipt.get('approved') else 'no'}**")
+    lines.append(f"Status: **{receipt.get('status')}**")
+    lines.append("")
+    lines.append("## Goal")
+    lines.append("")
+    lines.append(receipt["goal"])
+    lines.append("")
+
+    if receipt.get("blockers"):
+        lines.append("## Blockers")
+        lines.append("")
+        for blocker in receipt["blockers"]:
+            lines.append(f"- {blocker}")
+        lines.append("")
+
+    lines.append("## Commands")
+    lines.append("")
+    lines.append("| Command | Decision | Exit | OK |")
+    lines.append("|---|---:|---:|---:|")
+
+    for item in receipt.get("commands", []):
+        exit_code = item.get("exit_code")
+        exit_text = "" if exit_code is None else str(exit_code)
+        ok_text = "yes" if item.get("ok") else "no"
+        lines.append(
+            f"| `{item['command']}` | {item['decision']} | {exit_text} | {ok_text} |"
+        )
+
+    lines.append("")
+    lines.append("## Output Tails")
+    lines.append("")
+
+    for item in receipt.get("commands", []):
+        lines.append(f"### `{item['command']}`")
+        lines.append("")
+        lines.append("```")
+        lines.append(item.get("output_tail", ""))
+        lines.append("```")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Create a guarded Link task-to-patch plan.")
-    parser.add_argument("--goal", required=True, help="Task or upgrade goal to plan.")
-    parser.add_argument("--root", default=".", help="Repository root. Defaults to current directory.")
+    parser = argparse.ArgumentParser(description="Create or execute a guarded Link task-to-patch plan.")
+    parser.add_argument("--goal", required=True)
+    parser.add_argument("--root", default=".", help="repository root, default current directory")
     parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
-    parser.add_argument("--output", help="Optional output file for the plan/receipt.")
+    parser.add_argument("--execute", action="store_true", help="execute allowlisted recommended checks")
+    parser.add_argument("--approved", action="store_true", help="confirm human approval for guarded execution")
+    parser.add_argument("--output", "--receipt-out", dest="receipt_out", help="optional path to write receipt")
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
+
+    if args.execute:
+        receipt = execute_plan(root, args.goal, approved=args.approved, include_full_healthcheck=True)
+        text = json.dumps(receipt, indent=2, sort_keys=True) if args.format == "json" else render_execution_markdown(receipt)
+
+        if args.receipt_out:
+            out = Path(args.receipt_out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text, encoding="utf-8")
+
+        print(text)
+        return 0 if receipt.get("status") == "success" else 2
+
     plan = build_plan(root, args.goal)
+    text = json.dumps(plan, indent=2, sort_keys=True) if args.format == "json" else render_markdown(plan)
 
-    if args.format == "json":
-        rendered = json.dumps(plan, indent=2, sort_keys=True)
-    else:
-        rendered = render_markdown(plan)
-
-    if args.output:
-        out = Path(args.output)
-        if not out.is_absolute():
-            out = root / out
+    if args.receipt_out:
+        out = Path(args.receipt_out)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(rendered + "\n", encoding="utf-8")
-        print(out)
-    else:
-        print(rendered)
+        out.write_text(text, encoding="utf-8")
 
-    return 0 if not plan["blockers"] else 2
+    print(text)
+    return 0 if plan.get("working_tree_clean") else 2
 
 
 if __name__ == "__main__":

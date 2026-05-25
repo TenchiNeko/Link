@@ -129,43 +129,52 @@ UPGRADES = [{'commit_subject': '',
   'id': 'LU27',
   'status': 'implemented',
   'title': 'Latest recovery plan dashboard receipt evidence index web admin route'},
- {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index web admin integration OK',
+ {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index web admin '
+                         'integration OK',
   'id': 'LU28',
   'status': 'implemented',
   'title': 'Latest recovery plan dashboard receipt evidence index web admin integration'},
- {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt OK',
+ {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt '
+                         'OK',
   'id': 'LU29',
   'status': 'implemented',
   'title': 'Latest recovery plan dashboard receipt evidence index execution receipt'},
- {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt web admin route OK',
+ {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt '
+                         'web admin route OK',
   'id': 'LU30',
   'status': 'implemented',
-  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt web admin route'},
- {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt web admin '
-                         'integration OK',
+  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt web admin '
+           'route'},
+ {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt '
+                         'web admin integration OK',
   'id': 'LU31',
   'status': 'implemented',
-  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt web admin integration'},
- {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt evidence index OK',
+  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt web admin '
+           'integration'},
+ {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt '
+                         'evidence index OK',
   'id': 'LU32',
   'status': 'implemented',
-  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt evidence index'},
- {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt evidence index web '
-                         'admin route OK',
+  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt evidence '
+           'index'},
+ {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt '
+                         'evidence index web admin route OK',
   'id': 'LU33',
   'status': 'implemented',
-  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt evidence index web admin route'},
- {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt evidence index web '
-                         'admin integration OK',
+  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt evidence index '
+           'web admin route'},
+ {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt '
+                         'evidence index web admin integration OK',
   'id': 'LU34',
   'status': 'implemented',
-  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt evidence index web admin '
-           'integration'},
- {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt evidence index '
-                         'execution receipt OK',
+  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt evidence index '
+           'web admin integration'},
+ {'healthcheck_markers': 'latest recovery plan dashboard receipt evidence index execution receipt '
+                         'evidence index execution receipt OK',
   'id': 'LU35',
   'status': 'implemented',
-  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt evidence index execution receipt'},
+  'title': 'Latest recovery plan dashboard receipt evidence index execution receipt evidence index '
+           'execution receipt'},
  {'healthcheck_markers': 'workflow spec layer OK',
   'id': 'LU36',
   'status': 'implemented',
@@ -206,11 +215,13 @@ UPGRADES = [{'commit_subject': '',
   'id': 'LU45',
   'status': 'implemented',
   'title': 'Workflow step execution receipt index execution receipt'},
- {'healthcheck_markers': 'workflow step execution receipt index execution receipt web admin route OK',
+ {'healthcheck_markers': 'workflow step execution receipt index execution receipt web admin route '
+                         'OK',
   'id': 'LU46',
   'status': 'implemented',
   'title': 'Workflow step execution receipt index execution receipt web admin route'},
- {'healthcheck_markers': 'workflow step execution receipt index execution receipt web admin integration OK',
+ {'healthcheck_markers': 'workflow step execution receipt index execution receipt web admin '
+                         'integration OK',
   'id': 'LU47',
   'status': 'implemented',
   'title': 'Workflow step execution receipt index execution receipt web admin integration'},
@@ -262,122 +273,142 @@ UPGRADES = [{'commit_subject': '',
   'id': 'LU59',
   'status': 'implemented',
   'title': 'Research archive candidate shortlist dashboard web admin dispatch'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch integration OK',
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'integration OK',
   'id': 'LU60',
   'status': 'implemented',
   'title': 'Research archive candidate shortlist dashboard web admin dispatch integration'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt OK',
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt OK',
   'id': 'LU61',
   'status': 'implemented',
   'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt web admin route OK',
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt web admin route OK',
   'id': 'LU62',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt web admin route'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt web admin '
-                         'integration OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt web admin '
+           'route'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt web admin integration OK',
   'id': 'LU63',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt web admin integration'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt web admin '
+           'integration'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index OK',
   'id': 'LU64',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin route OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin route OK',
   'id': 'LU65',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin route'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin integration OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin route'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin integration OK',
   'id': 'LU66',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'integration'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin integration'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch OK',
   'id': 'LU67',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch integration OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch integration OK',
   'id': 'LU68',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch integration'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch integration'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt OK',
   'id': 'LU69',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt web admin route OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt web admin route OK',
   'id': 'LU70',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt web admin route'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt web admin integration OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt web admin route'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt web admin integration '
+                         'OK',
   'id': 'LU71',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt web admin integration'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt evidence index OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt web admin integration'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt evidence index OK',
   'id': 'LU72',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt evidence index'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt evidence index web admin route OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt evidence index'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt evidence index web '
+                         'admin route OK',
   'id': 'LU73',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt evidence index web admin route'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt evidence index web admin integration OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt evidence index web admin route'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt evidence index web '
+                         'admin integration OK',
   'id': 'LU74',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt evidence index web admin integration'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt evidence index web admin dispatch OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt evidence index web admin integration'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt evidence index web '
+                         'admin dispatch OK',
   'id': 'LU75',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt evidence index web admin dispatch'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt evidence index web admin dispatch integration OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt evidence index web admin dispatch'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt evidence index web '
+                         'admin dispatch integration OK',
   'id': 'LU76',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt evidence index web admin dispatch integration'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt evidence index web admin dispatch receipt OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt evidence index web admin dispatch integration'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt evidence index web '
+                         'admin dispatch receipt OK',
   'id': 'LU77',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt evidence index web admin dispatch receipt'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt evidence index web admin dispatch receipt web admin route OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt evidence index web admin dispatch receipt'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt evidence index web '
+                         'admin dispatch receipt web admin route OK',
   'id': 'LU78',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt evidence index web admin dispatch receipt web admin route'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt evidence index web admin dispatch receipt web admin integration OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt evidence index web admin dispatch receipt web admin '
+           'route'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt evidence index web '
+                         'admin dispatch receipt web admin integration OK',
   'id': 'LU79',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt evidence index web admin dispatch receipt web admin integration'},
- {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch receipt evidence index web '
-                         'admin dispatch receipt evidence index web admin dispatch receipt evidence index OK',
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt evidence index web admin dispatch receipt web admin '
+           'integration'},
+ {'healthcheck_markers': 'research archive candidate shortlist dashboard web admin dispatch '
+                         'receipt evidence index web admin dispatch receipt evidence index web '
+                         'admin dispatch receipt evidence index OK',
   'id': 'LU80',
   'status': 'implemented',
-  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin '
-           'dispatch receipt evidence index web admin dispatch receipt evidence index'},
+  'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence '
+           'index web admin dispatch receipt evidence index web admin dispatch receipt evidence '
+           'index'},
  {'healthcheck_markers': 'self-update preflight runner OK',
   'id': 'LU82',
   'status': 'implemented',
@@ -416,9 +447,15 @@ UPGRADES = [{'commit_subject': '',
   'healthcheck_markers': 'guarded task-to-patch planner OK',
   'id': 'LU90',
   'status': 'implemented',
-  'title': 'Guarded task-to-patch planner'}]
+  'title': 'Guarded task-to-patch planner'},
+ {'commit_subject': '',
+  'healthcheck_markers': 'guarded task-to-patch executor OK',
+  'id': 'LU91',
+  'status': 'implemented',
+  'title': 'Guarded task-to-patch executor'}]
 
-NEXT_UPGRADE = {'id': 'LU91', 'status': 'planned', 'title': 'Guarded task-to-patch executor'}
+NEXT_UPGRADE = {'id': 'LU92', 'status': 'planned', 'title': 'Concise task receipt format'}
+
 def implemented_upgrade_ids() -> list[str]:
     return [item["id"] if isinstance(item, dict) else item[0] for item in UPGRADES]
 

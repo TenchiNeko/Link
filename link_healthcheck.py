@@ -2604,6 +2604,38 @@ def check_task_patch_runner_command() -> None:
 
     print("guarded task-to-patch planner OK")
 
+
+def check_task_patch_executor_command() -> None:
+    from pathlib import Path
+    from link_task_patch_runner import execute_plan, render_execution_markdown
+
+    receipt = execute_plan(
+        Path.cwd(),
+        "Execute guarded LU91 task-to-patch smoke checks",
+        approved=True,
+        include_full_healthcheck=False,
+    )
+
+    if receipt.get("receipt_version") != "LU91-task-to-patch-exec-v1":
+        raise AssertionError("unexpected task-to-patch executor receipt version")
+
+    if receipt.get("status") != "success":
+        raise AssertionError(f"task-to-patch executor did not succeed: {receipt}")
+
+    commands = receipt.get("commands", [])
+    if not commands:
+        raise AssertionError("task-to-patch executor ran no commands")
+
+    denied = [item for item in commands if item.get("decision") != "allow"]
+    if denied:
+        raise AssertionError(f"task-to-patch executor denied expected smoke commands: {denied}")
+
+    rendered = render_execution_markdown(receipt)
+    if "Link Task-to-Patch Execution Receipt" not in rendered:
+        raise AssertionError("task-to-patch execution receipt render failed")
+
+    print("guarded task-to-patch executor OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -2799,6 +2831,7 @@ def main() -> None:
     check_research_source_inventory_command()
     check_link_grade_command()
     check_task_patch_runner_command()
+    check_task_patch_executor_command()
     print("LINK HEALTHCHECK PASSED")
     
 
