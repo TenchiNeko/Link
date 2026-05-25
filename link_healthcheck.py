@@ -2741,6 +2741,43 @@ def check_worker_dashboard_card_command() -> None:
 
     print("worker dashboard card OK")
 
+
+def check_worker_dashboard_web_admin_route() -> None:
+    from link_worker_dashboard_web_admin import (
+        WORKER_DASHBOARD_WEB_ADMIN_VERSION,
+        build_worker_dashboard_web_response,
+        render_worker_dashboard_web_response,
+        validate_worker_dashboard_web_admin_route,
+        worker_dashboard_web_admin_command,
+    )
+
+    problems = validate_worker_dashboard_web_admin_route()
+    if problems:
+        raise AssertionError(f"worker dashboard web admin route validation failed: {problems}")
+
+    command = worker_dashboard_web_admin_command("show worker dashboard json pending approval")
+    if not command:
+        raise AssertionError("worker dashboard web admin command did not route")
+
+    if "link_worker_dashboard_card.py" not in command:
+        raise AssertionError("worker dashboard web admin command target mismatch")
+
+    if "--pending-approval" not in command:
+        raise AssertionError("worker dashboard web admin pending approval flag missing")
+
+    response = build_worker_dashboard_web_response("show worker dashboard html pending approval")
+    if response.get("receipt_version") != WORKER_DASHBOARD_WEB_ADMIN_VERSION:
+        raise AssertionError("worker dashboard web admin receipt version mismatch")
+
+    if response.get("non_destructive") is not True:
+        raise AssertionError("worker dashboard web admin response must be non-destructive")
+
+    rendered = render_worker_dashboard_web_response(response)
+    if "link-worker-dashboard-card" not in rendered:
+        raise AssertionError("worker dashboard web admin rendered card marker missing")
+
+    print("worker dashboard web admin route OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -2940,6 +2977,7 @@ def main() -> None:
     check_concise_task_receipt_format()
     check_model_routing_profiles()
     check_worker_dashboard_card_command()
+    check_worker_dashboard_web_admin_route()
     print("LINK HEALTHCHECK PASSED")
     
 
