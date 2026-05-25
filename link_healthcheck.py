@@ -2662,6 +2662,36 @@ def check_concise_task_receipt_format() -> None:
 
     print("concise task receipt format OK")
 
+
+def check_model_routing_profiles() -> None:
+    from link_model_routing_profiles import (
+        profile_summary,
+        select_routing_profile,
+        validate_model_routing_profiles,
+    )
+
+    validation = validate_model_routing_profiles()
+    if not validation.get("ok"):
+        raise AssertionError(f"model routing profiles invalid: {validation}")
+
+    local = profile_summary("local_fast")
+    if local["profile"]["provider"] != "ollama":
+        raise AssertionError("local_fast should route to ollama")
+
+    cloud = select_routing_profile("Use OpenRouter cloud model routing for deep reasoning", prefer_cloud=True)
+    if cloud.get("selected_profile") != "cloud_deep":
+        raise AssertionError(f"cloud routing did not select cloud_deep: {cloud}")
+
+    offline = select_routing_profile("Use local Ollama for private offline patch review", prefer_local=True)
+    if offline.get("selected_profile") not in {"local_fast", "local_deep"}:
+        raise AssertionError(f"local routing did not select a local profile: {offline}")
+
+    hybrid = profile_summary("hybrid_fallback")
+    if "local_fast" not in hybrid.get("fallback_chain", []):
+        raise AssertionError(f"hybrid fallback chain is missing local_fast: {hybrid}")
+
+    print("model routing profiles OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -2859,6 +2889,7 @@ def main() -> None:
     check_task_patch_runner_command()
     check_task_patch_executor_command()
     check_concise_task_receipt_format()
+    check_model_routing_profiles()
     print("LINK HEALTHCHECK PASSED")
     
 

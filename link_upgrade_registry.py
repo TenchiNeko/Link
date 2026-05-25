@@ -452,9 +452,20 @@ UPGRADES = [{'commit_subject': '',
   'healthcheck_markers': 'guarded task-to-patch executor OK',
   'id': 'LU91',
   'status': 'implemented',
-  'title': 'Guarded task-to-patch executor'}]
+  'title': 'Guarded task-to-patch executor'},
+ {'id': 'LU92',
+  'status': 'implemented',
+  'title': 'Concise task receipt format',
+  'healthcheck_markers': 'concise task receipt format OK',
+  'commit_subject': ''},
+ {'id': 'LU93',
+  'status': 'implemented',
+  'title': 'Model routing profiles',
+  'healthcheck_markers': 'model routing profiles OK',
+  'commit_subject': ''}]
 
-NEXT_UPGRADE = {'id': 'LU92', 'status': 'planned', 'title': 'Concise task receipt format'}
+NEXT_UPGRADE = {'id': 'LU94', 'status': 'planned', 'title': 'Worker dashboard card'}
+
 
 def implemented_upgrade_ids() -> list[str]:
     return [item["id"] if isinstance(item, dict) else item[0] for item in UPGRADES]

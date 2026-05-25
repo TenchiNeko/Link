@@ -140,6 +140,7 @@ def build_grade_report(root: Path, run_checks: bool = False) -> dict[str, Any]:
         "tool registry": (root / "link_tool_registry.py").exists(),
         "worker profiles": (root / "link_worker_profiles.py").exists(),
         "profile gate": (root / "link_profile_gate.py").exists(),
+        "model routing profiles": (root / "link_model_routing_profiles.py").exists(),
         "research source inventory": (root / "link_research_source_inventory.py").exists(),
         "link grade": (root / "link_grade.py").exists(),
         "grade context": (root / "LINK_MINING_TEAM_GRADE_CONTEXT.md").exists(),
@@ -189,7 +190,7 @@ def build_grade_report(root: Path, run_checks: bool = False) -> dict[str, Any]:
         ("Autonomous coding execution", 74, "Still needs a guarded task-to-patch runner with plan, approval, patch, tests, and diff receipt."),
         ("Developer UX", 60 if files["link grade"] else 57, "Improved by permanent grade command, but still lacks one daily-driver command center."),
         ("Parallelism and delegation", 66, "Delegation exists conceptually, but needs clearer scheduling, isolation, and progress visibility."),
-        ("Model ecosystem integration", 56, "Needs explicit local/cloud/model routing profiles and fallback behavior."),
+        ("Model ecosystem integration", 72 if files["model routing profiles"] else 56, "Model routing profiles exist; runtime fallback/connectivity still needs deeper integration." if files["model routing profiles"] else "Needs explicit local/cloud/model routing profiles and fallback behavior."),
         ("Enterprise/team readiness", 62, "Strong local proof trail, but not yet a polished multi-user/team product."),
     ]
 
