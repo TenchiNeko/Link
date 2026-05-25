@@ -2843,6 +2843,35 @@ def check_worker_dashboard_receipt_evidence() -> None:
 
     print("worker dashboard receipt evidence OK")
 
+
+def check_worker_dashboard_evidence_index() -> None:
+    from link_worker_dashboard_evidence_index import (
+        WORKER_DASHBOARD_EVIDENCE_INDEX_VERSION,
+        build_worker_dashboard_evidence_index,
+        render_worker_dashboard_evidence_index_html,
+        validate_worker_dashboard_evidence_index,
+    )
+
+    problems = validate_worker_dashboard_evidence_index()
+    if problems:
+        raise AssertionError(f"worker dashboard evidence index validation failed: {problems}")
+
+    index = build_worker_dashboard_evidence_index(Path.cwd())
+    if index.get("receipt_version") != WORKER_DASHBOARD_EVIDENCE_INDEX_VERSION:
+        raise AssertionError("worker dashboard evidence index version mismatch")
+
+    if index.get("entry_count", 0) < 1:
+        raise AssertionError(f"worker dashboard evidence index missing live preview: {index}")
+
+    if index.get("non_destructive") is not True:
+        raise AssertionError("worker dashboard evidence index must be non-destructive")
+
+    rendered = render_worker_dashboard_evidence_index_html(index)
+    if "link-worker-dashboard-evidence-index" not in rendered:
+        raise AssertionError("worker dashboard evidence index marker missing")
+
+    print("worker dashboard evidence index OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3045,6 +3074,7 @@ def main() -> None:
     check_worker_dashboard_web_admin_route()
     check_worker_dashboard_web_admin_integration()
     check_worker_dashboard_receipt_evidence()
+    check_worker_dashboard_evidence_index()
     print("LINK HEALTHCHECK PASSED")
     
 
