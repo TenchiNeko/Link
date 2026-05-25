@@ -185,6 +185,45 @@ def render_markdown(dashboard: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_copy_box_text(data: dict[str, Any]) -> str:
+    """Build a compact, safe copy box from the current dashboard contract.
+
+    The big visual Approval Target can still render below. This box is only for
+    copy/paste and must never become a stale or malformed source of truth.
+    """
+    contract = data.get("approval_contract") or {}
+    draft_id = contract.get("draft_id") or ""
+    draft_file = contract.get("draft_file") or ""
+    proposal_hash = contract.get("proposal_hash") or ""
+    task_id = contract.get("task_id") or ""
+    title = contract.get("title") or ""
+    status = contract.get("status") or "not ready"
+    yes_enabled = contract.get("yes_enabled", False)
+
+    if not draft_id:
+        return (
+            "## Approval Target\\n\\n"
+            "Status: not ready\\n"
+            "Reason: No pending approval draft is available.\\n"
+        )
+
+    lines = [
+        "## Approval Target",
+        "",
+        f"Draft ID: {draft_id}",
+        f"Draft file: {draft_file}",
+        f"Proposal hash: {proposal_hash}",
+        f"Status: {status}",
+        f"Task: {task_id} — {title}",
+        f"YES enabled: {yes_enabled}",
+        "",
+        "Commands:",
+        f"YES: python3 link_approval_patch_draft_queue.py decide --action yes --draft-id '{draft_id}' --feedback 'Approved from dashboard.' --format markdown",
+        f"NO: python3 link_approval_patch_draft_queue.py decide --action no --draft-id '{draft_id}' --feedback 'Rejected from dashboard.' --format markdown",
+        f"TRY AGAIN: python3 link_approval_patch_draft_queue.py decide --action try_again --draft-id '{draft_id}' --feedback 'Try again with Brandon feedback.' --format markdown",
+    ]
+    return "\\n".join(lines) + "\\n"
+
 def render_html(dashboard: dict[str, Any]) -> str:
     style = """
 body { margin: 24px; background: #111827; color: #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; }

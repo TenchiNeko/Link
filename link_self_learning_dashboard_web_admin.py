@@ -127,8 +127,8 @@ def hard_recovery_controls() -> str:
 
 def inject_hard_recovery_controls(page: str) -> str:
     if "Emergency Hard-Link Controls" in page:
+        page = sync_all_visible_approval_hashes(page)
         return page
-
     controls = hard_recovery_controls()
 
     if "<body>" in page:
@@ -480,6 +480,192 @@ def _repair_approval_card(page: str) -> str:
 def rebuild_dashboard() -> str:
     return _repair_approval_card(_rebuild_dashboard_raw())
 # END LINK APPROVAL CARD DOUBLE REPAIR
+
+
+# BEGIN LINK GLOBAL APPROVAL HASH SYNC
+def sync_all_visible_approval_hashes(page: str) -> str:
+    """Make every visible approval block on the page use the current pending draft/hash.
+
+    This fixes the split-brain page where the top Approval Target is correct,
+    but the lower Full Dashboard Receipt still shows an old proposal hash.
+    """
+    pending = ROOT / ".link/patch_drafts/pending"
+    drafts = sorted(pending.glob("*.json")) if pending.exists() else []
+    if not drafts:
+        return page
+
+    draft_file = drafts[-1]
+    try:
+        data = json.loads(draft_file.read_text(encoding="utf-8"))
+    except Exception:
+        return page
+
+    draft_id = data.get("draft_id") or draft_file.stem
+    proposal_hash = data.get("proposal_hash") or data.get("hash") or ""
+    if not proposal_hash and "stable_proposal_hash" in globals():
+        proposal_hash = stable_proposal_hash(data)
+
+    if not proposal_hash:
+        return page
+
+    # Persist so the next raw render starts from the same identity.
+    if data.get("proposal_hash") != proposal_hash:
+        data["proposal_hash"] = proposal_hash
+        try:
+            draft_file.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    # Sync HTML attributes.
+    page = re.sub(
+        r'(data-draft-id=["\'])([^"\']*)(["\'])',
+        lambda m: m.group(1) + draft_id + m.group(3),
+        page,
+    )
+    page = re.sub(
+        r'(data-proposal-hash=["\'])([^"\']*)(["\'])',
+        lambda m: m.group(1) + proposal_hash + m.group(3),
+        page,
+    )
+
+    # Sync top visible spans.
+    page = re.sub(
+        r'(<span>Draft:\s*<code>)(.*?)(</code></span>)',
+        lambda m: m.group(1) + draft_id + m.group(3),
+        page,
+        flags=re.S,
+    )
+    page = re.sub(
+        r'(<span>Hash:\s*<code>)(.*?)(</code></span>)',
+        lambda m: m.group(1) + proposal_hash + m.group(3),
+        page,
+        flags=re.S,
+    )
+
+    # Sync all markdown approval blocks, including textarea, pre, and Full Dashboard Receipt.
+    page = re.sub(
+        r'- Draft ID:\s*`[^`]*`',
+        f'- Draft ID: `{draft_id}`',
+        page,
+    )
+    page = re.sub(
+        r'- Proposal hash:\s*`[^`]*`',
+        f'- Proposal hash: `{proposal_hash}`',
+        page,
+    )
+
+    return page
+# END LINK GLOBAL APPROVAL HASH SYNC
+
+
+# BEGIN LINK FINAL APPROVAL NORMALIZER
+def _final_current_pending_identity() -> tuple[str, str, Path | None]:
+    pending = ROOT / ".link/patch_drafts/pending"
+    drafts = sorted(pending.glob("*.json")) if pending.exists() else []
+    if not drafts:
+        return "", "", None
+
+    draft_file = drafts[-1]
+    try:
+        data = json.loads(draft_file.read_text(encoding="utf-8"))
+    except Exception:
+        return draft_file.stem, "", draft_file
+
+    draft_id = str(data.get("draft_id") or draft_file.stem)
+
+    proposal_hash = str(data.get("proposal_hash") or data.get("hash") or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{16}", proposal_hash):
+        payload = dict(data)
+        for key in [
+            "proposal_hash",
+            "hash",
+            "generated",
+            "created",
+            "created_at",
+            "updated",
+            "updated_at",
+            "written",
+        ]:
+            payload.pop(key, None)
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        proposal_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    # Persist the canonical hash into the JSON draft so every future renderer sees it.
+    try:
+        if data.get("proposal_hash") != proposal_hash:
+            data["proposal_hash"] = proposal_hash
+            draft_file.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+    # Also repair the sibling markdown file, because the dashboard may read from it.
+    md_file = draft_file.with_suffix(".md")
+    if md_file.exists():
+        try:
+            md = md_file.read_text(encoding="utf-8")
+            md = re.sub(r"- Draft ID:\s*`[^`]*`", f"- Draft ID: `{draft_id}`", md)
+            md = re.sub(r"- Proposal hash:\s*`[^`]*`", f"- Proposal hash: `{proposal_hash}`", md)
+            md_file.write_text(md, encoding="utf-8")
+        except Exception:
+            pass
+
+    return draft_id, proposal_hash, draft_file
+
+
+def _final_normalize_approval_page(page: str) -> str:
+    draft_id, proposal_hash, draft_file = _final_current_pending_identity()
+    if not draft_id:
+        return page
+
+    # HTML attributes / hidden form fields.
+    page = re.sub(r'data-draft-id="[^"]*"', f'data-draft-id="{draft_id}"', page)
+    page = re.sub(r"data-draft-id='[^']*'", f"data-draft-id='{draft_id}'", page)
+    page = re.sub(r'data-proposal-hash="[^"]*"', f'data-proposal-hash="{proposal_hash}"', page)
+    page = re.sub(r"data-proposal-hash='[^']*'", f"data-proposal-hash='{proposal_hash}'", page)
+    page = re.sub(r'name="draft_id"\s+value="[^"]*"', f'name="draft_id" value="{draft_id}"', page)
+
+    # Visible top-row values.
+    page = re.sub(
+        r"(<span>Draft:\s*<code>)(.*?)(</code></span>)",
+        rf"\g<1>{draft_id}\g<3>",
+        page,
+        flags=re.S,
+    )
+    page = re.sub(
+        r"(<span>Hash:\s*<code>)(.*?)(</code></span>)",
+        rf"\g<1>{proposal_hash}\g<3>",
+        page,
+        flags=re.S,
+    )
+
+    # Markdown blocks: textarea, visible pre, and Full Dashboard Receipt.
+    page = re.sub(r"- Draft ID:\s*`[^`]*`", f"- Draft ID: `{draft_id}`", page)
+    page = re.sub(r"- Proposal hash:\s*`[^`]*`", f"- Proposal hash: `{proposal_hash}`", page)
+
+    # Exact commands in all blocks.
+    page = re.sub(
+        r"--draft-id (?:&#x27;|'|\")[^&#'\"]+(?:&#x27;|'|\")",
+        f"--draft-id &#x27;{draft_id}&#x27;",
+        page,
+    )
+
+    return page
+
+
+# This must be the last rebuild_dashboard wrapper before main().
+_LINK_PRE_FINAL_REBUILD_DASHBOARD = rebuild_dashboard
+
+
+def rebuild_dashboard() -> str:
+    page = _LINK_PRE_FINAL_REBUILD_DASHBOARD()
+    page = _final_normalize_approval_page(page)
+    try:
+        DASHBOARD_HTML.parent.mkdir(parents=True, exist_ok=True)
+        DASHBOARD_HTML.write_text(page, encoding="utf-8")
+    except Exception:
+        pass
+    return page
+# END LINK FINAL APPROVAL NORMALIZER
 
 if __name__ == "__main__":
     main()
