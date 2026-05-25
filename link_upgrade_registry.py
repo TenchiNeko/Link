@@ -453,18 +453,23 @@ UPGRADES = [{'commit_subject': '',
   'id': 'LU91',
   'status': 'implemented',
   'title': 'Guarded task-to-patch executor'},
- {'id': 'LU92',
-  'status': 'implemented',
-  'title': 'Concise task receipt format',
+ {'commit_subject': '',
   'healthcheck_markers': 'concise task receipt format OK',
-  'commit_subject': ''},
- {'id': 'LU93',
+  'id': 'LU92',
   'status': 'implemented',
-  'title': 'Model routing profiles',
+  'title': 'Concise task receipt format'},
+ {'commit_subject': '',
   'healthcheck_markers': 'model routing profiles OK',
-  'commit_subject': ''}]
+  'id': 'LU93',
+  'status': 'implemented',
+  'title': 'Model routing profiles'},
+ {'commit_subject': '',
+  'healthcheck_markers': 'worker dashboard card OK',
+  'id': 'LU94',
+  'status': 'implemented',
+  'title': 'Worker dashboard card'}]
 
-NEXT_UPGRADE = {'id': 'LU94', 'status': 'planned', 'title': 'Worker dashboard card'}
+NEXT_UPGRADE = {'id': 'LU95', 'status': 'planned', 'title': 'Worker dashboard web admin route'}
 
 
 def implemented_upgrade_ids() -> list[str]:

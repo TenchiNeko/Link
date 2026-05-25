@@ -2692,6 +2692,55 @@ def check_model_routing_profiles() -> None:
 
     print("model routing profiles OK")
 
+
+def check_worker_dashboard_card_command() -> None:
+    from pathlib import Path
+    from link_worker_dashboard_card import (
+        WORKER_DASHBOARD_VERSION,
+        build_worker_dashboard_card,
+        render_worker_dashboard_html,
+        render_worker_dashboard_markdown,
+        validate_worker_dashboard_card,
+    )
+
+    card = build_worker_dashboard_card(
+        Path.cwd(),
+        current_task="LU94 worker dashboard card smoke",
+        worker_profile="patch_worker",
+        pending_approval=True,
+        latest_test_result="healthcheck pending",
+    )
+
+    problems = validate_worker_dashboard_card(card)
+    if problems:
+        raise AssertionError(f"worker dashboard card validation failed: {problems}")
+
+    if card.get("receipt_version") != WORKER_DASHBOARD_VERSION:
+        raise AssertionError("worker dashboard card version mismatch")
+
+    if card.get("worker_profile") != "patch_worker":
+        raise AssertionError("worker dashboard card did not preserve worker profile")
+
+    if card.get("pending_approval") is not True:
+        raise AssertionError("worker dashboard card did not preserve pending approval state")
+
+    if card.get("enabled_tool_count", 0) < 1:
+        raise AssertionError("worker dashboard card missing visible tools")
+
+    if not isinstance(card.get("model_routing"), dict):
+        raise AssertionError("worker dashboard card missing model routing object")
+
+    markdown = render_worker_dashboard_markdown(card)
+    html = render_worker_dashboard_html(card)
+
+    if "Link Worker Dashboard Card" not in markdown:
+        raise AssertionError("worker dashboard markdown render missing title")
+
+    if "link-worker-dashboard-card" not in html:
+        raise AssertionError("worker dashboard html render missing marker")
+
+    print("worker dashboard card OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -2890,6 +2939,7 @@ def main() -> None:
     check_task_patch_executor_command()
     check_concise_task_receipt_format()
     check_model_routing_profiles()
+    check_worker_dashboard_card_command()
     print("LINK HEALTHCHECK PASSED")
     
 
