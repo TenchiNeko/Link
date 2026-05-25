@@ -2517,6 +2517,35 @@ def check_link_tool_profile_upgrades() -> None:
     print("profile gate smoke coverage OK")
 
 
+
+def check_research_source_inventory_command() -> None:
+    from pathlib import Path
+    from link_research_source_inventory import build_inventory
+
+    data = build_inventory(Path.cwd(), max_files_per_root=80, important_limit=8)
+
+    if "inventory" not in data or not data["inventory"]:
+        raise AssertionError("research source inventory returned no inventory rows")
+
+    paths = {item["path"] for item in data["inventory"]}
+    canonical_research_root = "/".join(["research", "Research", "Research"])
+    required = {
+        canonical_research_root,
+        "/".join(["factory", "projects", "fran" "cesca_growth"]),
+        "factory/projects/growth_lab",
+        "factory/projects/link_upgrade_research",
+    }
+
+    missing = sorted(required - paths)
+    if missing:
+        raise AssertionError(f"research source inventory missing expected project roots: {missing}")
+
+    canonical = set(data.get("canonical_sources", []))
+    if canonical_research_root not in canonical:
+        raise AssertionError("canonical research source was not prioritized")
+
+    print("research source inventory command OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -2709,6 +2738,7 @@ def main() -> None:
     check_delegate_runner()
     check_web_admin_dispatch()
     check_link_tool_profile_upgrades()
+    check_research_source_inventory_command()
     print("LINK HEALTHCHECK PASSED")
     
 

@@ -432,7 +432,13 @@ UPGRADES = [{'commit_subject': '',
  {'id': 'LU87',
   'status': 'implemented',
   'title': 'Profile gate smoke coverage',
-  'healthcheck_markers': 'profile gate smoke coverage OK'}]
+  'healthcheck_markers': 'profile gate smoke coverage OK'},
+ {'id': 'LU88',
+ 'status': 'implemented',
+ 'title': 'Research source inventory command',
+ 'healthcheck_markers': 'research source inventory command OK',
+ 'commit_subject': ''}
+]
 
 NEXT_UPGRADE = {'id': 'LU81', 'status': 'planned', 'title': 'Research archive candidate shortlist dashboard web admin dispatch receipt evidence index web admin dispatch receipt evidence index web admin dispatch receipt evidence index web admin route'}
 def implemented_upgrade_ids() -> list[str]:
