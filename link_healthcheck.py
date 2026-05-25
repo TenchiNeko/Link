@@ -3010,6 +3010,34 @@ def check_worker_dashboard_evidence_index_execution_receipt_web_admin_route() ->
 
     print("worker dashboard evidence index execution receipt web admin route OK")
 
+
+def check_autonomous_growth_receipt() -> None:
+    from pathlib import Path
+
+    from link_autonomous_growth_receipt import (
+        AUTONOMOUS_GROWTH_RECEIPT_VERSION,
+        build_autonomous_growth_receipt,
+        render_autonomous_growth_html,
+        render_autonomous_growth_markdown,
+        validate_autonomous_growth_receipt,
+    )
+
+    receipt = build_autonomous_growth_receipt(Path("."), "healthcheck autonomous growth")
+    problems = validate_autonomous_growth_receipt(receipt)
+    if problems:
+        raise AssertionError("autonomous growth receipt invalid: " + ", ".join(problems))
+    if receipt.get("receipt_version") != AUTONOMOUS_GROWTH_RECEIPT_VERSION:
+        raise AssertionError("autonomous growth receipt version mismatch")
+    markdown = render_autonomous_growth_markdown(receipt)
+    html = render_autonomous_growth_html(receipt)
+    if "Link Autonomous Growth Receipt" not in markdown:
+        raise AssertionError("autonomous growth markdown marker missing")
+    if "link-autonomous-growth-receipt" not in html:
+        raise AssertionError("autonomous growth html marker missing")
+    if not receipt.get("next_recommended_task"):
+        raise AssertionError("autonomous growth receipt missing next task")
+    print("autonomous growth receipt OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3217,6 +3245,7 @@ def main() -> None:
     check_worker_dashboard_evidence_index_web_admin_integration()
     check_worker_dashboard_evidence_index_execution_receipt()
     check_worker_dashboard_evidence_index_execution_receipt_web_admin_route()
+    check_autonomous_growth_receipt()
     print("LINK HEALTHCHECK PASSED")
     
 
