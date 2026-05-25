@@ -3076,6 +3076,41 @@ def check_autonomous_task_queue_seed() -> None:
 
     print("autonomous task queue seed OK")
 
+
+def check_research_archive_comparison() -> None:
+    import tempfile
+    import zipfile
+    from pathlib import Path
+
+    from link_research_archive_comparison import (
+        compare_archives,
+        render_markdown,
+        validate_comparison,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        zpath = Path(tmp) / "sample_agent_research.zip"
+        with zipfile.ZipFile(zpath, "w") as zf:
+            zf.writestr(
+                "agent/runner.py",
+                "autonomous agent planner executor scheduler tick loop memory reflection self-learning approval guard",
+            )
+            zf.writestr(
+                "README.md",
+                "This archive describes an agent with memory, reflection, and approval-gated autonomous runtime.",
+            )
+        report = compare_archives([zpath], Path.cwd())
+        problems = validate_comparison(report)
+        rendered = render_markdown(report)
+        if problems:
+            raise SystemExit("research archive comparison failures:\n" + "\n".join(problems))
+        if "sample_agent_research.zip" not in rendered:
+            raise SystemExit("research archive comparison markdown missing sample archive")
+        if "autonomous_agent" not in rendered or "self_learning" not in rendered:
+            raise SystemExit("research archive comparison evidence groups missing")
+
+    print("research archive comparison OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3285,6 +3320,7 @@ def main() -> None:
     check_worker_dashboard_evidence_index_execution_receipt_web_admin_route()
     check_autonomous_growth_receipt()
     check_autonomous_task_queue_seed()
+    check_research_archive_comparison()
     print("LINK HEALTHCHECK PASSED")
     
 
