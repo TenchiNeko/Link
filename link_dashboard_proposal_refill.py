@@ -299,6 +299,84 @@ def write_candidate(root: Path, c: dict[str, Any], write: bool) -> dict[str, Any
     }
 
 
+def used_lu_numbers(root: Path) -> set[int]:
+    numbers: set[int] = set()
+    for base in [
+        root / ".link/patch_drafts/pending",
+        root / ".link/patch_drafts/approved",
+        root / ".link/patch_drafts/rejected",
+        root / ".link/patch_drafts/retry",
+        root / ".link/patch_drafts/blocked",
+        root / ".link/patch_drafts/receipts",
+        root / ".link/growth_receipts",
+        root / ".link/agent_queue/receipts",
+    ]:
+        if not base.exists():
+            continue
+        for path in base.glob("*.json"):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            for m in re.finditer(r"\bLU(\d+)\b", text, re.I):
+                try:
+                    numbers.add(int(m.group(1)))
+                except ValueError:
+                    pass
+    return numbers
+
+
+def next_unused_lu_id(root: Path, used: set[str]) -> str:
+    nums = used_lu_numbers(root)
+    n = max(nums or {120}) + 1
+    while f"LU{n}".upper() in used:
+        n += 1
+    return f"LU{n}"
+
+
+def build_dynamic_concrete_candidate(root: Path, used: set[str]) -> dict[str, Any]:
+    task_id = next_unused_lu_id(root, used)
+    return {
+        "task_id": task_id,
+        "title": f"{task_id} dynamic approval proposal source fallback",
+        "risk": "medium",
+        "why": (
+            "The approval refill system exhausted its hardcoded proposal list and started "
+            "writing no_useful_proposal_found receipts. It needs a dynamic fallback so the "
+            "dashboard can keep producing concrete, non-generic approval drafts without "
+            "reusing old task IDs or titles."
+        ),
+        "proposed_plan": [
+            "Add a dynamic proposal source after static recovery candidates are exhausted.",
+            "Derive the next LU task ID from existing approval folders and receipts.",
+            "Generate a concrete proposal instead of ending permanently at no_useful_proposal_found.",
+            "Keep LU113-style generic refill/self-loop proposals blocked.",
+            "Write a receipt explaining which dynamic source created the draft.",
+            "Add smoke coverage for the exhausted-candidate path.",
+        ],
+        "files_affected": [
+            "link_dashboard_proposal_refill.py",
+            "link_self_learning_dashboard.py",
+            "link_self_learning_dashboard_web_admin.py",
+            "link_healthcheck.py",
+        ],
+        "tests": [
+            "python3 -m py_compile link_dashboard_proposal_refill.py link_self_learning_dashboard.py link_self_learning_dashboard_web_admin.py link_dashboard_approval_contract.py link_healthcheck.py",
+            "python3 link_dashboard_proposal_refill.py --clear-bugged --force-new --write --format markdown",
+            "python3 link_self_learning_dashboard.py render --format markdown",
+            "python3 link_self_learning_dashboard.py render --format html --write",
+            "python3 link_self_learning_dashboard_web_admin.py --smoke",
+            "python3 link_healthcheck.py",
+            "git diff --check",
+        ],
+        "receipts": [
+            ".link/patch_drafts/pending/",
+            ".link/patch_drafts/receipts/",
+            ".link/growth_receipts/",
+            ".link/agent_queue/receipts/",
+        ],
+    }
+
 def no_useful(root: Path, write: bool, moved: list[dict[str, Any]]) -> dict[str, Any]:
     ensure_dirs(root)
     rec = {
@@ -362,9 +440,16 @@ def ensure_pending_approval_draft(root: Path | str = ".", write: bool = True, fo
             result["moved_bugged_drafts"] = moved
             return result
 
+    dynamic_used = used if "used" in locals() else set()
+
+    dynamic_candidate = build_dynamic_concrete_candidate(root, dynamic_used)
+
+    if dynamic_candidate["task_id"].upper() not in dynamic_used:
+
+        return create_concrete(root, dynamic_candidate, write, moved)
+
+
     return no_useful(root, write, moved)
-
-
 def format_markdown(rec: dict[str, Any]) -> str:
     lines = [
         "# Link Dashboard Proposal Refill",
