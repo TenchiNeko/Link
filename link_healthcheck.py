@@ -2911,6 +2911,38 @@ def check_worker_dashboard_evidence_index_web_admin_route() -> None:
 
     print("worker dashboard evidence index web admin route OK")
 
+
+def check_worker_dashboard_evidence_index_web_admin_integration() -> None:
+    from link_worker_dashboard_evidence_index_web_admin_integration import (
+        WORKER_DASHBOARD_EVIDENCE_INDEX_WEB_ADMIN_INTEGRATION_VERSION,
+        render_worker_dashboard_evidence_index_web_admin_dispatch,
+        validate_worker_dashboard_evidence_index_web_admin_integration,
+        worker_dashboard_evidence_index_web_admin_dispatch,
+    )
+
+    problems = validate_worker_dashboard_evidence_index_web_admin_integration()
+    if problems:
+        raise AssertionError(f"worker dashboard evidence index web-admin integration failed: {problems}")
+
+    dispatch = worker_dashboard_evidence_index_web_admin_dispatch(
+        "show worker dashboard evidence index html",
+        write=False,
+    )
+    if dispatch.get("receipt_version") != WORKER_DASHBOARD_EVIDENCE_INDEX_WEB_ADMIN_INTEGRATION_VERSION:
+        raise AssertionError("worker dashboard evidence index integration version mismatch")
+
+    if dispatch.get("handled") is not True:
+        raise AssertionError(f"worker dashboard evidence index integration did not handle prompt: {dispatch}")
+
+    if dispatch.get("non_destructive") is not True:
+        raise AssertionError("worker dashboard evidence index integration must be non-destructive")
+
+    rendered = render_worker_dashboard_evidence_index_web_admin_dispatch(dispatch)
+    if "link-worker-dashboard-evidence-index-web-admin-integration" not in rendered:
+        raise AssertionError("worker dashboard evidence index integration marker missing")
+
+    print("worker dashboard evidence index web admin integration OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3115,6 +3147,7 @@ def main() -> None:
     check_worker_dashboard_receipt_evidence()
     check_worker_dashboard_evidence_index()
     check_worker_dashboard_evidence_index_web_admin_route()
+    check_worker_dashboard_evidence_index_web_admin_integration()
     print("LINK HEALTHCHECK PASSED")
     
 
