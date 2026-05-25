@@ -2811,6 +2811,38 @@ def check_worker_dashboard_web_admin_integration() -> None:
 
     print("worker dashboard web admin integration OK")
 
+
+def check_worker_dashboard_receipt_evidence() -> None:
+    from link_worker_dashboard_receipt_evidence import (
+        WORKER_DASHBOARD_RECEIPT_EVIDENCE_VERSION,
+        build_worker_dashboard_receipt_evidence,
+        render_worker_dashboard_receipt_evidence_html,
+        validate_worker_dashboard_receipt_evidence,
+    )
+
+    problems = validate_worker_dashboard_receipt_evidence()
+    if problems:
+        raise AssertionError(f"worker dashboard receipt evidence validation failed: {problems}")
+
+    evidence = build_worker_dashboard_receipt_evidence(Path.cwd())
+    if evidence.get("receipt_version") != WORKER_DASHBOARD_RECEIPT_EVIDENCE_VERSION:
+        raise AssertionError("worker dashboard receipt evidence version mismatch")
+
+    if evidence.get("dispatch_ok") is not True:
+        raise AssertionError(f"worker dashboard receipt evidence dispatch failed: {evidence}")
+
+    if evidence.get("non_destructive") is not True:
+        raise AssertionError("worker dashboard receipt evidence must be non-destructive")
+
+    if evidence.get("written") is not False:
+        raise AssertionError("worker dashboard receipt evidence should not write by default")
+
+    rendered = render_worker_dashboard_receipt_evidence_html(evidence)
+    if "link-worker-dashboard-receipt-evidence" not in rendered:
+        raise AssertionError("worker dashboard receipt evidence marker missing")
+
+    print("worker dashboard receipt evidence OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3012,6 +3044,7 @@ def main() -> None:
     check_worker_dashboard_card_command()
     check_worker_dashboard_web_admin_route()
     check_worker_dashboard_web_admin_integration()
+    check_worker_dashboard_receipt_evidence()
     print("LINK HEALTHCHECK PASSED")
     
 
