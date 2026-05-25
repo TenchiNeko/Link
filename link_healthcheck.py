@@ -2546,6 +2546,43 @@ def check_research_source_inventory_command() -> None:
 
     print("research source inventory command OK")
 
+
+def check_link_grade_command() -> None:
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from link_grade import build_grade_report, render_markdown
+
+    data = build_grade_report(Path.cwd(), run_checks=False)
+    if "branch_readiness" not in data or "market_relative" not in data:
+        raise AssertionError("link grade report missing required grade sections")
+
+    if data["branch_readiness"]["score"] < 70:
+        raise AssertionError(f"branch readiness grade unexpectedly low: {data['branch_readiness']}")
+
+    markdown = render_markdown(data)
+    if "Market-relative" not in markdown or "Recommended Next Upgrades" not in markdown:
+        raise AssertionError("link grade markdown missing expected sections")
+
+    proc = subprocess.run(
+        [sys.executable, "link_grade.py", "--format", "json"],
+        cwd=Path.cwd(),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=60,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"link grade json command failed: {proc.stdout}")
+
+    parsed = json.loads(proc.stdout)
+    if "market_relative" not in parsed:
+        raise AssertionError("link grade json output missing market_relative")
+
+    print("link grade command OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -2739,6 +2776,7 @@ def main() -> None:
     check_web_admin_dispatch()
     check_link_tool_profile_upgrades()
     check_research_source_inventory_command()
+    check_link_grade_command()
     print("LINK HEALTHCHECK PASSED")
     
 
