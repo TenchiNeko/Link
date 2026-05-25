@@ -2872,6 +2872,45 @@ def check_worker_dashboard_evidence_index() -> None:
 
     print("worker dashboard evidence index OK")
 
+
+def check_worker_dashboard_evidence_index_web_admin_route() -> None:
+    from link_worker_dashboard_evidence_index_web_admin import (
+        WORKER_DASHBOARD_EVIDENCE_INDEX_WEB_ADMIN_VERSION,
+        build_worker_dashboard_evidence_index_web_response,
+        render_worker_dashboard_evidence_index_web_response,
+        validate_worker_dashboard_evidence_index_web_admin_route,
+        worker_dashboard_evidence_index_web_admin_command,
+    )
+
+    problems = validate_worker_dashboard_evidence_index_web_admin_route()
+    if problems:
+        raise AssertionError(f"worker dashboard evidence index web-admin route failed: {problems}")
+
+    command = worker_dashboard_evidence_index_web_admin_command(
+        "show worker dashboard evidence index json"
+    )
+    if command != ["python3", "link_worker_dashboard_evidence_index.py", "--format", "json"]:
+        raise AssertionError(f"worker dashboard evidence index web-admin command mismatch: {command}")
+
+    response = build_worker_dashboard_evidence_index_web_response(
+        "show worker dashboard evidence index html",
+        write=False,
+    )
+    if response.get("receipt_version") != WORKER_DASHBOARD_EVIDENCE_INDEX_WEB_ADMIN_VERSION:
+        raise AssertionError("worker dashboard evidence index web-admin version mismatch")
+
+    if response.get("non_destructive") is not True:
+        raise AssertionError("worker dashboard evidence index web-admin route must be non-destructive")
+
+    rendered = render_worker_dashboard_evidence_index_web_response(response)
+    if "link-worker-dashboard-evidence-index-web-admin" not in rendered:
+        raise AssertionError("worker dashboard evidence index web-admin wrapper marker missing")
+
+    if "link-worker-dashboard-evidence-index" not in rendered:
+        raise AssertionError("worker dashboard evidence index inner marker missing")
+
+    print("worker dashboard evidence index web admin route OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3075,6 +3114,7 @@ def main() -> None:
     check_worker_dashboard_web_admin_integration()
     check_worker_dashboard_receipt_evidence()
     check_worker_dashboard_evidence_index()
+    check_worker_dashboard_evidence_index_web_admin_route()
     print("LINK HEALTHCHECK PASSED")
     
 
