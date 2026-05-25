@@ -3119,6 +3119,51 @@ def check_autonomous_research_reflection() -> None:
         raise SystemExit("autonomous research reflection failures:\n" + "\n".join(problems))
     print("autonomous research reflection OK")
 
+
+def check_autonomous_tick_runner() -> None:
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from link_autonomous_tick_runner import (
+        build_autonomous_tick,
+        validate_autonomous_tick,
+    )
+
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        pending = root / ".link" / "agent_queue" / "pending"
+        pending.mkdir(parents=True, exist_ok=True)
+        (pending / "004-lu106-autonomous-tick-runner.json").write_text(
+            json.dumps(
+                {
+                    "task_id": "LU106",
+                    "title": "Autonomous tick runner",
+                    "priority": 90,
+                    "risk": "medium",
+                    "command": None,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        receipt = build_autonomous_tick(root=root, goal="healthcheck", write=False)
+        problems = validate_autonomous_tick(receipt)
+        if problems:
+            raise SystemExit("autonomous tick runner failures:\n" + "\n".join(problems))
+        task = receipt.get("next_task") or {}
+        if task.get("task_id") != "LU106":
+            raise SystemExit("autonomous tick runner did not select LU106")
+        if not receipt.get("suggested_command"):
+            raise SystemExit("autonomous tick runner did not derive missing command")
+        if list((root / ".link" / "agent_queue" / "receipts").glob("*.json")):
+            raise SystemExit("autonomous tick runner wrote receipts during read-only healthcheck")
+
+    print("autonomous tick runner OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3330,6 +3375,7 @@ def main() -> None:
     check_autonomous_task_queue_seed()
     check_research_archive_comparison()
     check_autonomous_research_reflection()
+    check_autonomous_tick_runner()
     print("LINK HEALTHCHECK PASSED")
     
 
