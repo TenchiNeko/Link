@@ -6,11 +6,15 @@ import datetime as dt
 import html
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
+from link_dashboard_proposal_refill import ensure_pending_approval_draft
+
+from link_dashboard_approval_contract import build_approval_contract, render_html as render_contract_html, render_markdown as render_contract_markdown
 
 
-SELF_LEARNING_DASHBOARD_VERSION = "LU108-self-learning-dashboard-v1"
+SELF_LEARNING_DASHBOARD_VERSION = "LU110-self-learning-dashboard-approval-sync-v1"
 
 
 def now() -> str:
@@ -19,14 +23,7 @@ def now() -> str:
 
 def run(cmd: list[str], root: Path, timeout: int = 30) -> tuple[int, str]:
     try:
-        p = subprocess.run(
-            cmd,
-            cwd=root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-        )
+        p = subprocess.run(cmd, cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
         return p.returncode, (p.stdout or "").strip()
     except Exception as exc:
         return 99, str(exc)
@@ -41,376 +38,322 @@ def load_json(path: Path | None) -> dict[str, Any]:
         return {}
 
 
-def list_json(folder: Path, limit: int = 20) -> list[Path]:
-    if not folder.exists():
-        return []
-    return sorted(folder.glob("*.json"))[-limit:]
+def count_json(path: Path) -> int:
+    return len(list(path.glob("*.json"))) if path.exists() else 0
 
 
-def count_json(folder: Path) -> int:
-    return len(list(folder.glob("*.json"))) if folder.exists() else 0
+def latest_json(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    files = sorted(path.glob("*.json"))
+    return str(files[-1]) if files else None
 
 
-def latest_file(folder: Path) -> Path | None:
-    files = list_json(folder, limit=999)
-    return files[-1] if files else None
+def _build_dashboard_impl(root: Path, run_healthcheck: bool = False, include_healthcheck: bool | None = None) -> dict[str, Any]:
+    # dashboard-refill:auto
+    root = Path(root)
+    try:
+        ensure_pending_approval_draft(root=root, source="dashboard-render", write=True)
+    except Exception:
+        pass
+    branch_exit, branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], root)
+    head_exit, head = run(["git", "log", "-1", "--oneline"], root)
+    status_exit, status = run(["git", "status", "--short"], root)
 
+    health_exit = None
+    health_tail = ""
+    if run_healthcheck:
+        health_exit, health_tail = run(["python3", "link_healthcheck.py"], root, timeout=120)
 
-def queue_counts(root: Path) -> dict[str, int]:
-    base = root / ".link" / "agent_queue"
-    return {
-        "pending": count_json(base / "pending"),
-        "running": count_json(base / "running"),
-        "done": count_json(base / "done"),
-        "blocked": count_json(base / "blocked"),
-        "receipts": count_json(base / "receipts"),
+    agent_root = root / ".link" / "agent_queue"
+    draft_root = root / ".link" / "patch_drafts"
+    contract = build_approval_contract(root)
+
+    queue_counts = {
+        "agent_pending": count_json(agent_root / "pending"),
+        "agent_running": count_json(agent_root / "running"),
+        "agent_done": count_json(agent_root / "done"),
+        "agent_blocked": count_json(agent_root / "blocked"),
+        "agent_receipts": count_json(agent_root / "receipts"),
+        "draft_pending": count_json(draft_root / "pending"),
+        "draft_approved": count_json(draft_root / "approved"),
+        "draft_rejected": count_json(draft_root / "rejected"),
+        "draft_retry": count_json(draft_root / "retry"),
+        "draft_receipts": count_json(draft_root / "receipts"),
     }
 
-
-def draft_counts(root: Path) -> dict[str, int]:
-    base = root / ".link" / "patch_drafts"
-    return {
-        "pending": count_json(base / "pending"),
-        "approved": count_json(base / "approved"),
-        "rejected": count_json(base / "rejected"),
-        "retry": count_json(base / "retry"),
-        "receipts": count_json(base / "receipts"),
-    }
-
-
-def git_state(root: Path) -> dict[str, Any]:
-    branch_code, branch = run(["git", "branch", "--show-current"], root)
-    head_code, head = run(["git", "log", "--oneline", "-1"], root)
-    status_code, status = run(["git", "status", "--short"], root)
-    return {
-        "branch": branch if branch_code == 0 else "",
-        "head": head if head_code == 0 else "",
-        "working_tree_clean": status.strip() == "",
-        "status": status,
-    }
-
-
-def latest_records(root: Path) -> dict[str, Any]:
-    agent_base = root / ".link" / "agent_queue"
-    draft_base = root / ".link" / "patch_drafts"
-
-    paths = {
-        "latest_pending_task": latest_file(agent_base / "pending"),
-        "latest_done_task": latest_file(agent_base / "done"),
-        "latest_tick_receipt": latest_file(agent_base / "receipts"),
-        "latest_pending_draft": latest_file(draft_base / "pending"),
-        "latest_approved_draft": latest_file(draft_base / "approved"),
-        "latest_retry_draft": latest_file(draft_base / "retry"),
-        "latest_rejected_draft": latest_file(draft_base / "rejected"),
-    }
-
-    out: dict[str, Any] = {}
-    for name, path in paths.items():
-        out[f"{name}_path"] = str(path) if path else None
-        out[name] = load_json(path)
-    return out
-
-
-def health_tail(root: Path) -> dict[str, Any]:
-    code, out = run(["python3", "link_healthcheck.py"], root, timeout=90)
-    lines = out.splitlines()
-    return {
-        "exit_code": code,
-        "passed": code == 0 and any("LINK HEALTHCHECK PASSED" in line for line in lines),
-        "tail": "\n".join(lines[-35:]),
-    }
-
-
-def build_dashboard(root: Path | None = None, include_healthcheck: bool = False) -> dict[str, Any]:
-    root = Path(root or Path.cwd()).resolve()
-    records = latest_records(root)
-    git = git_state(root)
-    health = health_tail(root) if include_healthcheck else {
-        "exit_code": None,
-        "passed": None,
-        "tail": "healthcheck not run for this render",
-    }
-
-    pending_draft = records.get("latest_pending_draft") or {}
-    pending_task = records.get("latest_pending_task") or {}
-    approved_draft = records.get("latest_approved_draft") or {}
-    retry_draft = records.get("latest_retry_draft") or {}
-
-    if pending_draft:
-        mode = "waiting_approval"
-        next_action = "Brandon approval needed: yes, no, or try_again."
-    elif retry_draft:
-        mode = "needs_retry"
-        next_action = "A draft needs retry feedback before patching."
-    elif pending_task:
-        mode = "work_available"
-        next_action = "Run one autonomous tick or generate an approval draft."
-    elif approved_draft:
-        mode = "approved_work_available"
-        next_action = "Approved draft exists; next step is safe patch execution."
+    if contract.get("present") and contract.get("can_approve"):
+        mode = "waiting_approval_synced"
+        next_action = "Read Approval Target, then choose YES / NO / TRY AGAIN."
+    elif contract.get("present"):
+        mode = "waiting_approval_blocked"
+        next_action = contract.get("disable_reason")
+    elif queue_counts["agent_pending"] > 0:
+        mode = "ready_for_tick"
+        next_action = "Run one tick."
     else:
         mode = "idle"
-        next_action = "No queued work. Generate a growth receipt to find the next useful upgrade."
+        next_action = "No pending work; find growth work or seed new queue."
 
     return {
         "version": SELF_LEARNING_DASHBOARD_VERSION,
         "generated": now(),
         "mode": mode,
         "next_action": next_action,
-        "git": git,
-        "healthcheck": health,
-        "agent_queue_counts": queue_counts(root),
-        "patch_draft_counts": draft_counts(root),
-        "records": records,
-        "summary": {
-            "pending_task_id": pending_task.get("task_id") or pending_task.get("id"),
-            "pending_task_title": pending_task.get("title"),
-            "pending_draft_id": pending_draft.get("draft_id"),
-            "pending_draft_goal": pending_draft.get("goal"),
-            "approved_draft_id": approved_draft.get("draft_id"),
-            "approved_draft_goal": approved_draft.get("goal"),
+        "git": {
+            "branch": branch if branch_exit == 0 else "unknown",
+            "head": head if head_exit == 0 else "unknown",
+            "working_tree_clean": status_exit == 0 and not bool(status.strip()),
+            "status": status,
         },
-        "commands": {
-            "refresh": "python3 link_self_learning_dashboard.py render --format html --write",
-            "tick": "python3 link_autonomous_tick_runner.py --write --format markdown",
-            "growth": "python3 link_autonomous_growth_receipt.py --goal 'Find next autonomous Link growth work' --format markdown --write",
-            "yes": "python3 link_approval_patch_draft_queue.py decide --action yes --draft-id latest --feedback 'Approved from dashboard.' --format markdown",
-            "no": "python3 link_approval_patch_draft_queue.py decide --action no --draft-id latest --feedback 'Rejected from dashboard.' --format markdown",
-            "try_again": "python3 link_approval_patch_draft_queue.py decide --action try_again --draft-id latest --feedback 'Try again with Brandon feedback.' --format markdown",
+        "health": {
+            "ran": run_healthcheck,
+            "exit": health_exit,
+            "passed": health_exit == 0 if health_exit is not None else None,
+            "tail": "\n".join(health_tail.splitlines()[-30:]) if health_tail else "",
         },
-        "boundary": [
-            "May inspect repo state, read queue files, write local .link receipts, and draft plans.",
-            "Must wait for approval before source edits, commits, pushes, destructive commands, or unknown external code.",
-            "Dashboard buttons copy commands for now; the next upgrade can wire them to a local POST route.",
-        ],
+        "counts": queue_counts,
+        "receipts": {
+            "latest_agent_pending": latest_json(agent_root / "pending"),
+            "latest_agent_receipt": latest_json(agent_root / "receipts"),
+            "latest_draft_pending": latest_json(draft_root / "pending"),
+            "latest_draft_approved": latest_json(draft_root / "approved"),
+            "latest_draft_receipt": latest_json(draft_root / "receipts"),
+        },
+        "approval_contract": contract,
     }
 
 
-def render_markdown(data: dict[str, Any]) -> str:
-    git = data.get("git") or {}
-    health = data.get("healthcheck") or {}
-    summary = data.get("summary") or {}
-    records = data.get("records") or {}
-    commands = data.get("commands") or {}
+def add_dashboard_compat_keys(data: dict[str, Any]) -> dict[str, Any]:
+    """Expose old healthcheck keys while keeping the newer dashboard schema."""
+    counts = data.get("counts") or data.get("queue_counts") or {}
 
+    if "agent_queue_counts" not in data:
+        data["agent_queue_counts"] = {
+            "pending": counts.get("agent_pending", 0),
+            "running": counts.get("agent_running", 0),
+            "done": counts.get("agent_done", 0),
+            "blocked": counts.get("agent_blocked", 0),
+            "receipts": counts.get("agent_receipts", 0),
+        }
+
+    if "patch_draft_counts" not in data:
+        data["patch_draft_counts"] = {
+            "pending": counts.get("draft_pending", 0),
+            "approved": counts.get("draft_approved", 0),
+            "rejected": counts.get("draft_rejected", 0),
+            "retry": counts.get("draft_retry", 0),
+            "receipts": counts.get("draft_receipts", 0),
+        }
+
+    return add_dashboard_compat_keys(data)
+def render_markdown(dashboard: dict[str, Any]) -> str:
+    c = dashboard["counts"]
     lines = [
         "# Link Self-Learning Dashboard",
         "",
-        f"Version: `{data.get('version')}`",
-        f"Generated: {data.get('generated')}",
-        f"Mode: **{data.get('mode')}**",
-        f"Next action: {data.get('next_action')}",
+        f"Version: `{dashboard['version']}`",
+        f"Generated: `{dashboard['generated']}`",
+        f"Mode: **{dashboard['mode']}**",
+        f"Next action: {dashboard['next_action']}",
         "",
         "## Git / Health",
-        f"- Branch: `{git.get('branch')}`",
-        f"- HEAD: `{git.get('head')}`",
-        f"- Working tree clean: **{git.get('working_tree_clean')}**",
-        f"- Healthcheck passed: **{health.get('passed')}**",
+        f"- Branch: `{dashboard['git']['branch']}`",
+        f"- HEAD: `{dashboard['git']['head']}`",
+        f"- Working tree clean: **{dashboard['git']['working_tree_clean']}**",
+        f"- Healthcheck passed: **{dashboard['health']['passed']}**",
         "",
         "## Queue Counts",
     ]
-
-    for key, value in (data.get("agent_queue_counts") or {}).items():
-        lines.append(f"- Agent `{key}`: **{value}**")
-    for key, value in (data.get("patch_draft_counts") or {}).items():
-        lines.append(f"- Draft `{key}`: **{value}**")
-
+    for key, value in c.items():
+        lines.append(f"- `{key}`: **{value}**")
     lines += [
         "",
-        "## Current Work",
-        f"- Pending task: `{summary.get('pending_task_id')}` — **{summary.get('pending_task_title')}**",
-        f"- Pending draft: `{summary.get('pending_draft_id')}` — **{summary.get('pending_draft_goal')}**",
-        f"- Approved draft: `{summary.get('approved_draft_id')}` — **{summary.get('approved_draft_goal')}**",
+        render_contract_markdown(dashboard["approval_contract"]),
         "",
         "## Receipts",
-        f"- Latest pending task: `{records.get('latest_pending_task_path')}`",
-        f"- Latest pending draft: `{records.get('latest_pending_draft_path')}`",
-        f"- Latest approved draft: `{records.get('latest_approved_draft_path')}`",
-        f"- Latest tick receipt: `{records.get('latest_tick_receipt_path')}`",
-        "",
-        "## Controls",
-        f"- YES: `{commands.get('yes')}`",
-        f"- NO: `{commands.get('no')}`",
-        f"- TRY AGAIN: `{commands.get('try_again')}`",
-        f"- RUN ONE TICK: `{commands.get('tick')}`",
-        f"- FIND GROWTH WORK: `{commands.get('growth')}`",
-        "",
-        "## Boundary",
     ]
-
-    for item in data.get("boundary") or []:
-        lines.append(f"- {item}")
-
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def render_html(data: dict[str, Any]) -> str:
-    def esc(value: Any) -> str:
-        return html.escape(str(value if value is not None else ""), quote=True)
-
-    def card(label: str, value: Any) -> str:
-        return f'<div class="card"><div class="label">{esc(label)}</div><div class="value">{esc(value)}</div></div>'
-
-    git = data.get("git") or {}
-    health = data.get("healthcheck") or {}
-    summary = data.get("summary") or {}
-    commands = data.get("commands") or {}
-
-    cards = [
-        card("Mode", data.get("mode")),
-        card("Branch", git.get("branch")),
-        card("Clean", git.get("working_tree_clean")),
-        card("Health", health.get("passed")),
+    for key, value in dashboard["receipts"].items():
+        lines.append(f"- `{key}`: `{value}`")
+    lines += [
+        "",
+        "## Safety Boundary",
+        "- Buttons may inspect queues, write local .link receipts, approve/reject drafts, and run safe tick/growth commands.",
+        "- Source edits, commits, pushes, destructive commands, and unknown external code remain approval-gated.",
+        "- YES is disabled whenever the visible proposal cannot be synced to an exact draft/hash.",
     ]
+    return "\n".join(lines)
 
-    for key, value in (data.get("agent_queue_counts") or {}).items():
-        cards.append(card(f"Agent {key}", value))
-    for key, value in (data.get("patch_draft_counts") or {}).items():
-        cards.append(card(f"Draft {key}", value))
 
-    markdown = esc(render_markdown(data))
+def render_html(dashboard: dict[str, Any]) -> str:
+    style = """
+body { margin: 24px; background: #111827; color: #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; }
+h1, h2, h3 { color: #f9fafb; }
+.card, .approval-target-card { border: 1px solid #334155; border-radius: 14px; padding: 18px; margin: 14px 0; background: #172033; }
+.badge { display: inline-block; border: 1px solid #475569; border-radius: 999px; padding: 5px 9px; margin: 3px; background: #263247; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #020617; border: 1px solid #334155; border-radius: 10px; padding: 12px; color: #e5e7eb; }
+textarea { width: 100%; min-height: 72px; background: #020617; color: #e5e7eb; border: 1px solid #334155; border-radius: 8px; padding: 10px; }
+button { border: 0; border-radius: 9px; padding: 10px 13px; margin: 5px 4px 0 0; font-weight: 800; }
+button:disabled { opacity: .35; filter: grayscale(1); }
+.yes { background: #62d26f; color: #052e16; }
+.no { background: #ef6262; color: #450a0a; }
+.retry { background: #f2c14e; color: #422006; }
+.tick { background: #60a5fa; color: #082f49; }
+.growth { background: #34d399; color: #022c22; }
+.reconcile { background: #f9fafb; color: #111827; }
+.danger { color: #fecaca; font-weight: 800; }
+.sync-row span { display: inline-block; margin-right: 12px; margin-bottom: 6px; }
 
+.copy { background: #a78bfa; color: #1e1b4b; }
+.copy-box { width: 100%; min-height: 190px; margin-top: 10px; background: #020617; color: #e5e7eb; border: 1px solid #334155; border-radius: 8px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.copy-status { margin-left: 10px; color: #bbf7d0; font-weight: 700; }
+.copy-proposal-panel { margin: 10px 0 14px 0; }
+
+a { color: #93c5fd; }
+"""
+    counts = " ".join(f"<span class='badge'>{html.escape(k)}: {v}</span>" for k, v in dashboard["counts"].items())
+    contract = dashboard["approval_contract"]
+    draft_id = html.escape(str(contract.get("draft_id") or ""))
+    yes_disabled = "disabled" if not contract.get("can_approve") else ""
+    md = html.escape(render_markdown(dashboard))
     return f"""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Link Self-Learning Dashboard</title>
-<style>
-body {{
-  font-family: system-ui, -apple-system, Segoe UI, sans-serif;
-  margin: 24px;
-  background: #101216;
-  color: #f3f4f6;
-}}
-.grid {{
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 12px;
-  margin: 16px 0;
-}}
-.card, .panel {{
-  background: #1b1f2a;
-  border: 1px solid #30384a;
-  border-radius: 14px;
-  padding: 14px;
-  margin: 14px 0;
-}}
-.label {{
-  color: #9ca3af;
-  font-size: 13px;
-}}
-.value {{
-  font-size: 22px;
-  font-weight: 800;
-  margin-top: 4px;
-  overflow-wrap: anywhere;
-}}
-button {{
-  border: 0;
-  border-radius: 12px;
-  padding: 14px 18px;
-  font-weight: 800;
-  cursor: pointer;
-  margin: 6px;
-}}
-.yes {{ background: #16a34a; color: white; }}
-.no {{ background: #dc2626; color: white; }}
-.retry {{ background: #f59e0b; color: #111827; }}
-.neutral {{ background: #334155; color: white; }}
-pre {{
-  white-space: pre-wrap;
-  background: #0b0d12;
-  border-radius: 12px;
-  padding: 16px;
-  overflow: auto;
-}}
-small {{ color: #9ca3af; }}
-</style>
-<script>
-function copyCommand(cmd) {{
-  navigator.clipboard.writeText(cmd);
-  alert("Copied command:\\n" + cmd);
-}}
-</script>
+<style>{style}</style>
 </head>
 <body>
 <h1>Link Self-Learning Dashboard</h1>
-<small>{esc(data.get("version"))} · {esc(data.get("generated"))}</small>
-
-<div class="panel">
-  <h2>Status</h2>
-  <p>{esc(data.get("next_action"))}</p>
-  <div class="grid">
-    {"".join(cards)}
-  </div>
+<p>Version: <code>{html.escape(dashboard['version'])}</code> · Generated: {html.escape(dashboard['generated'])}</p>
+<div class="card">
+  <span class="badge">Mode: {html.escape(dashboard['mode'])}</span>
+  <span class="badge">Next: {html.escape(str(dashboard['next_action']))}</span>
+  <span class="badge">Draft pending: {dashboard['counts']['draft_pending']}</span>
+  <span class="badge">Agent pending: {dashboard['counts']['agent_pending']}</span>
+  <span class="badge">Receipts: {dashboard['counts']['agent_receipts'] + dashboard['counts']['draft_receipts']}</span>
 </div>
 
-<div class="panel">
-  <h2>Current Work</h2>
-  <p><b>Pending task:</b> {esc(summary.get("pending_task_id"))} — {esc(summary.get("pending_task_title"))}</p>
-  <p><b>Pending draft:</b> {esc(summary.get("pending_draft_id"))} — {esc(summary.get("pending_draft_goal"))}</p>
-  <p><b>Approved draft:</b> {esc(summary.get("approved_draft_id"))} — {esc(summary.get("approved_draft_goal"))}</p>
+{render_contract_html(contract)}
+
+<div class="card">
+<h2>Approval Controls</h2>
+<p><strong>Dashboard Controls</strong></p>
+<form method="post" action="/action">
+  <input type="hidden" name="draft_id" value="{draft_id}">
+  <textarea name="feedback" placeholder="Feedback for YES / NO / TRY AGAIN. Example: Try again but make the plan smaller and list exact files."></textarea>
+  <br>
+  <button class="yes" name="action" value="yes" {yes_disabled}>YES</button>
+  <button class="no" name="action" value="no">NO</button>
+  <button class="retry" name="action" value="try_again">TRY AGAIN</button>
+  <button class="tick" name="action" value="run_tick">RUN ONE TICK</button>
+  <button class="growth" name="action" value="find_growth">FIND GROWTH WORK</button>
+  <button class="reconcile" name="action" value="reconcile">RECONCILE STALE DRAFTS</button>
+  <button class="reconcile" name="action" value="refresh">REFRESH</button>
+</form>
+<p><strong>YES is only enabled when the Approval Target above is complete and synced to the exact draft/hash.</strong></p>
 </div>
 
-<div class="panel">
-  <h2>Approval Controls</h2>
-  <button class="yes" onclick="copyCommand('{esc(commands.get("yes"))}')">YES</button>
-  <button class="no" onclick="copyCommand('{esc(commands.get("no"))}')">NO</button>
-  <button class="retry" onclick="copyCommand('{esc(commands.get("try_again"))}')">TRY AGAIN</button>
-  <button class="neutral" onclick="copyCommand('{esc(commands.get("tick"))}')">RUN ONE TICK</button>
-  <button class="neutral" onclick="copyCommand('{esc(commands.get("growth"))}')">FIND GROWTH WORK</button>
-  <p><small>Buttons copy terminal commands for now. Next upgrade can turn these into real local web actions.</small></p>
+<div class="card">
+<h2>Queue Counts</h2>
+{counts}
 </div>
 
-<div class="panel">
-  <h2>Copy/Paste Receipt</h2>
-  <pre>{markdown}</pre>
+<div class="card">
+<h2>Full Dashboard Receipt</h2>
+<pre>{md}</pre>
 </div>
 </body>
 </html>
 """
 
 
-def write_dashboard(data: dict[str, Any], root: Path) -> Path:
-    out_dir = root / ".link" / "dashboard"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / "self_learning_dashboard.html"
-    out.write_text(render_html(data), encoding="utf-8")
-    receipt = out_dir / f"{now().replace(':', '').replace('-', '').replace('T', '-')}-dashboard.json"
-    receipt.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+def write_dashboard(root: Path, dashboard: dict[str, Any]) -> Path:
+    out = root / ".link" / "dashboard" / "self_learning_dashboard.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_html(dashboard), encoding="utf-8")
     return out
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Render Link self-learning dashboard.")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+def main(argv: list[str] | None = None) -> int:
+    argv = list(argv or sys.argv[1:])
 
-    render = sub.add_parser("render")
-    render.add_argument("--format", choices=["markdown", "json", "html"], default="markdown")
-    render.add_argument("--write", action="store_true")
-    render.add_argument("--healthcheck", action="store_true")
-    render.add_argument("--root", default=".")
+    # Backward compatibility for old broken web-admin call:
+    # python3 link_self_learning_dashboard.py markdown
+    if argv and argv[0] in {"markdown", "html", "json"}:
+        argv = ["render", "--format", argv[0]] + argv[1:]
 
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="cmd")
+    r = sub.add_parser("render")
+    r.add_argument("--format", choices=["markdown", "html", "json"], default="markdown")
+    r.add_argument("--write", action="store_true")
+    r.add_argument("--run-healthcheck", action="store_true")
+    r.add_argument("--root", default=".")
+
+    args = parser.parse_args(argv)
+    if not args.cmd:
+        args.cmd = "render"
+        args.format = "markdown"
+        args.write = False
+        args.run_healthcheck = False
+        args.root = "."
+
     root = Path(args.root).resolve()
-    data = build_dashboard(root=root, include_healthcheck=args.healthcheck)
+    dashboard = build_dashboard(root, run_healthcheck=args.run_healthcheck)
 
-    written = None
     if args.write:
-        written = write_dashboard(data, root)
+        written = write_dashboard(root, dashboard)
+    else:
+        written = None
 
     if args.format == "json":
-        data = dict(data)
-        data["written_dashboard_path"] = str(written) if written else None
-        print(json.dumps(data, indent=2, sort_keys=True))
+        if written:
+            dashboard["written_dashboard"] = str(written)
+        print(json.dumps(dashboard, indent=2, sort_keys=True))
     elif args.format == "html":
-        print(render_html(data))
+        print(render_html(dashboard))
+        if written:
+            print(f"\n<!-- Written dashboard: {written} -->")
     else:
-        print(render_markdown(data), end="")
+        print(render_markdown(dashboard))
         if written:
             print(f"\nWritten dashboard: `{written}`")
     return 0
 
+
+
+# BEGIN LINK DASHBOARD COMPAT WRAPPER
+def add_dashboard_compat_keys(data: dict[str, Any]) -> dict[str, Any]:
+    """Expose old healthcheck keys while keeping the newer dashboard schema."""
+    counts = data.get("counts") or data.get("queue_counts") or {}
+
+    data["agent_queue_counts"] = data.get("agent_queue_counts") or {
+        "pending": counts.get("agent_pending", 0),
+        "running": counts.get("agent_running", 0),
+        "done": counts.get("agent_done", 0),
+        "blocked": counts.get("agent_blocked", 0),
+        "receipts": counts.get("agent_receipts", 0),
+    }
+
+    data["patch_draft_counts"] = data.get("patch_draft_counts") or {
+        "pending": counts.get("draft_pending", 0),
+        "approved": counts.get("draft_approved", 0),
+        "rejected": counts.get("draft_rejected", 0),
+        "retry": counts.get("draft_retry", 0),
+        "receipts": counts.get("draft_receipts", 0),
+    }
+
+    return data
+
+
+def build_dashboard(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Compatibility wrapper used by dashboard renderers and older healthcheck code."""
+    kwargs.pop("include_healthcheck", None)
+    data = _build_dashboard_impl(*args, **kwargs)
+    return add_dashboard_compat_keys(data)
+# END LINK DASHBOARD COMPAT WRAPPER
 
 if __name__ == "__main__":
     raise SystemExit(main())

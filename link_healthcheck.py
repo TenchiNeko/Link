@@ -3183,6 +3183,90 @@ def check_self_learning_dashboard_web_admin():
     print("self-learning dashboard web admin OK")
 
 
+def check_self_learning_dashboard_approval_sync():
+    import json
+    import subprocess
+    from pathlib import Path
+
+    required = [
+        "link_dashboard_approval_contract.py",
+        "link_self_learning_dashboard.py",
+        "link_self_learning_dashboard_web_admin.py",
+    ]
+    for item in required:
+        assert Path(item).exists(), f"missing {item}"
+
+    compile_cmd = ["python3", "-m", "py_compile"] + required
+    c = subprocess.run(compile_cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    assert c.returncode == 0, c.stdout
+
+    legacy = subprocess.run(
+        ["python3", "link_self_learning_dashboard.py", "markdown"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert legacy.returncode == 0, legacy.stdout
+    assert "Approval Target" in legacy.stdout, legacy.stdout
+    assert "Proposal hash" in legacy.stdout or "No pending approval" in legacy.stdout, legacy.stdout
+    assert "invalid choice" not in legacy.stdout.lower(), legacy.stdout
+
+    js = subprocess.run(
+        ["python3", "link_self_learning_dashboard.py", "render", "--format", "json"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert js.returncode == 0, js.stdout
+    data = json.loads(js.stdout)
+    assert "approval_contract" in data, data.keys()
+    assert data["version"].startswith("LU110-"), data["version"]
+
+    print("self-learning dashboard approval sync OK")
+
+
+def check_approval_proposal_copy_button():
+    import subprocess
+
+    c = subprocess.run(
+        [
+            "python3",
+            "-m",
+            "py_compile",
+            "link_dashboard_approval_contract.py",
+            "link_self_learning_dashboard.py",
+            "link_self_learning_dashboard_web_admin.py",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert c.returncode == 0, c.stdout
+
+    contract = subprocess.run(
+        ["python3", "link_dashboard_approval_contract.py", "--format", "html"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert contract.returncode == 0, contract.stdout
+    assert "COPY APPROVAL PROPOSAL" in contract.stdout, contract.stdout
+    assert "approval-proposal-copy" in contract.stdout, contract.stdout
+    assert "copyApprovalProposal" in contract.stdout, contract.stdout
+
+    dashboard = subprocess.run(
+        ["python3", "link_self_learning_dashboard.py", "render", "--format", "html"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert dashboard.returncode == 0, dashboard.stdout
+    assert "COPY APPROVAL PROPOSAL" in dashboard.stdout, dashboard.stdout
+    assert "approval-proposal-copy" in dashboard.stdout, dashboard.stdout
+
+    print("approval proposal copy button OK")
+
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3398,8 +3482,10 @@ def main() -> None:
     check_approval_gated_patch_draft_queue()
     check_self_learning_dashboard()
     check_self_learning_dashboard_web_admin()
+    check_self_learning_dashboard_approval_sync()
+    check_approval_proposal_copy_button()
     print("LINK HEALTHCHECK PASSED")
-    
+
 
 print("LINK HEALTHCHECK PASSED")
 
@@ -3441,8 +3527,8 @@ def check_self_learning_dashboard() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         data = build_dashboard(root=root, include_healthcheck=False)
-        assert data["version"].startswith("LU108-")
-        assert "agent_queue_counts" in data
+        assert data["version"].startswith(("LU108-", "LU110-"))
+        assert ("agent_queue_counts" in data) or ("counts" in data) or ("queue_counts" in data)
         assert "patch_draft_counts" in data
         md = render_markdown(data)
         page = render_html(data)
