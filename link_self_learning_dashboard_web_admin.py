@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import html
 import re
 import subprocess
@@ -315,6 +316,25 @@ def main() -> None:
 
 
 # BEGIN LINK APPROVAL CARD DOUBLE REPAIR
+
+def stable_proposal_hash(data: dict) -> str:
+    """Return a stable 16-char hash for dashboard approval identity."""
+    import copy
+    payload = copy.deepcopy(data)
+    for key in [
+        "proposal_hash",
+        "hash",
+        "generated",
+        "created",
+        "created_at",
+        "updated",
+        "updated_at",
+        "written",
+    ]:
+        payload.pop(key, None)
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
 def _as_lines(value):
     if value is None:
         return []
@@ -351,7 +371,15 @@ def _current_approval_text_from_pending_json(page: str) -> str:
     title = data.get("title") or data.get("task_title") or data.get("name") or ""
     status = data.get("status") or "waiting_approval"
     risk = data.get("risk") or "unknown"
-    proposal_hash = data.get("proposal_hash") or data.get("hash") or ""
+    proposal_hash = data.get("proposal_hash") or data.get("hash") or stable_proposal_hash(data)
+    if proposal_hash and data.get("proposal_hash") != proposal_hash:
+        data["proposal_hash"] = proposal_hash
+        try:
+            draft_file.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    yes_enabled = bool(proposal_hash and draft_file.exists())
 
     why = data.get("why") or data.get("reason") or ""
     plan = _as_lines(data.get("proposed_plan") or data.get("plan"))
@@ -371,7 +399,7 @@ def _current_approval_text_from_pending_json(page: str) -> str:
         f"- Status: **{status}**",
         f"- Task: `{task_id}` — **{title}**",
         f"- Risk: **{risk}**",
-        "- YES enabled: **True**",
+        f"- YES enabled: **{yes_enabled}**",
         "",
     ]
 
