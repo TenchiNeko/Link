@@ -2778,6 +2778,39 @@ def check_worker_dashboard_web_admin_route() -> None:
 
     print("worker dashboard web admin route OK")
 
+
+def check_worker_dashboard_web_admin_integration() -> None:
+    from link_worker_dashboard_web_admin_integration import (
+        WORKER_DASHBOARD_WEB_ADMIN_INTEGRATION_VERSION,
+        render_worker_dashboard_web_admin_dispatch,
+        validate_worker_dashboard_web_admin_integration,
+        worker_dashboard_web_admin_dispatch,
+    )
+
+    problems = validate_worker_dashboard_web_admin_integration()
+    if problems:
+        raise AssertionError(f"worker dashboard web admin integration validation failed: {problems}")
+
+    payload = worker_dashboard_web_admin_dispatch("show worker dashboard html pending approval")
+    if payload.get("receipt_version") != WORKER_DASHBOARD_WEB_ADMIN_INTEGRATION_VERSION:
+        raise AssertionError("worker dashboard integration receipt version mismatch")
+
+    if payload.get("handled") is not True:
+        raise AssertionError("worker dashboard integration did not handle dashboard prompt")
+
+    if payload.get("non_destructive") is not True:
+        raise AssertionError("worker dashboard integration must be non-destructive")
+
+    rendered = render_worker_dashboard_web_admin_dispatch(payload)
+    if "link-worker-dashboard-card" not in rendered:
+        raise AssertionError("worker dashboard integration rendered card marker missing")
+
+    miss = worker_dashboard_web_admin_dispatch("show recovery plan dashboard")
+    if miss.get("handled"):
+        raise AssertionError("worker dashboard integration should not claim recovery dashboard prompts")
+
+    print("worker dashboard web admin integration OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -2978,6 +3011,7 @@ def main() -> None:
     check_model_routing_profiles()
     check_worker_dashboard_card_command()
     check_worker_dashboard_web_admin_route()
+    check_worker_dashboard_web_admin_integration()
     print("LINK HEALTHCHECK PASSED")
     
 
