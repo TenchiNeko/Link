@@ -3376,11 +3376,39 @@ def main() -> None:
     check_research_archive_comparison()
     check_autonomous_research_reflection()
     check_autonomous_tick_runner()
+    check_approval_gated_patch_draft_queue()
     print("LINK HEALTHCHECK PASSED")
     
 
 print("LINK HEALTHCHECK PASSED")
 
+
+def check_approval_gated_patch_draft_queue() -> None:
+    import json
+    import subprocess
+    from pathlib import Path
+
+    script = Path("link_approval_gated_patch_draft_queue.py")
+    assert script.exists(), "missing link_approval_gated_patch_draft_queue.py"
+    result = subprocess.run(
+        ["python3", str(script), "--goal", "healthcheck approval gated patch draft", "--format", "json"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stdout
+    data = json.loads(result.stdout)
+    assert data.get("ok") is True, data
+    assert data.get("approval_required") is True, data
+    assert data.get("non_destructive") is True, data
+    assert data.get("source_edits_written") is False, data
+    assert data.get("commits_created") is False, data
+    assert data.get("pushes_created") is False, data
+    blocked = set(data.get("blocked_until_approval") or [])
+    assert "git commit" in blocked, data
+    assert "git push" in blocked, data
+    print("approval-gated patch draft queue OK")
 
 if __name__ == "__main__":
     main()
