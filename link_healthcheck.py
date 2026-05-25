@@ -3038,6 +3038,44 @@ def check_autonomous_growth_receipt() -> None:
         raise AssertionError("autonomous growth receipt missing next task")
     print("autonomous growth receipt OK")
 
+
+def check_autonomous_task_queue_seed() -> None:
+    import tempfile
+    from pathlib import Path
+
+    from link_autonomous_task_queue import (
+        AUTONOMOUS_TASK_QUEUE_VERSION,
+        build_autonomous_task_queue_seed,
+        render_autonomous_task_queue_html,
+        render_autonomous_task_queue_markdown,
+        validate_autonomous_task_queue_seed,
+    )
+
+    receipt = build_autonomous_task_queue_seed(Path("."), "healthcheck autonomous task queue", limit=3, write=False)
+    problems = validate_autonomous_task_queue_seed(receipt)
+    if problems:
+        raise AssertionError("autonomous task queue seed invalid: " + ", ".join(problems))
+    if receipt.get("receipt_version") != AUTONOMOUS_TASK_QUEUE_VERSION:
+        raise AssertionError("autonomous task queue seed version mismatch")
+    markdown = render_autonomous_task_queue_markdown(receipt)
+    html = render_autonomous_task_queue_html(receipt)
+    if "Link Autonomous Task Queue Seed" not in markdown:
+        raise AssertionError("autonomous task queue markdown marker missing")
+    if "link-autonomous-task-queue-seed" not in html:
+        raise AssertionError("autonomous task queue html marker missing")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        seeded = build_autonomous_task_queue_seed(Path(tmp), "healthcheck write queue", limit=2, write=True)
+        write_problems = validate_autonomous_task_queue_seed(seeded)
+        if write_problems:
+            raise AssertionError("autonomous task queue temp write invalid: " + ", ".join(write_problems))
+        if seeded.get("queued_count", 0) < 1:
+            raise AssertionError("autonomous task queue temp write did not queue tasks")
+        if not seeded.get("written_paths"):
+            raise AssertionError("autonomous task queue temp write missing written paths")
+
+    print("autonomous task queue seed OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3246,6 +3284,7 @@ def main() -> None:
     check_worker_dashboard_evidence_index_execution_receipt()
     check_worker_dashboard_evidence_index_execution_receipt_web_admin_route()
     check_autonomous_growth_receipt()
+    check_autonomous_task_queue_seed()
     print("LINK HEALTHCHECK PASSED")
     
 

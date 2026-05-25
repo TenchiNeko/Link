@@ -123,3 +123,6 @@ factory/rejected_outputs/*
 !factory/rejected_outputs/.gitkeep
 factory/external/
 .link_research_intake/
+
+# Link local autonomous runtime state
+.link/
