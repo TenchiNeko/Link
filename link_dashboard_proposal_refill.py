@@ -1099,5 +1099,380 @@ def ensure_pending_approval_draft(
 # END LINK NONSELF DYNAMIC FALLBACK
 
 
+
+# BEGIN LINK TITLE DEDUPE HARD FIX
+
+def _link_norm_title(value) -> str:
+    """Canonical title used for approval duplicate checks.
+
+    Important: strips LU IDs anywhere in the title, so these all match:
+    - LU146 approval queue maintenance audit
+    - approval queue maintenance audit lu146
+    - approval queue maintenance audit
+    """
+    text = str(value or "").lower()
+    text = re.sub(r"\b\d{8}-\d{6}\b", " ", text)
+    text = re.sub(r"\blu\s*[-_ ]*\d+\b", " ", text)
+    text = re.sub(r"\blu\d+\b", " ", text)
+    text = re.sub(r"\bmanual\b", " ", text)
+    text = re.sub(r"\b(created|approved|rejected|retry|blocked|pending)\b", " ", text)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
+
+
+def _link_extract_titles(obj):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            key_l = str(key).lower()
+            if key_l in {"title", "task_title", "proposal_title", "name"} and isinstance(value, str):
+                yield value
+            yield from _link_extract_titles(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _link_extract_titles(item)
+
+
+def _link_seen_titles(root: Path, include_pending: bool = True) -> set[str]:
+    folders = [
+        ".link/patch_drafts/approved",
+        ".link/patch_drafts/rejected",
+        ".link/patch_drafts/retry",
+        ".link/patch_drafts/blocked",
+        ".link/patch_drafts/receipts",
+        ".link/growth_receipts",
+        ".link/agent_queue/receipts",
+    ]
+    if include_pending:
+        folders.insert(0, ".link/patch_drafts/pending")
+
+    seen: set[str] = set()
+    for rel in folders:
+        base = root / rel
+        if not base.exists():
+            continue
+        for path in base.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+            except Exception:
+                continue
+
+            for title in _link_extract_titles(data):
+                norm = _link_norm_title(title)
+                if norm:
+                    seen.add(norm)
+
+            # Filename fallback for older/nonstandard receipts.
+            stem = path.stem
+            stem = re.sub(r"^\d{8}-\d{6}-", "", stem)
+            stem = re.sub(r"-(created|approved|rejected|retry|blocked)$", "", stem)
+            norm = _link_norm_title(stem.replace("-", " "))
+            if norm:
+                seen.add(norm)
+
+    return seen
+
+
+def _link_used_lu_numbers(root: Path) -> set[int]:
+    used: set[int] = set()
+    for rel in [
+        ".link/patch_drafts/pending",
+        ".link/patch_drafts/approved",
+        ".link/patch_drafts/rejected",
+        ".link/patch_drafts/retry",
+        ".link/patch_drafts/blocked",
+        ".link/patch_drafts/receipts",
+        ".link/growth_receipts",
+        ".link/agent_queue/receipts",
+    ]:
+        base = root / rel
+        if not base.exists():
+            continue
+        for path in base.glob("*.json"):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            for m in re.finditer(r"\bLU(\d+)\b", text, re.I):
+                try:
+                    used.add(int(m.group(1)))
+                except ValueError:
+                    pass
+    return used
+
+
+def _link_next_lu(root: Path) -> str:
+    used = _link_used_lu_numbers(root)
+    return f"LU{(max(used) + 1) if used else 1}"
+
+
+_LINK_NONSELF_IDEAS = [
+    {
+        "title": "approval queue orphan markdown cleanup",
+        "why": "The pending folder can contain orphan .md files with no matching JSON, which makes troubleshooting look like pending drafts still exist.",
+        "plan": [
+            "Scan pending approval markdown files for missing matching JSON files.",
+            "Move orphan markdown files to an archived orphan folder with a receipt.",
+            "Show orphan cleanup counts in dashboard receipts.",
+            "Keep real pending JSON drafts untouched.",
+        ],
+        "files": ["link_dashboard_proposal_refill.py", "link_self_learning_dashboard.py", "link_healthcheck.py"],
+    },
+    {
+        "title": "approval target single source renderer",
+        "why": "The dashboard should never show different approval text in the copy box, visible block, and full receipt.",
+        "plan": [
+            "Create one canonical approval markdown builder.",
+            "Use that builder for every approval target display.",
+            "Fail healthcheck if visible approval blocks disagree.",
+            "Keep YES disabled if identity fields cannot be synced.",
+        ],
+        "files": ["link_self_learning_dashboard.py", "link_self_learning_dashboard_web_admin.py", "link_dashboard_approval_contract.py", "link_healthcheck.py"],
+    },
+    {
+        "title": "dashboard action result receipt panel",
+        "why": "Button actions are hard to verify unless the result is shown directly in the dashboard after each click.",
+        "plan": [
+            "Persist the latest dashboard action result as a small receipt.",
+            "Render latest action, exit code, and output tail above the approval target.",
+            "Cover YES, NO, TRY AGAIN, clear bugged, and generate new actions.",
+            "Avoid relying only on server logs for button confirmation.",
+        ],
+        "files": ["link_self_learning_dashboard_web_admin.py", "link_self_learning_dashboard.py", "link_healthcheck.py"],
+    },
+    {
+        "title": "approval decision idempotency guard",
+        "why": "Double-clicking or refreshing after a decision should not create duplicate receipts or stale dashboard state.",
+        "plan": [
+            "Detect already-decided drafts before running a second decision.",
+            "Return a clear already-decided receipt.",
+            "Re-render the dashboard from disk after every decision.",
+            "Add healthcheck coverage for repeat decision behavior.",
+        ],
+        "files": ["link_approval_patch_draft_queue.py", "link_self_learning_dashboard_web_admin.py", "link_healthcheck.py"],
+    },
+    {
+        "title": "approval proposal hash persistence guard",
+        "why": "Proposal hashes should be stable on disk so the dashboard does not need to repair missing or mismatched hash values after render.",
+        "plan": [
+            "Persist proposal_hash into newly created draft JSON files.",
+            "Backfill missing proposal_hash only when a draft is otherwise valid.",
+            "Fail healthcheck if YES is enabled with a blank hash.",
+            "Keep all visible approval blocks synced to the persisted hash.",
+        ],
+        "files": ["link_dashboard_proposal_refill.py", "link_dashboard_approval_contract.py", "link_self_learning_dashboard.py", "link_healthcheck.py"],
+    },
+    {
+        "title": "approval queue duplicate title blocker",
+        "why": "The queue should not keep generating the same proposal with a new LU number after the old one was approved, rejected, retried, or blocked.",
+        "plan": [
+            "Normalize proposal titles before comparing them across approval folders.",
+            "Treat LU-prefixed and LU-suffixed versions of the same title as duplicates.",
+            "Write skipped-duplicate receipts for transparency.",
+            "Add healthcheck coverage using a duplicate dynamic proposal fixture.",
+        ],
+        "files": ["link_dashboard_proposal_refill.py", "link_healthcheck.py"],
+    },
+    {
+        "title": "dashboard no pending recovery explainer",
+        "why": "When no pending draft exists, the dashboard should explain whether generation is blocked, exhausted, or waiting for real input.",
+        "plan": [
+            "Render the latest no-useful-proposal receipt when no draft exists.",
+            "Show why generation was blocked or exhausted.",
+            "Keep generate-new controls visible.",
+            "Add a direct command hint for the next recovery action.",
+        ],
+        "files": ["link_self_learning_dashboard.py", "link_self_learning_dashboard_web_admin.py", "link_dashboard_proposal_refill.py"],
+    },
+    {
+        "title": "approval refill external candidate loader",
+        "why": "Hardcoded proposal lists eventually run out. The refill system should be able to load concrete candidates from a small local candidate file.",
+        "plan": [
+            "Add an optional .link/approval_candidates.jsonl source.",
+            "Validate candidate fields before creating a draft.",
+            "Skip candidates already seen in approval history.",
+            "Fall back to built-in maintenance ideas only when the candidate file is empty.",
+        ],
+        "files": ["link_dashboard_proposal_refill.py", "link_healthcheck.py"],
+    },
+    {
+        "title": "approval queue malformed json quarantine",
+        "why": "Malformed pending JSON can make the dashboard look empty or broken even when files are present.",
+        "plan": [
+            "Detect unreadable JSON drafts in pending.",
+            "Move malformed files to blocked with an error receipt.",
+            "Keep markdown companions with their JSON record.",
+            "Add healthcheck coverage for a malformed pending fixture.",
+        ],
+        "files": ["link_dashboard_proposal_refill.py", "link_self_learning_dashboard.py", "link_healthcheck.py"],
+    },
+    {
+        "title": "approval queue receipt compactor",
+        "why": "Repeated action and no-useful receipts make queue diagnosis noisy and hide the useful recent state.",
+        "plan": [
+            "Summarize repeated no-useful-proposal receipts into one compact dashboard line.",
+            "Keep raw receipts on disk.",
+            "Show latest unique action per draft ID.",
+            "Add coverage for noisy receipt folders.",
+        ],
+        "files": ["link_self_learning_dashboard.py", "link_healthcheck.py"],
+    },
+    {
+        "title": "dashboard approval cache buster",
+        "why": "The browser can show stale dashboard HTML after approval actions unless every action returns a fresh identity.",
+        "plan": [
+            "Add a generated timestamp and cache-control headers to web admin responses.",
+            "Ensure action redirects or responses include a fresh query token.",
+            "Expose current draft/hash in the action result banner.",
+            "Add smoke coverage for stale-cache prevention.",
+        ],
+        "files": ["link_self_learning_dashboard_web_admin.py", "link_self_learning_dashboard.py", "link_healthcheck.py"],
+    },
+]
+
+
+def _link_pick_nonself_candidate(root: Path) -> dict | None:
+    seen = _link_seen_titles(root, include_pending=True)
+    task_id = _link_next_lu(root)
+
+    for idea in _LINK_NONSELF_IDEAS:
+        norm = _link_norm_title(idea["title"])
+        if not norm or norm in seen:
+            continue
+
+        title = idea["title"]  # Do NOT append LU number to title.
+        return {
+            "task_id": task_id,
+            "task": {"id": task_id, "title": title},
+            "title": title,
+            "risk": "medium",
+            "why": idea["why"],
+            "plan": idea["plan"],
+            "files": idea["files"],
+            "tests": [
+                "python3 -m py_compile link_dashboard_proposal_refill.py link_self_learning_dashboard.py link_self_learning_dashboard_web_admin.py link_dashboard_approval_contract.py link_healthcheck.py",
+                "python3 link_dashboard_proposal_refill.py --clear-bugged --force-new --write --format markdown",
+                "python3 link_self_learning_dashboard.py render --format markdown",
+                "python3 link_self_learning_dashboard.py render --format html --write",
+                "python3 link_self_learning_dashboard_web_admin.py --smoke",
+                "python3 link_healthcheck.py",
+                "git diff --check",
+            ],
+            "source": "title_dedupe_hard_fix_nonself_candidate",
+        }
+
+    return None
+
+
+def _link_is_duplicate_or_self_loop_draft(root: Path, draft_path: Path, seen_before: set[str]) -> bool:
+    try:
+        data = json.loads(draft_path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return True
+
+    title = str(data.get("title") or (data.get("task") or {}).get("title") or draft_path.stem)
+    norm = _link_norm_title(title)
+
+    if not norm:
+        return True
+
+    if norm in seen_before:
+        return True
+
+    # Explicitly kill the two bad fallback loops we saw.
+    if re.search(r"\bdynamic approval proposal source fallback\b", title, re.I):
+        return True
+
+    if re.search(r"\bapproval queue maintenance audit\s+lu\d+\b", title, re.I):
+        return True
+
+    return False
+
+
+def _link_block_pending_draft(root: Path, draft_path: Path, reason: str) -> None:
+    blocked = root / ".link/patch_drafts/blocked"
+    receipts = root / ".link/patch_drafts/receipts"
+    blocked.mkdir(parents=True, exist_ok=True)
+    receipts.mkdir(parents=True, exist_ok=True)
+
+    target = blocked / draft_path.name
+    try:
+        shutil.move(str(draft_path), str(target))
+    except Exception:
+        return
+
+    md = draft_path.with_suffix(".md")
+    if md.exists():
+        try:
+            shutil.move(str(md), str(blocked / md.name))
+        except Exception:
+            pass
+
+    rec = {
+        "receipt_version": "LINK-title-dedupe-hard-fix-v1",
+        "action": "blocked_duplicate_or_self_loop_dynamic_draft",
+        "status": "blocked",
+        "draft_id": draft_path.stem,
+        "source_path": str(draft_path),
+        "target_path": str(target),
+        "reason": reason,
+        "generated": dt.datetime.now().isoformat(timespec="seconds"),
+    }
+    receipt_path = receipts / f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{draft_path.stem}-blocked-duplicate-title.json"
+    receipt_path.write_text(json.dumps(rec, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _link_create_nonself_candidate(root: Path, write: bool, moved: list[dict] | None = None) -> dict:
+    moved = moved or []
+    candidate = _link_pick_nonself_candidate(root)
+    if not candidate:
+        return no_useful(root, write, moved)
+
+    creator = globals().get("create_concrete")
+    if callable(creator):
+        return creator(root, candidate, write, moved)
+
+    # Fallback only if create_concrete is missing.
+    return no_useful(root, write, moved)
+
+
+_link_original_ensure_pending_approval_draft = ensure_pending_approval_draft
+
+
+def ensure_pending_approval_draft(root: Path | str = ".", write: bool = True, force_new: bool = False, clear_bugged: bool = True, **kwargs) -> dict:
+    root = Path(root)
+    seen_before = _link_seen_titles(root, include_pending=False)
+
+    rec = _link_original_ensure_pending_approval_draft(
+        root,
+        write=write,
+        force_new=force_new,
+        clear_bugged=clear_bugged,
+        **kwargs,
+    )
+
+    pending_dir = root / ".link/patch_drafts/pending"
+    pending_json = sorted(pending_dir.glob("*.json")) if pending_dir.exists() else []
+
+    # If the old generator produced a duplicate with only the LU number changed,
+    # quarantine it and immediately create the next non-self concrete candidate.
+    if pending_json:
+        latest = pending_json[-1]
+        if _link_is_duplicate_or_self_loop_draft(root, latest, seen_before):
+            _link_block_pending_draft(
+                root,
+                latest,
+                "Generated draft was duplicate/self-loop after title normalization.",
+            )
+            return _link_create_nonself_candidate(root, write=write, moved=rec.get("moved_bugged_drafts", []))
+
+    # If the old generator says exhausted/no useful, try the non-self candidate pool.
+    if str(rec.get("action", "")).lower() == "no_useful_proposal_found":
+        return _link_create_nonself_candidate(root, write=write, moved=rec.get("moved_bugged_drafts", []))
+
+    return rec
+
+# END LINK TITLE DEDUPE HARD FIX
+
+
 if __name__ == "__main__":
     main()
