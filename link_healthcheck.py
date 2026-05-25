@@ -3377,6 +3377,7 @@ def main() -> None:
     check_autonomous_research_reflection()
     check_autonomous_tick_runner()
     check_approval_gated_patch_draft_queue()
+    check_self_learning_dashboard()
     print("LINK HEALTHCHECK PASSED")
     
 
@@ -3409,6 +3410,27 @@ def check_approval_gated_patch_draft_queue() -> None:
     assert "git commit" in blocked, data
     assert "git push" in blocked, data
     print("approval-gated patch draft queue OK")
+
+
+def check_self_learning_dashboard() -> None:
+    import tempfile
+    from pathlib import Path
+
+    from link_self_learning_dashboard import build_dashboard, render_html, render_markdown
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        data = build_dashboard(root=root, include_healthcheck=False)
+        assert data["version"].startswith("LU108-")
+        assert "agent_queue_counts" in data
+        assert "patch_draft_counts" in data
+        md = render_markdown(data)
+        page = render_html(data)
+        assert "Link Self-Learning Dashboard" in md
+        assert "Approval Controls" in page
+        assert "YES" in page and "NO" in page and "TRY AGAIN" in page
+    print("self-learning dashboard OK")
+
 
 if __name__ == "__main__":
     main()
