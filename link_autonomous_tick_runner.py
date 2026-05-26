@@ -63,6 +63,15 @@ def normalize_task(path: Path, data: dict[str, Any]) -> dict[str, Any]:
         priority = 0
 
     command = data.get("command") or data.get("suggested_command")
+    if not command and str(data.get("status") or "") == "pending_guarded_implementation":
+        task_id = str(data.get("task_id") or "").strip()
+        title = str(data.get("title") or "").strip()
+        goal = f"Implement {task_id} {title}".strip()
+        command = (
+            "python3 link_task_patch_runner.py "
+            f"--goal {shlex.quote(goal)} "
+            "--approved --execute --format markdown"
+        )
     if not command:
         command = derive_command(task_id, title)
 
