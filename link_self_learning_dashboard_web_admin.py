@@ -727,5 +727,118 @@ def rebuild_dashboard() -> str:
 # END LINK WEB ADMIN READONLY RENDER
 
 
+
+
+
+# BEGIN LINK EMERGENCY CONTROLS FINAL OVERRIDE
+def _ec_latest_pending_draft_id() -> str:
+    pending = ROOT / ".link/patch_drafts/pending"
+    drafts = sorted(pending.glob("*.json")) if pending.exists() else []
+    if not drafts:
+        return ""
+    latest = drafts[-1]
+    try:
+        data = json.loads(latest.read_text(encoding="utf-8"))
+        return str(data.get("draft_id") or latest.stem)
+    except Exception:
+        return latest.stem
+
+
+def _ec_action_href(action: str, draft_id: str = "", feedback: str = "") -> str:
+    params = {
+        "action": action,
+        "t": str(int(time.time())),
+    }
+    if draft_id:
+        params["draft_id"] = draft_id
+    if feedback:
+        params["feedback"] = feedback
+    return "/action?" + urllib.parse.urlencode(params)
+
+
+def _ec_emergency_controls_html() -> str:
+    draft_id = _ec_latest_pending_draft_id()
+
+    yes_href = _ec_action_href("yes", draft_id, "Approved from YES HARD LINK.")
+    no_href = _ec_action_href("no", draft_id, "Rejected from NO HARD LINK.")
+    retry_href = _ec_action_href("try_again", draft_id, "Try again from TRY AGAIN HARD LINK.")
+    refresh_href = _ec_action_href("refresh")
+    clear_href = _ec_action_href("clear_bugged_draft", draft_id, "Clicked from CLEAR BUGGED DRAFT hard link.")
+    generate_href = _ec_action_href("generate_new_draft", "", "Clicked from GENERATE NEW DRAFT hard link.")
+    ping_href = "/__ping?t=" + str(int(time.time()))
+
+    return (
+        '<div class="card" id="emergency-hard-link-controls">'
+        '<h2>Emergency Hard-Link Controls</h2>'
+        '<p><strong>Direct server links for recovery if browser forms or JS get stale.</strong></p>'
+        '<p>'
+        '<a href="' + yes_href + '">YES HARD LINK</a>'
+        ' &nbsp;|&nbsp; '
+        '<a href="' + no_href + '">NO HARD LINK</a>'
+        ' &nbsp;|&nbsp; '
+        '<a href="' + retry_href + '">TRY AGAIN HARD LINK</a>'
+        '</p>'
+        '<p>'
+        '<a href="' + refresh_href + '">REFRESH</a>'
+        ' &nbsp;|&nbsp; '
+        '<a href="' + clear_href + '">CLEAR BUGGED DRAFT</a>'
+        ' &nbsp;|&nbsp; '
+        '<a href="' + generate_href + '">GENERATE NEW DRAFT</a>'
+        ' &nbsp;|&nbsp; '
+        '<a href="' + ping_href + '">PING SERVER</a>'
+        '</p>'
+        '</div>'
+    )
+
+
+def _ec_inject_emergency_controls(page: str) -> str:
+    if "Emergency Hard-Link Controls" in page and "YES HARD LINK" in page:
+        return page
+    controls = _ec_emergency_controls_html()
+    if '<div class="card" id="emergency-hard-link-controls">' in page:
+        page = re.sub(
+            r'<div class="card" id="emergency-hard-link-controls">.*?</div>',
+            controls,
+            page,
+            count=1,
+            flags=re.S,
+        )
+        return page
+    if "<body>" in page:
+        return page.replace("<body>", "<body>\n" + controls + "\n", 1)
+    return controls + "\n" + page
+
+
+def rebuild_dashboard() -> str:
+    """Final read-only dashboard renderer used by smoke and web requests."""
+    code, out = run_cmd(
+        ["python3", "link_self_learning_dashboard.py", "render", "--format", "html", "--write"],
+        timeout=180,
+    )
+
+    if DASHBOARD_HTML.exists():
+        page = DASHBOARD_HTML.read_text(encoding="utf-8", errors="replace")
+    else:
+        page = (
+            "<!doctype html><html><body>"
+            "<h1>Link Self-Learning Dashboard</h1>"
+            "<h2>Dashboard render failed</h2>"
+            "<pre>" + html.escape(out[-4000:]) + "</pre>"
+            "</body></html>"
+        )
+
+    if code != 0:
+        banner = (
+            '<div class="card danger"><h2>Dashboard Render Error</h2>'
+            "<pre>" + html.escape(out[-4000:]) + "</pre></div>"
+        )
+        if "<body>" in page:
+            page = page.replace("<body>", "<body>\n" + banner + "\n", 1)
+        else:
+            page = banner + "\n" + page
+
+    return _ec_inject_emergency_controls(page)
+# END LINK EMERGENCY CONTROLS FINAL OVERRIDE
+
 if __name__ == "__main__":
     main()

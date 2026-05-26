@@ -1687,5 +1687,391 @@ def create_concrete(root: Path, c: dict, write: bool, moved: list[dict] | None =
 # END LINK AUTHORITATIVE DRAFT WRITER
 
 
+
+# BEGIN LINK FORCE CANDIDATE OVERRIDE
+
+def _lfo_now():
+    import datetime as _dt
+    return _dt.datetime.now().isoformat(timespec="seconds")
+
+
+def _lfo_stamp():
+    import datetime as _dt
+    return _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def _lfo_slug(text):
+    import re as _re
+    text = _re.sub(r"\bLU\s*[-_ ]*\d+\b", "", str(text), flags=_re.I)
+    text = _re.sub(r"[^a-zA-Z0-9]+", "-", text.lower())
+    text = _re.sub(r"-+", "-", text).strip("-")
+    return text[:90] or "approval-proposal"
+
+
+def _lfo_norm_title(text):
+    import re as _re
+    text = str(text or "").lower()
+    text = _re.sub(r"\bmanual\b", " ", text)
+    text = _re.sub(r"\blu\s*[-_ ]*\d+\b", " ", text)
+    text = _re.sub(r"\d{8}[-_]\d{6}", " ", text)
+    text = _re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
+
+
+def _lfo_hash(data):
+    import copy as _copy
+    import hashlib as _hashlib
+    import json as _json
+    payload = _copy.deepcopy(data)
+    for k in ["proposal_hash", "hash", "generated", "created", "created_at", "updated", "updated_at", "written"]:
+        payload.pop(k, None)
+    raw = _json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return _hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _lfo_used(root):
+    import json as _json
+    import re as _re
+    from pathlib import Path as _Path
+
+    root = _Path(root)
+    titles = set()
+    nums = set()
+
+    for base in [
+        root / ".link/patch_drafts/pending",
+        root / ".link/patch_drafts/approved",
+        root / ".link/patch_drafts/rejected",
+        root / ".link/patch_drafts/retry",
+        root / ".link/patch_drafts/blocked",
+        root / ".link/patch_drafts/receipts",
+    ]:
+        if not base.exists():
+            continue
+
+        for path in base.glob("*.json"):
+            txt = path.read_text(encoding="utf-8", errors="replace")
+
+            for m in _re.finditer(r"\bLU(\d+)\b", txt, _re.I):
+                try:
+                    nums.add(int(m.group(1)))
+                except Exception:
+                    pass
+
+            try:
+                data = _json.loads(txt)
+            except Exception:
+                data = {}
+
+            raw_titles = []
+            if isinstance(data, dict):
+                raw_titles.append(data.get("title"))
+                raw_titles.append(data.get("task_title"))
+                task = data.get("task")
+                if isinstance(task, dict):
+                    raw_titles.append(task.get("title"))
+                elif isinstance(task, str):
+                    raw_titles.append(task)
+
+            raw_titles.append(path.stem)
+
+            for t in raw_titles:
+                nt = _lfo_norm_title(t)
+                if nt:
+                    titles.add(nt)
+
+    return titles, nums
+
+
+def _lfo_candidates():
+    return [
+        {
+            "title": "approval queue malformed json quarantine",
+            "why": "Malformed approval draft JSON can make the dashboard look empty or stuck even when files exist on disk.",
+            "plan": [
+                "Scan approval queue folders for unreadable JSON files.",
+                "Move malformed JSON records to a quarantine folder.",
+                "Write a receipt with the file path and parse error.",
+                "Keep valid pending drafts untouched.",
+            ],
+            "files": ["link_dashboard_proposal_refill.py", "link_healthcheck.py"],
+        },
+        {
+            "title": "approval queue receipt compactor",
+            "why": "Repeated no-useful and button-action receipts make queue diagnosis noisy and hide the current useful state.",
+            "plan": [
+                "Summarize repeated no-useful receipts into one compact receipt.",
+                "Keep raw receipts on disk unless explicitly archived.",
+                "Show compact receipt counts in the dashboard.",
+                "Add healthcheck coverage for receipt compaction output.",
+            ],
+            "files": ["link_self_learning_dashboard.py", "link_healthcheck.py"],
+        },
+        {
+            "title": "approval refill candidate source priority",
+            "why": "The refill path should choose real external or built-in candidates before falling back to maintenance proposals.",
+            "plan": [
+                "Define a deterministic candidate source priority order.",
+                "Prefer external approval candidates when present.",
+                "Then use built-in concrete maintenance candidates.",
+                "Only write no-useful receipts after all sources are exhausted.",
+            ],
+            "files": ["link_dashboard_proposal_refill.py", "link_healthcheck.py"],
+        },
+        {
+            "title": "dashboard no pending state recovery panel",
+            "why": "When no pending draft exists, the dashboard needs to show why and provide the exact recovery action.",
+            "plan": [
+                "Render the latest no-useful or blocked receipt in the no-pending state.",
+                "Keep Generate New Draft controls visible.",
+                "Show the exact command that will create the next candidate.",
+                "Add smoke coverage for the empty pending state.",
+            ],
+            "files": ["link_self_learning_dashboard.py", "link_self_learning_dashboard_web_admin.py", "link_healthcheck.py"],
+        },
+        {
+            "title": "approval target canonical field validator",
+            "why": "Generated drafts should never be YES-enabled if they are missing files, plan, tests, or proposal hash fields.",
+            "plan": [
+                "Validate canonical draft fields before rendering YES-enabled controls.",
+                "Backfill safe missing fields only when the draft is otherwise concrete.",
+                "Block vague drafts with missing file areas.",
+                "Add healthcheck coverage for missing canonical fields.",
+            ],
+            "files": ["link_dashboard_approval_contract.py", "link_self_learning_dashboard.py", "link_healthcheck.py"],
+        },
+        {
+            "title": "web admin generate new draft action receipt",
+            "why": "Generate New Draft should show exactly whether it created, skipped, or blocked a draft without relying on server logs.",
+            "plan": [
+                "Persist the latest generate-new action result as a dashboard receipt.",
+                "Render action, exit code, and output tail above the approval target.",
+                "Keep the action receipt separate from approval draft receipts.",
+                "Add smoke coverage for generate-new action visibility.",
+            ],
+            "files": ["link_self_learning_dashboard_web_admin.py", "link_self_learning_dashboard.py", "link_healthcheck.py"],
+        },
+        {
+            "title": "approval queue empty state smoke fixture",
+            "why": "The no-pending state keeps regressing because smoke coverage assumes a populated queue.",
+            "plan": [
+                "Create a temporary empty approval queue fixture.",
+                "Render the dashboard against that fixture.",
+                "Assert YES is disabled and recovery controls are visible.",
+                "Assert generate-new can create one concrete draft from the fixture.",
+            ],
+            "files": ["link_healthcheck.py", "link_self_learning_dashboard_web_admin.py"],
+        },
+        {
+            "title": "pending draft canonical markdown repair",
+            "why": "The markdown sidecar should always match the JSON draft identity and canonical approval text.",
+            "plan": [
+                "Regenerate pending markdown from the JSON draft source.",
+                "Ensure draft ID and proposal hash match.",
+                "Write a repair receipt when sidecar markdown changes.",
+                "Add healthcheck coverage for JSON and markdown identity agreement.",
+            ],
+            "files": ["link_dashboard_proposal_refill.py", "link_self_learning_dashboard.py", "link_healthcheck.py"],
+        },
+    ]
+
+
+def _lfo_markdown(data, draft_path, md_path):
+    lines = [
+        "## Approval Target",
+        "",
+        "Contract version: `LU110-dashboard-approval-contract-v1`",
+        "",
+        f"- Draft ID: `{data['draft_id']}`",
+        f"- Draft file: `{draft_path}`",
+        f"- Markdown file: `{md_path}`",
+        f"- Proposal hash: `{data['proposal_hash']}`",
+        "- Status: **waiting_approval**",
+        f"- Task: `{data['task_id']}` — **{data['title']}**",
+        f"- Risk: **{data['risk']}**",
+        "- YES enabled: **True**",
+        "",
+        "### Why",
+        "",
+        data["why"],
+        "",
+        "### Proposed Plan",
+    ]
+    lines += [f"- {x}" for x in data["plan"]]
+    lines += ["", "### Files / Areas Affected"]
+    lines += [f"- `{x}`" for x in data["files"]]
+    lines += ["", "### Tests / Checks"]
+    lines += [f"- `{x}`" for x in data["tests"]]
+    lines += ["", "### Receipts"]
+    lines += [f"- `{x}`" for x in data["receipts"]]
+    lines += [
+        "",
+        "### Button Meaning",
+        "- **YES** approves this exact visible draft/hash only.",
+        "- **NO** rejects this exact visible draft and stores feedback.",
+        "- **TRY AGAIN** moves this exact visible draft to retry with feedback.",
+        "",
+        "### Exact Commands",
+        f"- YES: `python3 link_approval_patch_draft_queue.py decide --action yes --draft-id '{data['draft_id']}' --feedback 'Approved from dashboard.' --format markdown`",
+        f"- NO: `python3 link_approval_patch_draft_queue.py decide --action no --draft-id '{data['draft_id']}' --feedback 'Rejected from dashboard.' --format markdown`",
+        f"- TRY AGAIN: `python3 link_approval_patch_draft_queue.py decide --action try_again --draft-id '{data['draft_id']}' --feedback 'Try again with Brandon feedback.' --format markdown`",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _lfo_create(root, write=True, moved=None):
+    import json as _json
+    from pathlib import Path as _Path
+
+    root = _Path(root)
+    moved = moved or []
+    used_titles, used_nums = _lfo_used(root)
+    next_num = max(used_nums or {149}) + 1
+
+    picked = None
+    for candidate in _lfo_candidates():
+        if _lfo_norm_title(candidate["title"]) not in used_titles:
+            picked = candidate
+            break
+
+    if picked is None:
+        # Last-resort concrete task, but not a suffix-only duplicate.
+        picked = {
+            "title": f"approval queue targeted recovery checkpoint {next_num}",
+            "why": "All known built-in candidates were already used, so Link needs a concrete checkpoint to inspect and recover approval queue behavior.",
+            "plan": [
+                "Inspect current approval queue state.",
+                "Write a targeted recovery receipt.",
+                "Keep generic LU113-style proposals blocked.",
+                "Add a healthcheck marker for this checkpoint path.",
+            ],
+            "files": ["link_dashboard_proposal_refill.py", "link_healthcheck.py"],
+        }
+
+    task_id = f"LU{next_num}"
+    title = picked["title"]
+    stamp = _lfo_stamp()
+    draft_id = f"{stamp}-manual-{task_id.lower()}-{_lfo_slug(title)}"
+
+    pending = root / ".link/patch_drafts/pending"
+    receipts_dir = root / ".link/patch_drafts/receipts"
+    pending.mkdir(parents=True, exist_ok=True)
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+
+    draft_path = pending / f"{draft_id}.json"
+    md_path = pending / f"{draft_id}.md"
+
+    tests = [
+        "python3 -m py_compile link_dashboard_proposal_refill.py link_self_learning_dashboard.py link_self_learning_dashboard_web_admin.py link_dashboard_approval_contract.py link_healthcheck.py",
+        "python3 link_dashboard_proposal_refill.py --clear-bugged --force-new --write --format markdown",
+        "python3 link_self_learning_dashboard.py render --format markdown",
+        "python3 link_self_learning_dashboard.py render --format html --write",
+        "python3 link_self_learning_dashboard_web_admin.py --smoke",
+        "python3 link_healthcheck.py",
+        "git diff --check",
+    ]
+
+    data = {
+        "receipt_version": "LU116-dashboard-recovery-refill-v2",
+        "action": "created_dynamic_concrete_recovery_proposal",
+        "status": "waiting_approval",
+        "draft_id": draft_id,
+        "task_id": task_id,
+        "task": {"id": task_id, "title": title},
+        "title": title,
+        "risk": "medium",
+        "why": picked["why"],
+        "plan": picked["plan"],
+        "proposed_plan": picked["plan"],
+        "files": picked["files"],
+        "files_affected": picked["files"],
+        "areas_affected": picked["files"],
+        "tests": tests,
+        "checks": tests,
+        "receipts": [
+            ".link/patch_drafts/pending/",
+            ".link/patch_drafts/receipts/",
+            ".link/growth_receipts/",
+            ".link/agent_queue/receipts/",
+        ],
+        "generated": _lfo_now(),
+        "moved_bugged_drafts": moved,
+    }
+    data["proposal_hash"] = _lfo_hash(data)
+    data["hash"] = data["proposal_hash"]
+
+    receipt = {
+        "receipt_version": "LU116-dashboard-recovery-refill-v2",
+        "status": "ok",
+        "action": "created_dynamic_concrete_recovery_proposal",
+        "draft_id": draft_id,
+        "task_id": task_id,
+        "title": title,
+        "proposal_hash": data["proposal_hash"],
+        "draft_path": str(draft_path.resolve()),
+        "markdown_path": str(md_path.resolve()),
+        "generated": data["generated"],
+        "reason": "Created one concrete fallback proposal from force candidate override.",
+        "moved_bugged_drafts": moved,
+    }
+
+    if write:
+        draft_path.write_text(_json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        md_path.write_text(_lfo_markdown(data, draft_path.resolve(), md_path.resolve()), encoding="utf-8")
+        receipt_path = receipts_dir / f"{draft_id}-created.json"
+        receipt["receipt_path"] = str(receipt_path.resolve())
+        receipt_path.write_text(_json.dumps(receipt, indent=2, sort_keys=True), encoding="utf-8")
+
+    return receipt
+
+
+def ensure_pending_approval_draft(root=".", write=True, force_new=False, clear_bugged=True, **_):
+    """Final override: never leave generate-new stuck at no_useful while concrete candidates exist."""
+    import json as _json
+    import shutil as _shutil
+    from pathlib import Path as _Path
+
+    root = _Path(root)
+    pending = root / ".link/patch_drafts/pending"
+    retry = root / ".link/patch_drafts/retry"
+    receipts_dir = root / ".link/patch_drafts/receipts"
+    pending.mkdir(parents=True, exist_ok=True)
+    retry.mkdir(parents=True, exist_ok=True)
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+
+    pending_json = sorted(pending.glob("*.json"))
+
+    if pending_json and not force_new:
+        p = pending_json[-1]
+        try:
+            d = _json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            d = {}
+        return {
+            "receipt_version": "LU116-dashboard-recovery-refill-v2",
+            "status": "ok",
+            "action": "already_pending",
+            "draft_id": d.get("draft_id") or p.stem,
+            "task_id": d.get("task_id"),
+            "title": d.get("title"),
+            "draft_path": str(p.resolve()),
+            "reason": "Valid pending approval draft already exists.",
+        }
+
+    moved = []
+    if pending_json and force_new:
+        for p in pending_json:
+            target = retry / p.name
+            _shutil.move(str(p), str(target))
+            md = p.with_suffix(".md")
+            if md.exists():
+                _shutil.move(str(md), str(retry / md.name))
+            moved.append({"from": str(p), "to": str(target), "reason": "superseded by force-new draft generation"})
+
+    return _lfo_create(root, write=write, moved=moved)
+
+# END LINK FORCE CANDIDATE OVERRIDE
+
+
 if __name__ == "__main__":
     main()
