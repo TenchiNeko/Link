@@ -2587,5 +2587,287 @@ def ensure_pending_approval_draft(root=".", write=True, force_new=False, clear_b
 # END LINK RESEARCH CANDIDATE FINAL OVERRIDE
 
 
+
+# BEGIN LINK APPROVED RESEARCH HANDOFF REFILL BRIDGE
+def _arh_refill_slug(text):
+    import re
+    text = str(text or "").lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return (text[:70] or "approved-research-implementation")
+
+
+def _arh_refill_hash(data):
+    import hashlib, json
+    canonical = {
+        "title": data.get("title"),
+        "task_id": data.get("task_id"),
+        "why": data.get("why"),
+        "plan": data.get("plan"),
+        "files": data.get("files"),
+        "source_handoff_id": data.get("source_handoff_id"),
+        "source_draft_id": data.get("source_draft_id"),
+    }
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+
+
+def _arh_refill_load_json(path):
+    import json
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _arh_refill_next_lu(root):
+    import re
+    from pathlib import Path
+    root = Path(root)
+    max_lu = 228
+    for base in [
+        root / ".link/patch_drafts/pending",
+        root / ".link/patch_drafts/approved",
+        root / ".link/patch_drafts/rejected",
+        root / ".link/patch_drafts/retry",
+        root / ".link/patch_drafts/blocked",
+    ]:
+        if not base.exists():
+            continue
+        for p in base.glob("*.json"):
+            for text in (p.name, p.stem):
+                for m in re.findall(r"lu(\d+)", text.lower()):
+                    max_lu = max(max_lu, int(m))
+            data = _arh_refill_load_json(p)
+            if data:
+                task = data.get("task") if isinstance(data.get("task"), dict) else {}
+                for value in [data.get("task_id"), task.get("id")]:
+                    for m in re.findall(r"LU(\d+)", str(value or ""), flags=re.I):
+                        max_lu = max(max_lu, int(m))
+    return max_lu + 1
+
+
+def _arh_refill_handoff_already_drafted(root, handoff_id):
+    from pathlib import Path
+    root = Path(root)
+    for base in [
+        root / ".link/patch_drafts/pending",
+        root / ".link/patch_drafts/approved",
+        root / ".link/patch_drafts/rejected",
+        root / ".link/patch_drafts/retry",
+        root / ".link/patch_drafts/blocked",
+    ]:
+        if not base.exists():
+            continue
+        for p in base.glob("*.json"):
+            data = _arh_refill_load_json(p)
+            if not data:
+                continue
+            if str(data.get("source_handoff_id") or data.get("handoff_id") or "") == str(handoff_id):
+                return True
+    return False
+
+
+def _arh_refill_render_markdown(data, draft_path):
+    lines = [
+        "## Approval Target",
+        "",
+        "Contract version: `LU110-dashboard-approval-contract-v1`",
+        "",
+        f"- Draft ID: `{data.get('draft_id')}`",
+        f"- Draft file: `{draft_path}`",
+        f"- Proposal hash: `{data.get('proposal_hash')}`",
+        "- Status: **waiting_approval**",
+        f"- Task: `{data.get('task_id')}` — **{data.get('title')}**",
+        f"- Risk: **{data.get('risk', 'medium')}**",
+        "- YES enabled: **True**",
+        "",
+        "### Why",
+        "",
+        str(data.get("why") or ""),
+        "",
+        "### Proposed Plan",
+    ]
+    for item in data.get("plan") or []:
+        lines.append(f"- {item}")
+    lines.extend(["", "### Files / Areas Affected"])
+    for item in data.get("files") or []:
+        lines.append(f"- `{item}`")
+    lines.extend(["", "### Tests / Checks"])
+    for item in data.get("tests") or []:
+        lines.append(f"- `{item}`")
+    lines.extend(["", "### Receipts"])
+    for item in data.get("receipts") or []:
+        lines.append(f"- `{item}`")
+    lines.extend([
+        "",
+        "### Source Handoff",
+        f"- Handoff ID: `{data.get('source_handoff_id')}`",
+        f"- Source draft: `{data.get('source_draft_id')}`",
+        f"- Source proposal hash: `{data.get('source_proposal_hash')}`",
+        "",
+        "### Button Meaning",
+        "- **YES** approves this exact visible draft/hash only.",
+        "- **NO** rejects this exact visible draft and stores feedback.",
+        "- **TRY AGAIN** moves this exact visible draft to retry with feedback.",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def _arh_refill_create_candidate_from_handoff(root, handoff, write=True):
+    from pathlib import Path
+    import datetime as _dt
+    import json
+
+    root = Path(root)
+    pending = root / ".link/patch_drafts/pending"
+    receipts = root / ".link/patch_drafts/receipts"
+    pending.mkdir(parents=True, exist_ok=True)
+    receipts.mkdir(parents=True, exist_ok=True)
+
+    source_title = str(handoff.get("source_title") or "approved research proposal")
+    task_num = _arh_refill_next_lu(root)
+    task_id = f"LU{task_num}"
+    title = f"implement approved research {source_title}"
+    slug = _arh_refill_slug(title)
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    draft_id = f"{stamp}-manual-lu{task_num}-{slug}"
+    draft_path = pending / f"{draft_id}.json"
+    md_path = pending / f"{draft_id}.md"
+
+    files = handoff.get("source_files") or [
+        "link_research_upgrade_miner.py",
+        "link_dashboard_proposal_refill.py",
+        "link_healthcheck.py",
+    ]
+    tests = handoff.get("source_tests") or [
+        "python3 -m py_compile link_approved_research_handoff_executor.py link_research_upgrade_miner.py link_dashboard_proposal_refill.py link_self_learning_dashboard.py link_healthcheck.py",
+        "python3 link_approved_research_handoff_executor.py --smoke",
+        "python3 link_dashboard_proposal_refill.py --clear-bugged --write --format markdown",
+        "python3 link_self_learning_dashboard_web_admin.py --smoke",
+        "python3 link_healthcheck.py",
+        "git diff --check",
+    ]
+
+    plan = [
+        "Read the approved research proposal and its handoff receipt.",
+        "Implement the approved capability in the listed Link files without touching unrelated research/reference material.",
+        "Preserve approval-gated source edits, receipt evidence, and rollback safety.",
+        "Run compile, dashboard smoke, healthcheck, and git diff checks before commit.",
+    ]
+
+    data = {
+        "receipt_version": "LU116-dashboard-recovery-refill-v2",
+        "action": "created_approved_research_handoff_implementation_candidate",
+        "status": "waiting_approval",
+        "draft_id": draft_id,
+        "task_id": task_id,
+        "task": {"id": task_id, "title": title},
+        "title": title,
+        "risk": "medium",
+        "why": f"Approved research proposal `{handoff.get('source_draft_id')}` is ready for actual implementation work instead of leaving the dashboard in a no-draft state.",
+        "plan": plan,
+        "proposed_plan": plan,
+        "files": files,
+        "files_affected": files,
+        "areas_affected": files,
+        "tests": tests,
+        "checks": tests,
+        "receipts": [
+            ".link/approved_research_handoffs/",
+            ".link/patch_drafts/pending/",
+            ".link/patch_drafts/receipts/",
+            ".link/agent_queue/receipts/",
+        ],
+        "source": "approved_research_handoff_refill_bridge",
+        "source_handoff_id": handoff.get("handoff_id"),
+        "source_draft_id": handoff.get("source_draft_id"),
+        "source_proposal_hash": handoff.get("source_proposal_hash"),
+        "source_handoff_path": handoff.get("handoff_path"),
+        "source_evidence": handoff.get("source_evidence") or [],
+        "generated": _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    data["proposal_hash"] = _arh_refill_hash(data)
+    data["hash"] = data["proposal_hash"]
+
+    receipt = {
+        "receipt_version": "LU116-dashboard-recovery-refill-v2",
+        "status": "ok",
+        "action": "created_approved_research_handoff_implementation_candidate",
+        "draft_id": draft_id,
+        "task_id": task_id,
+        "title": title,
+        "proposal_hash": data["proposal_hash"],
+        "source_handoff_id": data["source_handoff_id"],
+        "source_draft_id": data["source_draft_id"],
+        "draft_path": str(draft_path.resolve()),
+        "markdown_path": str(md_path.resolve()),
+        "reason": "Created implementation approval draft from approved research handoff.",
+    }
+
+    if write:
+        draft_path.write_text(json.dumps(data, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+        md_path.write_text(_arh_refill_render_markdown(data, draft_path.resolve()), encoding="utf-8")
+        receipt_path = receipts / f"{draft_id}-created.json"
+        receipt["receipt_path"] = str(receipt_path.resolve())
+        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+
+    return receipt
+
+
+_link_original_ensure_pending_approval_draft_before_arh = ensure_pending_approval_draft
+
+
+def ensure_pending_approval_draft(root=".", write=True, force_new=False, clear_bugged=True, **kwargs):
+    from pathlib import Path
+    root_path = Path(root)
+    pending = root_path / ".link/patch_drafts/pending"
+    pending.mkdir(parents=True, exist_ok=True)
+
+    if list(pending.glob("*.json")) and not force_new:
+        return _link_original_ensure_pending_approval_draft_before_arh(
+            root=root,
+            write=write,
+            force_new=force_new,
+            clear_bugged=clear_bugged,
+            **kwargs,
+        )
+
+    if not list(pending.glob("*.json")):
+        try:
+            import link_approved_research_handoff_executor as _handoff_executor
+            _handoff_executor.ensure_handoffs(root_path, write=write)
+        except Exception as exc:
+            receipts = root_path / ".link/patch_drafts/receipts"
+            receipts.mkdir(parents=True, exist_ok=True)
+            import datetime as _dt
+            import json
+            path = receipts / f"{_dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-approved-research-handoff-executor-error.json"
+            if write:
+                path.write_text(json.dumps({
+                    "action": "approved_research_handoff_executor_error",
+                    "status": "error",
+                    "error": str(exc),
+                }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        handoff_dir = root_path / ".link/approved_research_handoffs"
+        for hp in sorted(handoff_dir.glob("*.json")) if handoff_dir.exists() else []:
+            handoff = _arh_refill_load_json(hp)
+            if not handoff:
+                continue
+            handoff_id = str(handoff.get("handoff_id") or hp.stem)
+            if _arh_refill_handoff_already_drafted(root_path, handoff_id):
+                continue
+            return _arh_refill_create_candidate_from_handoff(root_path, handoff, write=write)
+
+    return _link_original_ensure_pending_approval_draft_before_arh(
+        root=root,
+        write=write,
+        force_new=force_new,
+        clear_bugged=clear_bugged,
+        **kwargs,
+    )
+# END LINK APPROVED RESEARCH HANDOFF REFILL BRIDGE
+
+
 if __name__ == "__main__":
     main()
