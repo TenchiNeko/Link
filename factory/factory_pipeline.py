@@ -96,12 +96,14 @@ def run_pipeline(
         assembly = assemble_factory_roles(project=project, goal=goal)
         roles = list(assembly.roles)
     else:
+    assembly = None
+    if tier == "auto":
+        assembly = assemble_factory_roles(project=project, goal=goal)
+        roles = list(assembly.roles)
+    else:
         if tier not in PIPELINES:
             raise ValueError(f"unknown tier {tier!r}; expected one of {sorted(set(PIPELINES) | {'auto'})}")
         roles = list(PIPELINES[tier])
-    if assembly is not None:
-        manifest["assembly"] = assembly.as_dict()
-
     outputs: list[dict[str, Any]] = []
 
     manifest = {
@@ -119,6 +121,9 @@ def run_pipeline(
             "human_approval_required": True,
         },
     }
+    if assembly is not None:
+        manifest["assembly"] = assembly.as_dict()
+
 
     for idx, role_id in enumerate(roles, start=1):
         role = TEAM[role_id]

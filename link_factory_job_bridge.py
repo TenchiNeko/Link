@@ -197,7 +197,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the next Link agent queue job through the existing factory pipeline.")
     parser.add_argument("--root", default=".")
     parser.add_argument("--project", default="link_upgrade_research")
-    parser.add_argument("--tier", default="cheap")
+    parser.add_argument("--tier", default="auto")
     parser.add_argument("--task-id", default=None)
     parser.add_argument("--execute-models", action="store_true")
     parser.add_argument("--mark-done", action="store_true")
@@ -257,7 +257,19 @@ def main() -> int:
                 data["factory_result"] = result
 
                 atomic_write_json(done_path, data)
-                source_path.unlink()
+
+                if source_path.exists():
+
+                    source_path.unlink()
+
+                    receipt["source_removed"] = True
+
+                else:
+
+                    receipt["source_removed"] = False
+
+                    receipt["source_already_absent"] = True
+
                 receipt["moved_to"] = str(done_path)
 
         except Exception as exc:

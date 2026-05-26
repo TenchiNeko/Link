@@ -71,7 +71,7 @@ def normalize_task(path: Path, data: dict[str, Any]) -> dict[str, Any]:
             "python3 link_factory_job_bridge.py "
             f"--task-id {shlex.quote(task_id)} "
             "--project link_upgrade_research "
-            "--tier cheap "
+            "--tier auto "
             "--format markdown"
         )
         data["needs_queue_consumer"] = True
