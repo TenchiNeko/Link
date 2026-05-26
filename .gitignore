@@ -126,3 +126,7 @@ factory/external/
 
 # Link local autonomous runtime state
 .link/
+# Keep Link-native research tools tracked
+!tools/
+!tools/research/
+!tools/research/**
