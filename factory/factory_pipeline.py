@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .team_registry import PIPELINES, TEAM
+from .assembly import assemble_factory_roles
 from .openrouter_team import chat
 
 
@@ -90,11 +91,17 @@ def run_pipeline(
     max_tokens: int = 1600,
 ) -> dict[str, Any]:
     os.environ["LINK_FACTORY_ACTIVE_PROJECT"] = str(project)
-    if tier not in PIPELINES:
-        raise ValueError(f"unknown tier {tier!r}; expected one of {sorted(PIPELINES)}")
+    assembly = None
+    if tier == "auto":
+        assembly = assemble_factory_roles(project=project, goal=goal)
+        roles = list(assembly.roles)
+    else:
+        if tier not in PIPELINES:
+            raise ValueError(f"unknown tier {tier!r}; expected one of {sorted(set(PIPELINES) | {'auto'})}")
+        roles = list(PIPELINES[tier])
+    if assembly is not None:
+        manifest["assembly"] = assembly.as_dict()
 
-    run_dir = new_run_dir(project)
-    roles = list(PIPELINES[tier])
     outputs: list[dict[str, Any]] = []
 
     manifest = {

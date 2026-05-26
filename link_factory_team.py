@@ -76,7 +76,7 @@ def main() -> int:
     p = sub.add_parser("run", help="Run a draft-only factory pipeline")
     p.add_argument("--project", required=True)
     p.add_argument("--goal", required=True)
-    p.add_argument("--tier", choices=sorted(PIPELINES), default="cheap")
+    p.add_argument("--tier", choices=sorted(set(PIPELINES) | {"auto"}), default="auto")
     group = p.add_mutually_exclusive_group()
     group.add_argument("--dry-run", action="store_true", help="Do not call models; create a simulated run")
     group.add_argument("--execute-models", action="store_true", help="Actually call OpenRouter models")

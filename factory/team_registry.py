@@ -362,7 +362,7 @@ FACTORY_TIERS = {
 
 
 def tier_names() -> list[str]:
-    return sorted(FACTORY_TIERS)
+    return sorted(set(FACTORY_TIERS) | {'auto'})
 
 
 def tier_roles(tier: str) -> list[str]:
