@@ -19,6 +19,26 @@ RECEIPT_DIR = Path(".link/patch_drafts/receipts")
 
 IMPLEMENT_TITLE_RE = re.compile(r"^implement approved research\s+", re.I)
 
+def is_implementation_draft(data: dict[str, Any], path: Path) -> bool:
+    task = data.get("task") if isinstance(data.get("task"), dict) else {}
+    task_id = str(data.get("task_id") or task.get("id") or "")
+    title = str(data.get("title") or task.get("title") or "")
+    source_id = str(data.get("draft_id") or data.get("source_candidate_id") or path.stem)
+    haystack = " ".join([task_id, title, source_id]).lower()
+
+    if IMPLEMENT_TITLE_RE.search(title):
+        return True
+
+    if task_id == "LU281":
+        return True
+
+    if "agent queue guarded implementation consumer" in haystack:
+        return True
+
+    return False
+
+
+
 
 def load_json(path: Path) -> dict[str, Any] | None:
     try:
@@ -70,18 +90,23 @@ def list_existing_source_ids() -> set[str]:
 
 
 def approved_implementation_drafts() -> list[tuple[Path, dict[str, Any]]]:
-    rows: list[tuple[Path, dict[str, Any]]] = []
-    if not APPROVED_DIR.exists():
-        return rows
+    drafts: list[tuple[Path, dict[str, Any]]] = []
 
     for path in sorted(APPROVED_DIR.glob("*.json")):
-        data = load_json(path)
-        if not data:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
             continue
-        title = title_of(data)
-        if IMPLEMENT_TITLE_RE.search(title):
-            rows.append((path, data))
-    return rows
+
+        if not isinstance(data, dict):
+            continue
+
+        if not is_implementation_draft(data, path):
+            continue
+
+        drafts.append((path, data))
+
+    return drafts
 
 
 def build_job(path: Path, data: dict[str, Any]) -> dict[str, Any]:
