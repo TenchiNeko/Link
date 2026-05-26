@@ -5,6 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+def _append_link_upgrade_research_tool_packet(project: str, context: str) -> str:
+    """Append focused TypeScript tool adaptation guidance for Link research factory agents."""
+    if project != "link_upgrade_research":
+        return context
+    packet = ROOT / "factory" / "context" / "link_upgrade_research" / "typescript_tool_adaptation_packet.md"
+    try:
+        text = packet.read_text(encoding="utf-8")
+    except Exception:
+        return context
+    if "TypeScript Tool Adaptation Packet" in context:
+        return context
+    return context.rstrip() + "\n\n" + text.strip() + "\n"
+
 CONTEXT_ROOT = ROOT / "factory" / "context"
 MAX_CONTEXT_CHARS = 18000
 
@@ -32,7 +46,7 @@ def load_project_context(project: str | None) -> str:
     text = "\n\n---\n\n".join(chunks).strip()
     if len(text) > MAX_CONTEXT_CHARS:
         text = text[:MAX_CONTEXT_CHARS] + "\n\n[context truncated by loader]"
-    return text
+    return _append_link_upgrade_research_tool_packet(project, text)
 
 
 # === LU01 context/truncation hardening ===
