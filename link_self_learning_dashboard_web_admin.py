@@ -215,8 +215,33 @@ def dispatch_action(fields: dict[str, list[str]], source: str) -> str:
         )
         outputs.append(f"$ clear bugged/refill\nexit={code}\n{out}")
 
+    elif action == "run_factory_job":
+        code, out = run_cmd([
+            "python3",
+            "link_factory_job_bridge.py",
+            "--project",
+            "link_upgrade_research",
+            "--tier",
+            "cheap",
+            "--execute-models",
+            "--mark-done",
+            "--format",
+            "markdown",
+        ], timeout=900)
+        outputs.append(f"$ run factory job\nexit={code}\n{out}")
+
+        code, out = run_cmd([
+            "python3",
+            "link_dashboard_proposal_refill.py",
+            "--clear-bugged",
+            "--write",
+            "--format",
+            "markdown",
+        ], timeout=180)
+        outputs.append(f"$ refill after factory job\nexit={code}\n{out}")
+
     elif action == "run_tick":
-        code, out = run_cmd(["python3", "link_autonomous_tick_runner.py"], timeout=180)
+        code, out = run_cmd(["python3", "link_autonomous_tick_runner.py", "--write"], timeout=180)
         outputs.append(f"$ run tick\nexit={code}\n{out}")
         code, out = run_cmd(
             ["python3", "link_dashboard_proposal_refill.py", "--write", "--format", "markdown"],

@@ -287,6 +287,7 @@ a { color: #93c5fd; }
   <button class="no" name="action" value="no">NO</button>
   <button class="retry" name="action" value="try_again">TRY AGAIN</button>
   <button class="tick" name="action" value="run_tick">RUN ONE TICK</button>
+  <button class="tick" name="action" value="run_factory_job">RUN FACTORY JOB</button>
   <button class="growth" name="action" value="find_growth">FIND GROWTH WORK</button>
   <button class="reconcile" name="action" value="reconcile">RECONCILE STALE DRAFTS</button>
   <button class="reconcile" name="action" value="refresh">REFRESH</button>

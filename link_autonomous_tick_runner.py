@@ -68,9 +68,11 @@ def normalize_task(path: Path, data: dict[str, Any]) -> dict[str, Any]:
         title = str(data.get("title") or "").strip()
         goal = f"Implement {task_id} {title}".strip()
         command = (
-            "python3 link_task_patch_runner.py "
-            f"--goal {shlex.quote(goal)} "
-            "--approved --execute --format markdown"
+            "python3 link_factory_job_bridge.py "
+            f"--task-id {shlex.quote(task_id)} "
+            "--project link_upgrade_research "
+            "--tier cheap "
+            "--format markdown"
         )
         data["needs_queue_consumer"] = True
         data["implementation_note"] = (
