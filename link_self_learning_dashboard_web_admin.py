@@ -222,24 +222,11 @@ def dispatch_action(fields: dict[str, list[str]], source: str) -> str:
             "--project",
             "link_upgrade_research",
             "--tier",
-            "cheap",
-            "--execute-models",
-            "--mark-done",
-            "--format",
-            "markdown",
-        ], timeout=900)
-        outputs.append(f"$ run factory job\nexit={code}\n{out}")
-
-        code, out = run_cmd([
-            "python3",
-            "link_dashboard_proposal_refill.py",
-            "--clear-bugged",
-            "--write",
+            "auto",
             "--format",
             "markdown",
         ], timeout=180)
-        outputs.append(f"$ refill after factory job\nexit={code}\n{out}")
-
+        outputs.append(f"$ run factory job dry auto\nexit={code}\n{out}")
     elif action == "run_tick":
         code, out = run_cmd(["python3", "link_autonomous_tick_runner.py", "--write"], timeout=180)
         outputs.append(f"$ run tick\nexit={code}\n{out}")
