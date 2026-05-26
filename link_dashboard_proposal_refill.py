@@ -2289,5 +2289,303 @@ def _lfo_create(root, write=True, moved=None):
     return _link_real_lfo_create(root_path, write=write, moved=moved)
 # END LINK LFO PREWRITE LOOP GUARD
 
+
+# BEGIN LINK RESEARCH CANDIDATE FINAL OVERRIDE
+
+_lrc_previous_ensure_pending_approval_draft = ensure_pending_approval_draft
+
+
+def _lrc_norm_title(title):
+    import re as _re
+    text = str(title or "").lower()
+    text = _re.sub(r"\blu\d+\b", "", text)
+    text = _re.sub(r"\b\d+\b", "", text)
+    text = _re.sub(r"[^a-z0-9]+", " ", text)
+    return _re.sub(r"\s+", " ", text).strip()
+
+
+def _lrc_slug(text):
+    import re as _re
+    slug = _re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")
+    return slug[:70] or "research-upgrade-candidate"
+
+
+def _lrc_lines(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x) for x in value if str(x).strip()]
+    return [str(value)] if str(value).strip() else []
+
+
+def _lrc_seen_titles(root):
+    import json as _json
+    seen = set()
+    for folder in ["pending", "approved", "rejected", "retry", "blocked"]:
+        base = root / ".link/patch_drafts" / folder
+        if not base.exists():
+            continue
+        for path in base.glob("*.json"):
+            try:
+                data = _json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            task = data.get("task") if isinstance(data.get("task"), dict) else {}
+            title = data.get("title") or task.get("title")
+            if title:
+                seen.add(_lrc_norm_title(title))
+    return seen
+
+
+def _lrc_next_lu(root):
+    import json as _json
+    import re as _re
+    max_lu = 0
+    for path in (root / ".link/patch_drafts").glob("**/*.json"):
+        for text in [path.stem]:
+            for m in _re.findall(r"\blu(\d+)\b", text, flags=_re.I):
+                max_lu = max(max_lu, int(m))
+        try:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+            for value in [data.get("task_id"), (data.get("task") or {}).get("id") if isinstance(data.get("task"), dict) else None]:
+                if value:
+                    for m in _re.findall(r"\bLU(\d+)\b", str(value), flags=_re.I):
+                        max_lu = max(max_lu, int(m))
+        except Exception:
+            pass
+    return max(max_lu + 1, 190)
+
+
+def _lrc_hash(data):
+    import hashlib as _hashlib
+    import json as _json
+    stable = {
+        "title": data.get("title"),
+        "why": data.get("why"),
+        "plan": data.get("plan"),
+        "files": data.get("files"),
+        "tests": data.get("tests"),
+        "risk": data.get("risk"),
+        "evidence": data.get("evidence"),
+    }
+    return _hashlib.sha256(_json.dumps(stable, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+
+
+def _lrc_load_candidates(root):
+    import json as _json
+    path = root / ".link/approval_candidates.jsonl"
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not line.strip():
+            continue
+        try:
+            item = _json.loads(line)
+        except Exception:
+            continue
+        if isinstance(item, dict) and (item.get("title") or (item.get("task") or {}).get("title")):
+            out.append(item)
+    return out
+
+
+def _lrc_pick_candidate(root):
+    blocked = {
+        "approval queue targeted recovery checkpoint",
+        "approval queue maintenance audit",
+        "dynamic approval proposal source fallback",
+        "next autonomous growth proposal",
+    }
+    seen = _lrc_seen_titles(root)
+    for cand in _lrc_load_candidates(root):
+        task = cand.get("task") if isinstance(cand.get("task"), dict) else {}
+        title = cand.get("title") or task.get("title")
+        key = _lrc_norm_title(title)
+        if not key or key in seen or key in blocked:
+            continue
+        return cand
+    return None
+
+
+def _lrc_markdown(data, draft_path):
+    draft_id = data["draft_id"]
+    title = data["title"]
+    task_id = data["task_id"]
+    proposal_hash = data["proposal_hash"]
+    risk = data.get("risk", "medium")
+    why = data.get("why", "")
+    plan = _lrc_lines(data.get("plan") or data.get("proposed_plan"))
+    files = _lrc_lines(data.get("files") or data.get("files_affected") or data.get("areas_affected"))
+    tests = _lrc_lines(data.get("tests") or data.get("checks"))
+
+    lines = [
+        "## Approval Target",
+        "",
+        "Contract version: `LU110-dashboard-approval-contract-v1`",
+        "",
+        f"- Draft ID: `{draft_id}`",
+        f"- Draft file: `{draft_path}`",
+        f"- Proposal hash: `{proposal_hash}`",
+        "- Status: **waiting_approval**",
+        f"- Task: `{task_id}` — **{title}**",
+        f"- Risk: **{risk}**",
+        "- YES enabled: **True**",
+        "",
+        "### Why",
+        "",
+        why,
+        "",
+        "### Proposed Plan",
+    ]
+    lines.extend([f"- {x}" for x in plan] or ["- No plan listed."])
+    lines.extend(["", "### Files / Areas Affected"])
+    lines.extend([f"- `{x}`" for x in files] or ["- `Not explicitly listed in draft; treat as unsafe until clarified.`"])
+    lines.extend(["", "### Tests / Checks"])
+    lines.extend([f"- `{x}`" for x in tests] or ["- `python3 link_healthcheck.py`", "- `git diff --check`"])
+
+    evidence = data.get("evidence") or []
+    if evidence:
+        lines.extend(["", "### Research Evidence"])
+        for ev in evidence[:6]:
+            lines.append(f"- `{ev.get('source_path')}` line `{ev.get('line')}` — {str(ev.get('snippet', ''))[:240]}")
+
+    lines.extend([
+        "",
+        "### Button Meaning",
+        "- **YES** approves this exact visible draft/hash only.",
+        "- **NO** rejects this exact visible draft and stores feedback.",
+        "- **TRY AGAIN** moves this exact visible draft to retry with feedback.",
+        "",
+        "### Exact Commands",
+        f"- YES: `python3 link_approval_patch_draft_queue.py decide --action yes --draft-id '{draft_id}' --feedback 'Approved from dashboard.' --format markdown`",
+        f"- NO: `python3 link_approval_patch_draft_queue.py decide --action no --draft-id '{draft_id}' --feedback 'Rejected from dashboard.' --format markdown`",
+        f"- TRY AGAIN: `python3 link_approval_patch_draft_queue.py decide --action try_again --draft-id '{draft_id}' --feedback 'Try again with Brandon feedback.' --format markdown`",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def _lrc_create_pending_from_candidate(root, cand, write=True, moved=None):
+    import datetime as _dt
+    import json as _json
+
+    moved = moved or []
+    pending = root / ".link/patch_drafts/pending"
+    receipts = root / ".link/patch_drafts/receipts"
+    pending.mkdir(parents=True, exist_ok=True)
+    receipts.mkdir(parents=True, exist_ok=True)
+
+    lu_num = _lrc_next_lu(root)
+    task_id = f"LU{lu_num}"
+    title = str(cand.get("title") or (cand.get("task") or {}).get("title"))
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    draft_id = f"{stamp}-manual-lu{lu_num}-{_lrc_slug(title)}"
+
+    data = {
+        "receipt_version": "LU116-dashboard-recovery-refill-v2",
+        "action": "created_research_upgrade_candidate_proposal",
+        "status": "waiting_approval",
+        "draft_id": draft_id,
+        "task_id": task_id,
+        "task": {"id": task_id, "title": title},
+        "title": title,
+        "risk": cand.get("risk", "medium"),
+        "why": cand.get("why", ""),
+        "plan": _lrc_lines(cand.get("plan") or cand.get("proposed_plan")),
+        "proposed_plan": _lrc_lines(cand.get("plan") or cand.get("proposed_plan")),
+        "files": _lrc_lines(cand.get("files") or cand.get("files_affected") or cand.get("areas_affected")),
+        "files_affected": _lrc_lines(cand.get("files") or cand.get("files_affected") or cand.get("areas_affected")),
+        "areas_affected": _lrc_lines(cand.get("files") or cand.get("files_affected") or cand.get("areas_affected")),
+        "tests": _lrc_lines(cand.get("tests") or cand.get("checks")),
+        "checks": _lrc_lines(cand.get("tests") or cand.get("checks")),
+        "receipts": _lrc_lines(cand.get("receipts")),
+        "evidence": cand.get("evidence") or [],
+        "source_candidate_id": cand.get("candidate_id"),
+        "source": cand.get("source", "approval_candidates_jsonl"),
+        "generated": _dt.datetime.now().replace(microsecond=0).isoformat(),
+        "moved_bugged_drafts": moved,
+    }
+    data["proposal_hash"] = _lrc_hash(data)
+    data["hash"] = data["proposal_hash"]
+
+    draft_path = pending / f"{draft_id}.json"
+    md_path = pending / f"{draft_id}.md"
+    receipt_path = receipts / f"{draft_id}-created.json"
+
+    receipt = {
+        "receipt_version": "LU116-dashboard-recovery-refill-v2",
+        "status": "ok",
+        "action": "created_research_upgrade_candidate_proposal",
+        "draft_id": draft_id,
+        "task_id": task_id,
+        "title": title,
+        "proposal_hash": data["proposal_hash"],
+        "draft_path": str(draft_path.resolve()),
+        "markdown_path": str(md_path.resolve()),
+        "receipt_path": str(receipt_path.resolve()),
+        "reason": "Created approval draft from mined research upgrade candidate.",
+        "source_candidate_id": data.get("source_candidate_id"),
+        "moved_bugged_drafts": moved,
+    }
+
+    if write:
+        draft_path.write_text(_json.dumps(data, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+        md_path.write_text(_lrc_markdown(data, draft_path.resolve()), encoding="utf-8")
+        receipt_path.write_text(_json.dumps(receipt, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+
+    return receipt
+
+
+def ensure_pending_approval_draft(root=".", write=True, force_new=False, clear_bugged=True, **kwargs):
+    import json as _json
+    import shutil as _shutil
+    from pathlib import Path as _Path
+
+    root_path = _Path(root)
+    pending = root_path / ".link/patch_drafts/pending"
+    retry = root_path / ".link/patch_drafts/retry"
+    pending.mkdir(parents=True, exist_ok=True)
+    retry.mkdir(parents=True, exist_ok=True)
+
+    pending_json = sorted(pending.glob("*.json"))
+
+    if pending_json and not force_new:
+        return _lrc_previous_ensure_pending_approval_draft(
+            root=root,
+            write=write,
+            force_new=force_new,
+            clear_bugged=clear_bugged,
+            **kwargs,
+        )
+
+    moved = []
+    if pending_json and force_new:
+        for path in pending_json:
+            target = retry / path.name
+            if write:
+                _shutil.move(str(path), str(target))
+                md = path.with_suffix(".md")
+                if md.exists():
+                    _shutil.move(str(md), str(retry / md.name))
+            moved.append({
+                "from": str(path),
+                "to": str(target),
+                "reason": "superseded before research candidate refill",
+            })
+
+    cand = _lrc_pick_candidate(root_path)
+    if cand:
+        return _lrc_create_pending_from_candidate(root_path, cand, write=write, moved=moved)
+
+    return _lrc_previous_ensure_pending_approval_draft(
+        root=root,
+        write=write,
+        force_new=force_new,
+        clear_bugged=clear_bugged,
+        **kwargs,
+    )
+
+# END LINK RESEARCH CANDIDATE FINAL OVERRIDE
+
+
 if __name__ == "__main__":
     main()
