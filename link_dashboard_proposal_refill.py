@@ -2073,5 +2073,221 @@ def ensure_pending_approval_draft(root=".", write=True, force_new=False, clear_b
 # END LINK FORCE CANDIDATE OVERRIDE
 
 
+
+# BEGIN LINK BLOCK GENERIC CHECKPOINT LOOP
+def _link_normalize_proposal_title_for_loop_guard(title: str) -> str:
+    text = str(title or "").lower()
+    text = re.sub(r"\blu\d+\b", "", text)
+    text = re.sub(r"\b\d+\b", "", text)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _link_is_generic_checkpoint_loop_title(title: str) -> bool:
+    normalized = _link_normalize_proposal_title_for_loop_guard(title)
+    blocked = {
+        "approval queue targeted recovery checkpoint",
+        "approval queue maintenance audit",
+        "dynamic approval proposal source fallback",
+        "next autonomous growth proposal",
+    }
+    return normalized in blocked
+
+
+_link_original_ensure_pending_approval_draft = ensure_pending_approval_draft
+
+
+def ensure_pending_approval_draft(root: Path | str = ".", write: bool = True, force_new: bool = False, clear_bugged: bool = True, **kwargs):
+    rec = _link_original_ensure_pending_approval_draft(
+        root=root,
+        write=write,
+        force_new=force_new,
+        clear_bugged=clear_bugged,
+        **kwargs,
+    )
+
+    root_path = Path(root)
+    pending_dir = root_path / ".link/patch_drafts/pending"
+    rejected_dir = root_path / ".link/patch_drafts/rejected"
+    receipts_dir = root_path / ".link/patch_drafts/receipts"
+    rejected_dir.mkdir(parents=True, exist_ok=True)
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+
+    moved = []
+    for draft_path in sorted(pending_dir.glob("*.json")) if pending_dir.exists() else []:
+        try:
+            data = json.loads(draft_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        task = data.get("task") if isinstance(data.get("task"), dict) else {}
+        title = data.get("title") or task.get("title") or ""
+
+        if not _link_is_generic_checkpoint_loop_title(title):
+            continue
+
+        draft_id = str(data.get("draft_id") or draft_path.stem)
+        target = rejected_dir / draft_path.name
+
+        if write:
+            draft_path.replace(target)
+            md_path = draft_path.with_suffix(".md")
+            if md_path.exists():
+                md_path.replace(rejected_dir / md_path.name)
+
+        moved.append({
+            "draft_id": draft_id,
+            "title": title,
+            "source_path": str(draft_path),
+            "target_path": str(target),
+            "reason": "Blocked generic checkpoint/fallback loop title after normalization.",
+        })
+
+    if moved:
+        receipt = {
+            "action": "blocked_generic_checkpoint_loop",
+            "status": "blocked",
+            "reason": "Generic checkpoint/fallback proposal loop blocked. No real candidate remains.",
+            "moved": moved,
+        }
+        receipt_path = receipts_dir / f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-blocked-generic-checkpoint-loop.json"
+        if write:
+            receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        if "no_useful" in globals():
+            return no_useful(root_path, write, moved)
+
+        return {
+            "status": "blocked",
+            "action": "blocked_generic_checkpoint_loop",
+            "reason": "Generic checkpoint/fallback proposal loop blocked. No real candidate remains.",
+            "moved_bugged_drafts": moved,
+            "receipt_path": str(receipt_path),
+        }
+
+    return rec
+# END LINK BLOCK GENERIC CHECKPOINT LOOP
+
+
+# BEGIN LINK PRECREATE LOOP GUARD
+def _precreate_loop_guard_normalize_title(title: str) -> str:
+    text = str(title or "").lower()
+    text = re.sub(r"\blu\d+\b", "", text)
+    text = re.sub(r"\b\d+\b", "", text)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _precreate_loop_guard_blocks(candidate: dict) -> bool:
+    task = candidate.get("task") if isinstance(candidate.get("task"), dict) else {}
+    title = candidate.get("title") or task.get("title") or ""
+    normalized = _precreate_loop_guard_normalize_title(title)
+
+    blocked_titles = {
+        "approval queue targeted recovery checkpoint",
+        "approval queue maintenance audit",
+        "dynamic approval proposal source fallback",
+        "next autonomous growth proposal",
+    }
+
+    return normalized in blocked_titles
+
+
+_link_original_create_concrete = create_concrete
+
+
+def create_concrete(root: Path, c: dict, write: bool, moved: list):
+    if _precreate_loop_guard_blocks(c):
+        root = Path(root)
+        receipts = root / ".link/patch_drafts/receipts"
+        receipts.mkdir(parents=True, exist_ok=True)
+
+        import datetime as _dt
+        receipt_path = receipts / f"{_dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-precreate-loop-candidate-blocked.json"
+
+        receipt = {
+            "action": "precreate_loop_candidate_blocked",
+            "status": "blocked",
+            "reason": "Blocked generic checkpoint/fallback candidate before draft creation.",
+            "task_id": c.get("task_id") or (c.get("task") or {}).get("id"),
+            "title": c.get("title") or (c.get("task") or {}).get("title"),
+        }
+
+        if write:
+            receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        if "no_useful" in globals():
+            return no_useful(root, write, moved)
+
+        receipt["receipt_path"] = str(receipt_path)
+        return receipt
+
+    return _link_original_create_concrete(root, c, write, moved)
+# END LINK PRECREATE LOOP GUARD
+
+
+# BEGIN LINK LFO PREWRITE LOOP GUARD
+def _lfo_prewrite_normalize_title(title: str) -> str:
+    text = str(title or "").lower()
+    text = re.sub(r"\blu\d+\b", "", text)
+    text = re.sub(r"\b\d+\b", "", text)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _lfo_prewrite_blocks_title(title: str) -> bool:
+    normalized = _lfo_prewrite_normalize_title(title)
+    blocked = {
+        "approval queue targeted recovery checkpoint",
+        "approval queue maintenance audit",
+        "dynamic approval proposal source fallback",
+        "next autonomous growth proposal",
+    }
+    return normalized in blocked
+
+
+_link_real_lfo_create = _lfo_create
+
+
+def _lfo_create(root, write=True, moved=None):
+    """Guard the final force-candidate writer before it writes drafts or created receipts."""
+    root_path = Path(root)
+    moved = moved or []
+
+    # Probe the final writer without writing. This reveals the exact candidate
+    # it would create, while preventing bogus *-created receipts.
+    probe = _link_real_lfo_create(root_path, write=False, moved=moved)
+    title = str(probe.get("title") or "")
+    task_id = str(probe.get("task_id") or "")
+
+    if _lfo_prewrite_blocks_title(title):
+        receipts_dir = root_path / ".link/patch_drafts/receipts"
+        receipts_dir.mkdir(parents=True, exist_ok=True)
+
+        import datetime as _dt
+        receipt_path = receipts_dir / f"{_dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-lfo-prewrite-loop-candidate-blocked.json"
+
+        blocked_receipt = {
+            "action": "lfo_prewrite_loop_candidate_blocked",
+            "status": "blocked",
+            "reason": "Blocked generic force-candidate fallback before draft or created receipt was written.",
+            "task_id": task_id,
+            "title": title,
+            "normalized_title": _lfo_prewrite_normalize_title(title),
+            "moved_bugged_drafts": moved,
+        }
+
+        if write:
+            receipt_path.write_text(json.dumps(blocked_receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        if "no_useful" in globals():
+            return no_useful(root_path, write, moved)
+
+        blocked_receipt["receipt_path"] = str(receipt_path)
+        return blocked_receipt
+
+    return _link_real_lfo_create(root_path, write=write, moved=moved)
+# END LINK LFO PREWRITE LOOP GUARD
+
 if __name__ == "__main__":
     main()
