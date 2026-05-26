@@ -132,14 +132,24 @@ def run_pipeline(
         user_prompt = _role_user_prompt(project, goal, role_id, outputs)
 
         if execute_models:
+            model_timeout = int(os.environ.get("LINK_FACTORY_MODEL_TIMEOUT", "75"))
+            print(
+                f"[factory] role {idx}/{len(roles)} START role={role_id} model={role.model} timeout={model_timeout}s max_tokens={max_tokens}",
+                flush=True,
+            )
             reply = chat(
                 model=role.model,
                 system=role.system_prompt,
                 user=user_prompt,
                 max_tokens=max_tokens,
+                timeout=model_timeout,
             )
             content = reply.content
             usage = reply.usage
+            print(
+                f"[factory] role {idx}/{len(roles)} DONE role={role_id} elapsed={usage.get('elapsed_seconds')}s chars={len(content)}",
+                flush=True,
+            )
         else:
             content = (
                 f"[DRY RUN]\n"

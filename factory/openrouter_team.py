@@ -160,6 +160,7 @@ def chat(
     )
 
     started = time.time()
+    print(f"[openrouter] POST model={model} timeout={timeout}s max_tokens={max_tokens}", flush=True)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = json.loads(resp.read().decode("utf-8"))
@@ -174,5 +175,6 @@ def chat(
 
     usage = raw.get("usage") or {}
     usage["elapsed_seconds"] = round(time.time() - started, 3)
+    print(f"[openrouter] OK model={model} elapsed={usage['elapsed_seconds']}s chars={len(content or '')}", flush=True)
 
     return ModelReply(model=model, content=content.strip(), raw=raw, usage=usage)
