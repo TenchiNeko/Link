@@ -72,6 +72,13 @@ def normalize_task(path: Path, data: dict[str, Any]) -> dict[str, Any]:
             f"--goal {shlex.quote(goal)} "
             "--approved --execute --format markdown"
         )
+        data["needs_queue_consumer"] = True
+        data["implementation_note"] = (
+            "This guarded implementation job now dispatches to patch runner, "
+            "but the current patch runner only executes safe checks. "
+            "A real implementation consumer must edit the target files or create a concrete patch receipt "
+            "before this job should move from pending to done."
+        )
     if not command:
         command = derive_command(task_id, title)
 
