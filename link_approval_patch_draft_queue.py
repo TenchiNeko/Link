@@ -385,6 +385,73 @@ def main() -> int:
     status.add_argument("--root", default=".")
 
     args = parser.parse_args()
+    # BEGIN LINK STALE APPROVAL GUARD
+    if getattr(args, "action", None) in {"yes", "no", "try_again"} and getattr(args, "draft_id", None):
+        import datetime as _link_stale_dt
+        import json as _link_stale_json
+        from pathlib import Path as _link_stale_Path
+
+        _link_root = _link_stale_Path(getattr(args, "root", ".") or ".").resolve()
+        _link_pending_dir = _link_root / ".link/patch_drafts/pending"
+        _link_receipts_dir = _link_root / ".link/patch_drafts/receipts"
+        _link_receipts_dir.mkdir(parents=True, exist_ok=True)
+
+        _link_submitted_draft_id = str(getattr(args, "draft_id", "") or "").strip()
+        _link_pending = []
+        if _link_pending_dir.exists():
+            _link_pending = sorted(
+                _link_pending_dir.glob("*.json"),
+                key=lambda x: (x.stat().st_mtime, x.name),
+                reverse=True,
+            )
+
+        _link_current_path = _link_pending[0] if _link_pending else None
+        _link_current_draft_id = ""
+        _link_current_hash = ""
+
+        if _link_current_path is not None:
+            try:
+                _link_current_data = _link_stale_json.loads(_link_current_path.read_text(encoding="utf-8"))
+                _link_current_draft_id = str(_link_current_data.get("draft_id") or _link_current_path.stem)
+                _link_current_hash = str(_link_current_data.get("proposal_hash") or _link_current_data.get("hash") or "")
+            except Exception:
+                _link_current_draft_id = _link_current_path.stem
+
+        if (not _link_current_draft_id) or (_link_submitted_draft_id != _link_current_draft_id):
+            _link_now = _link_stale_dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            _link_receipt = {
+                "action": "stale_approval_rejected",
+                "status": "stale_rejected",
+                "reason": "Rejected stale approval action. Submitted draft_id does not match the current pending draft on disk.",
+                "submitted_action": getattr(args, "action", None),
+                "submitted_draft_id": _link_submitted_draft_id,
+                "current_pending_draft_id": _link_current_draft_id or None,
+                "current_pending_path": str(_link_current_path) if _link_current_path else None,
+                "current_pending_proposal_hash": _link_current_hash or None,
+                "written": True,
+                "generated": _link_stale_dt.datetime.now().isoformat(timespec="seconds"),
+            }
+            _link_receipt_path = _link_receipts_dir / f"{_link_now}-stale-approval-rejected.json"
+            _link_receipt["receipt_path"] = str(_link_receipt_path.resolve())
+            _link_receipt_path.write_text(_link_stale_json.dumps(_link_receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            if str(getattr(args, "format", "") or "").lower() == "markdown":
+                print("# Link Approval Decision Receipt")
+                print()
+                print("Status: **stale_rejected**")
+                print("Decision: **blocked**")
+                print(f"Submitted action: `{getattr(args, 'action', None)}`")
+                print(f"Submitted draft: `{_link_submitted_draft_id}`")
+                print(f"Current pending draft: `{_link_current_draft_id or 'None'}`")
+                if _link_current_hash:
+                    print(f"Current proposal hash: `{_link_current_hash}`")
+                print()
+                print("Reason: Rejected stale approval action. Reload the dashboard and approve the current visible draft only.")
+                print(f"Receipt: `{_link_receipt_path.resolve()}`")
+            else:
+                print(_link_stale_json.dumps(_link_receipt, indent=2, sort_keys=True))
+            raise SystemExit(0)
+    # END LINK STALE APPROVAL GUARD
     root = Path(args.root).resolve()
 
     if args.cmd == "create":
