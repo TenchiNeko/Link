@@ -12,6 +12,7 @@ import os
 from factory.team_registry import tier_roles, FACTORY_TIERS
 
 import json
+import datetime as dt
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,18 +93,20 @@ def run_pipeline(
 ) -> dict[str, Any]:
     os.environ["LINK_FACTORY_ACTIVE_PROJECT"] = str(project)
     assembly = None
-    if tier == "auto":
+    normalized_tier = str(tier or "auto")
+    if normalized_tier == "auto":
         assembly = assemble_factory_roles(project=project, goal=goal)
         roles = list(assembly.roles)
     else:
-    assembly = None
-    if tier == "auto":
-        assembly = assemble_factory_roles(project=project, goal=goal)
-        roles = list(assembly.roles)
-    else:
-        if tier not in PIPELINES:
-            raise ValueError(f"unknown tier {tier!r}; expected one of {sorted(set(PIPELINES) | {'auto'})}")
-        roles = list(PIPELINES[tier])
+        if normalized_tier not in PIPELINES:
+            allowed = sorted(set(PIPELINES) | {"auto"})
+            raise ValueError(f"unknown tier {tier!r}; expected one of {allowed}")
+        roles = list(PIPELINES[normalized_tier])
+    tier = normalized_tier
+
+    run_dir = project_root(project) / "runs" / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir.mkdir(parents=True, exist_ok=True)
+
     outputs: list[dict[str, Any]] = []
 
     manifest = {
@@ -123,7 +126,6 @@ def run_pipeline(
     }
     if assembly is not None:
         manifest["assembly"] = assembly.as_dict()
-
 
     for idx, role_id in enumerate(roles, start=1):
         role = TEAM[role_id]
