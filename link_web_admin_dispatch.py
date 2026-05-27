@@ -210,6 +210,91 @@ def _delegate_cmd(prompt: str, plan: dict[str, object]) -> list[str]:
         prompt,
     ]
 
+
+def _is_factory_web_prompt(prompt: str) -> bool:
+    """Detect explicit factory requests from the web UI/admin prompt box."""
+    text = prompt.lower()
+    if "factory" not in text:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "upgrade",
+            "upgrades",
+            "run factory",
+            "factory run",
+            "factory mode",
+            "project factory",
+            "link upgrade",
+        )
+    )
+
+
+def _factory_project_from_prompt(prompt: str) -> str:
+    """Pick a safe project bucket from the prompt."""
+    text = prompt.lower()
+    if "[private-name]" in text or "[private-project]" in text:
+        return "[private-name]_growth"
+    if "link" in text or "upgrade" in text:
+        return "link_upgrades"
+    return "growth_lab"
+
+
+def _factory_tier_from_prompt(prompt: str) -> str:
+    """Keep web factory runs cheap/safe unless auto routing is explicitly requested."""
+    text = prompt.lower()
+    if "tier auto" in text or "auto tier" in text or "factory auto" in text:
+        return "auto"
+    return "cheap"
+
+
+def _run_factory_web_dispatch(prompt: str) -> int:
+    """
+    Web-safe factory dispatch.
+
+    This intentionally uses --dry-run only. The web UI can now trigger factory
+    planning for upgrades, but it cannot silently execute models, post, publish,
+    or deploy anything.
+    """
+    project = _factory_project_from_prompt(prompt)
+    tier = _factory_tier_from_prompt(prompt)
+
+    cmd = [
+        "python3",
+        str(ROOT / "link_factory_team.py"),
+        "run",
+        "--project",
+        project,
+        "--goal",
+        prompt.strip()[:8000],
+        "--tier",
+        tier,
+        "--dry-run",
+    ]
+
+    print("LINK FACTORY WEB DISPATCH")
+    print(f"project: {project}")
+    print(f"tier: {tier}")
+    print("execute_models: False")
+    print("safety: dry-run only; no posting/publishing/deploying")
+    print()
+
+    proc = subprocess.run(
+        cmd,
+        cwd=str(ROOT),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=300,
+        check=False,
+    )
+
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.stderr:
+        print(proc.stderr, end="")
+    return int(proc.returncode)
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("display_prompt", nargs="?")
@@ -222,6 +307,9 @@ def main() -> int:
 
     prompt_file = args.prompt_file_opt or args.prompt_file
     prompt = _read_prompt(args.display_prompt, prompt_file, args.prompt_override)
+
+    if _is_factory_web_prompt(prompt):
+        return _run_factory_web_dispatch(prompt)
     plan = _admin_plan(prompt)
     classification = plan.get("classification", {})
     route = classification.get("route")
