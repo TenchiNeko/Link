@@ -3604,6 +3604,65 @@ def check_control_plane_worker_handoff():
 
     print("control plane worker handoff OK")
 
+
+def check_control_plane_verifier_receipt():
+    import tempfile
+
+    from link_control_plane_verifier_receipt import (
+        build_verifier_receipt_from_handoff,
+        derive_verifier_receipt_for_handoff,
+        list_verifier_receipts,
+        load_verifier_receipt,
+        make_verification_id,
+        validate_verifier_receipt,
+    )
+    from link_control_plane_worker_handoff import make_worker_handoff_id, write_worker_handoff
+
+    handoff = {
+        "handoff_id": make_worker_handoff_id("verifier-plan"),
+        "plan_id": "verifier-plan",
+        "proposal_id": "verifier-proposal",
+        "title": "Verifier Receipt",
+        "stage": "PatchWorker",
+        "allowed_files": ["link_control_plane_verifier_receipt.py"],
+        "implementation_steps": ["create verifier receipt module", "add healthcheck"],
+        "verification_commands": ["python3 -m py_compile link_control_plane_verifier_receipt.py"],
+        "rollback_plan": "Delete generated verifier receipt file and revert module changes.",
+        "risk_level": "low",
+        "status": "queued",
+        "created_at": "2026-05-27T00:00:00Z",
+    }
+
+    receipt = build_verifier_receipt_from_handoff(
+        handoff,
+        status="passed",
+        evidence_paths=[".agents/reports/verifier-smoke.md"],
+        findings=["compile passed"],
+        created_at="2026-05-27T00:00:00Z",
+    )
+    validate_verifier_receipt(receipt)
+    assert receipt["verification_id"] == make_verification_id(handoff["handoff_id"])
+    assert receipt["stage"] == "Verifier"
+    assert receipt["status"] == "passed"
+    assert receipt["verification_commands"] == handoff["verification_commands"]
+    assert receipt["evidence_paths"] == [".agents/reports/verifier-smoke.md"]
+
+    with tempfile.TemporaryDirectory() as td:
+        handoff_path = write_worker_handoff(handoff, Path(td) / "handoffs")
+        receipt_path = derive_verifier_receipt_for_handoff(
+            handoff_path,
+            Path(td) / "verifier_receipts",
+            status="passed",
+            evidence_paths=[".agents/reports/verifier-smoke.md"],
+            findings=["compile passed"],
+            created_at="2026-05-27T00:00:00Z",
+        )
+        loaded = load_verifier_receipt(receipt_path)
+        assert loaded == receipt
+        assert list_verifier_receipts(Path(td) / "verifier_receipts") == [receipt_path]
+
+    print("control plane verifier receipt OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3828,6 +3887,7 @@ def main() -> None:
     check_control_plane_approval_gate()
     check_control_plane_patch_plan()
     check_control_plane_worker_handoff()
+    check_control_plane_verifier_receipt()
     print("LINK HEALTHCHECK PASSED")
 
 
