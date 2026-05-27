@@ -3863,6 +3863,59 @@ def check_control_plane_run_index():
 
     print("control plane run index OK")
 
+
+def check_control_plane_run_report():
+    import tempfile
+    from pathlib import Path
+
+    from link_control_plane_run_report import (
+        load_run_report,
+        render_run_report,
+        validate_run_report_markdown,
+        write_run_report,
+        write_run_report_from_index_path,
+    )
+    from link_control_plane_run_index import write_run_index
+
+    index = {
+        "generated_at": "2026-05-27T00:00:00Z",
+        "total_runs": 1,
+        "status_counts": {"finalized": 1},
+        "chain_ok_count": 1,
+        "chain_broken_count": 0,
+        "traces": [
+            {
+                "trace_id": "trace-run-report",
+                "proposal_id": "run-report-proposal",
+                "title": "Run Report",
+                "current_stage": "FinalizerReceipt",
+                "status": "finalized",
+                "chain_ok": True,
+                "created_at": "2026-05-27T00:00:00Z",
+                "artifact_ids": {
+                    "Proposal": "run-report-proposal",
+                    "FinalizerReceipt": "run-report-finalization",
+                },
+            }
+        ],
+    }
+
+    report = render_run_report(index)
+    validate_run_report_markdown(report)
+    assert "# Link Control-Plane Run Report" in report
+    assert "| trace-run-report | run-report-proposal | Run Report | FinalizerReceipt | finalized | OK | 2026-05-27T00:00:00Z |" in report
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        index_path = write_run_index(index, root / "control-plane-run-index.json")
+        report_path = write_run_report(index, root / "control-plane-run-report.md")
+        assert load_run_report(report_path) == report + "\n"
+
+        report_path_2 = write_run_report_from_index_path(index_path, root / "control-plane-run-report-from-index.md")
+        assert load_run_report(report_path_2) == report + "\n"
+
+    print("control plane run report OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -4091,6 +4144,7 @@ def main() -> None:
     check_control_plane_finalizer_receipt()
     check_control_plane_trace_manifest()
     check_control_plane_run_index()
+    check_control_plane_run_report()
     print("LINK HEALTHCHECK PASSED")
 
 
