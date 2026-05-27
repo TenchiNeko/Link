@@ -3368,6 +3368,68 @@ def check_control_plane_workflow():
     print("control plane workflow OK")
 
 
+
+def check_control_plane_proposal_registry():
+    import tempfile
+
+    from link_control_plane_proposals import (
+        make_proposal_id,
+        validate_proposal,
+        write_proposal,
+        load_proposal,
+        list_proposals,
+        update_proposal_status,
+    )
+
+    proposal = {
+        "proposal_id": make_proposal_id("Proposal Registry", "research/test.md"),
+        "title": "Proposal Registry",
+        "source_path": "research/test.md",
+        "source_summary": "Small test source.",
+        "extracted_capabilities": ["proposal schema"],
+        "link_takeaways": ["store approval-gated upgrade proposals"],
+        "affected_files": ["link_control_plane_proposals.py"],
+        "risk_level": "low",
+        "expected_behavior_change": "Adds proposal artifact validation and storage.",
+        "implementation_plan": ["create registry module", "add healthcheck"],
+        "verification_commands": ["python3 -m py_compile link_control_plane_proposals.py"],
+        "rollback_plan": "Delete generated proposal file and revert module changes.",
+        "recommendation": "accept",
+        "status": "pending",
+        "created_at": "2026-05-27T00:00:00Z",
+    }
+
+    validate_proposal(proposal)
+
+    with tempfile.TemporaryDirectory() as td:
+        path = write_proposal(proposal, td)
+        loaded = load_proposal(path)
+        assert loaded == proposal
+
+        proposals = list_proposals(td)
+        assert len(proposals) == 1
+        assert proposals[0]["proposal_id"] == proposal["proposal_id"]
+
+        updated = update_proposal_status(proposal["proposal_id"], "accepted", td)
+        assert updated["status"] == "accepted"
+
+        for field, value in (
+            ("status", "bad"),
+            ("risk_level", "severe"),
+            ("recommendation", "maybe"),
+        ):
+            bad = dict(proposal)
+            bad[field] = value
+            try:
+                validate_proposal(bad)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"invalid {field} was accepted")
+
+    print("control plane proposal registry OK")
+
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3588,6 +3650,7 @@ def main() -> None:
     check_self_learning_dashboard_approval_sync()
     check_approval_proposal_copy_button()
     check_control_plane_workflow()
+    check_control_plane_proposal_registry()
     print("LINK HEALTHCHECK PASSED")
 
 
