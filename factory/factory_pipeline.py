@@ -57,9 +57,24 @@ def _compact_context(outputs: list[dict[str, Any]], limit: int = 9000) -> str:
     return text[-limit:]
 
 
+def _role_memory_advisory(role_id: str) -> str:
+    """Return advisory-only memory for the current factory role."""
+    try:
+        from link_agent_memory_adapter import inject_memory_prompt
+
+        return inject_memory_prompt(role_id, limit=5)
+    except Exception as exc:
+        return (
+            "Agent memory advisory unavailable.\n"
+            "Memory is advisory only; verify live repo state before acting.\n"
+            f"Reason: {type(exc).__name__}: {exc}"
+        )
+
+
 def _role_user_prompt(project: str, goal: str, role_id: str, previous_outputs: list[dict[str, Any]]) -> str:
     role = TEAM[role_id]
     context = _compact_context(previous_outputs)
+    memory_context = _role_memory_advisory(role_id)
     return f"""Project: {project}
 
 Main goal:
@@ -71,6 +86,9 @@ Your factory position:
 - department: {role.department}
 - objective: {role.objective}
 - handoff_to: {', '.join(role.handoff_to) if role.handoff_to else 'final'}
+
+Agent memory advisory:
+{memory_context}
 
 Previous factory context:
 {context if context else '[No previous outputs yet.]'}
