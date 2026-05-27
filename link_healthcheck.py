@@ -3721,6 +3721,87 @@ def check_control_plane_finalizer_receipt():
 
     print("control plane finalizer receipt OK")
 
+
+def check_control_plane_trace_manifest():
+    import tempfile
+
+    from link_control_plane_trace_manifest import (
+        CONTROL_PLANE_TRACE_STAGES,
+        build_trace_manifest,
+        list_trace_manifests,
+        load_trace_manifest,
+        make_trace_id,
+        validate_trace_manifest,
+        write_trace_manifest,
+    )
+
+    proposal = {
+        "proposal_id": "trace-proposal",
+        "title": "Trace Manifest",
+        "status": "accepted",
+    }
+    approval_receipt = {
+        "receipt_id": "trace-approval",
+        "proposal_id": "trace-proposal",
+        "decision": "accept",
+        "status": "accepted",
+    }
+    patch_plan = {
+        "plan_id": "trace-plan",
+        "proposal_id": "trace-proposal",
+        "status": "draft",
+    }
+    worker_handoff = {
+        "handoff_id": "trace-handoff",
+        "plan_id": "trace-plan",
+        "proposal_id": "trace-proposal",
+        "status": "queued",
+    }
+    verifier_receipt = {
+        "verification_id": "trace-verification",
+        "handoff_id": "trace-handoff",
+        "plan_id": "trace-plan",
+        "proposal_id": "trace-proposal",
+        "status": "passed",
+    }
+    finalizer_receipt = {
+        "finalization_id": "trace-finalization",
+        "verification_id": "trace-verification",
+        "handoff_id": "trace-handoff",
+        "plan_id": "trace-plan",
+        "proposal_id": "trace-proposal",
+        "status": "finalized",
+    }
+
+    manifest = build_trace_manifest(
+        proposal,
+        approval_receipt,
+        patch_plan,
+        worker_handoff,
+        verifier_receipt,
+        finalizer_receipt,
+        created_at="2026-05-27T00:00:00Z",
+    )
+    validate_trace_manifest(manifest)
+
+    assert manifest["trace_id"] == make_trace_id("trace-proposal")
+    assert manifest["stage_order"] == list(CONTROL_PLANE_TRACE_STAGES)
+    assert manifest["current_stage"] == "FinalizerReceipt"
+    assert manifest["status"] == "finalized"
+    assert manifest["chain_ok"] is True
+    assert manifest["artifacts"]["PatchPlan"]["id"] == "trace-plan"
+    assert manifest["artifacts"]["WorkerHandoff"]["plan_id"] == "trace-plan"
+    assert manifest["artifacts"]["VerifierReceipt"]["handoff_id"] == "trace-handoff"
+    assert manifest["artifacts"]["FinalizerReceipt"]["verification_id"] == "trace-verification"
+
+    with tempfile.TemporaryDirectory() as td:
+        path = write_trace_manifest(manifest, Path(td) / "trace_manifests")
+        loaded = load_trace_manifest(path)
+        assert loaded == manifest
+        assert list_trace_manifests(Path(td) / "trace_manifests") == [path]
+
+    print("control plane trace manifest OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3947,6 +4028,7 @@ def main() -> None:
     check_control_plane_worker_handoff()
     check_control_plane_verifier_receipt()
     check_control_plane_finalizer_receipt()
+    check_control_plane_trace_manifest()
     print("LINK HEALTHCHECK PASSED")
 
 
