@@ -170,4 +170,4 @@ def discover_trace_manifest_paths(root: str | Path) -> list[Path]:
     root_path = Path(root)
     if not root_path.exists():
         return []
-    return sorted(root_path.rglob("*.json"))
+    return sorted(path for path in root_path.rglob("*.json") if path.is_file())
