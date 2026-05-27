@@ -3120,6 +3120,39 @@ def check_autonomous_research_reflection() -> None:
     print("autonomous research reflection OK")
 
 
+def check_factory_bridge_agent_memory() -> None:
+    import os
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as td:
+        env_root = Path(td) / ".link" / "agent_memory"
+        os.environ["LINK_AGENT_MEMORY_ROOT"] = str(env_root)
+
+        import link_factory_job_bridge as bridge
+
+        receipt_path = Path(td) / ".link" / "agent_queue" / "receipts" / "factory-smoke.json"
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+
+        receipt = {"status": "success", "task": {"task_id": "LU294-healthcheck"}}
+        bridge.record_factory_bridge_memory(receipt, receipt_path)
+
+        event = receipt.get("agent_memory_event") or {}
+        if event.get("role_id") != "qa_worker":
+            raise SystemExit("factory bridge memory role_id mismatch")
+        if event.get("outcome") != "pass":
+            raise SystemExit("factory bridge memory outcome mismatch")
+        if event.get("task_id") != "LU294-healthcheck":
+            raise SystemExit("factory bridge memory task_id mismatch")
+
+        idle_receipt = {"status": "no_pending_job"}
+        bridge.record_factory_bridge_memory(idle_receipt, receipt_path)
+        if idle_receipt.get("agent_memory_event"):
+            raise SystemExit("no_pending_job should not write agent memory")
+
+    print("factory bridge agent memory OK")
+
+
 def check_agent_memory_adapter() -> None:
     import json
     import os
@@ -3508,6 +3541,7 @@ def main() -> None:
     check_autonomous_task_queue_seed()
     check_research_archive_comparison()
     check_autonomous_research_reflection()
+    check_factory_bridge_agent_memory()
     check_agent_memory_adapter()
     check_autonomous_tick_runner()
     check_approval_gated_patch_draft_queue()
