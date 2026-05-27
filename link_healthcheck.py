@@ -3430,6 +3430,62 @@ def check_control_plane_proposal_registry():
     print("control plane proposal registry OK")
 
 
+
+def check_control_plane_approval_gate():
+    import tempfile
+
+    from link_control_plane_approval_gate import (
+        APPROVAL_DECISIONS,
+        apply_approval_decision,
+        build_approval_receipt,
+        proposal_status_for_decision,
+        validate_decision,
+    )
+    from link_control_plane_proposals import make_proposal_id, validate_proposal, write_proposal
+
+    assert "accept" in APPROVAL_DECISIONS
+    assert validate_decision("accept")
+    assert validate_decision("request_smaller_plan")
+    assert proposal_status_for_decision("accept") == "accepted"
+    assert proposal_status_for_decision("request_smaller_plan") == "needs_smaller_plan"
+
+    receipt = build_approval_receipt("test-proposal", "defer", note="not ready")
+    assert receipt["status"] == "deferred"
+
+    proposal = {
+        "proposal_id": make_proposal_id("Approval Gate", "research/approval.md"),
+        "title": "Approval Gate",
+        "source_path": "research/approval.md",
+        "source_summary": "Small approval-gate smoke test.",
+        "extracted_capabilities": ["approval decisions"],
+        "link_takeaways": ["gate proposal conversion before patching"],
+        "affected_files": ["link_control_plane_approval_gate.py"],
+        "risk_level": "low",
+        "expected_behavior_change": "Adds human decision receipts for proposals.",
+        "implementation_plan": ["create approval gate module", "add healthcheck"],
+        "verification_commands": ["python3 -m py_compile link_control_plane_approval_gate.py"],
+        "rollback_plan": "Revert approval gate module and healthcheck changes.",
+        "recommendation": "accept",
+        "status": "pending",
+        "created_at": "2026-05-27T00:00:00Z",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        write_proposal(proposal, td)
+        result = apply_approval_decision(
+            proposal["proposal_id"],
+            "request_smaller_plan",
+            proposal_root=td,
+            receipt_root=td,
+            note="split into smaller deterministic patch",
+        )
+        validate_proposal(result["proposal"])
+        assert result["proposal"]["status"] == "needs_smaller_plan"
+        assert result["receipt"]["decision"] == "request_smaller_plan"
+
+    print("control plane approval gate OK")
+
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3651,6 +3707,7 @@ def main() -> None:
     check_approval_proposal_copy_button()
     check_control_plane_workflow()
     check_control_plane_proposal_registry()
+    check_control_plane_approval_gate()
     print("LINK HEALTHCHECK PASSED")
 
 

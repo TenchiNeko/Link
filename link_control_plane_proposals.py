@@ -35,6 +35,7 @@ ALLOWED_STATUSES: Final[set[str]] = {
     "deferred",
     "rejected",
     "converted_to_patch",
+    "needs_smaller_plan",
 }
 
 LIST_FIELDS: Final[set[str]] = {
