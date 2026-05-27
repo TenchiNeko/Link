@@ -3663,6 +3663,64 @@ def check_control_plane_verifier_receipt():
 
     print("control plane verifier receipt OK")
 
+
+def check_control_plane_finalizer_receipt():
+    import tempfile
+
+    from link_control_plane_finalizer_receipt import (
+        build_finalizer_receipt_from_verifier,
+        derive_finalizer_receipt_for_verifier,
+        list_finalizer_receipts,
+        load_finalizer_receipt,
+        make_finalization_id,
+        validate_finalizer_receipt,
+    )
+    from link_control_plane_verifier_receipt import make_verification_id, write_verifier_receipt
+
+    verifier_receipt = {
+        "verification_id": make_verification_id("finalizer-handoff"),
+        "handoff_id": "finalizer-handoff",
+        "plan_id": "finalizer-plan",
+        "proposal_id": "finalizer-proposal",
+        "title": "Finalizer Receipt",
+        "stage": "Verifier",
+        "status": "passed",
+        "verification_commands": ["python3 -m py_compile link_control_plane_finalizer_receipt.py"],
+        "evidence_paths": [".agents/reports/finalizer-smoke.md"],
+        "findings": ["verifier passed"],
+        "created_at": "2026-05-27T00:00:00Z",
+    }
+
+    finalizer_receipt = build_finalizer_receipt_from_verifier(
+        verifier_receipt,
+        status="finalized",
+        final_summary="Verifier passed and finalizer receipt was recorded.",
+        next_recommendation="archive_and_report",
+        created_at="2026-05-27T00:00:00Z",
+    )
+    validate_finalizer_receipt(finalizer_receipt)
+    assert finalizer_receipt["finalization_id"] == make_finalization_id(verifier_receipt["verification_id"])
+    assert finalizer_receipt["stage"] == "Finalizer"
+    assert finalizer_receipt["status"] == "finalized"
+    assert finalizer_receipt["evidence_paths"] == [".agents/reports/finalizer-smoke.md"]
+    assert finalizer_receipt["findings"] == ["verifier passed"]
+
+    with tempfile.TemporaryDirectory() as td:
+        verifier_path = write_verifier_receipt(verifier_receipt, Path(td) / "verifier_receipts")
+        finalizer_path = derive_finalizer_receipt_for_verifier(
+            verifier_path,
+            Path(td) / "finalizer_receipts",
+            status="finalized",
+            final_summary="Verifier passed and finalizer receipt was recorded.",
+            next_recommendation="archive_and_report",
+            created_at="2026-05-27T00:00:00Z",
+        )
+        loaded = load_finalizer_receipt(finalizer_path)
+        assert loaded == finalizer_receipt
+        assert list_finalizer_receipts(Path(td) / "finalizer_receipts") == [finalizer_path]
+
+    print("control plane finalizer receipt OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3888,6 +3946,7 @@ def main() -> None:
     check_control_plane_patch_plan()
     check_control_plane_worker_handoff()
     check_control_plane_verifier_receipt()
+    check_control_plane_finalizer_receipt()
     print("LINK HEALTHCHECK PASSED")
 
 
