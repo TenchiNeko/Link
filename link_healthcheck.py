@@ -3345,6 +3345,29 @@ def check_approval_proposal_copy_button():
     print("approval proposal copy button OK")
 
 
+
+def check_control_plane_workflow():
+    from link_control_plane_workflow import (
+        CONTROL_PLANE_STAGES,
+        TRANSITIONS,
+        assert_valid_workflow,
+        is_control_plane_prompt,
+        next_stage,
+        validate_stage,
+    )
+
+    assert_valid_workflow()
+    assert len(CONTROL_PLANE_STAGES) == 9
+    assert validate_stage("ResearchIngest")
+    assert validate_stage("Finalizer")
+    assert not validate_stage("UnknownStage")
+    assert "CandidateExtractor" in next_stage("ResearchIngest")
+    assert "HumanApproval" in TRANSITIONS["ProposalWriter"]
+    assert is_control_plane_prompt("project factory control-plane proposal")
+    assert is_control_plane_prompt("factory dry-run upgrade proposal")
+    print("control plane workflow OK")
+
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3564,6 +3587,7 @@ def main() -> None:
     check_self_learning_dashboard_web_admin()
     check_self_learning_dashboard_approval_sync()
     check_approval_proposal_copy_button()
+    check_control_plane_workflow()
     print("LINK HEALTHCHECK PASSED")
 
 
