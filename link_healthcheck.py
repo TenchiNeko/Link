@@ -335,6 +335,21 @@ def check_forbidden_junk() -> None:
     hits: list[str] = []
 
     for path in ROOT.rglob("*"):
+        # Generated factory/research runtime artifacts are evidence, not live source/config.
+        try:
+            _forbidden_rel = str(path.relative_to(ROOT)).replace("\\", "/")
+        except Exception:
+            _forbidden_rel = str(path).replace("\\", "/")
+        if _forbidden_rel.startswith((
+            "factory/projects/",
+            "factory/work_orders/",
+            "factory/outputs/",
+            "factory/rejected_outputs/",
+            "factory/approvals/",
+            "research_memory_modules_scan_",
+            "research/link_project_identity_mining_",
+        )):
+            continue
         # Generated factory runtime state is allowed to contain project names.
         # Keep scanning factory source/templates, but ignore per-project output/state.
         try:
