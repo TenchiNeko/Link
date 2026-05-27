@@ -233,8 +233,6 @@ def _is_factory_web_prompt(prompt: str) -> bool:
 def _factory_project_from_prompt(prompt: str) -> str:
     """Pick a safe project bucket from the prompt."""
     text = prompt.lower()
-    if "[private-name]" in text or "[private-project]" in text:
-        return "[private-name]_growth"
     if "link" in text or "upgrade" in text:
         return "link_upgrades"
     return "growth_lab"
