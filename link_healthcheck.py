@@ -3547,6 +3547,63 @@ def check_control_plane_patch_plan():
 
     print("control plane patch plan OK")
 
+
+def check_control_plane_worker_handoff():
+    import tempfile
+
+    from link_control_plane_worker_handoff import (
+        build_worker_handoff_from_plan,
+        derive_worker_handoff_for_patch_plan,
+        list_worker_handoffs,
+        load_worker_handoff,
+        make_worker_handoff_id,
+        validate_worker_handoff,
+    )
+    from link_control_plane_patch_plan import make_patch_plan_id, write_patch_plan
+
+    plan = {
+        "plan_id": make_patch_plan_id("worker-handoff-proposal"),
+        "proposal_id": "worker-handoff-proposal",
+        "title": "Worker Handoff",
+        "affected_files": ["link_control_plane_worker_handoff.py"],
+        "implementation_steps": ["create worker handoff module", "add healthcheck"],
+        "verification_commands": ["python3 -m py_compile link_control_plane_worker_handoff.py"],
+        "rollback_plan": "Delete generated handoff file and revert module changes.",
+        "risk_level": "low",
+        "status": "draft",
+        "created_at": "2026-05-27T00:00:00Z",
+    }
+
+    handoff = build_worker_handoff_from_plan(plan, created_at="2026-05-27T00:00:00Z")
+    validate_worker_handoff(handoff)
+    assert handoff["plan_id"] == plan["plan_id"]
+    assert handoff["handoff_id"] == make_worker_handoff_id(plan["plan_id"])
+    assert handoff["stage"] == "PatchWorker"
+    assert handoff["status"] == "queued"
+    assert handoff["allowed_files"] == ["link_control_plane_worker_handoff.py"]
+
+    blocked = dict(plan)
+    blocked["status"] = "blocked"
+    try:
+        build_worker_handoff_from_plan(blocked)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("blocked patch plan should not produce worker handoff")
+
+    with tempfile.TemporaryDirectory() as td:
+        plan_path = write_patch_plan(plan, Path(td) / "plans")
+        handoff_path = derive_worker_handoff_for_patch_plan(
+            plan_path,
+            Path(td) / "handoffs",
+            created_at="2026-05-27T00:00:00Z",
+        )
+        loaded = load_worker_handoff(handoff_path)
+        assert loaded == handoff
+        assert list_worker_handoffs(Path(td) / "handoffs") == [handoff_path]
+
+    print("control plane worker handoff OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3770,6 +3827,7 @@ def main() -> None:
     check_control_plane_proposal_registry()
     check_control_plane_approval_gate()
     check_control_plane_patch_plan()
+    check_control_plane_worker_handoff()
     print("LINK HEALTHCHECK PASSED")
 
 
