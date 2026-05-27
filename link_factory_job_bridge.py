@@ -144,6 +144,49 @@ def run_factory_pipeline(
     return result if isinstance(result, dict) else {"result": result}
 
 
+def record_factory_bridge_memory(receipt: dict[str, Any], receipt_path: Path) -> None:
+    """Record factory bridge outcomes into advisory agent memory."""
+    status = str(receipt.get("status") or "unknown")
+    if status == "no_pending_job":
+        return
+
+    task = receipt.get("task") or {}
+    task_id = str(task.get("task_id") or "factory-none")
+    evidence_path = str(receipt_path)
+
+    try:
+        from link_agent_memory_adapter import record_blocked_command, record_qa_outcome
+
+        if status == "success":
+            event = record_qa_outcome(
+                role_id="qa_worker",
+                task_id=task_id,
+                verdict="pass",
+                details="Factory bridge completed successfully.",
+                evidence_path=evidence_path,
+            )
+        elif status == "failed":
+            event = record_qa_outcome(
+                role_id="qa_worker",
+                task_id=task_id,
+                verdict="fail",
+                details=str(receipt.get("error") or "Factory bridge failed."),
+                evidence_path=evidence_path,
+            )
+        else:
+            event = record_blocked_command(
+                role_id="chief_of_staff",
+                task_id=task_id,
+                command="link_factory_job_bridge",
+                reason=f"Factory bridge ended with status={status}.",
+                evidence_path=evidence_path,
+            )
+
+        receipt["agent_memory_event"] = event
+    except Exception as exc:
+        receipt["agent_memory_error"] = f"{type(exc).__name__}: {exc}"
+
+
 def render_markdown(receipt: dict[str, Any]) -> str:
     lines = [
         "# Link Factory Job Bridge Receipt",
@@ -282,6 +325,8 @@ def main() -> int:
     receipt_path = receipts / f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-factory-{task_part}.json"
     atomic_write_json(receipt_path, receipt)
     receipt["written_path"] = str(receipt_path)
+    record_factory_bridge_memory(receipt, receipt_path)
+    atomic_write_json(receipt_path, receipt)
 
     if args.format == "json":
         print(json.dumps(receipt, indent=2, sort_keys=True))
