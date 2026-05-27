@@ -92,6 +92,10 @@ def apply_approval_decision(
     note: str = "",
 ) -> dict[str, Any]:
     proposal_path = Path(proposal_root) / f"{proposal_id}.json"
+    if not proposal_path.exists():
+        matches = sorted(Path(proposal_root).rglob(f"{proposal_id}.json"))
+        if matches:
+            proposal_path = matches[0]
     proposal = load_proposal(proposal_path)
     validate_proposal(proposal)
 
