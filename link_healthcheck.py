@@ -3802,6 +3802,67 @@ def check_control_plane_trace_manifest():
 
     print("control plane trace manifest OK")
 
+
+def check_control_plane_run_index():
+    import tempfile
+    from pathlib import Path
+
+    from link_control_plane_run_index import (
+        build_run_index,
+        build_run_index_from_trace_paths,
+        build_trace_index_entry,
+        discover_trace_manifest_paths,
+        load_run_index,
+        validate_run_index,
+        validate_trace_index_entry,
+        write_run_index,
+    )
+    from link_control_plane_trace_manifest import build_trace_manifest, write_trace_manifest
+
+    proposal = {"proposal_id": "run-index-proposal", "title": "Run Index", "status": "accepted"}
+    approval = {"receipt_id": "run-index-approval", "proposal_id": "run-index-proposal", "decision": "accept", "status": "accepted"}
+    plan = {"plan_id": "run-index-plan", "proposal_id": "run-index-proposal", "status": "draft"}
+    handoff = {"handoff_id": "run-index-handoff", "plan_id": "run-index-plan", "proposal_id": "run-index-proposal", "status": "queued"}
+    verifier = {"verification_id": "run-index-verification", "handoff_id": "run-index-handoff", "plan_id": "run-index-plan", "proposal_id": "run-index-proposal", "status": "passed"}
+    finalizer = {"finalization_id": "run-index-finalization", "verification_id": "run-index-verification", "handoff_id": "run-index-handoff", "plan_id": "run-index-plan", "proposal_id": "run-index-proposal", "status": "finalized"}
+
+    manifest = build_trace_manifest(
+        proposal,
+        approval,
+        plan,
+        handoff,
+        verifier,
+        finalizer,
+        created_at="2026-05-27T00:00:00Z",
+    )
+
+    entry = build_trace_index_entry(manifest)
+    validate_trace_index_entry(entry)
+    assert entry["proposal_id"] == "run-index-proposal"
+    assert entry["artifact_ids"]["FinalizerReceipt"] == "run-index-finalization"
+
+    index = build_run_index([manifest], generated_at="2026-05-27T00:00:00Z")
+    validate_run_index(index)
+    assert index["total_runs"] == 1
+    assert index["status_counts"] == {"finalized": 1}
+    assert index["chain_ok_count"] == 1
+    assert index["chain_broken_count"] == 0
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        trace_path = write_trace_manifest(manifest, root / "traces")
+        paths = discover_trace_manifest_paths(root / "traces")
+        assert paths == [trace_path]
+
+        rebuilt = build_run_index_from_trace_paths(paths, generated_at="2026-05-27T00:00:00Z")
+        assert rebuilt == index
+
+        index_path = write_run_index(index, root / "indexes" / "control-plane-run-index.json")
+        loaded = load_run_index(index_path)
+        assert loaded == index
+
+    print("control plane run index OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -4029,6 +4090,7 @@ def main() -> None:
     check_control_plane_verifier_receipt()
     check_control_plane_finalizer_receipt()
     check_control_plane_trace_manifest()
+    check_control_plane_run_index()
     print("LINK HEALTHCHECK PASSED")
 
 
