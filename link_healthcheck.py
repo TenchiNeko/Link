@@ -3486,6 +3486,67 @@ def check_control_plane_approval_gate():
     print("control plane approval gate OK")
 
 
+
+def check_control_plane_patch_plan():
+    import tempfile
+
+    from link_control_plane_patch_plan import (
+        build_patch_plan_from_proposal,
+        derive_patch_plan_for_proposal,
+        list_patch_plans,
+        load_patch_plan,
+        make_patch_plan_id,
+        validate_patch_plan,
+    )
+    from link_control_plane_proposals import make_proposal_id, write_proposal
+
+    proposal = {
+        "proposal_id": make_proposal_id("Patch Plan", "research/patch-plan.md"),
+        "title": "Patch Plan",
+        "source_path": "research/patch-plan.md",
+        "source_summary": "Small patch-plan smoke test.",
+        "extracted_capabilities": ["patch planning"],
+        "link_takeaways": ["convert accepted proposals into worker-ready draft plans"],
+        "affected_files": ["link_control_plane_patch_plan.py"],
+        "risk_level": "low",
+        "expected_behavior_change": "Adds deterministic patch-plan draft artifacts.",
+        "implementation_plan": ["create patch plan module", "add healthcheck"],
+        "verification_commands": ["python3 -m py_compile link_control_plane_patch_plan.py"],
+        "rollback_plan": "Delete generated patch-plan file and revert module changes.",
+        "recommendation": "accept",
+        "status": "accepted",
+        "created_at": "2026-05-27T00:00:00Z",
+    }
+
+    plan = build_patch_plan_from_proposal(proposal, created_at="2026-05-27T00:00:00Z")
+    validate_patch_plan(plan)
+    assert plan["proposal_id"] == proposal["proposal_id"]
+    assert plan["plan_id"] == make_patch_plan_id(proposal["proposal_id"])
+    assert plan["status"] == "draft"
+    assert plan["affected_files"] == ["link_control_plane_patch_plan.py"]
+
+    pending = dict(proposal)
+    pending["status"] = "pending"
+    try:
+        build_patch_plan_from_proposal(pending)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("pending proposal should not produce patch plan")
+
+    with tempfile.TemporaryDirectory() as td:
+        proposal_path = write_proposal(proposal, Path(td) / "proposals")
+        plan_path = derive_patch_plan_for_proposal(
+            proposal_path,
+            Path(td) / "plans",
+            created_at="2026-05-27T00:00:00Z",
+        )
+        loaded = load_patch_plan(plan_path)
+        assert loaded == plan
+        assert list_patch_plans(Path(td) / "plans") == [plan_path]
+
+    print("control plane patch plan OK")
+
 def main() -> None:
     if "--self-test80" in sys.argv:
         check_research_archive_candidate_shortlist_dashboard_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index_web_admin_dispatch_receipt_evidence_index()
@@ -3708,6 +3769,7 @@ def main() -> None:
     check_control_plane_workflow()
     check_control_plane_proposal_registry()
     check_control_plane_approval_gate()
+    check_control_plane_patch_plan()
     print("LINK HEALTHCHECK PASSED")
 
 
