@@ -109,6 +109,24 @@ def select_next_task(root: Path) -> dict[str, Any] | None:
     return tasks[0]
 
 
+def build_agent_memory_snapshot() -> dict[str, Any]:
+    """Return advisory per-role memory state for downstream prompts."""
+    try:
+        from link_agent_memory_adapter import healthcheck, inject_memory_prompt
+        role_ids = ["chief_of_staff", "research_worker", "web_researcher", "production_lead", "production_worker", "qa_worker"]
+
+        health = healthcheck(role_ids)
+        prompts = {role_id: inject_memory_prompt(role_id, limit=5) for role_id in role_ids}
+        return {
+            "ok": bool(health.get("ok")),
+            "schema_version": health.get("schema_version"),
+            "roles": health.get("checks", []),
+            "prompts": prompts,
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "roles": [], "prompts": {}}
+
+
 def build_autonomous_tick(
     goal: str = "Run one autonomous Link tick",
     root: Path | None = None,
@@ -125,6 +143,7 @@ def build_autonomous_tick(
         "receipt_version": AUTONOMOUS_TICK_RUNNER_VERSION,
         "generated": now(),
         "goal": goal,
+        "agent_memory": build_agent_memory_snapshot(),
         "repo": str(repo),
         "queue_root": str(queue_root(repo)),
         "write_requested": bool(write),
@@ -189,6 +208,11 @@ def render_autonomous_tick_markdown(receipt: dict[str, Any]) -> str:
         f"Queue root: `{receipt.get('queue_root')}`",
         f"Write requested: **{'yes' if receipt.get('write_requested') else 'no'}**",
         "",
+        "",
+        "## Agent Memory",
+        "",
+        f"- ok: `{(receipt.get('agent_memory') or {}).get('ok')}`",
+        f"- roles: `{len((receipt.get('agent_memory') or {}).get('roles') or [])}`",
         "## Queue Counts",
         "",
     ]

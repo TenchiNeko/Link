@@ -3120,6 +3120,36 @@ def check_autonomous_research_reflection() -> None:
     print("autonomous research reflection OK")
 
 
+def check_agent_memory_adapter() -> None:
+    import json
+    import os
+    import subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as td:
+        env = os.environ.copy()
+        env["LINK_AGENT_MEMORY_ROOT"] = str(Path(td) / ".link" / "agent_memory")
+        result = subprocess.run(
+            [sys.executable, "link_agent_memory_adapter.py", "--healthcheck", "--format", "json"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise SystemExit("agent memory adapter healthcheck failed: " + result.stderr)
+        data = json.loads(result.stdout)
+        if not data.get("ok"):
+            raise SystemExit("agent memory adapter reported not ok")
+        if not data.get("checks"):
+            raise SystemExit("agent memory adapter returned no role checks")
+
+    print("agent memory adapter OK")
+
+
 def check_autonomous_tick_runner() -> None:
     import json
     import tempfile
@@ -3478,6 +3508,7 @@ def main() -> None:
     check_autonomous_task_queue_seed()
     check_research_archive_comparison()
     check_autonomous_research_reflection()
+    check_agent_memory_adapter()
     check_autonomous_tick_runner()
     check_approval_gated_patch_draft_queue()
     check_self_learning_dashboard()
