@@ -4020,6 +4020,8 @@ def check_control_plane_cli():
                 "report",
                 "--trace-root",
                 str(trace_root),
+                "--report-path",
+                str(report_path),
                 "--out",
                 str(report_path),
                 "--index-out",
@@ -4050,6 +4052,69 @@ def check_control_plane_cli():
             raise SystemExit("control plane CLI report missing expected title")
 
     print("control plane CLI OK")
+
+
+
+def check_control_plane_cli_status():
+    import subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    from link_control_plane_trace_manifest import build_trace_manifest, write_trace_manifest
+
+    proposal = {"proposal_id": "control-plane-cli-status-proposal", "title": "Control Plane CLI Status", "status": "accepted"}
+    approval = {"receipt_id": "control-plane-cli-status-approval", "proposal_id": "control-plane-cli-status-proposal", "decision": "accept", "status": "accepted"}
+    plan = {"plan_id": "control-plane-cli-status-plan", "proposal_id": "control-plane-cli-status-proposal", "status": "draft"}
+    handoff = {"handoff_id": "control-plane-cli-status-handoff", "plan_id": "control-plane-cli-status-plan", "proposal_id": "control-plane-cli-status-proposal", "status": "queued"}
+    verifier = {"verification_id": "control-plane-cli-status-verification", "handoff_id": "control-plane-cli-status-handoff", "plan_id": "control-plane-cli-status-plan", "proposal_id": "control-plane-cli-status-proposal", "status": "passed"}
+    finalizer = {"finalization_id": "control-plane-cli-status-finalization", "verification_id": "control-plane-cli-status-verification", "handoff_id": "control-plane-cli-status-handoff", "plan_id": "control-plane-cli-status-plan", "proposal_id": "control-plane-cli-status-proposal", "status": "finalized"}
+
+    manifest = build_trace_manifest(
+        proposal,
+        approval,
+        plan,
+        handoff,
+        verifier,
+        finalizer,
+        created_at="2026-05-27T00:00:00Z",
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        trace_root = Path(td) / "traces"
+        write_trace_manifest(manifest, trace_root)
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "link_control_plane_cli.py",
+                "status",
+                "--trace-root",
+                str(trace_root),
+                "--generated-at",
+                "2026-05-27T00:00:00Z",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            raise SystemExit("control plane CLI status failed: " + result.stderr)
+
+        required = [
+            "control plane traces discovered: 1",
+            "control plane runs indexed: 1",
+            "control plane chain ok: 1",
+            "control plane chain broken: 0",
+            "control plane status finalized: 1",
+        ]
+        for expected in required:
+            if expected not in result.stdout:
+                raise SystemExit(f"control plane CLI status missing output: {expected}")
+
+    print("control plane CLI status OK")
 
 
 def main() -> None:
@@ -4283,6 +4348,7 @@ def main() -> None:
     check_control_plane_run_report()
     check_control_plane_report_cli()
     check_control_plane_cli()
+    check_control_plane_cli_status()
     print("LINK HEALTHCHECK PASSED")
 
 
