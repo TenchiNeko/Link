@@ -138,3 +138,6 @@ factory/external/
 !docs/**/*.json
 !tools/
 !tools/**/*.py
+
+# allow text architecture reports
+!docs/**/*.txt
