@@ -130,3 +130,11 @@ factory/external/
 !tools/
 !tools/research/
 !tools/research/**
+
+# allow architecture docs and repo mapping tools
+!docs/
+!docs/**/*.md
+!docs/**/*.tsv
+!docs/**/*.json
+!tools/
+!tools/**/*.py
