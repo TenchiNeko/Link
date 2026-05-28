@@ -141,3 +141,7 @@ factory/external/
 
 # allow text architecture reports
 !docs/**/*.txt
+
+# allow Link mode packages
+!link_modes/
+!link_modes/**/*.py
