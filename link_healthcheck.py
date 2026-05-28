@@ -4022,8 +4022,6 @@ def check_control_plane_cli():
                 str(trace_root),
                 "--report-path",
                 str(report_path),
-                "--report-path",
-                str(report_path),
                 "--index-path",
                 str(index_path),
                 "--generated-at",
@@ -4042,7 +4040,7 @@ def check_control_plane_cli():
             raise SystemExit("control plane CLI did not report Markdown output")
         if "control plane index written:" not in result.stdout:
             raise SystemExit("control plane CLI did not report index output")
-        if "control plane traces indexed: 1" not in result.stdout:
+        if "control plane traces discovered: 1" not in result.stdout:
             raise SystemExit("control plane CLI did not index exactly one trace")
         if not report_path.exists():
             raise SystemExit("control plane CLI did not write report")
