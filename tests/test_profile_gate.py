@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from link_profile_gate import _tool_map, classify_profile_tool
+from link_core.routing.link_profile_gate import _tool_map, classify_profile_tool
 
 
 def classify(profile: str, tool: str, approved: bool = False):
