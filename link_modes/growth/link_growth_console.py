@@ -482,6 +482,310 @@ def render_proposals(data: dict[str, Any]) -> None:
     render_proposals_with_rich(data)
 
 
+# ── propose entry points ─────────────────────────────────────────────────
+
+
+def propose_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth propose --source <path>``.
+
+    Mines research from ``--source``, bridges candidates to proposals via
+    ``propose()``, and either previews (dry-run, default) or persists to the
+    control-plane proposal registry via ``--write``.
+
+    Flags:
+        --source <path>    Required. Research file or directory.
+        --write            Persist proposals to .agents/control_plane/proposals/
+        --json             Machine-readable output.
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if not args or "--help" in args or "-h" in args:
+        print("Growth propose: mine research into proposals")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth propose --source <path>")
+        print("  python3 link.py growth propose --source <path> --json")
+        print("  python3 link.py growth propose --source <path> --write")
+        print("")
+        print("Flags:")
+        print("  --source <path>    Research file or directory to mine.")
+        print("  --write            Persist proposals to the control-plane registry.")
+        print("  --json             Output machine-readable JSON.")
+        print("")
+        print("Default is dry-run. No files are written unless --write is provided.")
+        return 0
+
+    source = _parse_arg(args, "--source")
+    if not source:
+        print("error: --source <path> is required", file=sys.stderr)
+        print("Run 'python3 link.py growth propose --help' for usage.", file=sys.stderr)
+        return 2
+
+    write = "--write" in args
+    data = collect_propose_data(source, write=write)
+
+    if data.get("source_exists") is False:
+        print(f"error: source not found: {data['source']}", file=sys.stderr)
+        return 1
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+
+    render_propose(data)
+    return 0
+
+
+def _parse_arg(argv: list[str], flag: str) -> str | None:
+    """Extract a flag value from argv (e.g. ``--source value``)."""
+    for i, a in enumerate(argv):
+        if a == flag and i + 1 < len(argv):
+            return argv[i + 1]
+    return None
+
+
+def collect_propose_data(
+    source: str,
+    write: bool = False,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Mine a research source, bridge to proposals, optionally persist.
+
+    Args:
+        source: Research file or directory path (absolute or relative to cwd).
+        write: When True, persist each proposal via ``write_proposal``.
+        root: Override repo root (defaults to cwd). Used in tests.
+
+    Returns a dict summarizing the run. ``source_exists`` is False when the
+    resolved source path does not exist or is not a file/directory.
+    """
+    from pathlib import Path
+
+    from link_core.control_plane import write_proposal as _write_proposal
+    from link_modes.growth import propose
+    from link_modes.growth.link_research_upgrade_miner import run_miner
+
+    repo_root = Path(root) if root else Path.cwd()
+    source_path = Path(source)
+    if not source_path.is_absolute():
+        source_path = (repo_root / source).resolve()
+    else:
+        source_path = source_path.resolve()
+
+    if not source_path.exists() or not (source_path.is_file() or source_path.is_dir()):
+        return {
+            "source": str(source_path),
+            "source_exists": False,
+            "chunk_count": 0,
+            "candidate_count": 0,
+            "proposal_count": 0,
+            "proposals": [],
+            "written_paths": [],
+            "dry_run": not write,
+            "error": f"source not found: {source_path}",
+        }
+
+    (repo_root / ".link" / "patch_drafts" / "pending").mkdir(parents=True, exist_ok=True)
+
+    receipt = run_miner(
+        root=repo_root,
+        research_dirs=[str(source_path)],
+        candidate_file=Path(".link/approval_candidates.jsonl"),
+        write_candidates=False,
+    )
+
+    chunk_count: int = receipt.get("chunk_count", 0)
+    candidate_count: int = receipt.get("candidate_count", 0)
+    candidates = receipt.get("candidates", [])
+
+    proposals = propose(candidates)
+    proposal_count = len(proposals)
+
+    written_paths: list[str] = []
+    if write:
+        for p in proposals:
+            path = _write_proposal(p, root=repo_root)
+            written_paths.append(str(path))
+
+    return {
+        "source": str(source_path),
+        "source_exists": True,
+        "chunk_count": chunk_count,
+        "candidate_count": candidate_count,
+        "proposal_count": proposal_count,
+        "proposals": proposals,
+        "written_paths": written_paths,
+        "dry_run": not write,
+        "error": None if proposal_count > 0 else "no upgrade candidates found in source",
+    }
+
+
+# ── propose rich renderer ───────────────────────────────────────────────
+
+
+def render_propose_with_rich(data: dict[str, Any]) -> None:
+    """Render propose results using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    proposal_count: int = data.get("proposal_count", 0)
+    candidate_count: int = data.get("candidate_count", 0)
+    chunk_count: int = data.get("chunk_count", 0)
+    dry_run: bool = data.get("dry_run", True)
+    proposals = data.get("proposals", [])
+    written = data.get("written_paths", [])
+
+    status_colors = {
+        "pending": "yellow", "accepted": "green", "rejected": "red",
+        "deferred": "magenta", "converted_to_patch": "cyan",
+        "needs_smaller_plan": "orange1",
+    }
+    risk_colors = {"low": "green", "medium": "yellow", "high": "red"}
+
+    # ── header ──
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH PROPOSE[/]",
+        f"[{'yellow' if dry_run else 'red'}]DRY RUN[/]" if dry_run else "[bold red]WRITING[/]",
+    )
+    console.print(header)
+
+    # ── source info ──
+    info = Text()
+    info.append("source: ", style="dim")
+    info.append(data.get("source", ""), style="bold")
+    info.append(f"\n[dim]chunks: {chunk_count}  candidates: {candidate_count}  proposals: {proposal_count}[/]")
+    console.print(Panel(info, border_style="dim"))
+
+    if proposal_count == 0:
+        empty = Text()
+        empty.append("No upgrade candidates found in source.", style="dim")
+        console.print(Panel(empty, border_style="dim"))
+        console.print(Rule(style="dim"))
+        console.print("  [dim]python3 link.py growth status  -- back to status console[/]")
+        return
+
+    console.print(Rule(style="dim"))
+
+    # ── proposal cards ──
+    for i, p in enumerate(proposals):
+        card = Text()
+        status = p.get("status", "?")
+        risk = p.get("risk_level", "?")
+        rec = p.get("recommendation", "?")
+        sc = status_colors.get(status, "")
+        rc = risk_colors.get(risk, "")
+
+        card.append(f"[bold]{p.get('title', '(untitled)')}[/]\n")
+        card.append(f"[{sc}]STATUS: {status}[/]  ")
+        card.append(f"[{rc}]RISK: {risk}[/]  ")
+        card.append(f"[dim]REC: {rec}[/]")
+
+        summary = p.get("source_summary", "")
+        if summary:
+            if len(summary) > 140:
+                summary = summary[:137] + "..."
+            card.append(f"\n[dim]why:[/] {summary}")
+
+        impl = p.get("implementation_plan", [])
+        if impl:
+            card.append(f"\n[dim]plan (first {min(3, len(impl))} of {len(impl)}):[/]")
+            for step in impl[:3]:
+                card.append(f"\n  \u2022 {step}")
+
+        files = p.get("affected_files", [])
+        if files:
+            card.append(f"\n[dim]files:[/] {', '.join(files[:5])}")
+
+        panel_title = f"PROPOSAL [{i + 1}/{proposal_count}]  {p.get('proposal_id', '?')[:24]}"
+        console.print(Panel(card, title=panel_title, border_style="dim"))
+
+    # ── write summary ──
+    if written:
+        wrote_text = Text()
+        wrote_text.append("Written:\n", style="bold green")
+        for w in written:
+            wrote_text.append(f"  {w}\n", style="dim")
+        console.print(Panel(wrote_text, title="PERSISTED", border_style="dim green"))
+
+    console.print(Rule(style="dim"))
+    if dry_run:
+        console.print("  [dim]Use --write to persist proposals to disk[/]")
+    console.print("  [dim]python3 link.py growth status   -- back to status console[/]")
+    console.print("  [dim]python3 link.py growth proposals -- view proposal cards[/]")
+
+
+# ── propose plain fallback ──────────────────────────────────────────────
+
+
+def render_propose_plain(data: dict[str, Any]) -> None:
+    """Render propose results using plain print."""
+    proposal_count: int = data.get("proposal_count", 0)
+    dry_run: bool = data.get("dry_run", True)
+    proposals = data.get("proposals", [])
+    written = data.get("written_paths", [])
+
+    out: list[str] = []
+    out.append(
+        f"== LINK GROWTH PROPOSE ({'DRY RUN' if dry_run else 'WRITING'}) =="
+    )
+    out.append(f"source:   {data.get('source', '')}")
+    out.append(
+        f"chunks:   {data.get('chunk_count', 0)}\n"
+        f"candidates: {data.get('candidate_count', 0)}\n"
+        f"proposals: {proposal_count}"
+    )
+    out.append("")
+
+    if proposal_count == 0:
+        out.append("No upgrade candidates found in source.")
+    else:
+        for i, p in enumerate(proposals):
+            out.append(f"--- PROPOSAL [{i + 1}/{proposal_count}] ---")
+            out.append(f"title:          {p.get('title', '?')}")
+            out.append(f"status:         {p.get('status', '?')}")
+            out.append(f"risk_level:     {p.get('risk_level', '?')}")
+            out.append(f"recommendation: {p.get('recommendation', '?')}")
+            impl = p.get("implementation_plan", [])
+            if impl:
+                out.append(f"plan ({len(impl)} steps):")
+                for step in impl[:3]:
+                    out.append(f"  - {step}")
+            out.append("")
+
+    if written:
+        out.append("Written:")
+        for w in written:
+            out.append(f"  {w}")
+        out.append("")
+
+    if dry_run:
+        out.append("Use --write to persist proposals to disk.")
+    out.append("python3 link.py growth status   -- back to status console")
+    out.append("python3 link.py growth proposals -- view proposal cards")
+
+    print("\n".join(out))
+
+
+# ── propose render orchestrator ──────────────────────────────────────────
+
+
+def render_propose(data: dict[str, Any]) -> None:
+    """Render propose results with rich if available; fall back to plain text."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_propose_plain(data)
+        return
+    render_propose_with_rich(data)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for ``python3 link.py growth status``.
 

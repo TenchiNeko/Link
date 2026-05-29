@@ -342,6 +342,7 @@ def _cmd_growth(argv: list[str]) -> int:
     Subcommands:
       status     Render a read-only Growth mode status console.
       proposals  View control-plane proposal cards.
+      propose    Mine research into proposals (dry-run by default).
     """
     subcommand = argv[0] if argv else ""
     if subcommand in ("status", "--json", ""):
@@ -352,10 +353,15 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import proposals_main as _growth_proposals_main
 
         return _growth_proposals_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "propose":
+        from link_modes.growth.link_growth_console import propose_main as _growth_propose_main
+
+        return _growth_propose_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help"):
         print("Growth mode commands:")
         print("  status     Render Growth mode status console")
         print("  proposals  View control-plane proposal cards")
+        print("  propose    Mine research into proposals")
         return 0
     print(f"growth: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py growth --help' for subcommands.", file=sys.stderr)

@@ -587,6 +587,67 @@ def check_growth_proposals_data() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 11. Growth propose command -- source-to-proposal pipeline
+# ---------------------------------------------------------------------------
+
+def check_growth_propose_command() -> None:
+    """collect_propose_data mines a source, bridges candidates, optionally writes."""
+    from link_modes.growth.link_growth_console import collect_propose_data
+
+    # -- Missing source produces source_exists=False, no exception --
+    data_missing = collect_propose_data("/tmp/definitely-not-a-research-file-xyz")
+    _require(
+        data_missing.get("source_exists") is False,
+        "missing source must set source_exists=False",
+    )
+    _require(
+        data_missing.get("proposal_count", -1) == 0,
+        "missing source must have 0 proposals",
+    )
+    _require(
+        isinstance(data_missing.get("error"), str),
+        "missing source must set error string",
+    )
+
+    # -- Valid source with dry-run (default) --
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = root / "input.md"
+        src.write_text(
+            "Evidence citation source. Approval candidate pipeline. "
+            "Sandboxed safe implementation. Frontier gap grading. "
+            "Market context refresh. Research upgrade mining.\n",
+            encoding="utf-8",
+        )
+
+        data = collect_propose_data(source=str(src), write=False, root=td)
+        _require(data.get("source_exists") is True, "valid source must set source_exists=True")
+        _require(data.get("chunk_count", 0) >= 1, "must find >= 1 chunk")
+        _require(data.get("candidate_count", 0) >= 1, "must have >= 1 candidate")
+        _require(data.get("proposal_count", 0) >= 1, "must have >= 1 proposal")
+        _require(data.get("dry_run") is True, "default must be dry_run=True")
+        _require(data.get("written_paths") == [], "dry-run must have empty written_paths")
+
+        proposals = data.get("proposals", [])
+        for p in proposals:
+            for key in ("proposal_id", "title", "status", "risk_level"):
+                if key not in p:
+                    raise AssertionError(f"proposal missing key: {key!r}")
+
+        # -- Write mode --
+        data_w = collect_propose_data(source=str(src), write=True, root=td)
+        _require(data_w.get("dry_run") is False, "write=True must set dry_run=False")
+        _require(
+            len(data_w.get("written_paths", [])) == data_w.get("proposal_count", 0),
+            "written_paths count must match proposal_count",
+        )
+        for wp in data_w.get("written_paths", []):
+            _require(Path(wp).exists(), f"written path must exist on disk: {wp}")
+
+    print(f"growth propose command OK ({data['proposal_count']} proposals from {data['candidate_count']} candidates)")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -602,6 +663,7 @@ def main() -> None:
     check_growth_propose_function()
     check_growth_console_data()
     check_growth_proposals_data()
+    check_growth_propose_command()
     print("Growth pipeline smoke tests passed")
 
 
