@@ -334,6 +334,29 @@ def _cmd_config(argv: list[str]) -> int:
     return 0 if problems == 0 else 1
 
 
+def _cmd_growth(argv: list[str]) -> int:
+    """Growth mode subcommand dispatcher.
+
+    Usage: python3 link.py growth <subcommand> [args...]
+
+    Subcommands:
+      status   Render a read-only Growth mode status console.
+    """
+    subcommand = argv[0] if argv else ""
+    if subcommand in ("status", "--json", ""):
+        from link_modes.growth.link_growth_console import main as _growth_main
+
+        return _growth_main(argv if subcommand == "status" else [])
+    if subcommand in ("-h", "--help", "help"):
+        print("Growth mode commands:")
+        print("  status   Render Growth mode status console")
+        print("  proposals   View proposal cards [COMING]")
+        return 0
+    print(f"growth: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py growth --help' for subcommands.", file=sys.stderr)
+    return 2
+
+
 # Local commands: (function, help_text). Functions receive the remaining argv.
 _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "modes": (_cmd_modes, "List Link operating modes (base/growth/business)."),
@@ -341,6 +364,7 @@ _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "dashboard": (_cmd_dashboard, "Compact diagnostics dashboard."),
     "self-test": (_cmd_self_test, "Run canonical architecture smoke checks."),
     "config": (_cmd_config, "Validate Link configuration files against runtime."),
+    "growth": (_cmd_growth, "Growth mode terminal console."),
 }
 
 

@@ -506,6 +506,48 @@ def check_growth_propose_function() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 9. Growth console data collector
+# ---------------------------------------------------------------------------
+
+def check_growth_console_data() -> None:
+    """collect_console_data returns a dict with expected Growth display keys."""
+    from link_modes.growth.link_growth_console import collect_console_data
+
+    data = collect_console_data()
+    _require(isinstance(data, dict), "collect_console_data must return a dict")
+
+    for key in ("repo", "healthcheck", "mode", "pipeline", "clusters",
+                "proposals", "drafts", "next_actions"):
+        if key not in data:
+            raise AssertionError(
+                f"collect_console_data missing key: {key!r}"
+            )
+
+    repo = data["repo"]
+    _require(isinstance(repo.get("branch"), str) and bool(repo["branch"]),
+             "repo.branch must be a non-empty string")
+    _require(isinstance(repo.get("head"), str) and bool(repo["head"]),
+             "repo.head must be a non-empty string")
+
+    mode = data["mode"]
+    _require(mode.get("name") == "growth", "mode.name must be 'growth'")
+    _require(mode.get("has_propose") is True, "mode.has_propose must be True")
+    _require(isinstance(mode.get("bridge_version"), str),
+             "mode.bridge_version must be a string")
+
+    pipeline = data["pipeline"]
+    stages = pipeline.get("stages", [])
+    _require(isinstance(stages, list), "pipeline.stages must be a list")
+    _require(len(stages) == 9, f"pipeline must have 9 stages, got {len(stages)}")
+
+    clusters = data["clusters"]
+    _require(isinstance(clusters, list), "clusters must be a list")
+    _require(len(clusters) >= 1, "must have >= 1 upgrade cluster")
+
+    print("growth console data OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -519,6 +561,7 @@ def main() -> None:
     check_bridge_produces_valid_proposal()
     check_bridge_rejects_bad_input()
     check_growth_propose_function()
+    check_growth_console_data()
     print("Growth pipeline smoke tests passed")
 
 
