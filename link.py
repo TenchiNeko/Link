@@ -180,12 +180,167 @@ def _cmd_self_test(argv: list[str]) -> int:
     return 0
 
 
+def _cmd_config(argv: list[str]) -> int:
+    """Read and validate Link YAML configuration files."""
+    try:
+        import yaml as _yaml
+    except ImportError:
+        print("config: PyYAML is not installed. Install with: pip install pyyaml", file=sys.stderr)
+        return 1
+
+    import json as _json
+
+    config_root = ROOT / "configs"
+    config_files = [
+        ("configs/models.yaml", "Model routing", "models.yaml"),
+        ("configs/teams/link_growth.yaml", "Growth team", "link_growth.yaml"),
+        ("configs/teams/business_ops.yaml", "Business ops team", "business_ops.yaml"),
+    ]
+
+    file_results: list[dict] = []
+    checks: list[dict] = []
+    problems = 0
+
+    for rel_path, label, basename in config_files:
+        full_path = ROOT / rel_path
+        entry: dict = {"label": label, "path": rel_path, "exists": False}
+        if not full_path.is_file():
+            entry["status"] = "missing"
+            problems += 1
+            file_results.append(entry)
+            continue
+        entry["exists"] = True
+        try:
+            data = _yaml.safe_load(full_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            entry["status"] = "parse_error"
+            entry["error"] = str(exc)
+            problems += 1
+            file_results.append(entry)
+            continue
+        version = data.get("version", "unknown") if isinstance(data, dict) else "unknown"
+        entry["status"] = "ok"
+        entry["version"] = version
+        entry["top_keys"] = list(data.keys()) if isinstance(data, dict) else []
+        file_results.append(entry)
+
+    # Model profiles consistency check.
+    try:
+        from link_core.router import model_profile_map as _runtime_profiles
+
+        runtime_names = set(_runtime_profiles().keys())
+        models_yaml = config_root / "models.yaml"
+        if models_yaml.is_file():
+            yaml_data = _yaml.safe_load(models_yaml.read_text(encoding="utf-8"))
+            yaml_profiles = yaml_data.get("profiles", {}) if isinstance(yaml_data, dict) else {}
+            yaml_names = set(yaml_profiles.keys())
+            match = yaml_names == runtime_names
+            checks.append({
+                "label": "model profiles match runtime",
+                "ok": match,
+                "detail": f"{len(runtime_names)} runtime profiles, {len(yaml_names)} in yaml",
+            })
+            if not match:
+                checks[-1]["yaml_only"] = sorted(yaml_names - runtime_names)
+                checks[-1]["runtime_only"] = sorted(runtime_names - yaml_names)
+                problems += 1
+    except Exception as exc:
+        checks.append({"label": "model profiles match runtime", "ok": False, "detail": str(exc)})
+        problems += 1
+
+    # Growth control-plane stages check.
+    try:
+        from link_core.control_plane import get_control_plane_stages as _runtime_stages
+
+        growth_yaml = config_root / "teams" / "link_growth.yaml"
+        if growth_yaml.is_file():
+            yaml_data = _yaml.safe_load(growth_yaml.read_text(encoding="utf-8"))
+            yaml_stages = yaml_data.get("control_plane_stages", []) if isinstance(yaml_data, dict) else []
+            runtime_stages = list(_runtime_stages())
+            match = yaml_stages == runtime_stages
+            checks.append({
+                "label": "growth control-plane stages match runtime",
+                "ok": match,
+                "detail": f"{len(runtime_stages)} runtime stages, {len(yaml_stages)} in yaml",
+            })
+            if not match:
+                problems += 1
+    except Exception as exc:
+        checks.append({"label": "growth control-plane stages match runtime", "ok": False, "detail": str(exc)})
+        problems += 1
+
+    # Business tiers check.
+    try:
+        from link_core.roles import business_tier_names as _runtime_tiers
+
+        biz_yaml = config_root / "teams" / "business_ops.yaml"
+        if biz_yaml.is_file():
+            yaml_data = _yaml.safe_load(biz_yaml.read_text(encoding="utf-8"))
+            yaml_tiers = yaml_data.get("tiers", []) if isinstance(yaml_data, dict) else []
+            runtime_tier_list = _runtime_tiers()
+            runtime_tier_set = set(runtime_tier_list)
+            missing = [t for t in yaml_tiers if t not in runtime_tier_set]
+            ok = len(missing) == 0
+            checks.append({
+                "label": "business tiers in yaml present in runtime",
+                "ok": ok,
+                "detail": f"{len(yaml_tiers)} tiers in yaml, {len(runtime_tier_list)} in runtime",
+            })
+            if not ok:
+                checks[-1]["missing"] = missing
+                problems += 1
+    except Exception as exc:
+        checks.append({"label": "business tiers in yaml present in runtime", "ok": False, "detail": str(exc)})
+        problems += 1
+
+    result = {
+        "config_files": file_results,
+        "consistency_checks": checks,
+        "all_ok": problems == 0,
+    }
+
+    if "--json" in argv:
+        print(_json.dumps(result, indent=2))
+        return 0 if result["all_ok"] else 1
+
+    print("Link configuration")
+    print("")
+    print("Config files:")
+    for entry in file_results:
+        status = entry.get("status", "?")
+        label = entry.get("label", entry.get("path", "?"))
+        if status == "ok":
+            print(f"  OK: {label} ({entry.get('version', '?')})")
+        elif status == "missing":
+            print(f"  MISSING: {entry['path']}")
+        else:
+            print(f"  ERROR: {label} - {entry.get('error', status)}")
+
+    print("")
+    print("Consistency:")
+    for check in checks:
+        indicator = "OK" if check["ok"] else "DRIFT"
+        print(f"  {indicator}: {check['label']} ({check.get('detail', '')})")
+        if not check["ok"]:
+            for extra_key in ("yaml_only", "runtime_only", "missing"):
+                if extra_key in check:
+                    print(f"    {extra_key}: {check[extra_key]}")
+
+    print("")
+    if problems == 0:
+        print("config OK")
+    else:
+        print(f"config FAILED ({problems} problem(s))")
+    return 0 if problems == 0 else 1
+
+
 # Local commands: (function, help_text). Functions receive the remaining argv.
 _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "modes": (_cmd_modes, "List Link operating modes (base/growth/business)."),
     "roles": (_cmd_roles, "List worker safety profiles and business roles."),
     "dashboard": (_cmd_dashboard, "Compact diagnostics dashboard."),
     "self-test": (_cmd_self_test, "Run canonical architecture smoke checks."),
+    "config": (_cmd_config, "Validate Link configuration files against runtime."),
 }
 
 

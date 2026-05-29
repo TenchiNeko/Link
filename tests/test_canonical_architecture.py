@@ -258,6 +258,30 @@ def check_roles_facade() -> None:
     print("roles facade OK: worker profiles + business roles verified")
 
 
+def check_config_command() -> None:
+    """link.py config validates YAML configs against runtime without side effects."""
+    import json as _json
+
+    link = importlib.import_module("link")
+
+    local = link._LOCAL_COMMANDS
+    if "config" not in local:
+        raise AssertionError("link.py _LOCAL_COMMANDS is missing 'config'")
+
+    rc = link.main(["config"])
+    if rc != 0:
+        raise AssertionError(f"link.py config should return 0, got {rc}")
+
+    rc_json = link.main(["config", "--json"])
+    if rc_json != 0:
+        raise AssertionError(f"link.py config --json should return 0, got {rc_json}")
+
+    # Re-import link to get a fresh module with captured stdout is not needed
+    # here; we just assert the exit codes are clean. The --json path exercises
+    # the full yaml-load + consistency-check code path.
+    print("config command OK")
+
+
 def check_cli_dispatcher() -> None:
     """link.py exposes a stable command table and safe help/error branches.
 
@@ -279,7 +303,7 @@ def check_cli_dispatcher() -> None:
     local = getattr(link, "_LOCAL_COMMANDS", None)
     if local is None:
         raise AssertionError("link.py is missing _LOCAL_COMMANDS")
-    for required in ("modes", "roles", "dashboard", "self-test"):
+    for required in ("modes", "roles", "dashboard", "self-test", "config"):
         if required not in local:
             raise AssertionError(f"link.py CLI is missing local command: {required}")
         func, help_text = local[required]
@@ -315,6 +339,7 @@ def main() -> None:
     check_artifacts_facade()
     check_agents_facade()
     check_roles_facade()
+    check_config_command()
     check_cli_dispatcher()
     print("canonical architecture smoke checks passed")
 
