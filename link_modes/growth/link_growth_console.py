@@ -194,8 +194,7 @@ def render_with_rich(data: dict[str, Any]) -> None:
     actions.append("\n")
     actions.append("python3 link.py growth status   ", style="dim")
     actions.append("-- refresh this screen\n", style="dim")
-    actions.append("python3 link.py growth proposals", style="dim")
-    actions.append("  -- view proposal cards [COMING]\n", style="dim")
+    actions.append("python3 link.py growth proposals  -- view proposal cards\n", style="dim")
     console.print(Panel(actions, title="NEXT ACTIONS", border_style="dim"))
 
     console.print(Rule(style="dim"))
@@ -268,7 +267,219 @@ def render_console(data: dict[str, Any]) -> None:
     render_with_rich(data)
 
 
-# ── main entry point ────────────────────────────────────────────────────
+# ── main entry points ───────────────────────────────────────────────────
+
+
+def proposals_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth proposals``.
+
+    Reads proposals from the control-plane registry (repo-root relative),
+    renders them as proposal cards, and shows a useful empty state when
+    no proposals exist.
+
+    Supports ``--json`` for machine-readable output. Read-only. No mutation.
+    """
+    args = sys.argv[1:] if argv is None else argv
+    data = collect_proposals_data()
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+    render_proposals(data)
+    return 0
+
+
+def collect_proposals_data() -> dict[str, Any]:
+    """Read proposals from the control-plane registry (repo-root relative).
+
+    Returns a dict with ``count``, ``proposals``, and ``storage_path``.
+    Zero proposals is a valid state.
+    """
+    from pathlib import Path
+
+    from link_core.control_plane import list_proposals
+
+    proposals = list_proposals(root=Path.cwd())
+    return {
+        "count": len(proposals),
+        "proposals": proposals,
+        "storage_path": str(Path.cwd() / ".agents" / "control_plane" / "proposals"),
+    }
+
+
+# ── proposals rich renderer ──────────────────────────────────────────────
+
+
+def render_proposals_with_rich(data: dict[str, Any]) -> None:
+    """Render proposal cards using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    count: int = data.get("count", 0)
+    proposals: list[dict] = data.get("proposals", [])
+
+    # ── header ──
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH PROPOSALS[/]",
+        f"[dim]{count} proposal{'s' if count != 1 else ''}[/]",
+    )
+    console.print(header)
+    console.print(Rule(style="dim"))
+
+    # ── empty state ──
+    if count == 0:
+        empty = Text()
+        empty.append("\nNo proposals found in ", style="dim")
+        empty.append(data.get("storage_path", ""), style="bold")
+        empty.append("\n\nTo generate proposals from research:\n", style="dim")
+        empty.append("  from link_modes.growth import propose\n", style="dim")
+        empty.append("  from link_modes.growth.link_research_upgrade_miner import run_miner\n", style="dim")
+        empty.append("  receipt = run_miner(...)\n", style="dim")
+        empty.append("  proposals = propose(receipt[\"candidates\"])\n", style="dim")
+        empty.append("\n")
+        console.print(Panel(empty, border_style="dim"))
+        console.print(Rule(style="dim"))
+        console.print(
+            "  [dim]python3 link.py growth status  -- back to status console[/]"
+        )
+        return
+
+    # ── proposal cards ──
+    status_colors = {
+        "pending": "yellow",
+        "accepted": "green",
+        "rejected": "red",
+        "deferred": "magenta",
+        "converted_to_patch": "cyan",
+        "needs_smaller_plan": "orange1",
+    }
+    risk_colors = {"low": "green", "medium": "yellow", "high": "red"}
+
+    for i, p in enumerate(proposals):
+        card_lines = Text()
+
+        # Title + status badge bar
+        status = p.get("status", "?")
+        sc = status_colors.get(status, "")
+        risk = p.get("risk_level", "?")
+        rc = risk_colors.get(risk, "")
+        rec = p.get("recommendation", "?")
+
+        card_lines.append(
+            f"[bold]{p.get('title', '(untitled)')}[/]\n"
+            f"[{sc}]STATUS: {status}[/]  "
+            f"[{rc}]RISK: {risk}[/]  "
+            f"[dim]RECOMMENDATION: {rec}[/]"
+        )
+
+        # Source
+        card_lines.append(
+            f"\n[dim]source:[/] {p.get('source_path', '?')}"
+        )
+
+        # Summary
+        summary = p.get("source_summary", "")
+        if summary:
+            if len(summary) > 140:
+                summary = summary[:137] + "..."
+            card_lines.append(f"\n[dim]why:[/] {summary}")
+
+        # Implementation plan
+        impl = p.get("implementation_plan", [])
+        if impl:
+            card_lines.append("\n[dim]plan:[/]")
+            for step in impl:
+                card_lines.append(f"\n  \u2022 {step}")
+
+        # Affected files
+        files = p.get("affected_files", [])
+        if files:
+            card_lines.append(
+                f"\n[dim]files:[/] {', '.join(files[:5])}"
+            )
+
+        # Footer
+        card_lines.append(
+            f"\n[dim]created: {p.get('created_at', '?')}[/]"
+        )
+
+        panel_title = f"PROPOSAL [{i + 1}/{count}]  {p.get('proposal_id', '?')[:24]}"
+        console.print(Panel(card_lines, title=panel_title, border_style="dim"))
+
+    console.print(Rule(style="dim"))
+    console.print(
+        "  [dim]python3 link.py growth status   -- back to status console[/]"
+    )
+    console.print(
+        "  [dim]python3 link.py growth proposals --json  -- machine-readable[/]"
+    )
+
+
+# ── proposals plain fallback ─────────────────────────────────────────────
+
+
+def render_proposals_plain(data: dict[str, Any]) -> None:
+    """Render proposal cards using plain print."""
+    count: int = data.get("count", 0)
+    proposals: list[dict] = data.get("proposals", [])
+    out: list[str] = []
+    out.append(f"== LINK GROWTH PROPOSALS ({count}) ==")
+    out.append("")
+
+    if count == 0:
+        out.append(f"No proposals found in {data.get('storage_path', '?')}")
+        out.append("")
+        out.append("To generate proposals from research:")
+        out.append("  from link_modes.growth import propose")
+        out.append("  from link_modes.growth.link_research_upgrade_miner import run_miner")
+        out.append("  receipt = run_miner(...)")
+        out.append("  proposals = propose(receipt[\\\"candidates\\\"])")
+        out.append("")
+        out.append("python3 link.py growth status  -- back to status console")
+        print("\n".join(out))
+        return
+
+    for i, p in enumerate(proposals):
+        out.append(f"--- PROPOSAL [{i + 1}/{count}] ---")
+        out.append(f"title:          {p.get('title', '?')}")
+        out.append(f"status:         {p.get('status', '?')}")
+        out.append(f"risk_level:     {p.get('risk_level', '?')}")
+        out.append(f"recommendation: {p.get('recommendation', '?')}")
+        out.append(f"source_path:    {p.get('source_path', '?')}")
+        summary = p.get("source_summary", "")
+        if summary:
+            out.append(f"summary:        {summary[:120]}")
+        impl = p.get("implementation_plan", [])
+        if impl:
+            out.append("plan:")
+            for step in impl:
+                out.append(f"  - {step}")
+        files = p.get("affected_files", [])
+        if files:
+            out.append(f"files:          {', '.join(files[:5])}")
+        out.append(f"created_at:     {p.get('created_at', '?')}")
+        out.append("")
+    out.append("python3 link.py growth status  -- back to status console")
+    print("\n".join(out))
+
+
+# ── proposals render orchestrator ────────────────────────────────────────
+
+
+def render_proposals(data: dict[str, Any]) -> None:
+    """Render proposals with rich if available; fall back to plain text."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_proposals_plain(data)
+        return
+    render_proposals_with_rich(data)
 
 
 def main(argv: list[str] | None = None) -> int:

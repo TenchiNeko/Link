@@ -548,6 +548,45 @@ def check_growth_console_data() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 10. Growth proposals data collector
+# ---------------------------------------------------------------------------
+
+def check_growth_proposals_data() -> None:
+    """collect_proposals_data returns a dict with proposals from the registry."""
+    from link_modes.growth.link_growth_console import collect_proposals_data
+
+    data = collect_proposals_data()
+    _require(isinstance(data, dict), "collect_proposals_data must return a dict")
+
+    for key in ("count", "proposals", "storage_path"):
+        if key not in data:
+            raise AssertionError(
+                f"collect_proposals_data missing key: {key!r}"
+            )
+
+    _require(isinstance(data["count"], int), "count must be an int")
+    _require(data["count"] >= 0, f"count must be >= 0, got {data['count']}")
+    _require(isinstance(data["proposals"], list), "proposals must be a list")
+    _require(
+        data["count"] == len(data["proposals"]),
+        f"count {data['count']} must match proposals list length {len(data['proposals'])}",
+    )
+    _require(isinstance(data["storage_path"], str), "storage_path must be a string")
+    _require(bool(data["storage_path"]), "storage_path must be non-empty")
+
+    # If proposals exist, each must be a valid proposal dict
+    for i, p in enumerate(data["proposals"]):
+        _require(isinstance(p, dict), f"proposal [{i}] must be a dict")
+        for key in ("proposal_id", "title", "status", "risk_level"):
+            if key not in p:
+                raise AssertionError(
+                    f"proposal [{i}] missing required key: {key!r}"
+                )
+
+    print(f"growth proposals data OK ({data['count']} proposals on disk)")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -562,6 +601,7 @@ def main() -> None:
     check_bridge_rejects_bad_input()
     check_growth_propose_function()
     check_growth_console_data()
+    check_growth_proposals_data()
     print("Growth pipeline smoke tests passed")
 
 
