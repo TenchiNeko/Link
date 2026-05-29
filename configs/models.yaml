@@ -1,0 +1,80 @@
+# Link canonical model routing configuration.
+#
+# This file documents Link's conservative default model routing profiles.
+# It mirrors the deterministic profiles defined in
+# link_core/routing/link_model_routing_profiles.py, which remains the runtime
+# source of truth. This YAML is declarative defaults for the final
+# architecture; editing it does not change runtime behavior yet.
+#
+# Planner/builder execution targets used by the agent harness are recorded
+# under `execution_targets` for visibility.
+
+version: link-models-v1
+
+defaults:
+  # Prefer local-first routing; only use cloud when explicitly allowed.
+  primary_profile: local_fast
+  fallback_policy: hybrid_fallback
+
+profiles:
+  local_fast:
+    provider: ollama
+    default_model: "qwen2.5-coder:32b-instruct-q8_0"
+    model_env: LINK_LOCAL_FAST_MODEL
+    endpoint_env: OLLAMA_BASE_URL
+    endpoint_default: "http://127.0.0.1:11434"
+    priority: 10
+    fallback_profile: local_deep
+    use_cases:
+      - triage
+      - small patches
+      - fast local checks
+      - status summaries
+
+  local_deep:
+    provider: ollama
+    default_model: "qwen2.5:32b"
+    model_env: LINK_LOCAL_DEEP_MODEL
+    endpoint_env: OLLAMA_BASE_URL
+    endpoint_default: "http://127.0.0.1:11434"
+    priority: 20
+    fallback_profile: cloud_deep
+    use_cases:
+      - deep local reasoning
+      - offline coding
+      - privacy-sensitive review
+
+  cloud_deep:
+    provider: openrouter
+    default_model: "deepseek/deepseek-chat"
+    model_env: OPENROUTER_MODEL
+    endpoint_env: OPENROUTER_BASE_URL
+    endpoint_default: "https://openrouter.ai/api"
+    requires_api_key_env: OPENROUTER_API_KEY
+    priority: 30
+    fallback_profile: local_deep
+    use_cases:
+      - hard reasoning
+      - large context
+      - cloud fallback
+      - model comparison
+
+  hybrid_fallback:
+    provider: router
+    default_model: auto
+    model_env: LINK_ROUTER_MODE
+    priority: 40
+    fallback_profile: local_fast
+    use_cases:
+      - automatic fallback
+      - mixed local/cloud routing
+      - resilient execution
+
+# Agent harness execution targets (informational; not auto-applied).
+execution_targets:
+  planner:
+    model: "claude-opus-4.6"
+    variant: xhigh
+  builder:
+    model: "claude-opus-latest"
+    variant: xhigh

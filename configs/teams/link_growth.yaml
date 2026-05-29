@@ -1,0 +1,49 @@
+# Link Growth Team configuration.
+#
+# Growth mode is Link's upgrade research team. It mines external research into
+# Link-native upgrade candidates and proposals for human review. This file is
+# conservative declarative defaults for the final architecture; the runtime
+# source of truth remains the control-plane modules under
+# link_core/control_plane/ and the growth modules under link_modes/growth/.
+
+version: link-growth-team-v1
+
+mode: growth
+entrypoint_module: link_modes.growth
+
+description: >
+  Mine research/ archives and project context into Link-native upgrade
+  proposals. Convert ideas to small, testable patches with evidence and
+  rollback paths. Never auto-merge.
+
+# Control-plane stages growth proposals flow through.
+control_plane_stages:
+  - ResearchIngest
+  - CandidateExtractor
+  - FeasibilityReviewer
+  - ProposalWriter
+  - HumanApproval
+  - PatchPlanner
+  - PatchWorker
+  - Verifier
+  - Finalizer
+
+# Worker safety profiles this mode should prefer (defined in
+# link_core/routing/link_worker_profiles.py). Profiles narrow tools; they do
+# not grant permission by themselves.
+worker_profiles:
+  default: research_only
+  allowed:
+    - research_only
+    - read_only_auditor
+    - qa_worker
+    - factory_planner
+
+model_routing:
+  default_profile: local_fast
+  deep_profile: local_deep
+
+safety:
+  require_human_approval_before_merge: true
+  draft_only: true
+  no_external_publish: true

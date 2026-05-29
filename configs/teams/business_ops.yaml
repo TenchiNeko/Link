@@ -1,0 +1,51 @@
+# Business Operations Team configuration.
+#
+# Business mode is Link's business operations team (the factory). It turns
+# goals into draft work orders, research, and deliverables under QA gates.
+# This file is conservative declarative defaults for the final architecture;
+# the runtime source of truth remains factory/team_registry.py and the
+# business modules under link_modes/business/.
+
+version: business-ops-team-v1
+
+mode: business
+entrypoint_module: link_modes.business
+
+description: >
+  Convert a business goal into draft work orders, research, marketing angles,
+  finance estimates, production drafts, and QA review. Draft-only. Nothing is
+  posted, published, or sent without explicit human approval.
+
+# Default factory execution tier (see factory/team_registry.py FACTORY_TIERS).
+default_tier: cheap
+
+tiers:
+  - cheap
+  - balanced
+  - premium
+  - board-review
+
+# Roles are defined in factory/team_registry.py. Listed here for visibility.
+roles:
+  - ceo
+  - chief_of_staff
+  - research_worker
+  - web_researcher
+  - seo_researcher
+  - research_advisor
+  - marketing_lead
+  - finance_worker
+  - finance_advisor
+  - production_lead
+  - production_worker
+  - qa_worker
+  - qa_advisor
+
+model_routing:
+  default_profile: local_fast
+  premium_profile: cloud_deep
+
+safety:
+  draft_only: true
+  no_external_publish: true
+  require_human_approval_before_send: true
