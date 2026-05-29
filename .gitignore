@@ -145,3 +145,8 @@ factory/external/
 # allow Link mode packages
 !link_modes/
 !link_modes/**/*.py
+*.py[cod]
+.agents/tool_results/
+.agents/reports/
+link_core/**/.agents/tool_results/
+link_core/**/.agents/reports/
