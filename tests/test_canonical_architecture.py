@@ -166,6 +166,98 @@ def check_router_consistency() -> None:
     print(f"router consistency OK: {sorted(profiles)}")
 
 
+def check_artifacts_facade() -> None:
+    """execution_receipts facade round-trips a deterministic receipt."""
+    import link_core.artifacts as artifacts
+
+    receipt = artifacts.build_execution_receipt(
+        action="test", target="smoke", gate_decision=None, outcome="passed"
+    )
+    if not isinstance(receipt, dict):
+        raise AssertionError("build_execution_receipt must return a dict")
+    for key in ("receipt_id", "action", "outcome", "receipt_sha256"):
+        if key not in receipt:
+            raise AssertionError(f"build_execution_receipt missing key: {key}")
+
+    if receipt.get("action") != "test":
+        raise AssertionError("receipt action must be 'test'")
+    if receipt.get("outcome") != "passed":
+        raise AssertionError("receipt outcome must be 'passed'")
+    if not receipt.get("receipt_sha256"):
+        raise AssertionError("receipt_sha256 must be non-empty")
+
+    if not callable(artifacts.verify_execution_receipt):
+        raise AssertionError("verify_execution_receipt must be callable")
+    if not callable(artifacts.latest_receipts):
+        raise AssertionError("latest_receipts must be callable")
+    if artifacts.create_execution_snapshot is None:
+        raise AssertionError("create_execution_snapshot must not be None")
+    if artifacts.build_concise_task_receipt is None:
+        raise AssertionError("build_concise_task_receipt must not be None")
+
+    print("artifacts facade OK: build_execution_receipt verified")
+
+
+def check_agents_facade() -> None:
+    """Agent identity is deterministic and safe_role_id normalizes correctly."""
+    import link_core.agents as agents
+
+    id1 = agents.deterministic_agent_id("qa_worker")
+    id2 = agents.deterministic_agent_id("qa_worker")
+    if not id1 or not isinstance(id1, str):
+        raise AssertionError("deterministic_agent_id must return a non-empty string")
+    if id1 != id2:
+        raise AssertionError("deterministic_agent_id must be deterministic")
+
+    normalized = agents.safe_role_id("QA Worker")
+    if normalized != "qa-worker":
+        raise AssertionError(f"safe_role_id('QA Worker') expected 'qa-worker', got {normalized}")
+
+    if agents.collect_agent_sources is None:
+        raise AssertionError("collect_agent_sources must not be None")
+    if not callable(agents.collect_agent_sources):
+        raise AssertionError("collect_agent_sources must be callable")
+
+    print("agents facade OK: deterministic_agent_id verified")
+
+
+def check_roles_facade() -> None:
+    """Worker profiles and business roles resolve through the canonical facade."""
+    import link_core.roles as roles
+
+    wp = roles.get_worker_profile("research_only")
+    if wp.max_risk != "read":
+        raise AssertionError(f"research_only max_risk expected 'read', got {wp.max_risk}")
+
+    pw = roles.get_worker_profile("patch_worker")
+    if pw.max_risk != "write":
+        raise AssertionError(f"patch_worker max_risk expected 'write', got {pw.max_risk}")
+
+    names = roles.list_worker_profile_names()
+    if len(names) < 7:
+        raise AssertionError(f"expected >=7 worker profiles, got {len(names)}")
+
+    biz_roles = roles.list_business_roles()
+    if len(biz_roles) < 10:
+        raise AssertionError(f"expected >=10 business roles, got {len(biz_roles)}")
+
+    # get_business_role should not raise for a known role id.
+    try:
+        roles.get_business_role("qa_worker")
+    except Exception as exc:
+        raise AssertionError(f"get_business_role('qa_worker') raised: {exc}")
+
+    tiers = roles.business_tier_names()
+    if not isinstance(tiers, list):
+        raise AssertionError("business_tier_names must return a list")
+    if "cheap" not in tiers:
+        raise AssertionError("business_tier_names must include 'cheap'")
+    if "premium" not in tiers:
+        raise AssertionError("business_tier_names must include 'premium'")
+
+    print("roles facade OK: worker profiles + business roles verified")
+
+
 def check_cli_dispatcher() -> None:
     """link.py exposes a stable command table and safe help/error branches.
 
@@ -220,6 +312,9 @@ def main() -> None:
     check_modes_consistency()
     check_control_plane_consistency()
     check_router_consistency()
+    check_artifacts_facade()
+    check_agents_facade()
+    check_roles_facade()
     check_cli_dispatcher()
     print("canonical architecture smoke checks passed")
 
