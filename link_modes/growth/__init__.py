@@ -50,9 +50,58 @@ def control_plane_stages() -> tuple[str, ...]:
         return ()
 
 
+def propose(
+    candidates: list[dict[str, Any]],
+    *,
+    validate: bool = True,
+) -> list[dict[str, Any]]:
+    """Convert mined upgrade candidates into validated control-plane proposals.
+
+    Composes the existing ``candidate_to_proposal`` bridge and the control-plane
+    ``validate_proposal`` function. This is the canonical runtime entry point
+    for the Growth pipeline::
+
+        receipt = run_miner(...)
+        proposals = propose(receipt["candidates"])
+
+    Args:
+        candidates: A list of miner candidate dicts (from ``run_miner`` /
+            ``build_candidates`` in ``link_research_upgrade_miner``).
+        validate: When ``True`` (default), each proposal is validated via
+            ``link_core.control_plane.validate_proposal`` and an unvalidated
+            proposal will raise. When ``False``, validation is skipped but
+            the returned dicts still contain all required fields.
+
+    Returns:
+        A list of control-plane proposal dicts convertible to proposal
+        artifacts via ``write_proposal``.
+
+    Raises:
+        TypeError:  ``candidates`` is not iterable.
+        ValueError: A candidate is missing required identity fields or
+            contains invalid values, propagated from ``candidate_to_proposal``
+            or ``validate_proposal``.
+
+    No file I/O. No network. No subprocess. Pure data transform.
+    """
+    from link_modes.growth.link_candidate_proposal_bridge import (
+        candidate_to_proposal,
+    )
+
+    proposals: list[dict[str, Any]] = []
+    for candidate in candidates:
+        proposal = candidate_to_proposal(candidate)
+        if validate:
+            from link_core.control_plane import validate_proposal
+            validate_proposal(proposal)
+        proposals.append(proposal)
+    return proposals
+
+
 __all__ = [
     "MODE_NAME",
     "TEAM_CONFIG",
     "describe",
     "control_plane_stages",
+    "propose",
 ]

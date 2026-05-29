@@ -431,6 +431,81 @@ def check_bridge_rejects_bad_input() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 8. Growth propose() -- end-to-end candidate-to-proposal runtime path
+# ---------------------------------------------------------------------------
+
+def check_growth_propose_function() -> None:
+    """propose() converts miner candidates into validated proposal dicts."""
+    from link_core.control_plane import validate_proposal
+    from link_modes.growth import propose
+    from link_modes.growth.link_research_upgrade_miner import run_miner
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "research").mkdir(parents=True)
+        (root / ".link" / "patch_drafts" / "pending").mkdir(parents=True)
+
+        (root / "research" / "upgrade_ideas.md").write_text(
+            "Evidence citation for upgrade proposals. "
+            "Frontier gap grading rubric. "
+            "Approval candidate pipeline. "
+            "Sandboxed implementation handoff. "
+            "Market context refresh adapter.\n",
+            encoding="utf-8",
+        )
+
+        receipt = run_miner(
+            root=root,
+            research_dirs=["research"],
+            candidate_file=Path(".link/approval_candidates.jsonl"),
+            write_candidates=False,
+        )
+
+    candidates = receipt["candidates"]
+    _require(len(candidates) >= 1, "run_miner must produce candidates for propose() test")
+
+    proposals = propose(candidates)
+    _require(isinstance(proposals, list), "propose() must return a list")
+    _require(len(proposals) == len(candidates),
+             f"propose() must return same count: {len(proposals)} vs {len(candidates)}")
+
+    for proposal in proposals:
+        _require(isinstance(proposal, dict), "each proposal must be a dict")
+        try:
+            validate_proposal(proposal)
+        except Exception as exc:
+            raise AssertionError(
+                f"validate_proposal rejected propose() output: {exc}"
+            )
+
+    first = proposals[0]
+    _require(isinstance(first["proposal_id"], str) and bool(first["proposal_id"]),
+             "proposal_id must be non-empty")
+    _require(first["status"] == "pending",
+             f"proposal status must be 'pending', got {first['status']!r}")
+    _require(first["recommendation"] == "accept",
+             f"proposal recommendation must be 'accept', got {first['recommendation']!r}")
+    _require(isinstance(first["implementation_plan"], list) and len(first["implementation_plan"]) > 0,
+             "proposal implementation_plan must be a non-empty list")
+
+    # validate=False path -- still produces required fields but skips validation
+    proposals_no_val = propose(candidates, validate=False)
+    _require(len(proposals_no_val) == len(candidates),
+             "propose(validate=False) must return same count")
+    for key in ("proposal_id", "title", "risk_level", "status", "recommendation"):
+        if key not in proposals_no_val[0]:
+            raise AssertionError(
+                f"propose(validate=False) output missing key: {key!r}"
+            )
+
+    # Empty input is safe
+    empty = propose([])
+    _require(empty == [], "propose([]) must return empty list")
+
+    print(f"growth propose() OK ({len(proposals)} proposals from {len(candidates)} candidates)")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -443,6 +518,7 @@ def main() -> None:
     check_control_plane_accepts_valid_proposal()
     check_bridge_produces_valid_proposal()
     check_bridge_rejects_bad_input()
+    check_growth_propose_function()
     print("Growth pipeline smoke tests passed")
 
 
