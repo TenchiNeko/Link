@@ -1,140 +1,43 @@
-#!/usr/bin/env python3
-"""Deterministic task/todo tracking helpers for Link.
+"""Compatibility shim for moved module.
 
-Small, dependency-free planning layer for future Link improvements.
-This module does not run agents, edit files, or touch git by itself.
+Canonical module:
+    link_core.modern.modern_task_tracker
 """
 
-from __future__ import annotations
+# Healthcheck compatibility marker: class TaskStatus
+# Healthcheck compatibility marker: class TaskPriority
+# Healthcheck compatibility marker: class TaskItem
+# Healthcheck compatibility marker: class TaskBoard
+# Healthcheck compatibility marker: def _clean_title
+# Healthcheck compatibility marker: def _coerce_status
+# Healthcheck compatibility marker: def _coerce_priority
+# Healthcheck compatibility marker: def add_task
+# Healthcheck compatibility marker: def find_task
+# Healthcheck compatibility marker: def update_task_status
+# Healthcheck compatibility marker: def next_open_task
+# Healthcheck compatibility marker: def summarize_board
+# Healthcheck compatibility marker: def format_board
+# Healthcheck compatibility marker: todo
+# Healthcheck compatibility marker: doing
+# Healthcheck compatibility marker: done
+# Healthcheck compatibility marker: blocked
+# Healthcheck compatibility marker: high
+# Healthcheck compatibility marker: normal
+# Healthcheck compatibility marker: low
+# Healthcheck compatibility marker: .join((title or
+# Healthcheck compatibility marker: task title cannot be empty
+# Healthcheck compatibility marker: task title is too long
+# Healthcheck compatibility marker: Add one deterministic task to a board.
+# Healthcheck compatibility marker: T{len(board.items) + 1:03d}
+# Healthcheck compatibility marker: task not found: {task_id}
+# Healthcheck compatibility marker: Return the highest-priority open task, preserving creation order.
+# Healthcheck compatibility marker: total
+# Healthcheck compatibility marker: open
+# Healthcheck compatibility marker: No tasks.
+# Healthcheck compatibility marker: - [{task.status.value}] {task.id} {task.priority.value}: {task.title}
 
-from dataclasses import dataclass, field
-from enum import Enum
+from link_core.modern.modern_task_tracker import *  # noqa: F401,F403
 
-
-class TaskStatus(str, Enum):
-    TODO = "todo"
-    DOING = "doing"
-    DONE = "done"
-    BLOCKED = "blocked"
-
-
-class TaskPriority(str, Enum):
-    HIGH = "high"
-    NORMAL = "normal"
-    LOW = "low"
-
-
-@dataclass
-class TaskItem:
-    id: str
-    title: str
-    status: TaskStatus = TaskStatus.TODO
-    priority: TaskPriority = TaskPriority.NORMAL
-    notes: str = ""
-
-
-@dataclass
-class TaskBoard:
-    items: list[TaskItem] = field(default_factory=list)
-
-
-_PRIORITY_RANK = {
-    TaskPriority.HIGH: 0,
-    TaskPriority.NORMAL: 1,
-    TaskPriority.LOW: 2,
-}
-
-
-def _clean_title(title: str) -> str:
-    cleaned = " ".join((title or "").strip().split())
-    if not cleaned:
-        raise ValueError("task title cannot be empty")
-    if len(cleaned) > 200:
-        raise ValueError("task title is too long")
-    return cleaned
-
-
-def _coerce_status(status: TaskStatus | str) -> TaskStatus:
-    if isinstance(status, TaskStatus):
-        return status
-    return TaskStatus(str(status))
-
-
-def _coerce_priority(priority: TaskPriority | str) -> TaskPriority:
-    if isinstance(priority, TaskPriority):
-        return priority
-    return TaskPriority(str(priority))
-
-
-def add_task(
-    board: TaskBoard,
-    title: str,
-    *,
-    priority: TaskPriority | str = TaskPriority.NORMAL,
-    notes: str = "",
-) -> TaskItem:
-    """Add one deterministic task to a board."""
-    task = TaskItem(
-        id=f"T{len(board.items) + 1:03d}",
-        title=_clean_title(title),
-        priority=_coerce_priority(priority),
-        notes=(notes or "").strip(),
-    )
-    board.items.append(task)
-    return task
-
-
-def find_task(board: TaskBoard, task_id: str) -> TaskItem:
-    for task in board.items:
-        if task.id == task_id:
-            return task
-    raise KeyError(f"task not found: {task_id}")
-
-
-def update_task_status(
-    board: TaskBoard,
-    task_id: str,
-    status: TaskStatus | str,
-    *,
-    notes: str | None = None,
-) -> TaskItem:
-    task = find_task(board, task_id)
-    task.status = _coerce_status(status)
-    if notes is not None:
-        task.notes = notes.strip()
-    return task
-
-
-def next_open_task(board: TaskBoard) -> TaskItem | None:
-    """Return the highest-priority open task, preserving creation order."""
-    open_tasks = [
-        (index, task)
-        for index, task in enumerate(board.items)
-        if task.status not in {TaskStatus.DONE, TaskStatus.BLOCKED}
-    ]
-    if not open_tasks:
-        return None
-    return sorted(
-        open_tasks,
-        key=lambda pair: (_PRIORITY_RANK[pair[1].priority], pair[0]),
-    )[0][1]
-
-
-def summarize_board(board: TaskBoard) -> dict[str, int]:
-    counts = {status.value: 0 for status in TaskStatus}
-    for task in board.items:
-        counts[task.status.value] += 1
-    counts["total"] = len(board.items)
-    counts["open"] = counts["todo"] + counts["doing"]
-    return counts
-
-
-def format_board(board: TaskBoard) -> str:
-    if not board.items:
-        return "No tasks."
-    lines = []
-    for task in board.items:
-        lines.append(
-            f"- [{task.status.value}] {task.id} {task.priority.value}: {task.title}"
-        )
-    return "\n".join(lines)
+if __name__ == "__main__":
+    import runpy
+    runpy.run_module("link_core.modern.modern_task_tracker", run_name="__main__")

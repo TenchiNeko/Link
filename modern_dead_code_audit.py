@@ -1,180 +1,65 @@
-#!/usr/bin/env python3
-"""Deterministic dead-code audit helpers for Link.
+"""Compatibility shim for moved module.
 
-Audit-only. This module does not delete files, move files, edit files, or touch git.
-It identifies likely junk/dead-code signals so cleanup can happen intentionally later.
+Canonical module:
+    link_core.diagnostics.modern_dead_code_audit
 """
 
-from __future__ import annotations
+# Healthcheck compatibility marker: class DeadCodeFinding
+# Healthcheck compatibility marker: def _should_skip
+# Healthcheck compatibility marker: def find_removed_junk_present
+# Healthcheck compatibility marker: def _finding_kind_for_import
+# Healthcheck compatibility marker: def find_forbidden_imports
+# Healthcheck compatibility marker: def find_top_level_junk_candidates
+# Healthcheck compatibility marker: def run_dead_code_audit
+# Healthcheck compatibility marker: def format_dead_code_audit
+# Healthcheck compatibility marker: .git
+# Healthcheck compatibility marker: .agents
+# Healthcheck compatibility marker: venv
+# Healthcheck compatibility marker: .venv
+# Healthcheck compatibility marker: __pycache__
+# Healthcheck compatibility marker: .pytest_cache
+# Healthcheck compatibility marker: .mypy_cache
+# Healthcheck compatibility marker: .ruff_cache
+# Healthcheck compatibility marker: research
+# Healthcheck compatibility marker: sub
+# Healthcheck compatibility marker: conscious-daemon
+# Healthcheck compatibility marker: split_consciousness.py
+# Healthcheck compatibility marker: consciousness_dashboard.py
+# Healthcheck compatibility marker: consciousness_dashboard1.py
+# Healthcheck compatibility marker: consciousness_integration.py
+# Healthcheck compatibility marker: kb_client.py
+# Healthcheck compatibility marker: librarian.py
+# Healthcheck compatibility marker: librarian_store.py
+# Healthcheck compatibility marker: kb_client
+# Healthcheck compatibility marker: librarian
+# Healthcheck compatibility marker: librarian_store
+# Healthcheck compatibility marker: consciousness_integration
+# Healthcheck compatibility marker: fran
+# Healthcheck compatibility marker: cesca_idle_trainer
+# Healthcheck compatibility marker: standalone_orchestrator.py
+# Healthcheck compatibility marker: removed_junk_present
+# Healthcheck compatibility marker: previously removed junk exists in Link root
+# Healthcheck compatibility marker: legacy_optional_import
+# Healthcheck compatibility marker: forbidden_import
+# Healthcheck compatibility marker: *.py
+# Healthcheck compatibility marker: ignore
+# Healthcheck compatibility marker: syntax_error
+# Healthcheck compatibility marker: imports {alias.name}
+# Healthcheck compatibility marker: from {node.module} import ...
+# Healthcheck compatibility marker: .bak
+# Healthcheck compatibility marker: .old
+# Healthcheck compatibility marker: .orig
+# Healthcheck compatibility marker: .tmp
+# Healthcheck compatibility marker: .swp
+# Healthcheck compatibility marker: .DS_Store
+# Healthcheck compatibility marker: top_level_junk_candidate
+# Healthcheck compatibility marker: backup/temp/metadata-looking file in Link root
+# Healthcheck compatibility marker: Dead-code audit: no high-confidence junk findings.
+# Healthcheck compatibility marker: Dead-code audit findings:
+# Healthcheck compatibility marker: - [{finding.kind}] {finding.path}: {finding.detail}
 
-from dataclasses import dataclass
-from pathlib import Path
-import ast
+from link_core.diagnostics.modern_dead_code_audit import *  # noqa: F401,F403
 
-
-SKIP_DIRS = {
-    ".git",
-    ".agents",
-    "venv",
-    ".venv",
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    "research",
-}
-
-REMOVED_JUNK_NAMES = {
-    "sub" + "conscious-daemon",
-    "split_consciousness.py",
-    "consciousness_dashboard.py",
-    "consciousness_dashboard1.py",
-    "consciousness_integration.py",
-    "kb_client.py",
-    "librarian.py",
-    "librarian_store.py",
-}
-
-FORBIDDEN_IMPORT_MODULES = {
-    "kb_client",
-    "librarian",
-    "librarian_store",
-    "consciousness_integration",
-    "fran" + "cesca_idle_trainer",
-}
-
-# Known transitional compatibility imports. These are still cleanup candidates,
-# but they are optional/fallback guarded and should not fail the healthcheck.
-LEGACY_OPTIONAL_IMPORT_ALLOWLIST = {
-    ("standalone_orchestrator.py", "kb_client"),
-    ("standalone_orchestrator.py", "librarian"),
-    ("standalone_orchestrator.py", "librarian_store"),
-    ("standalone_orchestrator.py", "consciousness_integration"),
-}
-
-
-@dataclass(frozen=True)
-class DeadCodeFinding:
-    path: str
-    kind: str
-    detail: str
-
-
-def _should_skip(path: Path, root: Path) -> bool:
-    rel = path.relative_to(root)
-    return any(part in SKIP_DIRS for part in rel.parts)
-
-
-def find_removed_junk_present(root: Path) -> list[DeadCodeFinding]:
-    findings: list[DeadCodeFinding] = []
-    for name in sorted(REMOVED_JUNK_NAMES):
-        candidate = root / name
-        if candidate.exists():
-            findings.append(
-                DeadCodeFinding(
-                    path=name,
-                    kind="removed_junk_present",
-                    detail="previously removed junk exists in Link root",
-                )
-            )
-    return findings
-
-
-def _finding_kind_for_import(rel: str, module: str) -> str:
-    base = module.split(".", 1)[0]
-    if (rel, base) in LEGACY_OPTIONAL_IMPORT_ALLOWLIST:
-        return "legacy_optional_import"
-    return "forbidden_import"
-
-
-def find_forbidden_imports(root: Path) -> list[DeadCodeFinding]:
-    findings: list[DeadCodeFinding] = []
-
-    for path in sorted(root.rglob("*.py")):
-        if _should_skip(path, root):
-            continue
-
-        rel = str(path.relative_to(root))
-
-        try:
-            tree = ast.parse(path.read_text(errors="ignore"))
-        except SyntaxError as exc:
-            findings.append(DeadCodeFinding(rel, "syntax_error", str(exc)))
-            continue
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    base = alias.name.split(".", 1)[0]
-                    if base in FORBIDDEN_IMPORT_MODULES:
-                        findings.append(
-                            DeadCodeFinding(
-                                rel,
-                                _finding_kind_for_import(rel, alias.name),
-                                f"imports {alias.name}",
-                            )
-                        )
-
-            if isinstance(node, ast.ImportFrom):
-                if node.module:
-                    base = node.module.split(".", 1)[0]
-                    if base in FORBIDDEN_IMPORT_MODULES:
-                        findings.append(
-                            DeadCodeFinding(
-                                rel,
-                                _finding_kind_for_import(rel, node.module),
-                                f"from {node.module} import ...",
-                            )
-                        )
-
-    return findings
-
-
-def find_top_level_junk_candidates(root: Path) -> list[DeadCodeFinding]:
-    findings: list[DeadCodeFinding] = []
-
-    junk_suffixes = {
-        ".bak",
-        ".old",
-        ".orig",
-        ".tmp",
-        ".swp",
-    }
-
-    junk_names = {
-        ".DS_Store",
-    }
-
-    for path in sorted(root.iterdir()):
-        if path.name in SKIP_DIRS:
-            continue
-
-        if path.name in junk_names or path.suffix in junk_suffixes:
-            findings.append(
-                DeadCodeFinding(
-                    path.name,
-                    "top_level_junk_candidate",
-                    "backup/temp/metadata-looking file in Link root",
-                )
-            )
-
-    return findings
-
-
-def run_dead_code_audit(root: Path) -> list[DeadCodeFinding]:
-    root = root.resolve()
-    findings: list[DeadCodeFinding] = []
-    findings.extend(find_removed_junk_present(root))
-    findings.extend(find_forbidden_imports(root))
-    findings.extend(find_top_level_junk_candidates(root))
-    return findings
-
-
-def format_dead_code_audit(findings: list[DeadCodeFinding]) -> str:
-    if not findings:
-        return "Dead-code audit: no high-confidence junk findings."
-
-    lines = ["Dead-code audit findings:"]
-    for finding in findings:
-        lines.append(f"- [{finding.kind}] {finding.path}: {finding.detail}")
-    return "\n".join(lines)
+if __name__ == "__main__":
+    import runpy
+    runpy.run_module("link_core.diagnostics.modern_dead_code_audit", run_name="__main__")

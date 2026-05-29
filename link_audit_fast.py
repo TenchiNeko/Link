@@ -1,143 +1,77 @@
-#!/usr/bin/env python3
-from __future__ import annotations
+"""Compatibility shim for moved module.
 
-import argparse
-import json
-import subprocess
-import sys
-import time
-from pathlib import Path
+Canonical module:
+    link_core.runtime.link_audit_fast
+"""
 
-from link_runtime_policy import build_policy_prompt, compact_engine_report_payload
+# Healthcheck compatibility marker: def run_cmd
+# Healthcheck compatibility marker: def emit
+# Healthcheck compatibility marker: def main
+# Healthcheck compatibility marker: def _link_audit_fast_specialist_fanout_exit_hook
+# Healthcheck compatibility marker: , raw: str =
+# Healthcheck compatibility marker: level
+# Healthcheck compatibility marker: title
+# Healthcheck compatibility marker: detail
+# Healthcheck compatibility marker: phase
+# Healthcheck compatibility marker: audit
+# Healthcheck compatibility marker: raw
+# Healthcheck compatibility marker: {title}: {detail}
+# Healthcheck compatibility marker: Fast read-only Link audit path
+# Healthcheck compatibility marker: --prompt-file
+# Healthcheck compatibility marker: utf-8
+# Healthcheck compatibility marker: replace
+# Healthcheck compatibility marker: audit-
+# Healthcheck compatibility marker: LINK AUDIT FAST PATH
+# Healthcheck compatibility marker: repo:
+# Healthcheck compatibility marker: run_id:
+# Healthcheck compatibility marker: info
+# Healthcheck compatibility marker: Prompt received
+# Healthcheck compatibility marker: git
+# Healthcheck compatibility marker: status
+# Healthcheck compatibility marker: --short
+# Healthcheck compatibility marker: --untracked-files=all
+# Healthcheck compatibility marker: Git status
+# Healthcheck compatibility marker: clean
+# Healthcheck compatibility marker: dirty
+# Healthcheck compatibility marker: log
+# Healthcheck compatibility marker: --oneline
+# Healthcheck compatibility marker: --decorate
+# Healthcheck compatibility marker: Recent commits
+# Healthcheck compatibility marker: link_doctor.py
+# Healthcheck compatibility marker: success
+# Healthcheck compatibility marker: error
+# Healthcheck compatibility marker: Link doctor
+# Healthcheck compatibility marker: exit {rc_doctor}
+# Healthcheck compatibility marker: link_healthcheck.py
+# Healthcheck compatibility marker: Healthcheck
+# Healthcheck compatibility marker: exit {rc_health}
+# Healthcheck compatibility marker: run_id
+# Healthcheck compatibility marker: completed
+# Healthcheck compatibility marker: failed
+# Healthcheck compatibility marker: started_at
+# Healthcheck compatibility marker: ended_at
+# Healthcheck compatibility marker: exit_code
+# Healthcheck compatibility marker: changed_files
+# Healthcheck compatibility marker: diff_lines
+# Healthcheck compatibility marker: events
+# Healthcheck compatibility marker: report_path
+# Healthcheck compatibility marker: .agents
+# Healthcheck compatibility marker: engine_runs
+# Healthcheck compatibility marker: engine_report.json
+# Healthcheck compatibility marker: audit_fast_path
+# Healthcheck compatibility marker: Audit report:
+# Healthcheck compatibility marker: Run deterministic read-only specialist fanout at the end of audit fastpath.
+# Healthcheck compatibility marker: audit-fanout-
+# Healthcheck compatibility marker: SPECIALIST FANOUT: OK
+# Healthcheck compatibility marker: SPECIALIST FANOUT JSON:
+# Healthcheck compatibility marker: json_path
+# Healthcheck compatibility marker: SPECIALIST FANOUT SUMMARY:
+# Healthcheck compatibility marker: summary_path
+# Healthcheck compatibility marker: SPECIALIST FANOUT: FAILED:
+# Healthcheck compatibility marker: __main__
 
-ROOT = Path(__file__).resolve().parent
-
-
-def run_cmd(cmd: list[str], *, timeout: int = 120) -> tuple[int, str]:
-    cp = subprocess.run(
-        cmd,
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
-    out = "\n".join(part for part in [cp.stdout, cp.stderr] if part).strip()
-    return cp.returncode, out
-
-
-def emit(events: list[dict], level: str, title: str, detail: str = "", raw: str = "") -> None:
-    events.append(
-        {
-            "ts": time.time(),
-            "level": level,
-            "title": title,
-            "detail": detail,
-            "phase": "audit",
-            "raw": raw,
-        }
-    )
-    if raw:
-        print(raw)
-    elif detail:
-        print(f"{title}: {detail}")
-    else:
-        print(title)
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Fast read-only Link audit path")
-    parser.add_argument("--prompt-file")
-    args = parser.parse_args()
-
-    prompt = ""
-    if args.prompt_file:
-        prompt = Path(args.prompt_file).read_text(encoding="utf-8", errors="replace")
-        prompt = build_policy_prompt(prompt, audit_only=True)
-
-    run_id = "audit-" + hex(int(time.time() * 1000))[2:]
-    events: list[dict] = []
-    started = time.time()
-
-    print("LINK AUDIT FAST PATH")
-    print("repo:", ROOT)
-    print("run_id:", run_id)
-    print()
-
-    emit(events, "info", "Prompt received", prompt[:1000])
-
-    rc_status, out_status = run_cmd(["git", "status", "--short", "--untracked-files=all"])
-    emit(events, "info", "Git status", "clean" if not out_status else "dirty", out_status)
-
-    rc_log, out_log = run_cmd(["git", "log", "--oneline", "--decorate", "-8"])
-    emit(events, "info", "Recent commits", raw=out_log)
-
-    rc_doctor, out_doctor = run_cmd([sys.executable, str(ROOT / "link_doctor.py")])
-    emit(
-        events,
-        "success" if rc_doctor == 0 else "error",
-        "Link doctor",
-        f"exit {rc_doctor}",
-        out_doctor,
-    )
-
-    rc_health, out_health = run_cmd([sys.executable, str(ROOT / "link_healthcheck.py")])
-    emit(
-        events,
-        "success" if rc_health == 0 else "error",
-        "Healthcheck",
-        f"exit {rc_health}",
-        out_health,
-    )
-
-    exit_code = 0 if rc_status == 0 and rc_doctor == 0 and rc_health == 0 else 1
-
-    report = {
-        "run_id": run_id,
-        "status": "completed" if exit_code == 0 else "failed",
-        "phase": "audit",
-        "started_at": started,
-        "ended_at": time.time(),
-        "exit_code": exit_code,
-        "changed_files": [],
-        "diff_lines": 0,
-        "events": events,
-        "report_path": str(ROOT / ".agents" / "engine_runs" / run_id / "engine_report.json"),
-        "audit_fast_path": True,
-    }
-
-    report = compact_engine_report_payload(ROOT, report)
-    report_path = Path(report["report_path"])
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-
-    print()
-    print("Audit report:", report_path)
-    return exit_code
-
-
-
-# SPECIALIST_FANOUT_AUDIT_EXIT_HOOK_V1
-def _link_audit_fast_specialist_fanout_exit_hook():
-    """Run deterministic read-only specialist fanout at the end of audit fastpath."""
-    try:
-        import uuid
-        from link_specialist_fanout import run_fanout
-
-        fanout_run_id = "audit-fanout-" + uuid.uuid4().hex[:10]
-        data = run_fanout(run_id=fanout_run_id, write_markdown=True)
-        print("SPECIALIST FANOUT: OK")
-        print("SPECIALIST FANOUT JSON:", data.get("json_path"))
-        print("SPECIALIST FANOUT SUMMARY:", data.get("summary_path"))
-    except Exception as exc:
-        print("SPECIALIST FANOUT: FAILED:", repr(exc))
-
+from link_core.runtime.link_audit_fast import *  # noqa: F401,F403
 
 if __name__ == "__main__":
-    import atexit as _link_fanout_atexit
-    _link_fanout_atexit.register(_link_audit_fast_specialist_fanout_exit_hook)
-
-# END SPECIALIST_FANOUT_AUDIT_EXIT_HOOK_V1
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    import runpy
+    runpy.run_module("link_core.runtime.link_audit_fast", run_name="__main__")

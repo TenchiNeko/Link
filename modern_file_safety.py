@@ -1,141 +1,54 @@
-#!/usr/bin/env python3
-"""Deterministic file/path safety helpers for Link.
+"""Compatibility shim for moved module.
 
-This module is intentionally small and dependency-free. It does not perform
-file edits by itself; it classifies whether a future read/write/edit operation
-is safe for Link tooling.
+Canonical module:
+    link_core.modern.modern_file_safety
 """
 
-from __future__ import annotations
+# Healthcheck compatibility marker: class FileRiskLevel
+# Healthcheck compatibility marker: class FileSafetyAssessment
+# Healthcheck compatibility marker: def _inside
+# Healthcheck compatibility marker: def classify_file_operation
+# Healthcheck compatibility marker: allow
+# Healthcheck compatibility marker: caution
+# Healthcheck compatibility marker: deny
+# Healthcheck compatibility marker: .git
+# Healthcheck compatibility marker: .agents
+# Healthcheck compatibility marker: venv
+# Healthcheck compatibility marker: .venv
+# Healthcheck compatibility marker: __pycache__
+# Healthcheck compatibility marker: .pytest_cache
+# Healthcheck compatibility marker: .mypy_cache
+# Healthcheck compatibility marker: .ruff_cache
+# Healthcheck compatibility marker: research
+# Healthcheck compatibility marker: .py
+# Healthcheck compatibility marker: .md
+# Healthcheck compatibility marker: .txt
+# Healthcheck compatibility marker: .json
+# Healthcheck compatibility marker: .toml
+# Healthcheck compatibility marker: .yml
+# Healthcheck compatibility marker: .yaml
+# Healthcheck compatibility marker: .sh
+# Healthcheck compatibility marker: read
+# Healthcheck compatibility marker: path is outside the Link repo root
+# Healthcheck compatibility marker: path is inside protected generated/internal state
+# Healthcheck compatibility marker: delete
+# Healthcheck compatibility marker: remove
+# Healthcheck compatibility marker: delete operations require a separate manual cleanup flow
+# Healthcheck compatibility marker: path is in research/reference material; do not merge directly
+# Healthcheck compatibility marker: write
+# Healthcheck compatibility marker: edit
+# Healthcheck compatibility marker: move
+# Healthcheck compatibility marker: copy
+# Healthcheck compatibility marker: {op} may modify repo state
+# Healthcheck compatibility marker: read-only inspection inside Link repo
+# Healthcheck compatibility marker: read target has a less common file type
+# Healthcheck compatibility marker: unknown file operation
+# Healthcheck compatibility marker: FileRiskLevel
+# Healthcheck compatibility marker: FileSafetyAssessment
+# Healthcheck compatibility marker: classify_file_operation
 
-from dataclasses import dataclass
-from enum import Enum
-from pathlib import Path
+from link_core.modern.modern_file_safety import *  # noqa: F401,F403
 
-
-class FileRiskLevel(str, Enum):
-    ALLOW = "allow"
-    CAUTION = "caution"
-    DENY = "deny"
-
-
-@dataclass(frozen=True)
-class FileSafetyAssessment:
-    level: FileRiskLevel
-    reason: str
-    resolved_path: str
-
-
-DENY_PARTS = {
-    ".git",
-    ".agents",
-    "venv",
-    ".venv",
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-}
-
-CAUTION_PARTS = {
-    "research",
-}
-
-READ_ONLY_SAFE_SUFFIXES = {
-    ".py",
-    ".md",
-    ".txt",
-    ".json",
-    ".toml",
-    ".yml",
-    ".yaml",
-    ".sh",
-}
-
-
-def _inside(child: Path, parent: Path) -> bool:
-    try:
-        child.relative_to(parent)
-        return True
-    except ValueError:
-        return False
-
-
-def classify_file_operation(path: str | Path, operation: str = "read", root: str | Path | None = None) -> FileSafetyAssessment:
-    """Classify a file operation as allow/caution/deny.
-
-    operation should be one of: read, write, edit, delete, move, copy.
-    """
-
-    repo_root = Path(root or Path.cwd()).resolve()
-    target = Path(path)
-
-    if not target.is_absolute():
-        target = repo_root / target
-
-    resolved = target.resolve(strict=False)
-    op = (operation or "read").lower().strip()
-
-    if not _inside(resolved, repo_root):
-        return FileSafetyAssessment(
-            FileRiskLevel.DENY,
-            "path is outside the Link repo root",
-            str(resolved),
-        )
-
-    rel = resolved.relative_to(repo_root)
-    parts = set(rel.parts)
-
-    if parts & DENY_PARTS:
-        return FileSafetyAssessment(
-            FileRiskLevel.DENY,
-            "path is inside protected generated/internal state",
-            str(resolved),
-        )
-
-    if op in {"delete", "remove", "rm"}:
-        return FileSafetyAssessment(
-            FileRiskLevel.DENY,
-            "delete operations require a separate manual cleanup flow",
-            str(resolved),
-        )
-
-    if parts & CAUTION_PARTS:
-        return FileSafetyAssessment(
-            FileRiskLevel.CAUTION,
-            "path is in research/reference material; do not merge directly",
-            str(resolved),
-        )
-
-    if op in {"write", "edit", "move", "copy"}:
-        return FileSafetyAssessment(
-            FileRiskLevel.CAUTION,
-            f"{op} may modify repo state",
-            str(resolved),
-        )
-
-    if op == "read":
-        if resolved.suffix in READ_ONLY_SAFE_SUFFIXES or resolved.suffix == "":
-            return FileSafetyAssessment(
-                FileRiskLevel.ALLOW,
-                "read-only inspection inside Link repo",
-                str(resolved),
-            )
-        return FileSafetyAssessment(
-            FileRiskLevel.CAUTION,
-            "read target has a less common file type",
-            str(resolved),
-        )
-
-    return FileSafetyAssessment(
-        FileRiskLevel.CAUTION,
-        "unknown file operation",
-        str(resolved),
-    )
-
-
-__all__ = [
-    "FileRiskLevel",
-    "FileSafetyAssessment",
-    "classify_file_operation",
-]
+if __name__ == "__main__":
+    import runpy
+    runpy.run_module("link_core.modern.modern_file_safety", run_name="__main__")

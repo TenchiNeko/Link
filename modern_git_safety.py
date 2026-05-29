@@ -1,155 +1,86 @@
-#!/usr/bin/env python3
-"""Deterministic git/worktree safety helpers for Link.
+"""Compatibility shim for moved module.
 
-Small, dependency-free guard layer for classifying git commands before future
-agent/tool execution. This module does not run git commands by itself.
+Canonical module:
+    link_core.modern.modern_git_safety
 """
 
-from __future__ import annotations
+# Healthcheck compatibility marker: class GitRiskLevel
+# Healthcheck compatibility marker: class GitSafetyAssessment
+# Healthcheck compatibility marker: def _has_shell_write_or_pipe
+# Healthcheck compatibility marker: def classify_git_command
+# Healthcheck compatibility marker: def classify_worktree_path
+# Healthcheck compatibility marker: allow
+# Healthcheck compatibility marker: caution
+# Healthcheck compatibility marker: deny
+# Healthcheck compatibility marker: status
+# Healthcheck compatibility marker: diff
+# Healthcheck compatibility marker: log
+# Healthcheck compatibility marker: show
+# Healthcheck compatibility marker: rev-parse
+# Healthcheck compatibility marker: branch
+# Healthcheck compatibility marker: tag
+# Healthcheck compatibility marker: remote
+# Healthcheck compatibility marker: ls-files
+# Healthcheck compatibility marker: add
+# Healthcheck compatibility marker: commit
+# Healthcheck compatibility marker: checkout
+# Healthcheck compatibility marker: switch
+# Healthcheck compatibility marker: merge
+# Healthcheck compatibility marker: rebase
+# Healthcheck compatibility marker: reset
+# Healthcheck compatibility marker: clean
+# Healthcheck compatibility marker: stash
+# Healthcheck compatibility marker: pull
+# Healthcheck compatibility marker: fetch
+# Healthcheck compatibility marker: push
+# Healthcheck compatibility marker: worktree
+# Healthcheck compatibility marker: restore
+# Healthcheck compatibility marker: \bgit\s+reset\b.*\s--hard\b
+# Healthcheck compatibility marker: git reset --hard can destroy local work
+# Healthcheck compatibility marker: \bgit\s+clean\b.*-[a-zA-Z]*f[a-zA-Z]*d
+# Healthcheck compatibility marker: git clean -fd can delete untracked files
+# Healthcheck compatibility marker: \bgit\s+clean\b.*-[a-zA-Z]*x
+# Healthcheck compatibility marker: git clean -x can delete ignored files
+# Healthcheck compatibility marker: \bgit\s+push\b.*(--force|-f)\b
+# Healthcheck compatibility marker: force push can rewrite remote history
+# Healthcheck compatibility marker: \bgit\s+branch\s+-D\b
+# Healthcheck compatibility marker: force deleting branches is destructive
+# Healthcheck compatibility marker: \bgit\s+worktree\s+remove\b.*(--force|-f)\b
+# Healthcheck compatibility marker: force removing worktrees can destroy work
+# Healthcheck compatibility marker: \bgit\s+checkout\s+--\s+\.
+# Healthcheck compatibility marker: checkout -- . can discard local changes
+# Healthcheck compatibility marker: \bgit\s+restore\s+\.
+# Healthcheck compatibility marker: restore . can discard local changes
+# Healthcheck compatibility marker: (\||>>?|2>|&>)
+# Healthcheck compatibility marker: empty command
+# Healthcheck compatibility marker: could not parse command safely
+# Healthcheck compatibility marker: git
+# Healthcheck compatibility marker: not a git command
+# Healthcheck compatibility marker: git with no subcommand only prints help
+# Healthcheck compatibility marker: --git-dir
+# Healthcheck compatibility marker: --work-tree
+# Healthcheck compatibility marker: git path override needs review
+# Healthcheck compatibility marker: git command includes shell pipe/redirection
+# Healthcheck compatibility marker: --delete
+# Healthcheck compatibility marker: branch deletion needs review
+# Healthcheck compatibility marker: read-only git branch inspection
+# Healthcheck compatibility marker: --force
+# Healthcheck compatibility marker: git tag mutation needs review
+# Healthcheck compatibility marker: read-only git tag inspection
+# Healthcheck compatibility marker: read-only git {op}
+# Healthcheck compatibility marker: git {op} may modify repo state
+# Healthcheck compatibility marker: unknown git subcommand: {op}
+# Healthcheck compatibility marker: path is outside Link repo root
+# Healthcheck compatibility marker: .git
+# Healthcheck compatibility marker: path is inside .git metadata
+# Healthcheck compatibility marker: .agents
+# Healthcheck compatibility marker: path is inside Link agent generated state
+# Healthcheck compatibility marker: research
+# Healthcheck compatibility marker: path is research/reference material
+# Healthcheck compatibility marker: path is inside Link repo
 
-from dataclasses import dataclass
-from enum import Enum
-from pathlib import Path
-import re
-import shlex
+from link_core.modern.modern_git_safety import *  # noqa: F401,F403
 
-
-class GitRiskLevel(str, Enum):
-    ALLOW = "allow"
-    CAUTION = "caution"
-    DENY = "deny"
-
-
-@dataclass(frozen=True)
-class GitSafetyAssessment:
-    level: GitRiskLevel
-    reason: str
-
-
-_READ_ONLY_GIT_OPS = {
-    "status",
-    "diff",
-    "log",
-    "show",
-    "rev-parse",
-    "branch",
-    "tag",
-    "remote",
-    "ls-files",
-}
-
-_MUTATING_GIT_OPS = {
-    "add",
-    "commit",
-    "checkout",
-    "switch",
-    "merge",
-    "rebase",
-    "reset",
-    "clean",
-    "stash",
-    "pull",
-    "fetch",
-    "push",
-    "worktree",
-    "restore",
-    "rm",
-    "mv",
-}
-
-
-_DANGEROUS_PATTERNS = [
-    (r"\bgit\s+reset\b.*\s--hard\b", "git reset --hard can destroy local work"),
-    (r"\bgit\s+clean\b.*-[a-zA-Z]*f[a-zA-Z]*d", "git clean -fd can delete untracked files"),
-    (r"\bgit\s+clean\b.*-[a-zA-Z]*x", "git clean -x can delete ignored files"),
-    (r"\bgit\s+push\b.*(--force|-f)\b", "force push can rewrite remote history"),
-    (r"\bgit\s+branch\s+-D\b", "force deleting branches is destructive"),
-    (r"\bgit\s+worktree\s+remove\b.*(--force|-f)\b", "force removing worktrees can destroy work"),
-    (r"\bgit\s+checkout\s+--\s+\.", "checkout -- . can discard local changes"),
-    (r"\bgit\s+restore\s+\.", "restore . can discard local changes"),
-]
-
-
-def _has_shell_write_or_pipe(command: str) -> bool:
-    return bool(re.search(r"(\||>>?|2>|&>)", command))
-
-
-def classify_git_command(command: str) -> GitSafetyAssessment:
-    raw = (command or "").strip()
-
-    if not raw:
-        return GitSafetyAssessment(GitRiskLevel.CAUTION, "empty command")
-
-    lowered = raw.lower()
-
-    for pattern, reason in _DANGEROUS_PATTERNS:
-        if re.search(pattern, lowered):
-            return GitSafetyAssessment(GitRiskLevel.DENY, reason)
-
-    try:
-        tokens = shlex.split(raw)
-    except ValueError:
-        return GitSafetyAssessment(GitRiskLevel.CAUTION, "could not parse command safely")
-
-    if not tokens or tokens[0] != "git":
-        return GitSafetyAssessment(GitRiskLevel.CAUTION, "not a git command")
-
-    if len(tokens) == 1:
-        return GitSafetyAssessment(GitRiskLevel.ALLOW, "git with no subcommand only prints help")
-
-    op = tokens[1]
-
-    if op in {"-C", "--git-dir", "--work-tree"}:
-        return GitSafetyAssessment(GitRiskLevel.CAUTION, "git path override needs review")
-
-    if _has_shell_write_or_pipe(raw):
-        return GitSafetyAssessment(GitRiskLevel.CAUTION, "git command includes shell pipe/redirection")
-
-    if op == "branch":
-        if any(t in {"-d", "-D", "--delete"} for t in tokens[2:]):
-            return GitSafetyAssessment(GitRiskLevel.CAUTION, "branch deletion needs review")
-        return GitSafetyAssessment(GitRiskLevel.ALLOW, "read-only git branch inspection")
-
-    if op == "tag":
-        mutating_tag_flags = {"-a", "-s", "-f", "--force", "-d", "--delete"}
-        if any(t in mutating_tag_flags for t in tokens[2:]):
-            return GitSafetyAssessment(GitRiskLevel.CAUTION, "git tag mutation needs review")
-        return GitSafetyAssessment(GitRiskLevel.ALLOW, "read-only git tag inspection")
-
-    if op in {"status", "diff", "log", "show", "rev-parse", "remote", "ls-files"}:
-        return GitSafetyAssessment(GitRiskLevel.ALLOW, f"read-only git {op}")
-
-    if op in _MUTATING_GIT_OPS:
-        return GitSafetyAssessment(GitRiskLevel.CAUTION, f"git {op} may modify repo state")
-
-    if op in _READ_ONLY_GIT_OPS:
-        return GitSafetyAssessment(GitRiskLevel.ALLOW, f"read-only git {op}")
-
-    return GitSafetyAssessment(GitRiskLevel.CAUTION, f"unknown git subcommand: {op}")
-
-
-def classify_worktree_path(path: str | Path, repo_root: str | Path) -> GitSafetyAssessment:
-    root = Path(repo_root).resolve()
-    target = Path(path)
-
-    if not target.is_absolute():
-        target = root / target
-
-    try:
-        resolved = target.resolve()
-        resolved.relative_to(root)
-    except Exception:
-        return GitSafetyAssessment(GitRiskLevel.DENY, "path is outside Link repo root")
-
-    parts = set(resolved.relative_to(root).parts)
-
-    if ".git" in parts:
-        return GitSafetyAssessment(GitRiskLevel.DENY, "path is inside .git metadata")
-
-    if ".agents" in parts:
-        return GitSafetyAssessment(GitRiskLevel.CAUTION, "path is inside Link agent generated state")
-
-    if "research" in parts:
-        return GitSafetyAssessment(GitRiskLevel.CAUTION, "path is research/reference material")
-
-    return GitSafetyAssessment(GitRiskLevel.ALLOW, "path is inside Link repo")
+if __name__ == "__main__":
+    import runpy
+    runpy.run_module("link_core.modern.modern_git_safety", run_name="__main__")

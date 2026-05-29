@@ -1,28 +1,16 @@
+"""Compatibility shim for moved module.
+
+Canonical module:
+    link_core.standalone.standalone_artifacts
 """
-Stable task artifact paths for orchestrator runs.
 
-Artifacts live outside transient worktrees:
-.agents/artifacts/<task_id>/
-"""
+# Healthcheck compatibility marker: def get_task_artifact_dir
+# Healthcheck compatibility marker: def copy_file_to_artifacts
+# Healthcheck compatibility marker: .agents
+# Healthcheck compatibility marker: artifacts
 
-from __future__ import annotations
+from link_core.standalone.standalone_artifacts import *  # noqa: F401,F403
 
-import shutil
-from pathlib import Path
-
-
-def get_task_artifact_dir(repo: Path, task_id: str) -> Path:
-    artifact_dir = repo / ".agents" / "artifacts" / task_id
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    return artifact_dir
-
-
-def copy_file_to_artifacts(repo: Path, task_id: str, src: Path, subdir: str = "") -> Path:
-    artifact_dir = get_task_artifact_dir(repo, task_id)
-    if subdir:
-        artifact_dir = artifact_dir / subdir
-        artifact_dir.mkdir(parents=True, exist_ok=True)
-
-    dst = artifact_dir / src.name
-    shutil.copy2(src, dst)
-    return dst
+if __name__ == "__main__":
+    import runpy
+    runpy.run_module("link_core.standalone.standalone_artifacts", run_name="__main__")

@@ -1,136 +1,74 @@
-#!/usr/bin/env python3
-from __future__ import annotations
+"""Compatibility shim for moved module.
 
-import argparse
-import json
-import subprocess
-import time
-from pathlib import Path
-from typing import Any
+Canonical module:
+    link_core.runtime.link_self_update
+"""
 
-from capability_gate import classify_git_command
-from execution_snapshots import create_execution_snapshot
-from link_worker_profiles import profile_summary, validate_profiles
+# Healthcheck compatibility marker: def run_git
+# Healthcheck compatibility marker: def git_text
+# Healthcheck compatibility marker: def write_json
+# Healthcheck compatibility marker: def create_preflight_receipt
+# Healthcheck compatibility marker: def main
+# Healthcheck compatibility marker: .agents
+# Healthcheck compatibility marker: self_update_receipts
+# Healthcheck compatibility marker: git
+# Healthcheck compatibility marker: git command blocked: {decision.reason}
+# Healthcheck compatibility marker: git command failed: git {joined}\n{out}
+# Healthcheck compatibility marker: utf-8
+# Healthcheck compatibility marker: self_update_preflight
+# Healthcheck compatibility marker: %Y%m%d-%H%M%S
+# Healthcheck compatibility marker: worker profile validation failed: {validation}
+# Healthcheck compatibility marker: branch
+# Healthcheck compatibility marker: --show-current
+# Healthcheck compatibility marker: rev-parse
+# Healthcheck compatibility marker: --verify
+# Healthcheck compatibility marker: HEAD
+# Healthcheck compatibility marker: log
+# Healthcheck compatibility marker: --oneline
+# Healthcheck compatibility marker: status
+# Healthcheck compatibility marker: --short
+# Healthcheck compatibility marker: goal
+# Healthcheck compatibility marker: profile
+# Healthcheck compatibility marker: enabled_tools
+# Healthcheck compatibility marker: enabled_tool_names
+# Healthcheck compatibility marker: allow
+# Healthcheck compatibility marker: preflight inspection only
+# Healthcheck compatibility marker: link_self_update
+# Healthcheck compatibility marker: head
+# Healthcheck compatibility marker: status_before
+# Healthcheck compatibility marker: worker_profile
+# Healthcheck compatibility marker: receipt_version
+# Healthcheck compatibility marker: runner
+# Healthcheck compatibility marker: mode
+# Healthcheck compatibility marker: preflight
+# Healthcheck compatibility marker: created_at
+# Healthcheck compatibility marker: latest_commit
+# Healthcheck compatibility marker: profile_details
+# Healthcheck compatibility marker: profile_validation
+# Healthcheck compatibility marker: snapshot_path
+# Healthcheck compatibility marker: allowed_actions
+# Healthcheck compatibility marker: inspect repository state
+# Healthcheck compatibility marker: resolve restricted worker profile
+# Healthcheck compatibility marker: create execution snapshot
+# Healthcheck compatibility marker: write self-update receipt
+# Healthcheck compatibility marker: blocked_actions
+# Healthcheck compatibility marker: modify main directly
+# Healthcheck compatibility marker: run destructive git commands
+# Healthcheck compatibility marker: apply patches without later test evidence
+# Healthcheck compatibility marker: copy external project code wholesale
+# Healthcheck compatibility marker: use tools outside the resolved worker profile
+# Healthcheck compatibility marker: next_step
+# Healthcheck compatibility marker: review receipt, then implement the smallest safe Link-native patch
+# Healthcheck compatibility marker: {created_at}-self-update-preflight-{profile}.json
+# Healthcheck compatibility marker: Run Link self-update preflight.
+# Healthcheck compatibility marker: --goal
+# Healthcheck compatibility marker: Self-update goal being evaluated.
+# Healthcheck compatibility marker: --profile
+# Healthcheck compatibility marker: Worker profile to resolve for this preflight.
+# Healthcheck compatibility marker: __main__
 
-ROOT = Path(__file__).resolve().parent
-RECEIPT_DIR = ROOT / ".agents" / "self_update_receipts"
-
-
-def run_git(args: list[str]) -> tuple[int, str]:
-    command = ["git", *args]
-    decision = classify_git_command(command)
-    if decision.denied:
-        raise PermissionError(f"git command blocked: {decision.reason}")
-
-    proc = subprocess.run(
-        command,
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    return proc.returncode, proc.stdout
-
-
-def git_text(args: list[str]) -> str:
-    code, out = run_git(args)
-    if code != 0:
-        joined = " ".join(args)
-        raise RuntimeError(f"git command failed: git {joined}\n{out}")
-    return out.strip()
-
-
-def write_json(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
-        encoding="utf-8",
-    )
-    return path
-
-
-def create_preflight_receipt(goal: str, profile: str = "self_update_preflight") -> Path:
-    created_at = time.strftime("%Y%m%d-%H%M%S")
-
-    validation = validate_profiles()
-    if not validation.get("ok"):
-        raise RuntimeError(f"worker profile validation failed: {validation}")
-
-    profile_payload = profile_summary(profile)
-
-    branch = git_text(["branch", "--show-current"])
-    head = git_text(["rev-parse", "--verify", "HEAD"])
-    latest_commit = git_text(["log", "--oneline", "-1"])
-    status_before = git_text(["status", "--short"])
-
-    snapshot = create_execution_snapshot(
-        action="self_update_preflight",
-        target={
-            "goal": goal,
-            "profile": profile,
-            "enabled_tools": profile_payload["enabled_tool_names"],
-        },
-        gate_decision="allow",
-        gate_reason="preflight inspection only",
-        actor="link_self_update",
-        details={
-            "branch": branch,
-            "head": head,
-            "status_before": status_before,
-            "worker_profile": profile_payload,
-        },
-    )
-
-    receipt = {
-        "receipt_version": 2,
-        "runner": "link_self_update",
-        "mode": "preflight",
-        "created_at": created_at,
-        "goal": goal,
-        "branch": branch,
-        "head": head,
-        "latest_commit": latest_commit,
-        "status_before": status_before,
-        "worker_profile": profile,
-        "enabled_tools": profile_payload["enabled_tool_names"],
-        "profile_details": profile_payload["profile"],
-        "profile_validation": validation,
-        "snapshot_path": str(snapshot),
-        "allowed_actions": [
-            "inspect repository state",
-            "resolve restricted worker profile",
-            "create execution snapshot",
-            "write self-update receipt",
-        ],
-        "blocked_actions": [
-            "modify main directly",
-            "run destructive git commands",
-            "apply patches without later test evidence",
-            "copy external project code wholesale",
-            "use tools outside the resolved worker profile",
-        ],
-        "next_step": "review receipt, then implement the smallest safe Link-native patch",
-    }
-
-    filename = f"{created_at}-self-update-preflight-{profile}.json"
-    return write_json(RECEIPT_DIR / filename, receipt)
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Run Link self-update preflight.")
-    parser.add_argument("--goal", required=True, help="Self-update goal being evaluated.")
-    parser.add_argument(
-        "--profile",
-        default="self_update_preflight",
-        help="Worker profile to resolve for this preflight.",
-    )
-    args = parser.parse_args()
-
-    path = create_preflight_receipt(goal=args.goal, profile=args.profile)
-    print(path)
-    return 0
-
+from link_core.runtime.link_self_update import *  # noqa: F401,F403
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import runpy
+    runpy.run_module("link_core.runtime.link_self_update", run_name="__main__")

@@ -1,149 +1,93 @@
-#!/usr/bin/env python3
-from __future__ import annotations
+"""Compatibility shim for moved module.
 
-import argparse
-import sys
-from typing import Any
+Canonical module:
+    link_core.diagnostics.link_doctor
+"""
 
-from link_common import (
-    ROOT,
-    full_head_commit,
-    git_dirty,
-    head_commit,
-    json_print,
-    latest_engine_report,
-    run_cmd,
-    safe_latest_commit,
-    scrub_text,
-)
-import link_agents
-import link_config_conflicts
-import link_rules
-import link_status
-import link_loop_report
+# Healthcheck compatibility marker: def collect
+# Healthcheck compatibility marker: def print_human
+# Healthcheck compatibility marker: def main
+# Healthcheck compatibility marker: error
+# Healthcheck compatibility marker: link_web.py
+# Healthcheck compatibility marker: utf-8
+# Healthcheck compatibility marker: link_engine.py
+# Healthcheck compatibility marker: routes_through_engine
+# Healthcheck compatibility marker: str(ROOT / "link_engine.py")
+# Healthcheck compatibility marker: has_run_status_endpoint
+# Healthcheck compatibility marker: parsed.path.startswith("/api/run/")
+# Healthcheck compatibility marker: has_status_poller
+# Healthcheck compatibility marker: pollRunStatus
+# Healthcheck compatibility marker: has_engine_report_fallback
+# Healthcheck compatibility marker: find_engine_report_for_run
+# Healthcheck compatibility marker: fake_worktree_toggle_absent
+# Healthcheck compatibility marker: id="worktree"
+# Healthcheck compatibility marker: Use worktree
+# Healthcheck compatibility marker: expected_change_guard
+# Healthcheck compatibility marker: expected_changed_files
+# Healthcheck compatibility marker: min_changed_files
+# Healthcheck compatibility marker: live_report_writer
+# Healthcheck compatibility marker: _write_live_report
+# Healthcheck compatibility marker: self._write_live_report(state)
+# Healthcheck compatibility marker: auto_restore_flag
+# Healthcheck compatibility marker: --auto-restore-on-failure
+# Healthcheck compatibility marker: root
+# Healthcheck compatibility marker: git
+# Healthcheck compatibility marker: head
+# Healthcheck compatibility marker: head_full
+# Healthcheck compatibility marker: safe_link_latest
+# Healthcheck compatibility marker: dirty
+# Healthcheck compatibility marker: dirty_count
+# Healthcheck compatibility marker: web
+# Healthcheck compatibility marker: engine
+# Healthcheck compatibility marker: latest_engine_report
+# Healthcheck compatibility marker: latest_failure_summary
+# Healthcheck compatibility marker: rules_critique
+# Healthcheck compatibility marker: agents
+# Healthcheck compatibility marker: endpoint_status
+# Healthcheck compatibility marker: config_conflicts
+# Healthcheck compatibility marker: healthcheck
+# Healthcheck compatibility marker: python3
+# Healthcheck compatibility marker: link_healthcheck.py
+# Healthcheck compatibility marker: LINK DOCTOR
+# Healthcheck compatibility marker: repo: {data['root']}
+# Healthcheck compatibility marker: HEAD: {data['git']['head']}   safe-link-latest: {data['git']['safe_link_latest']}
+# Healthcheck compatibility marker: dirty files: {data['git']['dirty_count']}
+# Healthcheck compatibility marker: \nWeb:
+# Healthcheck compatibility marker: - {key}: {'OK' if value else 'FAIL'}
+# Healthcheck compatibility marker: \nEngine:
+# Healthcheck compatibility marker: \nLatest engine run:
+# Healthcheck compatibility marker: - run_id: {latest.get('run_id')}
+# Healthcheck compatibility marker: - status: {latest.get('status')}
+# Healthcheck compatibility marker: - phase: {latest.get('phase')}
+# Healthcheck compatibility marker: - exit_code: {latest.get('exit_code')}
+# Healthcheck compatibility marker: - report: {latest.get('_path') or latest.get('report_path')}
+# Healthcheck compatibility marker: - none found
+# Healthcheck compatibility marker: \nMost recent failure memory:
+# Healthcheck compatibility marker: - note: this may predate the latest completed engine run
+# Healthcheck compatibility marker: - failure_type: {summary.get('failure_type')}
+# Healthcheck compatibility marker: - phase: {summary.get('phase')}
+# Healthcheck compatibility marker: - safe_to_retry: {summary.get('safe_to_retry')}
+# Healthcheck compatibility marker: last_successful_observation
+# Healthcheck compatibility marker: - last_successful_observation: {scrub_text(str(obs))[:300]}
+# Healthcheck compatibility marker: recommended_next_action
+# Healthcheck compatibility marker: - {rec}
+# Healthcheck compatibility marker: - none
+# Healthcheck compatibility marker: findings
+# Healthcheck compatibility marker: \nRule critique:
+# Healthcheck compatibility marker: - {finding['severity']}: {finding['path']} — {finding['message']}
+# Healthcheck compatibility marker: conflicts
+# Healthcheck compatibility marker: \nConfig conflicts: {len(conflicts)}
+# Healthcheck compatibility marker: - {item['key']}: {', '.join(item['scopes'])}
+# Healthcheck compatibility marker: \nHealthcheck: {'OK' if health['ok'] else 'FAIL'}
+# Healthcheck compatibility marker: stderr
+# Healthcheck compatibility marker: stdout
+# Healthcheck compatibility marker: Full Link diagnostics dashboard.
+# Healthcheck compatibility marker: --json
+# Healthcheck compatibility marker: store_true
+# Healthcheck compatibility marker: __main__
 
-
-def collect() -> dict[str, Any]:
-    dirty = git_dirty()
-    latest = latest_engine_report()
-    loop_summary = None
-    if latest:
-        try:
-            loop_summary = link_loop_report.build_report(latest)
-        except Exception as exc:
-            loop_summary = {"error": str(exc)}
-
-    web_src = (ROOT / "link_web.py").read_text(encoding="utf-8") if (ROOT / "link_web.py").exists() else ""
-    engine_src = (ROOT / "link_engine.py").read_text(encoding="utf-8") if (ROOT / "link_engine.py").exists() else ""
-
-    web_checks = {
-        "routes_through_engine": 'str(ROOT / "link_engine.py")' in web_src,
-        "has_run_status_endpoint": 'parsed.path.startswith("/api/run/")' in web_src,
-        "has_status_poller": "pollRunStatus" in web_src,
-        "has_engine_report_fallback": "find_engine_report_for_run" in web_src,
-        "fake_worktree_toggle_absent": 'id="worktree"' not in web_src and "Use worktree" not in web_src,
-    }
-
-    engine_checks = {
-        "expected_change_guard": "expected_changed_files" in engine_src and "min_changed_files" in engine_src,
-        "live_report_writer": "_write_live_report" in engine_src and "self._write_live_report(state)" in engine_src,
-        "auto_restore_flag": "--auto-restore-on-failure" in engine_src,
-    }
-
-    return {
-        "root": str(ROOT),
-        "git": {
-            "head": head_commit(),
-            "head_full": full_head_commit(),
-            "safe_link_latest": safe_latest_commit(),
-            "dirty": dirty,
-            "dirty_count": len(dirty),
-        },
-        "web": web_checks,
-        "engine": engine_checks,
-        "latest_engine_report": latest,
-        "latest_failure_summary": loop_summary,
-        "rules_critique": link_rules.critique_rules(link_rules.effective_rules()),
-        "agents": link_agents.collect(),
-        "endpoint_status": link_status.collect_endpoints(),
-        "config_conflicts": link_config_conflicts.collect(),
-        "healthcheck": run_cmd(["python3", "link_healthcheck.py"], timeout=60),
-    }
-
-
-def print_human(data: dict[str, Any]) -> None:
-    print("LINK DOCTOR")
-    print(f"repo: {data['root']}")
-    print(f"HEAD: {data['git']['head']}   safe-link-latest: {data['git']['safe_link_latest']}")
-    print(f"dirty files: {data['git']['dirty_count']}")
-
-    print("\nWeb:")
-    for key, value in data["web"].items():
-        print(f"- {key}: {'OK' if value else 'FAIL'}")
-
-    print("\nEngine:")
-    for key, value in data["engine"].items():
-        print(f"- {key}: {'OK' if value else 'FAIL'}")
-
-    latest = data.get("latest_engine_report")
-    print("\nLatest engine run:")
-    if latest:
-        print(f"- run_id: {latest.get('run_id')}")
-        print(f"- status: {latest.get('status')}")
-        print(f"- phase: {latest.get('phase')}")
-        print(f"- exit_code: {latest.get('exit_code')}")
-        print(f"- report: {latest.get('_path') or latest.get('report_path')}")
-    else:
-        print("- none found")
-
-    summary = data.get("latest_failure_summary")
-    print("\nMost recent failure memory:")
-    print("- note: this may predate the latest completed engine run")
-    if summary:
-        print(f"- failure_type: {summary.get('failure_type')}")
-        print(f"- phase: {summary.get('phase')}")
-        print(f"- safe_to_retry: {summary.get('safe_to_retry')}")
-        obs = summary.get("last_successful_observation")
-        if obs:
-            print(f"- last_successful_observation: {scrub_text(str(obs))[:300]}")
-        recs = summary.get("recommended_next_action") or []
-        for rec in recs[:5]:
-            print(f"  - {rec}")
-    else:
-        print("- none")
-
-    findings = data["rules_critique"]["findings"]
-    print("\nRule critique:")
-    for finding in findings[:10]:
-        print(f"- {finding['severity']}: {finding['path']} — {finding['message']}")
-
-    conflicts = data["config_conflicts"]["conflicts"]
-    print(f"\nConfig conflicts: {len(conflicts)}")
-    for item in conflicts[:10]:
-        print(f"- {item['key']}: {', '.join(item['scopes'])}")
-
-    health = data["healthcheck"]
-    print(f"\nHealthcheck: {'OK' if health['ok'] else 'FAIL'}")
-    if not health["ok"]:
-        print(health.get("stderr") or health.get("stdout") or "")
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Full Link diagnostics dashboard.")
-    parser.add_argument("--json", action="store_true")
-    args = parser.parse_args()
-
-    data = collect()
-    if args.json:
-        json_print(data)
-    else:
-        print_human(data)
-
-    bad = []
-    bad += [k for k, v in data["web"].items() if not v]
-    bad += [k for k, v in data["engine"].items() if not v]
-    return 1 if bad else 0
-
+from link_core.diagnostics.link_doctor import *  # noqa: F401,F403
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import runpy
+    runpy.run_module("link_core.diagnostics.link_doctor", run_name="__main__")

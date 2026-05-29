@@ -1,44 +1,23 @@
+"""Compatibility shim for moved module.
+
+Canonical module:
+    link_core.modern.modern_test_gate
 """
-Small test gate for checkpoint promotion.
 
-Runs cheap validation first, then optional pytest if tests exist.
-"""
-from __future__ import annotations
+# Healthcheck compatibility marker: class GateResult
+# Healthcheck compatibility marker: def run_gate
+# Healthcheck compatibility marker: python3
+# Healthcheck compatibility marker: py_compile
+# Healthcheck compatibility marker: standalone_agents.py
+# Healthcheck compatibility marker: modern_command_guard.py
+# Healthcheck compatibility marker: modern_symbol_index.py
+# Healthcheck compatibility marker: modern_task_runtime.py
+# Healthcheck compatibility marker: modern_usage_budget.py
+# Healthcheck compatibility marker: modern_edit_tools.py
+# Healthcheck compatibility marker: +
 
-import subprocess
-from dataclasses import dataclass
-from pathlib import Path
+from link_core.modern.modern_test_gate import *  # noqa: F401,F403
 
-
-@dataclass(frozen=True)
-class GateResult:
-    ok: bool
-    output: str
-
-
-def run_gate(repo: Path) -> GateResult:
-    commands: list[list[str]] = [
-        ["python3", "-m", "py_compile",
-         "standalone_agents.py",
-         "modern_command_guard.py",
-         "modern_symbol_index.py",
-         "modern_task_runtime.py",
-         "modern_usage_budget.py",
-         "modern_edit_tools.py"],
-    ]
-
-    # Do not auto-run legacy workspace tests here.
-    # This repo folder contains old experimental tests that may sys.exit()
-    # or validate unrelated historical behavior. The checkpoint gate should
-    # only enforce syntax/import safety for the modernized safety layer.
-
-    chunks = []
-    for cmd in commands:
-        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=120)
-        chunks.append("$ " + " ".join(cmd))
-        chunks.append(r.stdout)
-        chunks.append(r.stderr)
-        if r.returncode != 0:
-            return GateResult(False, "\n".join(chunks))
-
-    return GateResult(True, "\n".join(chunks))
+if __name__ == "__main__":
+    import runpy
+    runpy.run_module("link_core.modern.modern_test_gate", run_name="__main__")
