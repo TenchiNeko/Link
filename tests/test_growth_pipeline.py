@@ -2015,6 +2015,143 @@ def check_growth_archive_queue_invalid_catalog() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 38. Growth archive-mine -- dry-run via --rank
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_mine_dry_run_rank() -> None:
+    """archive-mine via --rank mines a queue source without writing proposals."""
+    import json as _json
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import (
+        collect_archive_mine, _CATALOG_OUTPUT_DIR,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        extracted = root / "extracted/mine_test"
+        extracted.mkdir(parents=True)
+        src_content = (
+            "evidence citation source research document\n"
+            "missing gap upgrade not in link improve\n"
+            "proposal approval candidate human oversight\n"
+            "sandbox worktree isolation agent implementation\n"
+        )
+        (extracted / "README.md").write_text(src_content, encoding="utf-8")
+
+        catalogs_dir = root / _CATALOG_OUTPUT_DIR
+        catalogs_dir.mkdir(parents=True)
+        catalog = {
+            "catalog_version": "link-archive-catalog-v1",
+            "source_name": "mine_test",
+            "source_path": str(extracted),
+            "candidate_research_sources": [
+                {"path": "README.md", "type": "readme_file", "size_bytes": 200},
+            ],
+            "important_files": [
+                {"path": "README.md", "type": "readme", "size_human": "200B"},
+            ],
+            "file_type_counts": {"markdown": 1},
+            "top_level_dirs": [],
+            "likely_project_roots": [],
+            "recommendations": [],
+            "safety_flags": [],
+            "total_bytes": 200,
+            "total_human": "200B",
+            "file_count": 1,
+            "directory_count": 0,
+            "skipped_count": 0,
+            "skipped_details": {},
+        }
+        (catalogs_dir / "mine_test.json").write_text(
+            _json.dumps(catalog), encoding="utf-8"
+        )
+
+        data = collect_archive_mine(rank="1", write=False, root=str(root))
+        _require(data.get("ok") is True, "dry-run must set ok=True")
+        _require(data.get("dry_run") is True, "dry-run must set dry_run=True")
+        _require(data.get("rank") == 1, "rank must be 1")
+        _require(data.get("queue_entry") is not None,
+                 "queue_entry must be populated when --rank used")
+        _require(data.get("candidate_count", 0) >= 1,
+                 f"must have >= 1 candidate, got {data.get('candidate_count')}")
+        _require(data.get("proposal_count", 0) >= 1,
+                 f"must have >= 1 proposal, got {data.get('proposal_count')}")
+        _require(data.get("written_paths") == [],
+                 "dry-run must have empty written_paths")
+        _require(len(data.get("proposals", [])) == data.get("proposal_count", 0),
+                 "proposals list length must match proposal_count")
+
+        # Verify no proposal files were written
+        prop_dir = root / ".agents/control_plane/proposals"
+        p_files = list(prop_dir.glob("*.json")) if prop_dir.exists() else []
+        _require(len(p_files) == 0, f"dry-run must not write proposal files, found {len(p_files)}")
+
+    print("growth archive-mine dry-run rank OK")
+
+
+# ---------------------------------------------------------------------------
+# 39. Growth archive-mine -- dry-run via --source
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_mine_dry_run_source() -> None:
+    """archive-mine via --source bypasses queue, returns no queue_entry."""
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_archive_mine
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = root / "research_input.md"
+        src.write_text(
+            "evidence citation source research document\n"
+            "missing gap upgrade not in link improve\n",
+            encoding="utf-8",
+        )
+
+        data = collect_archive_mine(source=str(src), write=False, root=str(root))
+        _require(data.get("ok") is True, "dry-run must set ok=True")
+        _require(data.get("rank") is None,
+                 "rank must be None when --source used without --rank")
+        _require(data.get("queue_entry") is None,
+                 "queue_entry must be None when --source used")
+        _require(data.get("dry_run") is True, "dry-run must set dry_run=True")
+        _require(data.get("written_paths") == [],
+                 "dry-run must have empty written_paths")
+
+    print("growth archive-mine dry-run source OK")
+
+
+# ---------------------------------------------------------------------------
+# 40. Growth archive-mine -- error states
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_mine_errors() -> None:
+    """archive-mine returns ok=False for invalid/out-of-range ranks."""
+    from link_modes.growth.link_growth_console import collect_archive_mine
+
+    with tempfile.TemporaryDirectory() as td:
+        rank_out = collect_archive_mine(rank="999", write=False, root=td)
+        _require(rank_out.get("ok") is False,
+                 "rank out of range must set ok=False")
+        _require(isinstance(rank_out.get("error"), str),
+                 "rank out of range must have error string")
+        _require("out of range" in rank_out.get("error", "").lower() or
+                 "no queue" in rank_out.get("error", "").lower(),
+                 f"error must mention out of range/no queue, got {rank_out.get('error')!r}")
+
+        rank_bad = collect_archive_mine(rank="abc", write=False, root=td)
+        _require(rank_bad.get("ok") is False,
+                 "non-integer rank must set ok=False")
+        _require("integer" in rank_bad.get("error", "").lower(),
+                 "non-integer rank error must mention 'integer'")
+
+        rank_neg = collect_archive_mine(rank="-1", write=False, root=td)
+        _require(rank_neg.get("ok") is False,
+                 "negative rank must set ok=False")
+
+    print("growth archive-mine errors OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -2057,6 +2194,9 @@ def main() -> None:
     check_growth_archive_queue_empty()
     check_growth_archive_queue_populated()
     check_growth_archive_queue_invalid_catalog()
+    check_growth_archive_mine_dry_run_rank()
+    check_growth_archive_mine_dry_run_source()
+    check_growth_archive_mine_errors()
     print("Growth pipeline smoke tests passed")
 
 

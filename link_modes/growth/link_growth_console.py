@@ -4193,6 +4193,442 @@ def render_archive_queue_view(data: dict[str, Any]) -> None:
     render_archive_queue_with_rich(data)
 
 
+# ── archive mine entry point ────────────────────────────────────────────
+
+
+def archive_mine_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth archive-mine --rank <N>``.
+
+    Mines a ranked archive queue item (or an arbitrary ``--source`` path)
+    into Growth proposals using the existing ``collect_propose_data`` pipeline.
+    Dry-run by default; ``--write`` persists proposals to the control-plane
+    registry.
+
+    Flags:
+        --rank <N>   Mine the queue entry at this rank (1-indexed).
+        --source <path>  Mine a specific file, bypassing the queue.
+        --write      Persist proposals to disk.
+        --json       Machine-readable output.
+        --root <path>  Override repo root (for test isolation).
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if not args or "--help" in args or "-h" in args:
+        print("Growth archive-mine: mine archive queue sources into proposals")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth archive-mine --rank <N>")
+        print("  python3 link.py growth archive-mine --rank <N> --write")
+        print("  python3 link.py growth archive-mine --rank <N> --json")
+        print("  python3 link.py growth archive-mine --source <path>")
+        print("  python3 link.py growth archive-mine --source <path> --write")
+        print("")
+        print("Picks a source from the archive queue (by rank) or mines a")
+        print("specific file directly.  Dry-run by default.  Proposals are")
+        print("written only when --write is provided.")
+        return 0
+
+    rank_arg = _parse_arg(args, "--rank")
+    source_arg = _parse_arg(args, "--source")
+
+    if rank_arg is not None and source_arg is not None:
+        print("error: use --rank or --source, not both", file=sys.stderr)
+        print("Run 'python3 link.py growth archive-mine --help' for usage.",
+              file=sys.stderr)
+        return 2
+
+    if rank_arg is None and source_arg is None:
+        print("error: --rank <N> or --source <path> is required", file=sys.stderr)
+        print("Run 'python3 link.py growth archive-mine --help' for usage.",
+              file=sys.stderr)
+        return 2
+
+    write = "--write" in args
+    root_override = _parse_arg(args, "--root")
+    data = collect_archive_mine(
+        rank=rank_arg, source=source_arg, write=write, root=root_override,
+    )
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0 if data.get("ok") else 1
+
+    render_archive_mine_view(data)
+    return 0 if data.get("ok") else 1
+
+
+def collect_archive_mine(
+    rank: str | None = None,
+    source: str | None = None,
+    write: bool = False,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Resolve a queue rank or source path and mine it into proposals.
+
+    When ``rank`` is provided the archive queue is loaded and the entry
+    at that 1-indexed position is selected.  When ``source`` is provided
+    the queue is bypassed entirely.  The resolved source path is passed
+    directly to ``collect_propose_data`` (the existing propose pipeline).
+
+    Returns a combined dict with queue metadata, propose results, and
+    suggested next commands.  ``--write`` is forwarded to the propose
+    pipeline.
+
+    Read-only when ``write=False``.  No queue/catalog/source files are
+    mutated.
+    """
+    from pathlib import Path
+
+    repo_root = Path(root) if root else Path.cwd()
+
+    # ── resolve source ──
+    queue_entry: dict[str, Any] | None = None
+    rank_num: int | None = None
+    warnings: list[str] = []
+    source_path: str
+
+    if rank is not None:
+        try:
+            rank_num = int(rank)
+        except ValueError:
+            return _mine_error(
+                f"rank must be an integer, got {rank!r}",
+                warnings=["bad_rank"],
+            )
+
+        if rank_num < 1:
+            return _mine_error(
+                f"rank must be >= 1, got {rank_num}",
+                warnings=["rank_out_of_range"],
+            )
+
+        try:
+            queue_data = collect_archive_queue(root=str(repo_root))
+        except Exception as exc:
+            return _mine_error(
+                f"failed to load archive queue: {exc}",
+                warnings=["queue_load_failed"],
+            )
+
+        q_warnings = queue_data.get("warnings", [])
+        for w in q_warnings:
+            warnings.append(w.get("detail", w.get("type", "?")))
+
+        source_queue = queue_data.get("source_queue", [])
+        if not source_queue:
+            return _mine_error(
+                "no queue entries available. Run archive-queue first.",
+                warnings=warnings + ["empty_queue"],
+            )
+
+        idx = rank_num - 1
+        if idx >= len(source_queue):
+            return _mine_error(
+                f"rank {rank_num} out of range (1..{len(source_queue)})",
+                warnings=warnings + ["rank_out_of_range"],
+            )
+
+        queue_entry = source_queue[idx]
+        source_path = queue_entry.get("source_path", "")
+        if not source_path:
+            return _mine_error(
+                f"queue entry at rank {rank_num} has no source_path",
+                warnings=warnings + ["bad_queue_entry"],
+            )
+
+    elif source is not None:
+        sp = (repo_root / source).resolve() if not Path(source).is_absolute() else Path(source).resolve()
+        source_path = str(sp)
+    else:
+        return _mine_error(
+            "--rank <N> or --source <path> is required",
+            warnings=["missing_args"],
+        )
+
+    # ── mine the source ──
+    if not Path(source_path).exists():
+        return _mine_error(
+            f"source not found: {source_path}",
+            rank_num=rank_num,
+            queue_entry=queue_entry,
+            source=source_path,
+            warnings=warnings + ["source_missing"],
+        )
+
+    propose_data = collect_propose_data(source_path, write=write, root=str(repo_root))
+
+    return {
+        "ok": propose_data.get("source_exists", False),
+        "rank": rank_num,
+        "queue_entry": queue_entry,
+        "source": source_path,
+        "source_exists": propose_data.get("source_exists", False),
+        "candidate_count": propose_data.get("candidate_count", 0),
+        "proposal_count": propose_data.get("proposal_count", 0),
+        "proposals": propose_data.get("proposals", []),
+        "dry_run": propose_data.get("dry_run", not write),
+        "written_paths": propose_data.get("written_paths", []),
+        "next_commands": [
+            "python3 link.py growth proposals",
+            "python3 link.py growth approve <proposal_id>",
+            "python3 link.py growth run",
+        ],
+        "warnings": warnings if warnings else [],
+        "error": None if propose_data.get("source_exists") else "source not found or invalid",
+    }
+
+
+def _mine_error(
+    error: str,
+    rank_num: int | None = None,
+    queue_entry: dict[str, Any] | None = None,
+    source: str | None = None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "rank": rank_num,
+        "queue_entry": queue_entry,
+        "source": source or "",
+        "source_exists": False,
+        "candidate_count": 0,
+        "proposal_count": 0,
+        "proposals": [],
+        "dry_run": True,
+        "written_paths": [],
+        "next_commands": [
+            "python3 link.py growth archive-queue",
+            "python3 link.py growth run",
+        ],
+        "warnings": warnings or [],
+        "error": error,
+    }
+
+
+# ── archive mine rich renderer ──────────────────────────────────────────
+
+
+def render_archive_mine_with_rich(data: dict[str, Any]) -> None:
+    """Render an archive mine preview/receipt using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    ok: bool = data.get("ok", True)
+    dry_run: bool = data.get("dry_run", True)
+    rank: int | None = data.get("rank")
+    queue_entry: dict | None = data.get("queue_entry")
+    source: str = data.get("source", "?")
+    candidate_count: int = data.get("candidate_count", 0)
+    proposal_count: int = data.get("proposal_count", 0)
+    proposals: list = data.get("proposals", [])
+    written_paths: list = data.get("written_paths", [])
+    warnings: list = data.get("warnings", [])
+
+    status_colors = {
+        "pending": "yellow", "accepted": "green", "rejected": "red",
+        "deferred": "magenta", "converted_to_patch": "cyan",
+        "needs_smaller_plan": "orange1",
+    }
+    risk_colors = {"low": "green", "medium": "yellow", "high": "red"}
+
+    # ── header ──
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    if not ok:
+        label, color = "FAILED", "red"
+    elif dry_run:
+        label, color = "DRY RUN", "yellow"
+    else:
+        label, color = "WRITTEN", "bold green"
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH ARCHIVE MINE[/]",
+        f"[{color}]{label}[/]",
+    )
+    console.print(header)
+
+    # ── warnings ──
+    for w in warnings:
+        w_text = Text()
+        w_text.append(f"[yellow]{w}[/]")
+        console.print(Panel(w_text, border_style="yellow"))
+
+    if not ok:
+        error_text = Text()
+        error_text.append(data.get("error", "unknown error"), style="bold red")
+        console.print(Panel(error_text, border_style="red"))
+        console.print(Rule(style="dim"))
+        return
+
+    # ── queue context (only when --rank used) ──
+    if rank is not None and queue_entry is not None:
+        value_colors = {"high": "green", "medium": "yellow", "low": "dim"}
+        ev = queue_entry.get("estimated_value", "medium")
+        vc = value_colors.get(ev, "dim")
+
+        ctx = Text()
+        ctx.append(f"[bold]#{rank}  [{vc}]{ev.upper()}[/]  score: {queue_entry.get('score', '?')}[/]")
+        ctx.append(f"\n[dim]source: [/]{queue_entry.get('source_path', source)}")
+        ctx.append(f"\n[dim]catalog:[/] {queue_entry.get('catalog_source_name', '?')}")
+        ctx.append(f"\n[dim]reason: [/]{queue_entry.get('reason', '?')}")
+        console.print(Panel(ctx, title=f"QUEUE CONTEXT (#{rank})", border_style="dim"))
+
+    # ── propose summary ──
+    info = Text()
+    info.append("source: ", style="dim")
+    info.append(source, style="bold")
+    info.append(f"\n[dim]chunks: {candidate_count}  candidates: {candidate_count}  proposals: {proposal_count}[/]")
+    console.print(Panel(info, border_style="dim"))
+
+    if proposal_count == 0:
+        empty = Text()
+        empty.append("No upgrade candidates found in source.", style="dim")
+        empty.append(" Source may have no matching keywords or content was deduplicated.")
+        console.print(Panel(empty, border_style="dim"))
+    else:
+        console.print(Rule(style="dim"))
+        for i, p in enumerate(proposals):
+            card = Text()
+            status = p.get("status", "?")
+            risk = p.get("risk_level", "?")
+            rec = p.get("recommendation", "?")
+            sc = status_colors.get(status, "")
+            rc = risk_colors.get(risk, "")
+
+            card.append(f"[bold]{p.get('title', '(untitled)')}[/]\n")
+            card.append(f"[{sc}]STATUS: {status}[/]  ")
+            card.append(f"[{rc}]RISK: {risk}[/]  ")
+            card.append(f"[dim]REC: {rec}[/]")
+
+            summary = p.get("source_summary", "")
+            if summary:
+                if len(summary) > 140:
+                    summary = summary[:137] + "..."
+                card.append(f"\n[dim]why:[/] {summary}")
+
+            impl = p.get("implementation_plan", [])
+            if impl:
+                card.append(f"\n[dim]plan (first {min(3, len(impl))} of {len(impl)}):[/]")
+                for step in impl[:3]:
+                    card.append(f"\n  \u2022 {step}")
+
+            files = p.get("affected_files", [])
+            if files:
+                card.append(f"\n[dim]files:[/] {', '.join(files[:5])}")
+
+            panel_title = f"PROPOSAL [{i + 1}/{proposal_count}]  {p.get('proposal_id', '?')[:24]}"
+            console.print(Panel(card, title=panel_title, border_style="dim"))
+
+    # ── written paths ──
+    if written_paths:
+        wrote = Text()
+        wrote.append("Written:\n", style="bold green")
+        for wp in written_paths:
+            wrote.append(f"  {wp}\n", style="dim")
+        console.print(Panel(wrote, title="PERSISTED", border_style="dim green"))
+
+    # ── next commands ──
+    next_cmds = data.get("next_commands", [])
+    cmd_text = Text()
+    cmd_text.append("Next:\n", style="bold")
+    for nc in next_cmds:
+        cmd_text.append(f"  $ {nc}\n", style="dim")
+
+    console.print(Rule(style="dim"))
+    console.print(Panel(cmd_text, title="SUGGESTED NEXT STEPS", border_style="green"))
+    console.print("  [dim]python3 link.py growth run  -- guided workflow dashboard[/]")
+
+
+# ── archive mine plain fallback ─────────────────────────────────────────
+
+
+def render_archive_mine_plain(data: dict[str, Any]) -> None:
+    """Render an archive mine preview/receipt using plain print."""
+    ok: bool = data.get("ok", True)
+    dry_run: bool = data.get("dry_run", True)
+    rank: int | None = data.get("rank")
+    queue_entry: dict | None = data.get("queue_entry")
+    source: str = data.get("source", "?")
+    candidate_count: int = data.get("candidate_count", 0)
+    proposal_count: int = data.get("proposal_count", 0)
+    proposals: list = data.get("proposals", [])
+    written_paths: list = data.get("written_paths", [])
+    warnings: list = data.get("warnings", [])
+    next_cmds: list = data.get("next_commands", [])
+
+    label = "FAILED" if not ok else ("DRY RUN" if dry_run else "WRITTEN")
+    out: list[str] = []
+    out.append(f"== LINK GROWTH ARCHIVE MINE ({label}) ==")
+    out.append("")
+
+    for w in warnings:
+        out.append(f"WARNING: {w}")
+
+    if not ok:
+        out.append(f"error: {data.get('error', 'unknown error')}")
+        print("\n".join(out))
+        return
+
+    if rank is not None and queue_entry is not None:
+        out.append(f"-- QUEUE CONTEXT (#{rank}) --")
+        out.append(f"score: {queue_entry.get('score', '?')}  value: {queue_entry.get('estimated_value', '?').upper()}")
+        out.append(f"source:   {queue_entry.get('source_path', source)}")
+        out.append(f"catalog:  {queue_entry.get('catalog_source_name', '?')}")
+        out.append(f"reason:   {queue_entry.get('reason', '?')}")
+        out.append("")
+
+    out.append(f"source:   {source}")
+    out.append(f"chunks:   {candidate_count}  candidates: {candidate_count}  proposals: {proposal_count}")
+    out.append("")
+
+    if proposal_count == 0:
+        out.append("No upgrade candidates found in source.")
+        out.append("")
+    else:
+        for i, p in enumerate(proposals):
+            out.append(f"--- PROPOSAL [{i + 1}/{proposal_count}] ---")
+            out.append(f"title:          {p.get('title', '?')}")
+            out.append(f"status:         {p.get('status', '?')}")
+            out.append(f"risk_level:     {p.get('risk_level', '?')}")
+            out.append(f"recommendation: {p.get('recommendation', '?')}")
+            impl = p.get("implementation_plan", [])
+            if impl:
+                out.append(f"plan ({len(impl)} steps):")
+                for step in impl[:3]:
+                    out.append(f"  - {step}")
+            out.append("")
+
+    if written_paths:
+        out.append("Written:")
+        for wp in written_paths:
+            out.append(f"  {wp}")
+        out.append("")
+
+    out.append("-- SUGGESTED NEXT STEPS --")
+    for nc in next_cmds:
+        out.append(f"  $ {nc}")
+    out.append("")
+    out.append("python3 link.py growth run  -- guided workflow dashboard")
+    print("\n".join(out))
+
+
+# ── archive mine render orchestrator ────────────────────────────────────
+
+
+def render_archive_mine_view(data: dict[str, Any]) -> None:
+    """Render archive mine with rich if available; fall back to plain."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_archive_mine_plain(data)
+        return
+    render_archive_mine_with_rich(data)
+
+
 # ── run guide entry point ────────────────────────────────────────────────
 
 
