@@ -371,6 +371,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import handoff_main as _growth_handoff_main
 
         return _growth_handoff_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "run":
+        from link_modes.growth.link_growth_console import run_main as _growth_run_main
+
+        return _growth_run_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help"):
         print("Growth mode commands:")
         print("  status     Render Growth mode status console")
@@ -379,6 +383,7 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  approve    Accept a pending proposal")
         print("  reject     Reject a pending proposal")
         print("  handoff    Create a worker handoff from an accepted proposal")
+        print("  run        Guided Growth workflow dashboard")
         return 0
     print(f"growth: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py growth --help' for subcommands.", file=sys.stderr)

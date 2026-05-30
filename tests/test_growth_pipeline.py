@@ -1032,6 +1032,87 @@ def check_growth_handoff_errors() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 18. Growth run guide -- read-only workflow dashboard
+# ---------------------------------------------------------------------------
+
+def check_growth_run_guide() -> None:
+    """collect_run_data returns a read-only Growth workflow guide dict."""
+    from link_modes.growth.link_growth_console import collect_run_data
+
+    data = collect_run_data()
+    _require(isinstance(data, dict), "collect_run_data must return a dict")
+
+    for key in ("repo", "healthcheck", "mode", "pipeline_stage",
+                "proposal_counts", "proposals_total",
+                "accepted_proposal_ids", "next_action", "commands",
+                "source_preview"):
+        if key not in data:
+            raise AssertionError(
+                f"collect_run_data missing key: {key!r}"
+            )
+
+    _require(isinstance(data["repo"], dict), "repo must be a dict")
+    _require(isinstance(data["repo"].get("branch"), str), "repo.branch must be a string")
+    _require(isinstance(data["healthcheck"], dict), "healthcheck must be a dict")
+    _require(isinstance(data["proposal_counts"], dict), "proposal_counts must be a dict")
+    _require(isinstance(data["proposals_total"], int), "proposals_total must be an int")
+    _require(data["proposals_total"] >= 0, f"proposals_total must be >= 0, got {data['proposals_total']}")
+    _require(isinstance(data["accepted_proposal_ids"], list),
+             "accepted_proposal_ids must be a list")
+    _require(isinstance(data["next_action"], str), "next_action must be a string")
+    _require(isinstance(data["commands"], list), "commands must be a list")
+    _require(len(data["commands"]) >= 1, "commands must be non-empty")
+    _require(data["pipeline_stage"] is not None, "pipeline_stage must not be None")
+
+    # source_preview is None when no --source given
+    _require(data["source_preview"] is None,
+             "source_preview must be None when no --source provided")
+
+    print(f"growth run guide OK (stage: {data['pipeline_stage']}, proposals: {data['proposals_total']})")
+
+
+# ---------------------------------------------------------------------------
+# 19. Growth run --source preview
+# ---------------------------------------------------------------------------
+
+def check_growth_run_with_source() -> None:
+    """collect_run_data with --source returns a mining preview, no writes."""
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_run_data
+
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "research_input.md"
+        src.write_text(
+            "evidence citation source research document\n"
+            "missing gap upgrade not in link improve\n"
+            "proposal approval candidate human oversight\n",
+            encoding="utf-8",
+        )
+
+        data = collect_run_data(source=str(src), root=td)
+        _require(isinstance(data, dict), "collect_run_data must return a dict")
+        _require(data["source_preview"] is not None,
+                 "source_preview must not be None when --source given")
+
+        sp = data["source_preview"]
+        _require(sp.get("source_exists") is True, "valid source must set source_exists=True")
+        _require(isinstance(sp.get("chunk_count"), int), "chunk_count must be an int")
+        _require(isinstance(sp.get("candidate_count"), int), "candidate_count must be an int")
+        _require(isinstance(sp.get("proposal_count"), int), "proposal_count must be an int")
+
+        # Verify no files were created (read-only)
+        plan_dir = Path(td) / ".agents" / "control_plane" / "patch_plans"
+        prop_dir = Path(td) / ".agents" / "control_plane" / "proposals"
+        hf_dir = Path(td) / ".agents" / "control_plane" / "worker_handoffs"
+        for d in (plan_dir, prop_dir, hf_dir):
+            files = list(d.glob("*.json")) if d.exists() else []
+            _require(len(files) == 0,
+                     f"run --source must not write files to {d}, found {len(files)}")
+
+    print(f"growth run with source OK (candidates: {sp.get('candidate_count')})")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -1054,6 +1135,8 @@ def main() -> None:
     check_growth_handoff_dry_run()
     check_growth_handoff_write()
     check_growth_handoff_errors()
+    check_growth_run_guide()
+    check_growth_run_with_source()
     print("Growth pipeline smoke tests passed")
 
 

@@ -1418,6 +1418,414 @@ def render_handoff(data: dict[str, Any]) -> None:
     render_handoff_with_rich(data)
 
 
+# ── run guide entry point ────────────────────────────────────────────────
+
+
+def run_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth run``.
+
+    A read-only guided Growth workflow dashboard. Shows the current
+    pipeline stage, proposal counts, and the next recommended command.
+    When ``--source <path>`` is given, includes a dry-run mining preview.
+
+    Flags:
+        --source <path>  Optional research source for a mining preview.
+        --json           Machine-readable output.
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if "--help" in args or "-h" in args:
+        print("Growth run: guided Growth workflow dashboard")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth run")
+        print("  python3 link.py growth run --json")
+        print("  python3 link.py growth run --source <path>")
+        print("  python3 link.py growth run --source <path> --json")
+        print("")
+        print("This command is a read-only guide/router. It shows")
+        print("your current Growth pipeline stage and the next")
+        print("safest command to run. No files are written.")
+        return 0
+
+    source = _parse_arg(args, "--source")
+    data = collect_run_data(source=source)
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+
+    render_run(data)
+    return 0
+
+
+def collect_run_data(
+    source: str | None = None,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Gather all Growth workflow guide data from existing collectors.
+
+    Composes ``collect_console_data``, ``list_proposals``,
+    ``build_dashboard``, and (optionally) ``collect_propose_data``
+    into a single state dictionary describing where the user is in
+    the Growth pipeline and what to do next.
+
+    Read-only. No mutation. No network. No subprocess.
+    """
+    from pathlib import Path
+
+    from link_core.control_plane import list_proposals
+    from link_modes.growth.link_self_learning_dashboard import (
+        build_dashboard,
+    )
+
+    repo_root = Path(root) if root else Path.cwd()
+    console_data = collect_console_data()
+
+    proposals = list_proposals(root=repo_root)
+    sd = build_dashboard(root=repo_root)
+
+    status_counts: dict[str, int] = {}
+    accepted_ids: list[str] = []
+    for p in proposals:
+        s = p.get("status", "?")
+        status_counts[s] = status_counts.get(s, 0) + 1
+        if s == "accepted":
+            accepted_ids.append(p.get("proposal_id", ""))
+
+    total = len(proposals)
+
+    handoff_dir = repo_root / ".agents" / "control_plane" / "worker_handoffs"
+    has_handoffs = handoff_dir.exists() and any(handoff_dir.glob("*.json"))
+
+    stage, next_action, commands = _derive_workflow_state(
+        total=total,
+        accepted_count=status_counts.get("accepted", 0),
+        pending_count=status_counts.get("pending", 0),
+        has_handoffs=has_handoffs,
+    )
+
+    result: dict[str, Any] = {
+        "version": console_data.get("version", ""),
+        "repo": console_data.get("repo", {}),
+        "healthcheck": console_data.get("healthcheck", {}),
+        "mode": console_data.get("mode", {}),
+        "pipeline_stages": console_data.get("pipeline", {}).get(
+            "canonical_stages",
+            console_data.get("pipeline", {}).get("stages", []),
+        ),
+        "pipeline_stage": stage,
+        "proposal_counts": status_counts,
+        "proposals_total": total,
+        "accepted_proposal_ids": accepted_ids,
+        "has_handoffs": has_handoffs,
+        "patch_draft_counts": sd.get("patch_draft_counts", {}),
+        "next_action": next_action,
+        "commands": commands,
+        "source_preview": None,
+    }
+
+    if source:
+        try:
+            preview = collect_propose_data(source, write=False, root=root)
+            result["source_preview"] = {
+                "source": preview.get("source", ""),
+                "source_exists": preview.get("source_exists", False),
+                "chunk_count": preview.get("chunk_count", 0),
+                "candidate_count": preview.get("candidate_count", 0),
+                "proposal_count": preview.get("proposal_count", 0),
+                "error": preview.get("error"),
+            }
+        except Exception as exc:
+            result["source_preview"] = {
+                "source": source,
+                "source_exists": False,
+                "chunk_count": 0,
+                "candidate_count": 0,
+                "proposal_count": 0,
+                "error": str(exc),
+            }
+
+    return result
+
+
+def _derive_workflow_state(
+    total: int,
+    accepted_count: int,
+    pending_count: int,
+    has_handoffs: bool,
+) -> tuple[str, str, list[str]]:
+    """Derive pipeline stage, next_action, and recommended commands."""
+    if total == 0:
+        return (
+            "ResearchIngest",
+            "No proposals found. Mine research into proposals.",
+            [
+                "python3 link.py growth propose --source <path>",
+                "python3 link.py growth propose --source <path> --write",
+            ],
+        )
+
+    if accepted_count > 0 and not has_handoffs:
+        return (
+            "PatchWorker",
+            "Accepted proposals are ready for handoff creation.",
+            [
+                "python3 link.py growth proposals",
+                "python3 link.py growth handoff <id>",
+                "python3 link.py growth handoff <id> --write",
+            ],
+        )
+
+    if accepted_count > 0 and has_handoffs:
+        return (
+            "Verifier",
+            "Handoffs exist. Verify and execute worker handoffs.",
+            [
+                "python3 link.py growth proposals",
+                "python3 link.py growth handoff <id> --write",
+            ],
+        )
+
+    if pending_count > 0:
+        return (
+            "HumanApproval",
+            "Proposals are pending review. Approve or reject them.",
+            [
+                "python3 link.py growth proposals",
+                "python3 link.py growth approve <id>",
+                "python3 link.py growth reject <id> --reason \"...\"",
+            ],
+        )
+
+    return (
+        "HumanApproval",
+        "Proposals present. Review status and take next action.",
+        [
+            "python3 link.py growth proposals",
+            "python3 link.py growth approve <id>",
+        ],
+    )
+
+
+# ── run rich renderer ───────────────────────────────────────────────────
+
+
+def render_run_with_rich(data: dict[str, Any]) -> None:
+    """Render the Growth run guide using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    repo = data.get("repo", {})
+    hc = data.get("healthcheck", {})
+    stage = data.get("pipeline_stage", "?")
+    next_action = data.get("next_action", "")
+    commands = data.get("commands", [])
+    counts = data.get("proposal_counts", {})
+    total = data.get("proposals_total", 0)
+    accepted_ids = data.get("accepted_proposal_ids", [])
+    has_handoffs = data.get("has_handoffs", False)
+    source_preview = data.get("source_preview")
+
+    stage_colors = {
+        "ResearchIngest": "dim", "CandidateExtractor": "dim",
+        "HumanApproval": "yellow", "ProposalWriter": "dim",
+        "PatchWorker": "green", "Verifier": "cyan",
+        "Finalizer": "bright_green", "PatchPlanner": "dim",
+        "FeasibilityReviewer": "dim",
+    }
+
+    # ── header ──
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH RUN GUIDE[/]",
+        f"[dim]v{data.get('version', '?')}[/]",
+    )
+    console.print(header)
+
+    # ── repo bar ──
+    repo_line = (
+        f"branch: [bold]{repo.get('branch', '?')}[/]  "
+        f"HEAD: [bold]{repo.get('head', '?')[:8]}[/]  "
+        f"dirty: [{'red' if repo.get('dirty') else 'green'}]{'YES' if repo.get('dirty') else 'no'}[/]"
+    )
+    console.print(Panel(repo_line, border_style="dim"))
+
+    # ── pipeline stage panel ──
+    sc = stage_colors.get(stage, "")
+    stage_text = Text()
+    stage_text.append("Current stage: ", style="dim")
+    stage_text.append(f"[{sc}]{stage}[/]")
+    if next_action:
+        stage_text.append(f"\n[dim]{next_action}[/]")
+    console.print(Panel(stage_text, title="PIPELINE STAGE", border_style=sc or "dim"))
+
+    # ── health quick status ──
+    hc_ok = hc.get("ok", False)
+    hc_color = "green" if hc_ok else "red"
+    status_line = f"healthcheck: [{hc_color}]{'PASS' if hc_ok else 'FAIL'}[/]  "
+    hc_text = Text()
+    hc_text.append(f"healthcheck: [{hc_color}]{'PASS' if hc_ok else 'FAIL'}[/]")
+    console.print(Panel(hc_text, border_style=hc_color if hc_ok else "red"))
+
+    # ── proposal counts panel ──
+    count_text = Text()
+    count_labels = [
+        ("pending", "yellow"), ("accepted", "green"), ("rejected", "red"),
+        ("deferred", "magenta"), ("needs_smaller_plan", "orange1"),
+        ("converted_to_patch", "cyan"),
+    ]
+    first = True
+    for label, color in count_labels:
+        val = counts.get(label, 0)
+        if val == 0 and label not in ("pending", "accepted", "rejected"):
+            continue
+        if not first:
+            count_text.append("  ")
+        first = False
+        count_text.append(f"[{color}]{label}: {val}[/]")
+    count_text.append(f"\n[dim]total: {total}[/]")
+    console.print(Panel(count_text, title="PROPOSAL COUNTS", border_style="dim"))
+
+    # ── accepted ready for handoff ──
+    if accepted_ids:
+        ready_text = Text()
+        ready_text.append(f"{len(accepted_ids)} accepted proposal(s) ready for handoff:\n", style="green")
+        for a_id in accepted_ids[:10]:
+            ready_text.append(f"  {a_id}\n", style="dim")
+        console.print(Panel(ready_text, title="READY FOR HANDOFF", border_style="green"))
+
+    if has_handoffs:
+        hf_text = Text("Worker handoff directory contains files.", style="cyan")
+        console.print(Panel(hf_text, title="HANDOFFS EXIST", border_style="cyan"))
+
+    # ── source preview ──
+    if source_preview:
+        sp = source_preview
+        sp_text = Text()
+        exists = sp.get("source_exists", False)
+        if not exists:
+            sp_text.append(f"source not found: {sp.get('source', '?')}", style="red")
+        else:
+            sp_text.append(f"source: {sp.get('source', '?')}\n", style="bold")
+            sp_text.append(
+                f"[dim]chunks: {sp.get('chunk_count', 0)}  "
+                f"candidates: {sp.get('candidate_count', 0)}  "
+                f"proposals (dry-run): {sp.get('proposal_count', 0)}[/]"
+            )
+            if sp.get("candidate_count", 0) == 0:
+                sp_text.append(
+                    "\n[dim]no candidates — check keyword matches or duplicate titles[/]"
+                )
+            else:
+                sp_text.append(
+                    "\n[dim]use --write to persist proposals to disk[/]"
+                )
+        console.print(Panel(sp_text, title="SOURCE PREVIEW", border_style="dim"))
+
+    # ── next commands panel ──
+    cmd_text = Text()
+    cmd_text.append("Next commands:\n", style="bold")
+    for cmd in commands:
+        cmd_text.append(f"  $ {cmd}\n", style="dim")
+    console.print(Panel(cmd_text, title="RECOMMENDED NEXT STEP", border_style="green"))
+
+    console.print(Rule(style="dim"))
+    console.print(
+        "  [dim]python3 link.py growth status  -- status console[/]"
+    )
+
+
+# ── run plain fallback ──────────────────────────────────────────────────
+
+
+def render_run_plain(data: dict[str, Any]) -> None:
+    """Render the Growth run guide using plain print."""
+    repo = data.get("repo", {})
+    hc = data.get("healthcheck", {})
+    stage = data.get("pipeline_stage", "?")
+    next_action = data.get("next_action", "")
+    commands = data.get("commands", [])
+    counts = data.get("proposal_counts", {})
+    total = data.get("proposals_total", 0)
+    accepted_ids = data.get("accepted_proposal_ids", [])
+    has_handoffs = data.get("has_handoffs", False)
+    source_preview = data.get("source_preview")
+
+    out: list[str] = []
+    out.append("== LINK GROWTH RUN GUIDE ==")
+    out.append(
+        f"branch: {repo.get('branch', '?')}  "
+        f"HEAD: {repo.get('head', '?')[:8]}  "
+        f"dirty: {'YES' if repo.get('dirty') else 'no'}"
+    )
+    out.append("")
+    out.append(f"-- PIPELINE STAGE: {stage} --")
+    out.append(next_action)
+    out.append("")
+    hc_ok = hc.get("ok", False)
+    out.append(f"healthcheck: {'PASS' if hc_ok else 'FAIL'}")
+    out.append("")
+    out.append("-- PROPOSAL COUNTS --")
+    out.append(
+        f"pending: {counts.get('pending', 0)}  "
+        f"accepted: {counts.get('accepted', 0)}  "
+        f"rejected: {counts.get('rejected', 0)}  "
+        f"total: {total}"
+    )
+    out.append("")
+
+    if accepted_ids:
+        out.append("-- READY FOR HANDOFF --")
+        for a_id in accepted_ids[:10]:
+            out.append(f"  {a_id}")
+        out.append("")
+    if has_handoffs:
+        out.append("Handoff directory contains files.")
+        out.append("")
+
+    if source_preview:
+        sp = source_preview
+        out.append("-- SOURCE PREVIEW --")
+        if not sp.get("source_exists", False):
+            out.append(f"source not found: {sp.get('source', '?')}")
+        else:
+            out.append(f"source: {sp.get('source', '?')}")
+            out.append(
+                f"chunks: {sp.get('chunk_count', 0)}  "
+                f"candidates: {sp.get('candidate_count', 0)}  "
+                f"proposals (dry-run): {sp.get('proposal_count', 0)}"
+            )
+        out.append("")
+
+    out.append("-- RECOMMENDED NEXT STEP --")
+    for cmd in commands:
+        out.append(f"  $ {cmd}")
+    out.append("")
+
+    out.append("python3 link.py growth status  -- status console")
+    print("\n".join(out))
+
+
+# ── run render orchestrator ─────────────────────────────────────────────
+
+
+def render_run(data: dict[str, Any]) -> None:
+    """Render the Growth run guide with rich if available."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_run_plain(data)
+        return
+    render_run_with_rich(data)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for ``python3 link.py growth status``.
 
