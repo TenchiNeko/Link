@@ -795,6 +795,243 @@ def check_growth_approve_reject_missing_id() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 15. Growth handoff command -- dry-run does not write files
+# ---------------------------------------------------------------------------
+
+def check_growth_handoff_dry_run() -> None:
+    """collect_handoff_data on an accepted proposal returns a preview, no writes."""
+    import json as _json
+    from pathlib import Path
+    from link_core.control_plane import write_proposal, update_proposal_status
+
+    proposal = {
+        "proposal_id": "handoff-smoke-dryrun-xyz",
+        "title": "handoff dry-run smoke test",
+        "source_path": "research/smoke.md",
+        "source_summary": "Smoke test for handoff dry-run.",
+        "extracted_capabilities": ["dryrun smoke"],
+        "link_takeaways": ["dryrun works"],
+        "affected_files": ["link_growth_console.py"],
+        "risk_level": "low",
+        "expected_behavior_change": "Console shows handoff card.",
+        "implementation_plan": ["Step one.", "Step two.", "Step three."],
+        "verification_commands": ["python3 -m py_compile link_growth_console.py"],
+        "rollback_plan": "Revert patch branch.",
+        "recommendation": "accept",
+        "status": "pending",
+        "created_at": "2026-05-29T00:00:00",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        write_proposal(proposal, root=td)
+        update_proposal_status("handoff-smoke-dryrun-xyz", "accepted", root=td)
+
+        from link_modes.growth.link_growth_console import collect_handoff_data
+
+        data = collect_handoff_data("handoff-smoke-dryrun-xyz", write=False, root=td)
+        _require(data.get("ok") is True, "dry-run handoff must set ok=True")
+        _require(data["proposal_id"] == "handoff-smoke-dryrun-xyz",
+                 "handoff must return correct proposal_id")
+        _require(data["proposal_status"] == "accepted",
+                 f"proposal_status must be 'accepted', got {data['proposal_status']!r}")
+        _require(data.get("dry_run") is True, "dry-run must set dry_run=True")
+        _require(data.get("written_paths") == [],
+                 "dry-run must have empty written_paths")
+
+        plan = data.get("patch_plan")
+        _require(plan is not None, "dry-run must populate patch_plan")
+        _require(isinstance(plan.get("plan_id"), str) and bool(plan["plan_id"]),
+                 "plan_id must be non-empty")
+        _require(plan.get("status") == "draft",
+                 f"plan status must be 'draft', got {plan.get('status')!r}")
+
+        handoff = data.get("worker_handoff")
+        _require(handoff is not None, "dry-run must populate worker_handoff")
+        _require(isinstance(handoff.get("handoff_id"), str) and bool(handoff["handoff_id"]),
+                 "handoff_id must be non-empty")
+        _require(handoff.get("stage") == "PatchWorker",
+                 f"handoff stage must be 'PatchWorker', got {handoff.get('stage')!r}")
+        _require(handoff.get("status") == "queued",
+                 f"handoff status must be 'queued', got {handoff.get('status')!r}")
+
+        # Confirm no files were written to the temp dir
+        plan_dir = Path(td) / ".agents/control_plane/patch_plans"
+        worker_dir = Path(td) / ".agents/control_plane/worker_handoffs"
+        plan_files = list(plan_dir.glob("*.json")) if plan_dir.exists() else []
+        worker_files = list(worker_dir.glob("*.json")) if worker_dir.exists() else []
+        _require(len(plan_files) == 0, f"dry-run must not write plan files, found {len(plan_files)}")
+        _require(len(worker_files) == 0, f"dry-run must not write handoff files, found {len(worker_files)}")
+
+    print("growth handoff dry-run OK")
+
+
+# ---------------------------------------------------------------------------
+# 16. Growth handoff --write persists files
+# ---------------------------------------------------------------------------
+
+def check_growth_handoff_write() -> None:
+    """collect_handoff_data with write=True persists plan and handoff files."""
+    from pathlib import Path
+    from link_core.control_plane import write_proposal, update_proposal_status
+
+    proposal = {
+        "proposal_id": "handoff-smoke-write-xyz",
+        "title": "handoff write smoke test",
+        "source_path": "research/smoke.md",
+        "source_summary": "Smoke test for handoff --write.",
+        "extracted_capabilities": ["write smoke"],
+        "link_takeaways": ["write works"],
+        "affected_files": ["link_growth_console.py"],
+        "risk_level": "medium",
+        "expected_behavior_change": "Files are written to canonical paths.",
+        "implementation_plan": ["Write.", "Verify.", "Done."],
+        "verification_commands": ["echo ok"],
+        "rollback_plan": "Revert patch branch.",
+        "recommendation": "accept",
+        "status": "pending",
+        "created_at": "2026-05-29T00:00:00",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        write_proposal(proposal, root=td)
+        update_proposal_status("handoff-smoke-write-xyz", "accepted", root=td)
+
+        from link_modes.growth.link_growth_console import collect_handoff_data
+
+        data = collect_handoff_data("handoff-smoke-write-xyz", write=True, root=td)
+        _require(data.get("ok") is True, "write handoff must set ok=True")
+        _require(data.get("dry_run") is False, "write=True must set dry_run=False")
+
+        written = data.get("written_paths", [])
+        _require(len(written) == 2, f"expected 2 written paths, got {len(written)}")
+
+        plan_data = data.get("patch_plan")
+        handoff_data = data.get("worker_handoff")
+
+        # Verify plan file
+        plan_dir = Path(td) / ".agents" / "control_plane" / "patch_plans"
+        plan_file = plan_dir / f"{plan_data['plan_id']}.json"
+        _require(plan_file.exists(), f"plan file must exist: {plan_file}")
+        plan_content = json.loads(plan_file.read_text(encoding="utf-8"))
+        _require(plan_content["plan_id"] == plan_data["plan_id"],
+                 "plan_id must match on-disk content")
+
+        # Verify handoff file
+        worker_dir = Path(td) / ".agents" / "control_plane" / "worker_handoffs"
+        handoff_file = worker_dir / f"{handoff_data['handoff_id']}.json"
+        _require(handoff_file.exists(), f"handoff file must exist: {handoff_file}")
+        hf_content = json.loads(handoff_file.read_text(encoding="utf-8"))
+        _require(hf_content["handoff_id"] == handoff_data["handoff_id"],
+                 "handoff_id must match on-disk content")
+        _require(hf_content["status"] == "queued",
+                 f"handoff on-disk status must be 'queued', got {hf_content['status']!r}")
+
+    print("growth handoff write OK")
+
+
+# ---------------------------------------------------------------------------
+# 17. Growth handoff -- error states
+# ---------------------------------------------------------------------------
+
+def check_growth_handoff_errors() -> None:
+    """collect_handoff_data returns ok=False for missing, not-found, and not-accepted."""
+    from pathlib import Path
+    from link_core.control_plane import write_proposal, update_proposal_status
+    from link_modes.growth.link_growth_console import collect_handoff_data
+
+    with tempfile.TemporaryDirectory() as td:
+
+        # Not found
+        data_nf = collect_handoff_data("nonexistent-id-handoff-xyz", root=td)
+        _require(data_nf.get("ok") is False, "not-found must set ok=False")
+        _require(isinstance(data_nf.get("error"), str), "not-found must set error")
+        _require("not found" in data_nf.get("error", "").lower(),
+                 "not-found error must mention 'not found'")
+
+        # Exists but not accepted (pending)
+        pending_proposal = {
+            "proposal_id": "handoff-pending-xyz",
+            "title": "pending proposal for handoff test",
+            "source_path": "research/smoke.md",
+            "source_summary": "Pending proposal.",
+            "extracted_capabilities": ["pending"],
+            "link_takeaways": ["pending"],
+            "affected_files": [],
+            "risk_level": "low",
+            "expected_behavior_change": "none",
+            "implementation_plan": ["step"],
+            "verification_commands": ["echo ok"],
+            "rollback_plan": "revert",
+            "recommendation": "accept",
+            "status": "pending",
+            "created_at": "2026-05-29T00:00:00",
+        }
+        write_proposal(pending_proposal, root=td)
+
+        data_pending = collect_handoff_data("handoff-pending-xyz", root=td)
+        _require(data_pending.get("ok") is False, "pending must set ok=False")
+        _require(isinstance(data_pending.get("error"), str), "pending must set error")
+        _require("accepted" in data_pending.get("error", "").lower(),
+                 "pending error must mention 'accepted'")
+
+        # Exists but rejected
+        rejected_proposal = {
+            "proposal_id": "handoff-rejected-xyz",
+            "title": "rejected proposal for handoff test",
+            "source_path": "research/smoke.md",
+            "source_summary": "Rejected proposal.",
+            "extracted_capabilities": ["rejected"],
+            "link_takeaways": ["rejected"],
+            "affected_files": [],
+            "risk_level": "low",
+            "expected_behavior_change": "none",
+            "implementation_plan": ["step"],
+            "verification_commands": ["echo ok"],
+            "rollback_plan": "revert",
+            "recommendation": "reject",
+            "status": "rejected",
+            "created_at": "2026-05-29T00:00:00",
+        }
+        write_proposal(rejected_proposal, root=td)
+
+        data_rejected = collect_handoff_data("handoff-rejected-xyz", root=td)
+        _require(data_rejected.get("ok") is False, "rejected must set ok=False")
+        _require(isinstance(data_rejected.get("error"), str), "rejected must set error")
+        _require("accepted" in data_rejected.get("error", "").lower(),
+                 "rejected error must mention 'accepted'")
+
+        # Exists and accepted -- confirm ok=True with correct fields
+        accepted_proposal = {
+            "proposal_id": "handoff-accepted-xyz",
+            "title": "accepted proposal for handoff error check",
+            "source_path": "research/smoke.md",
+            "source_summary": "Accepted.",
+            "extracted_capabilities": ["accepted"],
+            "link_takeaways": ["accepted"],
+            "affected_files": ["link_growth_console.py"],
+            "risk_level": "low",
+            "expected_behavior_change": "none",
+            "implementation_plan": ["Step one.", "Step two."],
+            "verification_commands": ["echo ok"],
+            "rollback_plan": "revert",
+            "recommendation": "accept",
+            "status": "pending",
+            "created_at": "2026-05-29T00:00:00",
+        }
+        write_proposal(accepted_proposal, root=td)
+        update_proposal_status("handoff-accepted-xyz", "accepted", root=td)
+
+        data_ok = collect_handoff_data("handoff-accepted-xyz", root=td)
+        _require(data_ok.get("ok") is True, "accepted must set ok=True")
+        _require(data_ok["proposal_status"] == "accepted",
+                 "proposal_status must be 'accepted'")
+        _require(data_ok.get("plan_id") is not None, "plan_id must not be None")
+        _require(data_ok.get("handoff_id") is not None, "handoff_id must not be None")
+
+    print("growth handoff errors OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -814,6 +1051,9 @@ def main() -> None:
     check_growth_approve_command()
     check_growth_reject_command()
     check_growth_approve_reject_missing_id()
+    check_growth_handoff_dry_run()
+    check_growth_handoff_write()
+    check_growth_handoff_errors()
     print("Growth pipeline smoke tests passed")
 
 

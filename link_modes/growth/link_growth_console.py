@@ -1096,6 +1096,328 @@ def render_decision(data: dict[str, Any]) -> None:
     render_decision_with_rich(data)
 
 
+# ── handoff entry point ──────────────────────────────────────────────────
+
+
+def handoff_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth handoff <proposal_id>``.
+
+    Loads an accepted proposal, builds a patch plan and worker handoff from
+    it, and either previews (dry-run, default) or persists to disk (--write).
+
+    Flags:
+        --write  Persist patch plan and worker handoff to canonical paths.
+        --json   Machine-readable output.
+        --root <path>  Override repo root (for test isolation).
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if not args or "--help" in args or "-h" in args:
+        print("Growth handoff: create a worker handoff from an accepted proposal")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth handoff <proposal_id>")
+        print("  python3 link.py growth handoff <proposal_id> --json")
+        print("  python3 link.py growth handoff <proposal_id> --write")
+        print("")
+        print("The proposal must have status 'accepted'.")
+        print("Default is dry-run. No files are written without --write.")
+        return 0
+
+    proposal_id = args[0]
+    write = "--write" in args
+    root_override = _parse_arg(args, "--root")
+    data = collect_handoff_data(proposal_id, write=write, root=root_override)
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0 if data.get("ok") else 1
+
+    render_handoff(data)
+    return 0 if data.get("ok") else 1
+
+
+# ── handoff data collector ───────────────────────────────────────────────
+
+
+_HANDOFF_PLAN_DIR = ".agents/control_plane/patch_plans"
+_HANDOFF_WORKER_DIR = ".agents/control_plane/worker_handoffs"
+
+
+def collect_handoff_data(
+    proposal_id: str,
+    write: bool = False,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Build a patch plan and worker handoff from an accepted proposal.
+
+    Loads the proposal, verifies it is on disk and accepted, then builds
+    a patch plan and worker handoff in memory.  When ``write=True`` both
+    artifacts are persisted to ``_HANDOFF_PLAN_DIR`` and
+    ``_HANDOFF_WORKER_DIR`` relative to the repo root.
+
+    Returns a receipt dict with ``ok``, proposal/plan/handoff metadata,
+    ``written_paths``, and ``error``.
+    """
+    from pathlib import Path
+
+    from link_core.control_plane.link_control_plane_patch_plan import (
+        build_patch_plan_from_proposal,
+        write_patch_plan,
+    )
+    from link_core.control_plane.link_control_plane_proposals import (
+        load_proposal,
+        proposal_storage_dir,
+    )
+    from link_core.control_plane.link_control_plane_worker_handoff import (
+        build_worker_handoff_from_plan,
+        write_worker_handoff,
+    )
+
+    repo_root = Path(root) if root else Path.cwd()
+    storage = proposal_storage_dir(repo_root)
+    prop_path = storage / f"{proposal_id}.json"
+
+    if not prop_path.exists():
+        return _handoff_error(
+            proposal_id,
+            f"proposal not found: {prop_path}",
+        )
+
+    try:
+        proposal = load_proposal(prop_path)
+    except Exception as exc:
+        return _handoff_error(
+            proposal_id,
+            f"failed to load proposal: {exc}",
+        )
+
+    current_status = str(proposal.get("status", ""))
+    if current_status != "accepted":
+        return _handoff_error(
+            proposal_id,
+            f"proposal must be accepted (current status: {current_status}). "
+            f"Run 'python3 link.py growth approve {proposal_id}' first.",
+        )
+
+    try:
+        plan = build_patch_plan_from_proposal(proposal)
+    except Exception as exc:
+        return _handoff_error(
+            proposal_id,
+            f"build_patch_plan_from_proposal failed: {exc}",
+        )
+
+    try:
+        handoff = build_worker_handoff_from_plan(plan)
+    except Exception as exc:
+        return _handoff_error(
+            proposal_id,
+            f"build_worker_handoff_from_plan failed: {exc}",
+        )
+
+    written_paths: list[str] = []
+    if write:
+        plan_root = repo_root / _HANDOFF_PLAN_DIR
+        handoff_root = repo_root / _HANDOFF_WORKER_DIR
+        plan_path = write_patch_plan(plan, root=plan_root)
+        handoff_path = write_worker_handoff(handoff, root=handoff_root)
+        written_paths = [str(plan_path), str(handoff_path)]
+
+    return {
+        "ok": True,
+        "proposal_id": proposal_id,
+        "proposal_title": proposal.get("title", ""),
+        "proposal_status": current_status,
+        "plan_id": plan.get("plan_id", ""),
+        "handoff_id": handoff.get("handoff_id", ""),
+        "handoff_stage": handoff.get("stage", "PatchWorker"),
+        "handoff_status": handoff.get("status", "queued"),
+        "patch_plan": plan,
+        "worker_handoff": handoff,
+        "written_paths": written_paths,
+        "dry_run": not write,
+        "error": None,
+    }
+
+
+def _handoff_error(
+    proposal_id: str,
+    error: str,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "proposal_id": proposal_id,
+        "proposal_title": "",
+        "proposal_status": "",
+        "plan_id": None,
+        "handoff_id": None,
+        "handoff_stage": "",
+        "handoff_status": "",
+        "patch_plan": None,
+        "worker_handoff": None,
+        "written_paths": [],
+        "dry_run": True,
+        "error": error,
+    }
+
+
+# ── handoff rich renderer ───────────────────────────────────────────────
+
+
+def render_handoff_with_rich(data: dict[str, Any]) -> None:
+    """Render a handoff preview/receipt using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    ok: bool = data.get("ok", False)
+    dry_run: bool = data.get("dry_run", True)
+
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH HANDOFF[/]",
+        f"[{'yellow' if dry_run else 'red'}]DRY RUN[/]" if dry_run else "[bold green]WRITTEN[/]",
+    )
+    console.print(header)
+
+    if not ok:
+        error_text = Text()
+        error_text.append(data.get("error", "unknown error"), style="bold red")
+        console.print(Panel(error_text, border_style="red"))
+        console.print(Rule(style="dim"))
+        return
+
+    # ── proposal summary ──
+    proposal = Text()
+    proposal.append("proposal_id: ", style="dim")
+    proposal.append(data.get("proposal_id", "?"), style="bold")
+    proposal.append("\n[dim]title:       [/]")
+    proposal.append(data.get("proposal_title", "?"))
+    proposal.append("\n[dim]status:      [/][green]accepted[/]")
+    console.print(Panel(proposal, title="PROPOSAL", border_style="dim"))
+
+    # ── patch plan ──
+    plan = data.get("patch_plan") or {}
+    plan_text = Text()
+    plan_text.append("plan_id: ", style="dim")
+    plan_text.append(plan.get("plan_id", "?"), style="bold")
+    plan_text.append("\n[dim]status:      [/]")
+    plan_text.append(f"[cyan]{plan.get('status', 'draft')}[/]")
+    steps = plan.get("implementation_steps", [])
+    if steps:
+        plan_text.append(f"\n[dim]steps ({len(steps)}):[/]")
+        for s in steps[:5]:
+            plan_text.append(f"\n  \u2022 {s}")
+    files = plan.get("affected_files", [])
+    if files:
+        plan_text.append(f"\n[dim]files:       [/]{', '.join(files[:5])}")
+    console.print(Panel(plan_text, title="PATCH PLAN", border_style="dim"))
+
+    # ── worker handoff ──
+    handoff = data.get("worker_handoff") or {}
+    hf_text = Text()
+    hf_text.append("handoff_id: ", style="dim")
+    hf_text.append(handoff.get("handoff_id", "?"), style="bold")
+    hf_text.append("\n[dim]stage:       [/][cyan]")
+    hf_text.append(handoff.get("stage", "PatchWorker"))
+    hf_text.append("[/]")
+    hf_text.append("\n[dim]status:      [/][green]")
+    hf_text.append(handoff.get("status", "queued"))
+    hf_text.append("[/]")
+    hf_text.append("\n[dim]risk_level:  [/]")
+    hf_text.append(handoff.get("risk_level", "?"))
+    console.print(Panel(hf_text, title="WORKER HANDOFF", border_style="dim"))
+
+    written = data.get("written_paths", [])
+    if written:
+        wrote_text = Text()
+        wrote_text.append("Written:\n", style="bold green")
+        for w in written:
+            wrote_text.append(f"  {w}\n", style="dim")
+        console.print(Panel(wrote_text, title="PERSISTED", border_style="dim green"))
+
+    console.print(Rule(style="dim"))
+    if dry_run:
+        console.print("  [dim]Use --write to persist to disk[/]")
+    console.print("  [dim]python3 link.py growth status   -- back to status console[/]")
+
+
+# ── handoff plain fallback ───────────────────────────────────────────────
+
+
+def render_handoff_plain(data: dict[str, Any]) -> None:
+    """Render a handoff preview/receipt using plain print."""
+    ok: bool = data.get("ok", False)
+    dry_run: bool = data.get("dry_run", True)
+    out: list[str] = []
+    out.append(
+        f"== LINK GROWTH HANDOFF ({'DRY RUN' if dry_run else 'WRITTEN'}) =="
+    )
+    out.append("")
+
+    if not ok:
+        out.append(f"error: {data.get('error', 'unknown error')}")
+        print("\n".join(out))
+        return
+
+    out.append("-- PROPOSAL --")
+    out.append(f"proposal_id: {data.get('proposal_id', '?')}")
+    out.append(f"title:       {data.get('proposal_title', '?')}")
+    out.append("status:      accepted")
+    out.append("")
+
+    plan = data.get("patch_plan") or {}
+    out.append("-- PATCH PLAN --")
+    out.append(f"plan_id:     {plan.get('plan_id', '?')}")
+    out.append(f"status:      {plan.get('status', 'draft')}")
+    steps = plan.get("implementation_steps", [])
+    if steps:
+        out.append(f"steps ({len(steps)}):")
+        for s in steps[:5]:
+            out.append(f"  - {s}")
+    out.append("")
+
+    handoff = data.get("worker_handoff") or {}
+    out.append("-- WORKER HANDOFF --")
+    out.append(f"handoff_id:  {handoff.get('handoff_id', '?')}")
+    out.append(f"stage:       {handoff.get('stage', 'PatchWorker')}")
+    out.append(f"status:      {handoff.get('status', 'queued')}")
+    out.append(f"risk_level:  {handoff.get('risk_level', '?')}")
+    out.append("")
+
+    written = data.get("written_paths", [])
+    if written:
+        out.append("Written:")
+        for w in written:
+            out.append(f"  {w}")
+        out.append("")
+
+    if dry_run:
+        out.append("Use --write to persist to disk.")
+    out.append("python3 link.py growth status  -- back to status console")
+
+    print("\n".join(out))
+
+
+# ── handoff render orchestrator ──────────────────────────────────────────
+
+
+def render_handoff(data: dict[str, Any]) -> None:
+    """Render a handoff preview/receipt with rich if available."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_handoff_plain(data)
+        return
+    render_handoff_with_rich(data)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for ``python3 link.py growth status``.
 
