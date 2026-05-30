@@ -379,6 +379,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import execute_main as _growth_execute_main
 
         return _growth_execute_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "receipts":
+        from link_modes.growth.link_growth_console import receipts_main as _growth_receipts_main
+
+        return _growth_receipts_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "run":
         from link_modes.growth.link_growth_console import run_main as _growth_run_main
 
@@ -393,6 +397,7 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  handoff    Create a worker handoff from an accepted proposal")
         print("  handoffs   View existing worker handoffs")
         print("  execute    Prepare handoff for verification")
+        print("  receipts   View verifier receipts")
         print("  run        Guided Growth workflow dashboard")
         return 0
     print(f"growth: unknown subcommand: {subcommand}", file=sys.stderr)

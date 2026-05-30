@@ -1381,6 +1381,109 @@ def check_growth_execute_errors() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 25. Growth receipts -- empty state
+# ---------------------------------------------------------------------------
+
+def check_growth_receipts_empty() -> None:
+    """collect_receipts_data returns count=0 when no receipts exist."""
+    from link_modes.growth.link_growth_console import collect_receipts_data
+
+    with tempfile.TemporaryDirectory() as td:
+        data = collect_receipts_data(root=td)
+        _require(isinstance(data, dict), "collect_receipts_data must return a dict")
+        _require(data.get("count") == 0,
+                 f"empty dir must have count=0, got {data.get('count')}")
+        _require(data.get("receipts") == [],
+                 "empty dir must have receipts=[]")
+        _require(isinstance(data.get("storage_path"), str),
+                 "storage_path must be a string")
+        _require(bool(data.get("storage_path", "")),
+                 "storage_path must be non-empty")
+
+    print("growth receipts empty OK")
+
+
+# ---------------------------------------------------------------------------
+# 26. Growth receipts -- populated state
+# ---------------------------------------------------------------------------
+
+def check_growth_receipts_populated() -> None:
+    """collect_receipts_data returns receipts when they exist on disk."""
+    from pathlib import Path
+    from link_core.control_plane import write_proposal, update_proposal_status
+    from link_core.control_plane.link_control_plane_proposals import (
+        load_proposal,
+        proposal_storage_dir,
+    )
+    from link_core.control_plane.link_control_plane_patch_plan import (
+        build_patch_plan_from_proposal,
+    )
+    from link_core.control_plane.link_control_plane_worker_handoff import (
+        build_worker_handoff_from_plan,
+        write_worker_handoff,
+    )
+    from link_core.control_plane.link_control_plane_verifier_receipt import (
+        build_verifier_receipt_from_handoff,
+        write_verifier_receipt,
+    )
+    from link_modes.growth.link_growth_console import (
+        collect_receipts_data,
+        _VERIFIER_RECEIPT_DIR,
+    )
+
+    proposal = {
+        "proposal_id": "receipts-pop-smoke-xyz",
+        "title": "receipts populated smoke test",
+        "source_path": "research/smoke.md",
+        "source_summary": "Smoke test for receipts view.",
+        "extracted_capabilities": ["smoke"],
+        "link_takeaways": ["receipts view works"],
+        "affected_files": ["link_growth_console.py"],
+        "risk_level": "low",
+        "expected_behavior_change": "none",
+        "implementation_plan": ["Step one.", "Step two."],
+        "verification_commands": ["echo ok"],
+        "rollback_plan": "Revert patch branch.",
+        "recommendation": "accept",
+        "status": "pending",
+        "created_at": "2026-05-29T00:00:00",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        write_proposal(proposal, root=td)
+        update_proposal_status("receipts-pop-smoke-xyz", "accepted", root=td)
+        accepted = load_proposal(proposal_storage_dir(td) / "receipts-pop-smoke-xyz.json")
+        plan = build_patch_plan_from_proposal(accepted)
+        hf = build_worker_handoff_from_plan(plan)
+        hf_dir = Path(td) / ".agents/control_plane/worker_handoffs"
+        write_worker_handoff(hf, root=hf_dir)
+
+        receipt = build_verifier_receipt_from_handoff(hf)
+        receipt_dir = Path(td) / _VERIFIER_RECEIPT_DIR
+        write_verifier_receipt(receipt, root=receipt_dir)
+
+        data = collect_receipts_data(root=td)
+        _require(data.get("count") == 1,
+                 f"must find 1 receipt, got {data.get('count')}")
+        receipts = data.get("receipts", [])
+        _require(len(receipts) == 1, "receipts list must have 1 entry")
+
+        r = receipts[0]
+        _require(r.get("verification_id") == receipt["verification_id"],
+                 "verification_id must match written value")
+        _require(r.get("handoff_id") == hf["handoff_id"],
+                 "handoff_id must match")
+        _require(r.get("stage") == "Verifier",
+                 f"receipt stage must be 'Verifier', got {r.get('stage')!r}")
+        _require(r.get("status") == "pending",
+                 f"receipt status must be 'pending', got {r.get('status')!r}")
+        _require(isinstance(r.get("verification_commands"), list),
+                 "verification_commands must be a list")
+
+    print("growth receipts populated OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -1410,6 +1513,8 @@ def main() -> None:
     check_growth_execute_dry_run()
     check_growth_execute_write()
     check_growth_execute_errors()
+    check_growth_receipts_empty()
+    check_growth_receipts_populated()
     print("Growth pipeline smoke tests passed")
 
 

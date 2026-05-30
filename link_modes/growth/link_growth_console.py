@@ -2042,6 +2042,218 @@ def render_execute(data: dict[str, Any]) -> None:
     render_execute_with_rich(data)
 
 
+# ── receipts list entry point ────────────────────────────────────────────
+
+
+def receipts_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth receipts``.
+
+    Reads existing verifier receipt JSON files from the canonical
+    ``.agents/control_plane/verifier_receipts/`` directory and renders
+    a read-only terminal view. No files are written.
+
+    Flags:
+        --json  Machine-readable output.
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if "--help" in args or "-h" in args:
+        print("Growth receipts: view existing verifier receipts")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth receipts")
+        print("  python3 link.py growth receipts --json")
+        print("")
+        print("This command is read-only. It lists receipt artifacts")
+        print("stored under .agents/control_plane/verifier_receipts/")
+        print("and does not execute or mutate anything.")
+        return 0
+
+    data = collect_receipts_data()
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+
+    render_receipts_view(data)
+    return 0
+
+
+def collect_receipts_data(
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Read verifier receipt JSON files from the canonical receipts dir.
+
+    Every receipt dict is loaded via ``load_verifier_receipt``. Returns
+    a flat dict with ``count``, ``receipts``, and ``storage_path``.
+    Zero receipts is a valid state.
+    """
+    from pathlib import Path
+
+    from link_core.control_plane.link_control_plane_verifier_receipt import (
+        list_verifier_receipts,
+        load_verifier_receipt,
+    )
+
+    repo_root = Path(root) if root else Path.cwd()
+    receipt_dir = repo_root / _VERIFIER_RECEIPT_DIR
+
+    paths = list_verifier_receipts(receipt_dir)
+    receipts = [load_verifier_receipt(p) for p in paths]
+
+    return {
+        "count": len(receipts),
+        "receipts": receipts,
+        "storage_path": str(receipt_dir),
+    }
+
+
+# ── receipts rich renderer ──────────────────────────────────────────────
+
+
+def render_receipts_with_rich(data: dict[str, Any]) -> None:
+    """Render a receipts list view using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    count: int = data.get("count", 0)
+    receipts: list[dict] = data.get("receipts", [])
+
+    # ── header ──
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH RECEIPTS[/]",
+        f"[dim]{count} receipt{'s' if count != 1 else ''}[/]",
+    )
+    console.print(header)
+    console.print(Rule(style="dim"))
+
+    # ── empty state ──
+    if count == 0:
+        empty = Text()
+        empty.append("\nNo verifier receipts found in ", style="dim")
+        empty.append(data.get("storage_path", ""), style="bold")
+        empty.append("\n\nTo create a verifier receipt:\n", style="dim")
+        empty.append("  python3 link.py growth handoffs\n", style="dim")
+        empty.append("  python3 link.py growth execute <handoff_id> --write\n", style="dim")
+        empty.append("\n")
+        empty.append("  [dim]python3 link.py growth run  -- guided workflow dashboard[/]\n", style="dim")
+        console.print(Panel(empty, border_style="dim"))
+        console.print(Rule(style="dim"))
+        return
+
+    status_colors = {
+        "pending": "yellow", "running": "cyan", "done": "green",
+        "failed": "red", "blocked": "red",
+    }
+
+    for i, r in enumerate(receipts):
+        card = Text()
+        vid = r.get("verification_id", "?")
+        status = r.get("status", "?")
+        sc = status_colors.get(status, "")
+
+        card.append(f"[bold]{r.get('title', '(untitled)')}[/]\n")
+        card.append(f"[{sc}]STATUS: {status}[/]  ")
+        card.append(f"[dim]STAGE: {r.get('stage', '?')}[/]")
+
+        hf_id = r.get("handoff_id", "")
+        if hf_id:
+            card.append(f"\n[dim]handoff_id:    [/]{hf_id}")
+        plan_id = r.get("plan_id", "")
+        if plan_id:
+            card.append(f"\n[dim]plan_id:       [/]{plan_id}")
+        prop_id = r.get("proposal_id", "")
+        if prop_id:
+            card.append(f"\n[dim]proposal_id:   [/]{prop_id}")
+
+        cmds = r.get("verification_commands", [])
+        if cmds:
+            card.append(f"\n[dim]verification commands ({len(cmds)}):[/]")
+            for c in cmds[:3]:
+                card.append(f"\n  $ {c}")
+
+        findings = r.get("findings", [])
+        if findings:
+            card.append(f"\n[dim]findings:      [/]{', '.join(findings[:3])}")
+
+        evidence = r.get("evidence_paths", [])
+        if evidence:
+            card.append(f"\n[dim]evidence:      [/]{', '.join(evidence[:3])}")
+
+        card.append(f"\n[dim]created:       [/]{r.get('created_at', '?')}")
+
+        panel_title = f"RECEIPT [{i + 1}/{count}]  {vid[:24]}"
+        console.print(Panel(card, title=panel_title, border_style="dim"))
+
+    console.print(Rule(style="dim"))
+    console.print("  [dim]python3 link.py growth run      -- guided workflow dashboard[/]")
+
+
+# ── receipts plain fallback ─────────────────────────────────────────────
+
+
+def render_receipts_plain(data: dict[str, Any]) -> None:
+    """Render a receipts list view using plain print."""
+    count: int = data.get("count", 0)
+    receipts: list[dict] = data.get("receipts", [])
+    out: list[str] = []
+    out.append(f"== LINK GROWTH RECEIPTS ({count}) ==")
+    out.append("")
+
+    if count == 0:
+        out.append(f"No verifier receipts found in {data.get('storage_path', '?')}")
+        out.append("")
+        out.append("To create a verifier receipt:")
+        out.append("  python3 link.py growth handoffs")
+        out.append("  python3 link.py growth execute <handoff_id> --write")
+        out.append("")
+        out.append("python3 link.py growth run  -- guided workflow dashboard")
+        print("\n".join(out))
+        return
+
+    for i, r in enumerate(receipts):
+        out.append(f"--- RECEIPT [{i + 1}/{count}] ---")
+        out.append(f"verification_id:     {r.get('verification_id', '?')}")
+        out.append(f"handoff_id:          {r.get('handoff_id', '?')}")
+        out.append(f"plan_id:             {r.get('plan_id', '?')}")
+        out.append(f"proposal_id:         {r.get('proposal_id', '?')}")
+        out.append(f"title:               {r.get('title', '?')}")
+        out.append(f"stage:               {r.get('stage', '?')}")
+        out.append(f"status:              {r.get('status', '?')}")
+        cmds = r.get("verification_commands", [])
+        if cmds:
+            out.append(f"verification commands ({len(cmds)}):")
+            for c in cmds[:3]:
+                out.append(f"  $ {c}")
+        findings = r.get("findings", [])
+        if findings:
+            out.append(f"findings:            {', '.join(findings[:3])}")
+        out.append(f"created_at:          {r.get('created_at', '?')}")
+        out.append("")
+    out.append("python3 link.py growth run  -- guided workflow dashboard")
+    print("\n".join(out))
+
+
+# ── receipts render orchestrator ────────────────────────────────────────
+
+
+def render_receipts_view(data: dict[str, Any]) -> None:
+    """Render receipts with rich if available; fall back to plain text."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_receipts_plain(data)
+        return
+    render_receipts_with_rich(data)
+
+
 # ── run guide entry point ────────────────────────────────────────────────
 
 
