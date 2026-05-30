@@ -1418,6 +1418,217 @@ def render_handoff(data: dict[str, Any]) -> None:
     render_handoff_with_rich(data)
 
 
+# ── handoffs list entry point ────────────────────────────────────────────
+
+
+def handoffs_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth handoffs``.
+
+    Reads existing worker handoff JSON files from the canonical
+    ``.agents/control_plane/worker_handoffs/`` directory and renders
+    a read-only terminal view. No files are written. No handoffs are
+    executed.
+
+    Flags:
+        --json  Machine-readable output.
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if "--help" in args or "-h" in args:
+        print("Growth handoffs: view existing worker handoffs")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth handoffs")
+        print("  python3 link.py growth handoffs --json")
+        print("")
+        print("This command is read-only. It lists handoff artifacts")
+        print("stored under .agents/control_plane/worker_handoffs/")
+        print("and does not execute or mutate anything.")
+        return 0
+
+    data = collect_handoffs_data()
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+
+    render_handoffs_view(data)
+    return 0
+
+
+def collect_handoffs_data(
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Read handoff JSON files from the canonical worker_handoffs directory.
+
+    Every handoff dict is loaded via ``load_worker_handoff``. Returns
+    a flat dict with ``count``, ``handoffs``, and ``storage_path``.
+    Zero handoffs is a valid state.
+    """
+    from pathlib import Path
+
+    from link_core.control_plane.link_control_plane_worker_handoff import (
+        list_worker_handoffs,
+        load_worker_handoff,
+    )
+
+    repo_root = Path(root) if root else Path.cwd()
+    handoff_dir = repo_root / _HANDOFF_WORKER_DIR
+
+    paths = list_worker_handoffs(handoff_dir)
+    handoffs = [load_worker_handoff(p) for p in paths]
+
+    return {
+        "count": len(handoffs),
+        "handoffs": handoffs,
+        "storage_path": str(handoff_dir),
+    }
+
+
+# ── handoffs rich renderer ──────────────────────────────────────────────
+
+
+def render_handoffs_with_rich(data: dict[str, Any]) -> None:
+    """Render a handoffs list view using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    count: int = data.get("count", 0)
+    handoffs: list[dict] = data.get("handoffs", [])
+
+    # ── header ──
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH HANDOFFS[/]",
+        f"[dim]{count} handoff{'s' if count != 1 else ''}[/]",
+    )
+    console.print(header)
+    console.print(Rule(style="dim"))
+
+    # ── empty state ──
+    if count == 0:
+        empty = Text()
+        empty.append("\nNo worker handoffs found in ", style="dim")
+        empty.append(data.get("storage_path", ""), style="bold")
+        empty.append("\n\nTo create a handoff:\n", style="dim")
+        empty.append("  python3 link.py growth approve <proposal_id>\n", style="dim")
+        empty.append("  python3 link.py growth handoff <proposal_id> --write\n", style="dim")
+        empty.append("\n")
+        empty.append("  [dim]python3 link.py growth run  -- guided workflow dashboard[/]\n", style="dim")
+        console.print(Panel(empty, border_style="dim"))
+        console.print(Rule(style="dim"))
+        return
+
+    status_colors = {
+        "queued": "yellow", "running": "cyan", "done": "green",
+        "failed": "red", "blocked": "red",
+    }
+    risk_colors = {"low": "green", "medium": "yellow", "high": "red"}
+
+    for i, hf in enumerate(handoffs):
+        card = Text()
+        hf_id = hf.get("handoff_id", "?")
+        status = hf.get("status", "?")
+        sc = status_colors.get(status, "")
+        risk = hf.get("risk_level", "?")
+        rc = risk_colors.get(risk, "")
+        stage = hf.get("stage", "?")
+
+        card.append(f"[bold]{hf.get('title', '(untitled)')}[/]\n")
+        card.append(f"[{sc}]STATUS: {status}[/]  ")
+        card.append(f"[{rc}]RISK: {risk}[/]  ")
+        card.append(f"[dim]STAGE: {stage}[/]")
+
+        prop_id = hf.get("proposal_id", "")
+        if prop_id:
+            card.append(f"\n[dim]proposal_id:[/] {prop_id}")
+        plan_id = hf.get("plan_id", "")
+        if plan_id:
+            card.append(f"\n[dim]plan_id:    [/] {plan_id}")
+
+        files = hf.get("allowed_files", [])
+        if files:
+            card.append(f"\n[dim]files:      [/]{', '.join(files[:5])}")
+
+        steps = hf.get("implementation_steps", [])
+        if steps:
+            card.append(f"\n[dim]steps ({len(steps)}):[/]")
+            for s in steps[:5]:
+                card.append(f"\n  \u2022 {s}")
+
+        card.append(f"\n[dim]created:    [/]{hf.get('created_at', '?')}")
+
+        panel_title = f"HANDOFF [{i + 1}/{count}]  {hf_id[:24]}"
+        console.print(Panel(card, title=panel_title, border_style="dim"))
+
+    console.print(Rule(style="dim"))
+    console.print("  [dim]python3 link.py growth run      -- guided workflow dashboard[/]")
+
+
+# ── handoffs plain fallback ─────────────────────────────────────────────
+
+
+def render_handoffs_plain(data: dict[str, Any]) -> None:
+    """Render a handoffs list view using plain print."""
+    count: int = data.get("count", 0)
+    handoffs: list[dict] = data.get("handoffs", [])
+    out: list[str] = []
+    out.append(f"== LINK GROWTH HANDOFFS ({count}) ==")
+    out.append("")
+
+    if count == 0:
+        out.append(f"No worker handoffs found in {data.get('storage_path', '?')}")
+        out.append("")
+        out.append("To create a handoff:")
+        out.append("  python3 link.py growth approve <proposal_id>")
+        out.append("  python3 link.py growth handoff <proposal_id> --write")
+        out.append("")
+        out.append("python3 link.py growth run  -- guided workflow dashboard")
+        print("\n".join(out))
+        return
+
+    for i, hf in enumerate(handoffs):
+        out.append(f"--- HANDOFF [{i + 1}/{count}] ---")
+        out.append(f"handoff_id:   {hf.get('handoff_id', '?')}")
+        out.append(f"proposal_id:  {hf.get('proposal_id', '?')}")
+        out.append(f"plan_id:      {hf.get('plan_id', '?')}")
+        out.append(f"title:        {hf.get('title', '?')}")
+        out.append(f"stage:        {hf.get('stage', '?')}")
+        out.append(f"status:       {hf.get('status', '?')}")
+        out.append(f"risk_level:   {hf.get('risk_level', '?')}")
+        files = hf.get("allowed_files", [])
+        if files:
+            out.append(f"files:        {', '.join(files[:5])}")
+        steps = hf.get("implementation_steps", [])
+        if steps:
+            out.append(f"steps ({len(steps)}):")
+            for s in steps[:5]:
+                out.append(f"  - {s}")
+        out.append(f"created_at:   {hf.get('created_at', '?')}")
+        out.append("")
+    out.append("python3 link.py growth run  -- guided workflow dashboard")
+    print("\n".join(out))
+
+
+# ── handoffs render orchestrator ────────────────────────────────────────
+
+
+def render_handoffs_view(data: dict[str, Any]) -> None:
+    """Render handoffs with rich if available; fall back to plain text."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_handoffs_plain(data)
+        return
+    render_handoffs_with_rich(data)
+
+
 # ── run guide entry point ────────────────────────────────────────────────
 
 

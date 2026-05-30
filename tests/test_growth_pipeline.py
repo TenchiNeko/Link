@@ -1113,6 +1113,102 @@ def check_growth_run_with_source() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 20. Growth handoffs -- empty state
+# ---------------------------------------------------------------------------
+
+def check_growth_handoffs_empty() -> None:
+    """collect_handoffs_data returns count=0 when no handoffs exist."""
+    from link_modes.growth.link_growth_console import collect_handoffs_data
+
+    with tempfile.TemporaryDirectory() as td:
+        data = collect_handoffs_data(root=td)
+        _require(isinstance(data, dict), "collect_handoffs_data must return a dict")
+        _require(data.get("count") == 0,
+                 f"empty dir must have count=0, got {data.get('count')}")
+        _require(data.get("handoffs") == [],
+                 "empty dir must have handoffs=[]")
+        _require(isinstance(data.get("storage_path"), str),
+                 "storage_path must be a string")
+        _require(bool(data.get("storage_path", "")),
+                 "storage_path must be non-empty")
+
+    print("growth handoffs empty OK")
+
+
+# ---------------------------------------------------------------------------
+# 21. Growth handoffs -- populated state
+# ---------------------------------------------------------------------------
+
+def check_growth_handoffs_populated() -> None:
+    """collect_handoffs_data returns handoffs when they exist on disk."""
+    from pathlib import Path
+    from link_core.control_plane import write_proposal, update_proposal_status
+    from link_core.control_plane.link_control_plane_patch_plan import (
+        build_patch_plan_from_proposal,
+    )
+    from link_core.control_plane.link_control_plane_worker_handoff import (
+        build_worker_handoff_from_plan,
+        write_worker_handoff,
+    )
+    from link_modes.growth.link_growth_console import (
+        collect_handoffs_data,
+        _HANDOFF_WORKER_DIR,
+    )
+
+    proposal = {
+        "proposal_id": "handoffs-view-test-xyz",
+        "title": "handoffs terminal view test",
+        "source_path": "research/test.md",
+        "source_summary": "Smoke test for handoffs view.",
+        "extracted_capabilities": ["smoke"],
+        "link_takeaways": ["handoffs view works"],
+        "affected_files": ["link_growth_console.py"],
+        "risk_level": "low",
+        "expected_behavior_change": "none",
+        "implementation_plan": ["Step one.", "Step two.", "Step three."],
+        "verification_commands": ["echo ok"],
+        "rollback_plan": "Revert patch branch.",
+        "recommendation": "accept",
+        "status": "pending",
+        "created_at": "2026-05-29T00:00:00",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        write_proposal(proposal, root=td)
+        from link_core.control_plane.link_control_plane_proposals import (
+            load_proposal,
+            proposal_storage_dir,
+        )
+        update_proposal_status("handoffs-view-test-xyz", "accepted", root=td)
+        accepted = load_proposal(proposal_storage_dir(td) / "handoffs-view-test-xyz.json")
+        plan = build_patch_plan_from_proposal(accepted)
+        hf = build_worker_handoff_from_plan(plan)
+
+        hf_dir = Path(td) / _HANDOFF_WORKER_DIR
+        write_worker_handoff(hf, root=hf_dir)
+
+        data = collect_handoffs_data(root=td)
+        _require(data.get("count") == 1,
+                 f"must find 1 handoff, got {data.get('count')}")
+        handoffs = data.get("handoffs", [])
+        _require(len(handoffs) == 1, "handoffs list must have 1 entry")
+
+        h = handoffs[0]
+        _require(h.get("handoff_id") == hf["handoff_id"],
+                 "handoff_id must match written value")
+        _require(h.get("proposal_id") == "handoffs-view-test-xyz",
+                 "proposal_id must match source proposal")
+        _require(h.get("status") == "queued",
+                 f"handoff status must be 'queued', got {h.get('status')!r}")
+        _require(h.get("stage") == "PatchWorker",
+                 f"handoff stage must be 'PatchWorker', got {h.get('stage')!r}")
+        _require(isinstance(h.get("allowed_files"), list),
+                 "allowed_files must be a list")
+
+    print("growth handoffs populated OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -1137,6 +1233,8 @@ def main() -> None:
     check_growth_handoff_errors()
     check_growth_run_guide()
     check_growth_run_with_source()
+    check_growth_handoffs_empty()
+    check_growth_handoffs_populated()
     print("Growth pipeline smoke tests passed")
 
 
