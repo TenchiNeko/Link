@@ -1560,6 +1560,156 @@ def check_growth_archive_inventory_populated() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 29. Growth archive-extract -- dry-run previews, writes nothing
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_extract_dry_run() -> None:
+    """archive-extract dry-run pre-checks and previews without writing files."""
+    import zipfile
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_extraction_data
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        research_dir = root / "research"
+        research_dir.mkdir()
+
+        archive_path = research_dir / "test_dry_extract.zip"
+        with zipfile.ZipFile(str(archive_path), "w") as zf:
+            zf.writestr("project-dry/README.md", "# Dry run test\n")
+            zf.writestr("project-dry/src/lib.py", "def foo(): pass\n")
+            zf.writestr("project-dry/docs/api.md", "# API\n")
+
+        data = collect_extraction_data(
+            "research/test_dry_extract.zip", write=False, root=str(root)
+        )
+        _require(data.get("ok") is True, "dry-run must set ok=True")
+        _require(data.get("dry_run") is True, "dry-run must set dry_run=True")
+        _require(data.get("extracted_count") == 0,
+                 "dry-run must have extracted_count=0")
+        _require(data.get("archive_name") == "test_dry_extract.zip",
+                 f"archive_name mismatch: {data.get('archive_name')}")
+
+        # Verify no files were written
+        output_dir = root / "research/_extracted" / "test_dry_extract"
+        _require(not output_dir.exists(),
+                 f"dry-run must not create output dir: {output_dir}")
+        receipt_dir = root / "research/_catalog/extraction_receipts"
+        _require(not receipt_dir.exists(),
+                 f"dry-run must not create receipt dir: {receipt_dir}")
+
+    print("growth archive-extract dry-run OK")
+
+
+# ---------------------------------------------------------------------------
+# 30. Growth archive-extract -- --write extracts and writes receipt
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_extract_write() -> None:
+    """archive-extract --write extracts files and writes a receipt."""
+    import json as _json
+    import zipfile
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_extraction_data
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        research_dir = root / "research"
+        research_dir.mkdir()
+
+        archive_path = research_dir / "test_write_extract.zip"
+        with zipfile.ZipFile(str(archive_path), "w") as zf:
+            zf.writestr("project-write/README.md", "# Write test\n")
+            zf.writestr("project-write/src/main.py", "print('hello')\n")
+            zf.writestr("project-write/tests/test_main.py", "# test\n")
+
+        data = collect_extraction_data(
+            "research/test_write_extract.zip", write=True, root=str(root)
+        )
+        _require(data.get("ok") is True, "write must set ok=True")
+        _require(data.get("dry_run") is False, "write must set dry_run=False")
+        _require(data.get("extracted_count") == 3,
+                 f"expected 3 extracted, got {data.get('extracted_count')}")
+        _require(data.get("skipped_unsafe") == 0,
+                 "clean archive must have skipped_unsafe=0")
+        _require(data.get("skipped_macosx") == 0,
+                 "clean archive must have skipped_macosx=0")
+
+        # Verify files on disk
+        output_dir = root / "research/_extracted" / "test_write_extract"
+        _require(output_dir.exists(), "output dir must exist after --write")
+        _require((output_dir / "project-write/README.md").exists(),
+                 "README.md must exist on disk")
+        _require((output_dir / "project-write/src/main.py").exists(),
+                 "src/main.py must exist on disk")
+        _require((output_dir / "project-write/tests/test_main.py").exists(),
+                 "tests/test_main.py must exist on disk")
+
+        # Verify receipt
+        receipt_path = Path(data.get("receipt_path", ""))
+        _require(receipt_path.exists(), f"receipt must exist: {receipt_path}")
+        receipt_data = _json.loads(receipt_path.read_text(encoding="utf-8"))
+        _require(receipt_data.get("receipt_version") == "link-archive-extract-v1",
+                 "receipt must have correct version")
+        _require(receipt_data.get("archive_stem") == "test_write_extract",
+                 "receipt must have correct archive_stem")
+        _require(receipt_data.get("extracted_count") == 3,
+                 f"receipt extracted_count must be 3, got {receipt_data.get('extracted_count')}")
+
+        # Originals should still exist
+        _require(archive_path.exists(), "original archive must not be touched")
+
+    print("growth archive-extract write OK")
+
+
+# ---------------------------------------------------------------------------
+# 31. Growth archive-extract -- blocked for unsafe archives
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_extract_blocked() -> None:
+    """archive-extract blocks archives with unsafe paths."""
+    import zipfile
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_extraction_data
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        research_dir = root / "research"
+        research_dir.mkdir()
+
+        # Archive with ../ traversal
+        archive_path = research_dir / "dangerous_traversal.zip"
+        with zipfile.ZipFile(str(archive_path), "w") as zf:
+            zf.writestr("normal-file.md", "# safe\n")
+            zf.writestr("../outside-escape.txt", "dangerous\n")
+
+        data = collect_extraction_data(
+            "research/dangerous_traversal.zip", write=False, root=str(root)
+        )
+        _require(data.get("ok") is False,
+                 "archive with ../ traversal must be blocked")
+        _require(isinstance(data.get("error"), str),
+                 "blocked archive must have error string")
+        _require("traversal" in data.get("error", "").lower() or
+                 "safety" in data.get("error", "").lower(),
+                 "error must mention safety/traversal")
+
+        # Archive with absolute path
+        archive_path2 = research_dir / "dangerous_absolute.zip"
+        with zipfile.ZipFile(str(archive_path2), "w") as zf:
+            zf.writestr("safe-file.md", "# safe\n")
+            zf.writestr("/etc/malicious.conf", "bad\n")
+
+        data2 = collect_extraction_data(
+            "research/dangerous_absolute.zip", write=False, root=str(root)
+        )
+        _require(data2.get("ok") is False,
+                 "archive with absolute path must be blocked")
+
+    print("growth archive-extract blocked OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -1593,6 +1743,9 @@ def main() -> None:
     check_growth_receipts_populated()
     check_growth_archive_inventory_empty()
     check_growth_archive_inventory_populated()
+    check_growth_archive_extract_dry_run()
+    check_growth_archive_extract_write()
+    check_growth_archive_extract_blocked()
     print("Growth pipeline smoke tests passed")
 
 

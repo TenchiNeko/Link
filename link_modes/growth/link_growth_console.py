@@ -2592,6 +2592,490 @@ def render_archive_inventory_view(data: dict[str, Any]) -> None:
     render_archive_inventory_with_rich(data)
 
 
+# ── archive extraction entry point ───────────────────────────────────────
+_EXTRACTED_DIR = "research/_extracted"
+_CATALOG_DIR = "research/_catalog"
+_RECEIPTS_DIR = "research/_catalog/extraction_receipts"
+
+_ARCHIVE_SUFFIXES = {
+    ".zip", ".tar.gz", ".tgz", ".tar", ".tar.bz2", ".tar.xz", ".7z", ".rar",
+}
+
+_MAX_FILE_COUNT = 50000
+_MAX_EXTRACTED_BYTES = 2_000_000_000  # 2GB
+
+
+def archive_extract_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth archive-extract --archive <path>``.
+
+    Safely extracts a research archive into ``research/_extracted/<stem>/``.
+    Dry-run by default; ``--write`` performs the extraction and writes a
+    receipt to ``research/_catalog/extraction_receipts/<stem>.json``.
+
+    Originals are never modified.  Unsafe archive entries are skipped.
+    Nested archives are reported but not extracted.
+
+    Flags:
+        --archive <path>  Required. Archive file path.
+        --write           Extract to staging directory.
+        --json            Machine-readable output.
+        --root <path>     Override repo root (for test isolation).
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if not args or "--help" in args or "-h" in args:
+        print("Growth archive-extract: safely extract a research archive")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth archive-extract --archive <path>")
+        print("  python3 link.py growth archive-extract --archive <path> --write")
+        print("  python3 link.py growth archive-extract --archive <path> --json")
+        print("")
+        print("Extracts into research/_extracted/<archive_stem>/.")
+        print("Default is dry-run. No files are extracted without --write.")
+        print("Originals are never modified. Unsafe paths are skipped.")
+        return 0
+
+    archive_path = _parse_arg(args, "--archive")
+    if not archive_path:
+        print("error: --archive <path> is required", file=sys.stderr)
+        print("Run 'python3 link.py growth archive-extract --help' for usage.",
+              file=sys.stderr)
+        return 2
+
+    write = "--write" in args
+    root_override = _parse_arg(args, "--root")
+    data = collect_extraction_data(
+        archive_path, write=write, root=root_override
+    )
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0 if data.get("ok") else 1
+
+    render_extraction_view(data)
+    return 0 if data.get("ok") else 1
+
+
+def collect_extraction_data(
+    archive_path: str,
+    write: bool = False,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Pre-check, preview, and optionally extract a research archive.
+
+    Returns a dict with ``ok``, archive metadata, ``extracted_count``,
+    ``skipped`` breakdown, ``nested_archives``, ``receipt_path``,
+    and ``error``.  On ``--write``, files are extracted to the controlled
+    staging directory and a receipt is written.
+    """
+    import zipfile
+    from pathlib import Path
+
+    repo_root = Path(root) if root else Path.cwd()
+    source_path = (repo_root / archive_path).resolve()
+
+    # ── pre-check: file must exist ──
+    if not source_path.exists() or not source_path.is_file():
+        return _extraction_error(archive_path, f"archive not found: {source_path}")
+
+    # ── pre-check: run inventory to get safety data ──
+    inventory = collect_archive_inventory(root=str(repo_root))
+    matched = None
+    for a in inventory.get("archives", []):
+        # Match by absolute path or relative path
+        if a.get("abs_path") == str(source_path):
+            matched = a
+            break
+        if a.get("relative_path") == archive_path:
+            matched = a
+            break
+
+    if matched is None:
+        return _extraction_error(
+            archive_path,
+            f"archive not found in archive-inventory. "
+            f"Run 'python3 link.py growth archive-inventory' first.",
+        )
+
+    # ── pre-check: safety blockers ──
+    if matched.get("error"):
+        return _extraction_error(archive_path, f"archive error: {matched['error']}")
+
+    flags = matched.get("safety_flags", [])
+    if flags:
+        return _extraction_error(
+            archive_path,
+            f"archive has safety flags: {', '.join(flags)}",
+            safety_flags=flags,
+        )
+
+    if matched.get("file_count", 0) > _MAX_FILE_COUNT:
+        return _extraction_error(
+            archive_path,
+            f"too many files: {matched['file_count']} > {_MAX_FILE_COUNT}",
+            safety_flags=["high_file_count"],
+        )
+
+    if matched.get("estimated_extracted_bytes", 0) > _MAX_EXTRACTED_BYTES:
+        return _extraction_error(
+            archive_path,
+            f"estimated extracted size too large: "
+            f"{_human_size(matched['estimated_extracted_bytes'])} > "
+            f"{_human_size(_MAX_EXTRACTED_BYTES)}",
+            safety_flags=["huge_extracted_size"],
+        )
+
+    atype = matched.get("archive_type", "")
+    if atype not in ("zip", "tar"):
+        return _extraction_error(
+            archive_path,
+            f"unsupported archive type for extraction: {atype}",
+        )
+
+    archive_stem = Path(matched.get("name", archive_path)).stem
+    output_dir = repo_root / _EXTRACTED_DIR / archive_stem
+
+    # ── dry-run preview ──
+    if not write:
+        return {
+            "ok": True,
+            "archive_name": matched.get("name", archive_path),
+            "archive_path": str(source_path),
+            "archive_type": atype,
+            "archive_size_human": matched.get("size_human", "?"),
+            "output_dir": str(output_dir),
+            "archive_stem": archive_stem,
+            "file_count": matched.get("file_count", 0),
+            "estimated_extracted_human": matched.get("estimated_extracted_human", "?"),
+            "extracted_count": 0,
+            "skipped_macosx": 0,
+            "skipped_unsafe": 0,
+            "nested_archives": [],
+            "safety_flags": flags,
+            "receipt_path": "",
+            "dry_run": True,
+            "error": None,
+        }
+
+    # ── --write: extract ──
+    if output_dir.exists():
+        return _extraction_error(
+            archive_path,
+            f"output directory already exists: {output_dir}",
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=False)
+
+    extracted = 0
+    skipped_macosx = 0
+    skipped_unsafe = 0
+    nested_archives: list[str] = []
+    extraction_error: str | None = None
+
+    try:
+        if atype == "zip":
+            with zipfile.ZipFile(str(source_path), "r") as zf:
+                for info in zf.infolist():
+                    name = info.filename
+                    if name.startswith("__MACOSX/"):
+                        skipped_macosx += 1
+                        continue
+                    if _is_nested_archive(name):
+                        nested_archives.append(name)
+                        continue
+                    if _member_is_unsafe(name, is_symlink_zf=False):
+                        skipped_unsafe += 1
+                        continue
+                    zf.extract(info, str(output_dir))
+                    extracted += 1
+        else:
+            import tarfile as _tarfile
+            with _tarfile.open(str(source_path), "r:*") as tf:
+                for member in tf.getmembers():
+                    name = member.name
+                    if "__MACOSX/" in name:
+                        skipped_macosx += 1
+                        continue
+                    if _is_nested_archive(name):
+                        nested_archives.append(name)
+                        continue
+                    is_sym = member.issym() if hasattr(member, "issym") else member.is_symlink()
+                    if _member_is_unsafe(name, is_symlink_zf=is_sym):
+                        skipped_unsafe += 1
+                        continue
+                    if member.isdir():
+                        continue
+                    tf.extract(member, str(output_dir), filter=None)  # type: ignore[arg-type]
+                    extracted += 1
+    except Exception as exc:
+        extraction_error = str(exc)
+
+    # ── write receipt ──
+    receipt_root = repo_root / _RECEIPTS_DIR
+    receipt_root.mkdir(parents=True, exist_ok=True)
+    receipt_data = {
+        "receipt_version": "link-archive-extract-v1",
+        "archive_stem": archive_stem,
+        "archive_path": str(source_path),
+        "archive_type": atype,
+        "archive_size_human": matched.get("size_human", "?"),
+        "output_dir": str(output_dir),
+        "extracted_count": extracted,
+        "skipped_macosx": skipped_macosx,
+        "skipped_unsafe": skipped_unsafe,
+        "nested_archives": nested_archives,
+        "error": extraction_error,
+        "created_at": _utc_now(),
+    }
+    receipt_path = receipt_root / f"{archive_stem}.json"
+    receipt_path.write_text(json.dumps(receipt_data, indent=2, default=str),
+                            encoding="utf-8")
+
+    return {
+        "ok": extraction_error is None,
+        "archive_name": matched.get("name", archive_path),
+        "archive_path": str(source_path),
+        "archive_type": atype,
+        "archive_size_human": matched.get("size_human", "?"),
+        "output_dir": str(output_dir),
+        "archive_stem": archive_stem,
+        "file_count": matched.get("file_count", 0),
+        "estimated_extracted_human": matched.get("estimated_extracted_human", "?"),
+        "extracted_count": extracted,
+        "skipped_macosx": skipped_macosx,
+        "skipped_unsafe": skipped_unsafe,
+        "nested_archives": nested_archives,
+        "safety_flags": flags,
+        "receipt_path": str(receipt_path),
+        "dry_run": False,
+        "error": extraction_error,
+    }
+
+
+def _utc_now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _is_nested_archive(name: str) -> bool:
+    """Return True if ``name`` looks like a nested archive file."""
+    lower = name.lower()
+    return any(lower.endswith(s) for s in _ARCHIVE_SUFFIXES)
+
+
+def _member_is_unsafe(name: str, is_symlink_zf: bool) -> bool:
+    """Return True if an archive member is unsafe to extract."""
+    if name.startswith("/"):
+        return True
+    if "../" in name:
+        return True
+    if is_symlink_zf:
+        return True
+    return False
+
+
+def _extraction_error(
+    archive_path: str,
+    error: str,
+    safety_flags: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "archive_name": archive_path,
+        "archive_path": archive_path,
+        "archive_type": "",
+        "archive_size_human": "",
+        "output_dir": "",
+        "archive_stem": "",
+        "file_count": 0,
+        "estimated_extracted_human": "",
+        "extracted_count": 0,
+        "skipped_macosx": 0,
+        "skipped_unsafe": 0,
+        "nested_archives": [],
+        "safety_flags": safety_flags or [],
+        "receipt_path": "",
+        "dry_run": True,
+        "error": error,
+    }
+
+
+# ── extraction rich renderer ────────────────────────────────────────────
+
+
+def render_extraction_with_rich(data: dict[str, Any]) -> None:
+    """Render an archive extraction preview/receipt using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    ok: bool = data.get("ok", False)
+    dry_run: bool = data.get("dry_run", True)
+
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    if not ok:
+        state_label = "BLOCKED"
+        state_color = "red"
+    elif dry_run:
+        state_label = "DRY RUN"
+        state_color = "yellow"
+    else:
+        state_label = "EXTRACTED"
+        state_color = "bold green"
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH ARCHIVE EXTRACT[/]",
+        f"[{state_color}]{state_label}[/]",
+    )
+    console.print(header)
+
+    if not ok:
+        error_text = Text()
+        error_text.append(data.get("error", "unknown error"), style="bold red")
+        flags = data.get("safety_flags", [])
+        if flags:
+            error_text.append("\n[dim]safety flags: [/]")
+            error_text.append(", ".join(flags), style="red")
+        console.print(Panel(error_text, border_style="red"))
+        console.print(Rule(style="dim"))
+        return
+
+    # ── archive info ──
+    info = Text()
+    info.append("archive: ", style="dim")
+    info.append(data.get("archive_name", "?"), style="bold")
+    info.append(f"\n[dim]type:   [/]{data.get('archive_type', '?')}")
+    info.append(f"\n[dim]size:   [/]{data.get('archive_size_human', '?')}")
+    console.print(Panel(info, title="ARCHIVE", border_style="dim"))
+
+    # ── extraction preview / result ──
+    preview = Text()
+    if dry_run:
+        preview.append(
+            f"\n[dim]files in archive:      [/]{data.get('file_count', 0)}"
+        )
+        preview.append(
+            f"\n[dim]estimated extracted:   [/]{data.get('estimated_extracted_human', '?')}"
+        )
+        preview.append(
+            f"\n[dim]output dir:            [/]{data.get('output_dir', '?')}"
+        )
+        preview.append(
+            "\n\n[yellow]Would extract above files. Dry-run mode — no files written.[/]"
+        )
+    else:
+        preview.append(
+            f"\n[dim]extracted: [/][green]{data.get('extracted_count', 0)}[/]"
+        )
+        preview.append(
+            f"\n[dim]skipped (unsafe): [/][yellow]{data.get('skipped_unsafe', 0)}[/]"
+        )
+        preview.append(
+            f"\n[dim]skipped (macosx): [/][yellow]{data.get('skipped_macosx', 0)}[/]"
+        )
+        preview.append(
+            f"\n[dim]output dir:    [/]{data.get('output_dir', '?')}"
+        )
+        receipt_path = data.get("receipt_path", "")
+        if receipt_path:
+            preview.append(
+                f"\n[dim]receipt:       [/]{receipt_path}"
+            )
+        err = data.get("error")
+        if err:
+            preview.append(f"\n[red]error: {err}[/]")
+
+    nested = data.get("nested_archives", [])
+    if nested:
+        preview.append(
+            f"\n[dim]nested archives ({len(nested)}):[/]"
+        )
+        for n in nested[:10]:
+            preview.append(f"\n  [dim]{n}[/]")
+
+    console.print(Panel(preview, title="EXTRACTION" if not dry_run else "PREVIEW",
+                        border_style="green" if ok and not dry_run else "dim"))
+
+    console.print(Rule(style="dim"))
+    if dry_run:
+        console.print("  [dim]Use --write to extract to staging directory[/]")
+    console.print("  [dim]python3 link.py growth run  -- guided workflow dashboard[/]")
+
+
+# ── extraction plain fallback ───────────────────────────────────────────
+
+
+def render_extraction_plain(data: dict[str, Any]) -> None:
+    """Render an archive extraction preview/receipt using plain print."""
+    ok: bool = data.get("ok", False)
+    dry_run: bool = data.get("dry_run", True)
+    label = "BLOCKED" if not ok else ("DRY RUN" if dry_run else "EXTRACTED")
+    out: list[str] = []
+    out.append(f"== LINK GROWTH ARCHIVE EXTRACT ({label}) ==")
+    out.append("")
+
+    if not ok:
+        out.append(f"error: {data.get('error', 'unknown error')}")
+        flags = data.get("safety_flags", [])
+        if flags:
+            out.append(f"safety flags: {', '.join(flags)}")
+        print("\n".join(out))
+        return
+
+    out.append(f"archive:    {data.get('archive_name', '?')}")
+    out.append(f"type:       {data.get('archive_type', '?')}")
+    out.append(f"size:       {data.get('archive_size_human', '?')}")
+
+    if dry_run:
+        out.append(f"files:      {data.get('file_count', 0)}")
+        out.append(f"est size:   {data.get('estimated_extracted_human', '?')}")
+        out.append(f"output dir: {data.get('output_dir', '?')}")
+        out.append("")
+        out.append("Dry-run mode — no files written.")
+    else:
+        out.append(f"extracted:  {data.get('extracted_count', 0)}")
+        out.append(f"skipped (unsafe):  {data.get('skipped_unsafe', 0)}")
+        out.append(f"skipped (macosx):  {data.get('skipped_macosx', 0)}")
+        out.append(f"output dir: {data.get('output_dir', '?')}")
+        receipt_path = data.get("receipt_path", "")
+        if receipt_path:
+            out.append(f"receipt:    {receipt_path}")
+        err = data.get("error")
+        if err:
+            out.append(f"error:      {err}")
+
+    nested = data.get("nested_archives", [])
+    if nested:
+        out.append(f"nested archives ({len(nested)}):")
+        for n in nested[:10]:
+            out.append(f"  {n}")
+
+    out.append("")
+    if dry_run:
+        out.append("Use --write to extract to staging directory.")
+    out.append("python3 link.py growth run  -- guided workflow dashboard")
+
+    print("\n".join(out))
+
+
+# ── extraction render orchestrator ──────────────────────────────────────
+
+
+def render_extraction_view(data: dict[str, Any]) -> None:
+    """Render extraction preview/receipt with rich if available."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_extraction_plain(data)
+        return
+    render_extraction_with_rich(data)
+
+
 # ── run guide entry point ────────────────────────────────────────────────
 
 
