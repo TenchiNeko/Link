@@ -2491,6 +2491,105 @@ def check_growth_archive_code_queue_top_clamp() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 47. Growth archive-code-brief -- dry-run
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_code_brief_dry_run() -> None:
+    """archive-code-brief dry-run reads sources, produces preview, writes nothing."""
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_code_brief
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src_dir = root / "extracted/commands/agent"
+        src_dir.mkdir(parents=True)
+        (src_dir / "index.ts").write_text(
+            "// Agent command dispatcher\n"
+            "import { registerTool } from '../tool-registry';\n"
+            "export function agentOrchestrator() { return 'agent'; }\n"
+            "// Permission check before agent delegation\n",
+            encoding="utf-8",
+        )
+        (src_dir / "context.ts").write_text(
+            "// Session context for agent pipeline\n"
+            "export class AgentContext { storage: Map<string, any>; }\n",
+            encoding="utf-8",
+        )
+
+        data = collect_code_brief(str(src_dir), write=False, root=str(root))
+        _require(data.get("ok") is True, "dry-run must set ok=True")
+        _require(data.get("dry_run") is True, "dry-run must set dry_run=True")
+        _require(data.get("brief_path") == "", "dry-run must have empty brief_path")
+        _require(data.get("files_read_count", 0) == 2,
+                 f"2 files should be read, got {data.get('files_read_count')}")
+        _require(data.get("source_type") == "directory",
+                 "source_type must be 'directory'")
+
+        preview = data.get("brief_preview", [])
+        _require(len(preview) >= 1, "dry-run must populate brief_preview")
+
+        # Verify no files written
+        briefs_dir = root / "research/_catalog/code_briefs"
+        _require(not briefs_dir.exists(),
+                 f"dry-run must not create briefs dir: {briefs_dir}")
+
+    print("growth archive-code-brief dry-run OK")
+
+
+# ---------------------------------------------------------------------------
+# 48. Growth archive-code-brief -- --write
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_code_brief_write() -> None:
+    """archive-code-brief --write persists a markdown brief to disk."""
+    import json as _json
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_code_brief
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src_file = root / "extracted/src/main.ts"
+        src_file.parent.mkdir(parents=True)
+        src_file.write_text(
+            "// Main CLI entry\n"
+            "import { CommandRouter } from './router';\n"
+            "import { ToolRegistry } from './tools';\n"
+            "import { AgentOrchestrator } from './agent';\n"
+            "import { MemoryStore } from './memory';\n"
+            "const router = new CommandRouter();\n"
+            "const tools = new ToolRegistry();\n"
+            "const agent = new AgentOrchestrator(tools, new MemoryStore());\n"
+            "export { router, tools, agent };\n",
+            encoding="utf-8",
+        )
+
+        data = collect_code_brief(str(src_file), write=True, root=str(root))
+        _require(data.get("ok") is True, "write must set ok=True")
+        _require(data.get("dry_run") is False, "write must set dry_run=False")
+        _require(bool(data.get("brief_path")), "brief_path must be non-empty")
+        _require(data.get("files_read_count", 0) >= 1,
+                 "must have read at least 1 file")
+
+        brief_file = Path(data.get("brief_path", ""))
+        _require(brief_file.exists(), f"brief file must exist: {brief_file}")
+        content = brief_file.read_text(encoding="utf-8")
+        _require("Code Research Brief" in content,
+                 "brief must contain title")
+        _require("python3 link.py growth archive-mine" in content,
+                 "brief must suggest archive-mine command")
+        _require("archive-code-brief" in content,
+                 "brief must mention archive-code-brief")
+
+        # Architecture signals should be detected
+        _require("agent" in content.lower() or "Agent" in content,
+                 "brief should detect agent patterns")
+        _require("Tool" in content or "tool" in content.lower(),
+                 "brief should detect tool patterns")
+
+    print("growth archive-code-brief write OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -2542,6 +2641,8 @@ def main() -> None:
     check_growth_archive_code_queue_empty()
     check_growth_archive_code_queue_populated()
     check_growth_archive_code_queue_top_clamp()
+    check_growth_archive_code_brief_dry_run()
+    check_growth_archive_code_brief_write()
     print("Growth pipeline smoke tests passed")
 
 

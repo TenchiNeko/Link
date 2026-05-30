@@ -5745,6 +5745,647 @@ def render_archive_code_queue_view(data: dict[str, Any]) -> None:
     render_archive_code_queue_with_rich(data)
 
 
+# ── archive code brief entry point ──────────────────────────────────────
+_CODE_BRIEFS_DIR = "research/_catalog/code_briefs"
+_CODE_BRIEF_MAX_FILE_BYTES = 250_000
+_CODE_BRIEF_MAX_TOTAL_BYTES = 1_000_000
+_CODE_BRIEF_MAX_FILES_PER_DIR = 30
+
+
+def archive_code_brief_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth archive-code-brief --source <path>``.
+
+    Reads a code file or directory and produces a markdown research brief
+    summarising its architecture value.  Dry-run by default; ``--write``
+    persists the brief to ``research/_catalog/code_briefs/<slug>.md``.
+
+    No code is executed.  Only plain text is read.  Existing extracted
+    files are never modified.
+
+    Flags:
+        --source <path>  Required. Code file or directory.
+        --write          Persist the brief to disk.
+        --json           Machine-readable output.
+        --root <path>    Override repo root (for test isolation).
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if not args or "--help" in args or "-h" in args:
+        print("Growth archive-code-brief: create a markdown research brief")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth archive-code-brief --source <path>")
+        print("  python3 link.py growth archive-code-brief --source <path> --write")
+        print("  python3 link.py growth archive-code-brief --source <path> --json")
+        print("")
+        print("Reads a code file or directory and produces a markdown")
+        print("research brief so the proposal miner can understand it.")
+        print("Dry-run by default.  No code is executed.")
+        return 0
+
+    source_arg = _parse_arg(args, "--source")
+    if not source_arg:
+        print("error: --source <path> is required", file=sys.stderr)
+        print("Run 'python3 link.py growth archive-code-brief --help' for usage.",
+              file=sys.stderr)
+        return 2
+
+    write = "--write" in args
+    root_override = _parse_arg(args, "--root")
+    data = collect_code_brief(source_arg, write=write, root=root_override)
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0 if data.get("ok") else 1
+
+    render_code_brief_view(data)
+    return 0 if data.get("ok") else 1
+
+
+def collect_code_brief(
+    source: str,
+    write: bool = False,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Read a code file or directory and produce a markdown research brief.
+
+    For directories, sibling implementation files are included alongside
+    index files.  Files are capped at ``_CODE_BRIEF_MAX_FILE_BYTES`` and
+    ``_CODE_BRIEF_MAX_TOTAL_BYTES``.  Binary files, lockfiles, and files
+    in skipped directories are excluded.
+
+    When ``write=True`` the brief is persisted to
+    ``research/_catalog/code_briefs/<slug>.md``.
+
+    Returns a dict with ``ok``, ``brief_preview``, ``brief_path``,
+    ``files_read``, ``files_skipped``, and suggested next commands.
+
+    No code is executed.  Read-only text extraction.
+    """
+    from pathlib import Path
+
+    repo_root = Path(root) if root else Path.cwd()
+    source_path = (repo_root / source).resolve()
+
+    if not source_path.exists():
+        return _brief_error(f"source not found: {source_path}")
+
+    is_dir = source_path.is_dir()
+
+    # ── collect files ──
+    files_read: list[dict] = []
+    files_skipped: list[dict] = []
+    total_bytes = 0
+    source_type = "directory" if is_dir else "file"
+
+    source_files = _collect_brief_files(
+        source_path, is_dir, _CODE_BRIEF_MAX_FILES_PER_DIR,
+    )
+
+    for fpath in source_files:
+        size = fpath.stat().st_size
+        rel = str(fpath.relative_to(source_path)) if is_dir else fpath.name
+
+        if size > _CODE_BRIEF_MAX_FILE_BYTES:
+            files_skipped.append({"path": rel, "reason": f"too large ({_human_size(size)})"})
+            continue
+        if _code_is_binary(fpath):
+            files_skipped.append({"path": rel, "reason": "binary"})
+            continue
+        if total_bytes + size > _CODE_BRIEF_MAX_TOTAL_BYTES:
+            files_skipped.append({"path": rel, "reason": "total bytes cap reached"})
+            continue
+
+        try:
+            content = fpath.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            files_skipped.append({"path": rel, "reason": "unreadable"})
+            continue
+
+        total_bytes += size
+        files_read.append({
+            "path": rel,
+            "size_bytes": size,
+            "content": content,
+        })
+
+    if not files_read:
+        return _brief_error(
+            f"no readable source files found in {source_path}. "
+            f"All files were skipped or the source is empty.",
+            files_read=files_read,
+            files_skipped=files_skipped,
+            source_type=source_type,
+        )
+
+    # ── build brief ──
+    source_name = source_path.name
+    slug = _slugify(source_name)
+    brief_md = _build_code_brief(source_path, source_name, slug, files_read)
+
+    brief_path = ""
+    if write:
+        briefs_dir = repo_root / _CODE_BRIEFS_DIR
+        briefs_dir.mkdir(parents=True, exist_ok=True)
+        brief_file = briefs_dir / f"{slug}.md"
+        if brief_file.exists():
+            return _brief_error(
+                f"brief already exists: {brief_file}",
+                files_read=files_read,
+                files_skipped=files_skipped,
+                source_type=source_type,
+            )
+        brief_file.write_text(brief_md, encoding="utf-8")
+        brief_path = str(brief_file)
+
+    return {
+        "ok": True,
+        "source_path": str(source_path),
+        "source_name": source_name,
+        "source_type": source_type,
+        "slug": slug,
+        "files_read": [{k: v for k, v in f.items() if k != "content"} for f in files_read],
+        "files_read_count": len(files_read),
+        "files_skipped": files_skipped,
+        "total_bytes_read": total_bytes,
+        "total_human": _human_size(total_bytes),
+        "brief_path": brief_path,
+        "brief_preview": brief_md.split("\n")[:25],
+        "dry_run": not write,
+        "next_commands": [
+            f"python3 link.py growth archive-mine --source {brief_path}" if brief_path else (
+                f"python3 link.py growth archive-code-brief --source {source_path} --write"
+            ),
+            "python3 link.py growth proposals",
+            "python3 link.py growth approve <proposal_id>",
+        ],
+        "warnings": [],
+        "error": None,
+    }
+
+
+def _collect_brief_files(
+    source_path: Path, is_dir: bool, max_files: int,
+) -> list[Path]:
+    """Collect readable source files for a brief."""
+    files: list[Path] = []
+
+    if not is_dir:
+        files.append(source_path)
+        return files
+
+    # Gather all files in directory, sorted
+    for entry in sorted(source_path.rglob("*")):
+        if not entry.is_file():
+            continue
+        if entry.is_symlink():
+            continue
+
+        rel = str(entry.relative_to(source_path))
+        path_lower = rel.lower()
+
+        # Skip dirs
+        skip = False
+        for sd in _SKIP_DIR_NAMES:
+            if sd in path_lower.split("/"):
+                skip = True
+                break
+        if skip:
+            continue
+        if "__MACOSX" in path_lower:
+            continue
+
+        # Skip lockfiles
+        if entry.name.lower() in _CODE_LOCKFILE_NAMES:
+            continue
+
+        # Skip non-code extensions
+        suffix = entry.suffix.lower()
+        if suffix not in _CODE_EXTS:
+            continue
+
+        files.append(entry)
+        if len(files) >= max_files:
+            break
+
+    return files
+
+
+def _build_code_brief(
+    source_path: Path,
+    source_name: str,
+    slug: str,
+    files_read: list[dict],
+) -> str:
+    """Build a markdown research brief from code files."""
+    lines: list[str] = []
+    lines.append(f"# Code Research Brief: {source_name}")
+    lines.append("")
+    lines.append(f"**Source path:** `{source_path}`")
+    lines.append(f"**Files read:** {len(files_read)}")
+    lines.append(f"**Generated by:** Link Growth archive-code-brief")
+    lines.append(f"**Suggested mining:**")
+    lines.append(f"")
+    lines.append(f"    python3 link.py growth archive-mine --source research/_catalog/code_briefs/{slug}.md")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append("## File Inventory")
+    lines.append("")
+
+    for f in files_read:
+        lines.append(f"- `{f['path']}` ({_human_size(f['size_bytes'])})")
+
+    lines.append("")
+    lines.append("## Architecture Signals")
+    lines.append("")
+
+    all_text = "\n".join(f["content"] for f in files_read)
+    signals = _detect_architecture_signals(all_text)
+    for sig in signals:
+        lines.append(f"- {sig}")
+
+    if not signals:
+        lines.append("- No strong architecture patterns detected automatically.")
+    lines.append("")
+    lines.append("## Source Excerpts")
+    lines.append("")
+
+    for f in files_read:
+        excerpt = f["content"][:800].rstrip()
+        lines.append(f"### {f['path']}")
+        lines.append("")
+        lines.append("```")
+        if f["path"].endswith(".ts") or f["path"].endswith(".tsx"):
+            lines.append("typescript")
+        elif f["path"].endswith(".js") or f["path"].endswith(".jsx"):
+            lines.append("javascript")
+        elif f["path"].endswith(".py"):
+            lines.append("python")
+        elif f["path"].endswith(".json"):
+            lines.append("json")
+        elif f["path"].endswith((".yaml", ".yml")):
+            lines.append("yaml")
+        lines.append(excerpt)
+        lines.append("```")
+        lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    lines.append("## Possible Link Upgrade Ideas")
+    lines.append("")
+
+    ideas = _infer_upgrade_ideas(source_name, signals)
+    for idea in ideas:
+        lines.append(f"- {idea}")
+
+    if not ideas:
+        lines.append("- No specific upgrade ideas inferred.")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _detect_architecture_signals(text: str) -> list[str]:
+    """Detect architecture patterns in source text."""
+    signals: list[str] = []
+    text_lower = text.lower()
+
+    patterns = [
+        ("router", "Routing / dispatch table patterns detected"),
+        ("orchestrat", "Orchestration patterns detected"),
+        ("agent", "Agent / autonomous actor patterns detected"),
+        ("planner", "Planning workflow patterns detected"),
+        ("executor", "Execution / task runner patterns detected"),
+        ("workflow", "Workflow / pipeline patterns detected"),
+        ("pipeline", "Pipeline / sequential processing patterns detected"),
+        ("tool", "Tool registration / capability patterns detected"),
+        ("memory", "Memory / state persistence patterns detected"),
+        ("context", "Context / session management patterns detected"),
+        ("schema", "Schema / validation patterns detected"),
+        ("verifier", "Verification / check patterns detected"),
+        ("receipt", "Receipt / evidence patterns detected"),
+        ("worker", "Worker / parallel execution patterns detected"),
+        ("queue", "Queue / task scheduling patterns detected"),
+        ("dashboard", "Dashboard / admin UI patterns detected"),
+        ("lazy", "Lazy-load / dynamic import patterns detected"),
+        ("import(", "Dynamic import patterns detected"),
+        ("permission", "Permission / access control patterns detected"),
+        ("auth", "Authentication patterns detected"),
+        ("session", "Session management patterns detected"),
+        ("transcript", "Transcript / logging patterns detected"),
+        ("storage", "Storage / persistence patterns detected"),
+        ("error", "Error handling patterns detected"),
+        ("retry", "Retry / resilience patterns detected"),
+        ("fallback", "Fallback / degradation patterns detected"),
+        ("sandbox", "Sandbox / isolation patterns detected"),
+        ("isolat", "Isolation / containment patterns detected"),
+        ("safe", "Safety / guard patterns detected"),
+        ("factory", "Factory / builder patterns detected"),
+        ("delegate", "Delegation patterns detected"),
+        ("adapter", "Adapter / bridge patterns detected"),
+        ("bridge", "Bridge / translation patterns detected"),
+        ("provider", "Provider / injection patterns detected"),
+    ]
+
+    for keyword, label in patterns:
+        if keyword in text_lower and label not in signals:
+            signals.append(label)
+
+    if len(signals) > 15:
+        signals = signals[:15]
+
+    return signals
+
+
+def _infer_upgrade_ideas(source_name: str, signals: list[str]) -> list[str]:
+    """Infer possible Link upgrade ideas from detected patterns."""
+    ideas: list[str] = []
+    sig_text = " ".join(signals).lower()
+
+    if "agent" in sig_text and "tool" in sig_text:
+        ideas.append(
+            "Review agent/tool registration model for tool-canister or "
+            "profile-gated tool dispatch patterns adaptable to Link's tool registry."
+        )
+    if "router" in sig_text:
+        ideas.append(
+            "Study routing/dispatch architecture for Link's model router "
+            "or worker delegation routing."
+        )
+    if "worker" in sig_text and "queue" in sig_text:
+        ideas.append(
+            "Review worker/queue model for Link task scheduler or "
+            "autonomous agent task queue."
+        )
+    if "sandbox" in sig_text or "isolat" in sig_text:
+        ideas.append(
+            "Study sandbox/isolation patterns for Link's worker isolation "
+            "and safe-code-execution story."
+        )
+    if "context" in sig_text and "session" in sig_text:
+        ideas.append(
+            "Review context/session management for Link's long-session "
+            "memory and context-truncation upgrade."
+        )
+    if "permission" in sig_text or "auth" in sig_text:
+        ideas.append(
+            "Study permission/auth patterns for Link's capability gate "
+            "and profile tool gate."
+        )
+    if "receipt" in sig_text or "verifier" in sig_text:
+        ideas.append(
+            "Review receipt/verifier patterns for Link's execution "
+            "evidence and healthcheck receipt system."
+        )
+    if "pipeline" in sig_text or "workflow" in sig_text:
+        ideas.append(
+            "Study pipeline/workflow patterns for Link's control-plane "
+            "proposal pipeline."
+        )
+    if "error" in sig_text or "retry" in sig_text or "fallback" in sig_text:
+        ideas.append(
+            "Review error/retry/fallback patterns for Link's agent loop "
+            "recovery and provider fallback."
+        )
+    if "lazy" in sig_text or "import(" in sig_text:
+        ideas.append(
+            "Study lazy-load/dynamic import patterns for Link's dynamic "
+            "tool loading and provider routing."
+        )
+    if "factory" in sig_text or "delegate" in sig_text or "provider" in sig_text:
+        ideas.append(
+            "Review factory/delegate/provider patterns for Link's worker "
+            "profile and mode factory architecture."
+        )
+
+    if not ideas:
+        ideas.append(
+            "General architecture review — compare command/event patterns "
+            "to Link's CLI dispatcher and control-plane event model."
+        )
+
+    return ideas[:6]
+
+
+def _slugify(name: str) -> str:
+    """Create a safe slug from a name."""
+    import re
+    slug = name.lower().strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug or "unnamed"
+
+
+def _brief_error(
+    error: str,
+    files_read: list | None = None,
+    files_skipped: list | None = None,
+    source_type: str = "",
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "source_path": "",
+        "source_name": "",
+        "source_type": source_type,
+        "slug": "",
+        "files_read": files_read or [],
+        "files_skipped": files_skipped or [],
+        "total_bytes_read": 0,
+        "total_human": "0",
+        "brief_path": "",
+        "brief_preview": [],
+        "dry_run": True,
+        "next_commands": [
+            "python3 link.py growth archive-code-queue",
+            "python3 link.py growth run",
+        ],
+        "warnings": [],
+        "error": error,
+        "files_read_count": len(files_read) if files_read else 0,
+    }
+
+
+# ── code brief rich renderer ────────────────────────────────────────────
+
+
+def render_code_brief_with_rich(data: dict[str, Any]) -> None:
+    """Render a code brief preview/receipt using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    ok: bool = data.get("ok", True)
+    dry_run: bool = data.get("dry_run", True)
+
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    if not ok:
+        label, color = "ERROR", "red"
+    elif dry_run:
+        label, color = "DRY RUN", "yellow"
+    else:
+        label, color = "WRITTEN", "bold green"
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH CODE BRIEF[/]",
+        f"[{color}]{label}[/]",
+    )
+    console.print(header)
+
+    if not ok:
+        error_text = Text()
+        sk = data.get("files_skipped", [])
+        if sk:
+            error_text.append("All files were skipped or unreadable:\n", style="dim")
+            for s in sk[:5]:
+                error_text.append(f"  {s['path']}: {s['reason']}\n", style="dim")
+        error_text.append(f"\n[red]{data.get('error', 'unknown error')}[/]")
+        console.print(Panel(error_text, border_style="red"))
+        console.print(Rule(style="dim"))
+        return
+
+    # ── source info ──
+    info = Text()
+    info.append("source: ", style="dim")
+    info.append(data.get("source_path", "?"), style="bold")
+    info.append(f"\n[dim]type:   [/]{data.get('source_type', '?')}")
+    info.append(
+        f"\n[dim]files:  [/]{data.get('files_read_count', 0)} read  "
+        f"{len(data.get('files_skipped', []))} skipped  "
+        f"[dim]total: {data.get('total_human', '?')}[/]"
+    )
+    console.print(Panel(info, title="SOURCE", border_style="dim"))
+
+    # ── files read ──
+    files = data.get("files_read", [])
+    if files:
+        ft = Text()
+        for f in files[:12]:
+            ft.append(
+                f"\n\u2022 {f.get('path', '?')}  "
+                f"[dim]({_human_size(f.get('size_bytes', 0))})[/]"
+            )
+        console.print(Panel(ft, title="FILES READ", border_style="dim"))
+
+    # ── files skipped ──
+    skipped = data.get("files_skipped", [])
+    if skipped:
+        st = Text()
+        for s in skipped[:8]:
+            st.append(
+                f"\n[dim]\u2717 {s.get('path', '?')} — {s.get('reason', '?')}[/]"
+            )
+        console.print(Panel(st, title="SKIPPED", border_style="yellow"))
+
+    # ── brief preview ──
+    preview = data.get("brief_preview", [])
+    if preview:
+        prev_text = Text()
+        prev_text.append("\n".join(preview[:20]))
+        console.print(Panel(prev_text, title="BRIEF PREVIEW", border_style="dim"))
+
+    # ── written path ──
+    brief_path = data.get("brief_path", "")
+    if brief_path:
+        wt = Text()
+        wt.append("Brief written to:\n", style="bold green")
+        wt.append(f"  {brief_path}", style="dim")
+        console.print(Panel(wt, border_style="dim green"))
+
+    # ── next commands ──
+    next_cmds = data.get("next_commands", [])
+    nc = Text()
+    nc.append("Next:\n", style="bold")
+    for cmd in next_cmds:
+        nc.append(f"  $ {cmd}\n", style="dim")
+
+    console.print(Rule(style="dim"))
+    console.print(Panel(nc, title="SUGGESTED NEXT STEPS", border_style="green"))
+    console.print("  [dim]No code was executed by this command.[/]")
+    console.print("  [dim]python3 link.py growth run  -- guided workflow[/]")
+
+
+# ── code brief plain fallback ───────────────────────────────────────────
+
+
+def render_code_brief_plain(data: dict[str, Any]) -> None:
+    """Render a code brief using plain print."""
+    ok: bool = data.get("ok", True)
+    dry_run: bool = data.get("dry_run", True)
+    label = "ERROR" if not ok else ("DRY RUN" if dry_run else "WRITTEN")
+    out: list[str] = []
+    out.append(f"== LINK GROWTH CODE BRIEF ({label}) ==")
+    out.append("")
+
+    if not ok:
+        skipped = data.get("files_skipped", [])
+        if skipped:
+            out.append("Files skipped:")
+            for s in skipped[:5]:
+                out.append(f"  {s['path']}: {s['reason']}")
+        out.append(f"error: {data.get('error', 'unknown error')}")
+        print("\n".join(out))
+        return
+
+    out.append(f"source: {data.get('source_path', '?')}")
+    out.append(f"type:   {data.get('source_type', '?')}")
+    out.append(f"files:  {data.get('files_read_count', 0)} read  "
+               f"{len(data.get('files_skipped', []))} skipped  "
+               f"total: {data.get('total_human', '?')}")
+    out.append("")
+
+    files = data.get("files_read", [])
+    if files:
+        out.append("-- FILES READ --")
+        for f in files[:12]:
+            out.append(f"  - {f.get('path', '?')} ({_human_size(f.get('size_bytes', 0))})")
+        out.append("")
+
+    skipped = data.get("files_skipped", [])
+    if skipped:
+        out.append("-- SKIPPED --")
+        for s in skipped[:8]:
+            out.append(f"  - {s.get('path', '?')}: {s.get('reason', '?')}")
+        out.append("")
+
+    preview = data.get("brief_preview", [])
+    if preview:
+        out.append("-- BRIEF PREVIEW --")
+        out.extend(preview[:20])
+        out.append("")
+
+    brief_path = data.get("brief_path", "")
+    if brief_path:
+        out.append(f"Brief written to: {brief_path}")
+        out.append("")
+
+    next_cmds = data.get("next_commands", [])
+    out.append("-- SUGGESTED NEXT STEPS --")
+    for cmd in next_cmds:
+        out.append(f"  $ {cmd}")
+    out.append("")
+    out.append("No code was executed by this command.")
+    out.append("python3 link.py growth run  -- guided workflow")
+    print("\n".join(out))
+
+
+# ── code brief render orchestrator ──────────────────────────────────────
+
+
+def render_code_brief_view(data: dict[str, Any]) -> None:
+    """Render code brief with rich if available; fall back to plain."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_code_brief_plain(data)
+        return
+    render_code_brief_with_rich(data)
+
+
 # ── run guide entry point ────────────────────────────────────────────────
 
 
