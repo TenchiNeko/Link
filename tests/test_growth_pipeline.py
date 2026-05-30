@@ -2344,6 +2344,153 @@ def check_growth_archive_batch_mine_partial_failure() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 44. Growth archive-code-queue -- empty state
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_code_queue_empty() -> None:
+    """archive-code-queue returns empty state when no catalogs exist."""
+    from link_modes.growth.link_growth_console import collect_archive_code_queue
+
+    with tempfile.TemporaryDirectory() as td:
+        data = collect_archive_code_queue(root=td)
+        _require(isinstance(data, dict), "must return dict")
+        _require(data.get("catalog_count") == 0,
+                 f"catalog_count must be 0, got {data.get('catalog_count')}")
+        _require(data.get("queue_count") == 0, "queue_count must be 0")
+        warnings = data.get("warnings", [])
+        _require(len(warnings) >= 1, "must have warnings")
+
+    print("growth archive-code-queue empty OK")
+
+
+# ---------------------------------------------------------------------------
+# 45. Growth archive-code-queue -- populated with ranked code files
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_code_queue_populated() -> None:
+    """archive-code-queue ranks TypeScript/JS files by architecture value."""
+    import json as _json
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import (
+        collect_archive_code_queue, _CATALOG_OUTPUT_DIR,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        ext = root / "extracted/ts_proj"
+        ext.mkdir(parents=True)
+        (ext / "src").mkdir(parents=True)
+        (ext / "src/agent.ts").write_text(
+            "// Linked agent orchestrator implementation\n"
+            "// This file configures the agent dispatch pipeline.\n",
+            encoding="utf-8",
+        )
+        (ext / "src/router.ts").write_text(
+            "// Tool routing dispatch table\n"
+            "// Maps tool names to registered handler functions.\n",
+            encoding="utf-8",
+        )
+        (ext / "src/utils").mkdir(parents=True, exist_ok=True)
+        (ext / "src/utils/helper.ts").write_text(
+            "// Shared utility functions\n"
+            "// Used by agent, router, and pipeline modules.\n",
+            encoding="utf-8",
+        )
+        (ext / "package.json").write_text(
+            '{"name":"test-project","scripts":{"build":"tsc"}}',
+            encoding="utf-8",
+        )
+        (ext / "tsconfig.json").write_text(
+            '{"compilerOptions":{"target":"es2020","module":"commonjs"}}',
+            encoding="utf-8",
+        )
+        # Low-value / skipped
+        (ext / "src/node_modules").mkdir(parents=True, exist_ok=True)
+        (ext / "src/node_modules/skip.ts").write_text(
+            "// This file should be skipped because it is in node_modules\n"
+            "// It is in a directory excluded by the skip-dir list.\n",
+            encoding="utf-8",
+        )
+
+        catalogs_dir = root / _CATALOG_OUTPUT_DIR
+        catalogs_dir.mkdir(parents=True)
+        catalog = {
+            "catalog_version": "link-archive-catalog-v1",
+            "source_name": "ts_proj",
+            "source_path": str(ext),
+            "candidate_research_sources": [],
+            "important_files": [
+                {"path": "package.json", "type": "package_json", "size_human": "17B"},
+                {"path": "tsconfig.json", "type": "tsconfig_json", "size_human": "2B"},
+            ],
+            "file_type_counts": {"typescript": 5, "json": 2},
+            "top_level_dirs": ["src"],
+            "likely_project_roots": [],
+            "recommendations": [],
+            "safety_flags": [],
+            "total_bytes": 200,
+            "total_human": "200B",
+            "file_count": 7,
+            "directory_count": 3,
+            "skipped_count": 0,
+            "skipped_details": {},
+        }
+        (catalogs_dir / "ts_proj.json").write_text(
+            _json.dumps(catalog), encoding="utf-8"
+        )
+
+        data = collect_archive_code_queue(top=10, root=str(root))
+        _require(data.get("catalog_count") == 1,
+                 f"catalog_count must be 1, got {data.get('catalog_count')}")
+        _require(data.get("queue_count", 0) >= 3,
+                 f"queue_count must be >= 3, got {data.get('queue_count')}")
+
+        queue = data.get("source_queue", [])
+        _require(len(queue) >= 3, "source_queue must have >= 3 entries")
+
+        # agent.ts or router.ts should be top-ranked
+        first = queue[0]
+        _require(first.get("rank") == 1, "first entry rank must be 1")
+        _require(first.get("score", 0) >= 10,
+                 f"top file should score >= 10, got {first.get('score')}")
+        _require(first.get("estimated_value") in ("high", "medium"),
+                 "top file should be high or medium value")
+
+        # Verify skipped contains node_modules
+        skipped = data.get("skipped_entries", [])
+        node_skipped = [s for s in skipped if "node_modules" in s.get("path", "")]
+        _require(len(node_skipped) >= 1, "node_modules file must be skipped")
+
+        # Verify no proposal files written
+        prop_dir = root / ".agents/control_plane/proposals"
+        p_files = list(prop_dir.glob("*.json")) if prop_dir.exists() else []
+        _require(len(p_files) == 0, "must not write proposal files")
+
+    print("growth archive-code-queue populated OK")
+
+
+# ---------------------------------------------------------------------------
+# 46. Growth archive-code-queue -- top clamping
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_code_queue_top_clamp() -> None:
+    """archive-code-queue clamps top > max and rejects invalid values."""
+    from link_modes.growth.link_growth_console import (
+        collect_archive_code_queue, _MAX_CODE_QUEUE_TOP,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        data = collect_archive_code_queue(top=25, root=td)
+        _require(data.get("top_requested") == _MAX_CODE_QUEUE_TOP,
+                 f"top 25 must be clamped to {_MAX_CODE_QUEUE_TOP}")
+        warnings = data.get("warnings", [])
+        cap = [w for w in warnings if "capped" in str(w).lower()]
+        _require(len(cap) >= 1, "must have capped warning")
+
+    print("growth archive-code-queue top clamp OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -2392,6 +2539,9 @@ def main() -> None:
     check_growth_archive_batch_mine_dry_run()
     check_growth_archive_batch_mine_top_clamp()
     check_growth_archive_batch_mine_partial_failure()
+    check_growth_archive_code_queue_empty()
+    check_growth_archive_code_queue_populated()
+    check_growth_archive_code_queue_top_clamp()
     print("Growth pipeline smoke tests passed")
 
 

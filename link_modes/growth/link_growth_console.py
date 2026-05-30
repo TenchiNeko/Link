@@ -5144,6 +5144,607 @@ def render_archive_batch_mine_view(data: dict[str, Any]) -> None:
     render_archive_batch_mine_with_rich(data)
 
 
+# ── archive code queue entry point ──────────────────────────────────────
+_CODE_EXTS: set[str] = {
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".py", ".json", ".yaml", ".yml", ".toml", ".cfg",
+}
+
+_CODE_HIGH_VALUE_NAMES: set[str] = {
+    "index.ts", "main.ts", "app.ts", "cli.ts", "server.ts",
+    "router.ts", "agent.ts", "orchestrator.ts",
+    "package.json", "tsconfig.json",
+    "index.tsx", "main.tsx", "app.tsx",
+    "index.js", "main.js", "app.js",
+}
+
+_CODE_ARCHITECTURE_KEYWORDS: list[str] = [
+    "agent", "planner", "executor", "orchestrator", "workflow",
+    "pipeline", "router", "tool", "memory", "context", "schema",
+    "types", "prompt", "eval", "command", "runtime", "worker",
+    "queue", "receipt", "verifier", "control", "dashboard",
+    "task", "skill", "config", "server", "service", "adapter",
+    "bridge", "handler", "factory", "delegate", "provider",
+    "store", "state", "feature", "module",
+]
+
+_CODE_CONFIG_PREFIXES: list[str] = [
+    "vite.", "next.", "webpack.", "docker", "eslint", "babel",
+    "tsup.", "rollup.", "postcss", "tailwind", "jest.",
+]
+
+_CODE_LOCKFILE_NAMES: set[str] = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "poetry.lock", "pipfile.lock", "cargo.lock",
+}
+
+_MAX_CODE_FILE_BYTES = 500_000
+_MAX_CODE_QUEUE_TOP = 20
+_DEFAULT_CODE_QUEUE_TOP = 10
+
+
+def archive_code_queue_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth archive-code-queue``.
+
+    Reads archive catalog JSON files and walks extracted source_paths
+    to rank code files (TypeScript, JavaScript, Python, configs, etc.)
+    by architecture research value.  Read-only.  No files written.
+
+    Flags:
+        --top <N>         Number of top-ranked sources (default 10, max 20).
+        --catalog <path>  Read only this one catalog.
+        --json            Machine-readable output.
+        --root <path>     Override repo root (for test isolation).
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if "--help" in args or "-h" in args:
+        print("Growth archive-code-queue: rank code files for research mining")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth archive-code-queue")
+        print("  python3 link.py growth archive-code-queue --top <N>")
+        print("  python3 link.py growth archive-code-queue --catalog <path>")
+        print("  python3 link.py growth archive-code-queue --json")
+        print("")
+        print("Walks extracted source directories and ranks code files")
+        print(f"by architecture value.  Default top is {_DEFAULT_CODE_QUEUE_TOP}.")
+        print(f"Hard cap at {_MAX_CODE_QUEUE_TOP}.  Read-only — no files written.")
+        return 0
+
+    top_arg = _parse_arg(args, "--top")
+    top = _resolve_code_queue_top(top_arg)
+
+    if isinstance(top, str):
+        print(f"error: {top}", file=sys.stderr)
+        print("Run 'python3 link.py growth archive-code-queue --help' for usage.",
+              file=sys.stderr)
+        return 1
+
+    catalog_arg = _parse_arg(args, "--catalog")
+    root_override = _parse_arg(args, "--root")
+    data = collect_archive_code_queue(
+        catalog_path=catalog_arg, top=top, root=root_override,
+    )
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+
+    render_archive_code_queue_view(data)
+    return 0
+
+
+def _resolve_code_queue_top(top_arg: str | None) -> int | str:
+    if top_arg is None:
+        return _DEFAULT_CODE_QUEUE_TOP
+    try:
+        n = int(top_arg)
+    except ValueError:
+        return f"top must be an integer, got {top_arg!r}"
+    if n < 1:
+        return f"top must be >= 1, got {n}"
+    return n
+
+
+def collect_archive_code_queue(
+    catalog_path: str | None = None,
+    top: int = _DEFAULT_CODE_QUEUE_TOP,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Load catalogs, walk source_paths, and rank code files for mining.
+
+    When ``catalog_path`` is omitted every catalog under
+    ``_CATALOG_OUTPUT_DIR`` is loaded.
+
+    Source directories are walked for code-relevant files.  Each file is
+    scored by ``_score_code_source`` and ranked descending.
+
+    Read-only.  No files written.  No source content read.
+    """
+    import json as _json
+    from pathlib import Path
+
+    repo_root = Path(root) if root else Path.cwd()
+    catalogs_dir = repo_root / _CATALOG_OUTPUT_DIR
+
+    effective_top = min(top, _MAX_CODE_QUEUE_TOP)
+    warnings: list[str] = []
+    if top > _MAX_CODE_QUEUE_TOP:
+        warnings.append(
+            f"top {top} capped at {_MAX_CODE_QUEUE_TOP} (hard limit)"
+        )
+
+    # ── load catalogs ──
+    if catalog_path:
+        catalog_file = repo_root / catalog_path
+        if not catalog_file.exists():
+            return _code_queue_empty(
+                warnings=warnings + [{
+                    "type": "catalog_missing",
+                    "detail": f"catalog not found: {catalog_file}",
+                }],
+                top=effective_top,
+            )
+        raw_catalogs = [catalog_file]
+    else:
+        if not catalogs_dir.exists():
+            return _code_queue_empty(
+                warnings=warnings + [{
+                    "type": "no_catalogs",
+                    "detail": f"no catalogs directory: {catalogs_dir}",
+                }],
+                top=effective_top,
+            )
+        raw_catalogs = sorted(catalogs_dir.glob("*.json"))
+
+    catalogs: list[dict] = []
+    for cf in raw_catalogs:
+        try:
+            cat = _json.loads(cf.read_text(encoding="utf-8"))
+        except Exception as exc:
+            warnings.append(
+                f"catalog_invalid_json: {cf.name}: {exc}"
+            )
+            continue
+        if not isinstance(cat, dict):
+            warnings.append(f"catalog_not_dict: {cf.name}")
+            continue
+        catalogs.append(cat)
+
+    if not catalogs:
+        if not warnings:
+            warnings.append("no catalogs found")
+        return _code_queue_empty(warnings=warnings,
+                                 top=effective_top)
+
+    # ── walk source_paths and score code files ──
+    all_entries: list[dict] = []
+    skipped: list[dict] = []
+
+    for catalog in catalogs:
+        source_name = catalog.get("source_name", "?")
+        source_root_str = catalog.get("source_path", "")
+        src_root = Path(source_root_str)
+        if not src_root.exists() or not src_root.is_dir():
+            warnings.append(
+                f"source_missing: {source_name}: {source_root_str}"
+            )
+            continue
+
+        code_file_count = 0
+        for entry in sorted(src_root.rglob("*")):
+            if not entry.is_file():
+                continue
+            suffix = entry.suffix.lower()
+            if suffix not in _CODE_EXTS:
+                continue
+
+            rel = str(entry.relative_to(src_root))
+            path_lower = rel.lower()
+            name_lower = entry.name.lower()
+            size = entry.stat().st_size
+
+            # Skip dirs
+            if any(seg in path_lower for seg in _SKIP_DIR_NAMES):
+                skipped.append({
+                    "path": str(src_root / rel),
+                    "reason": f"in skipped directory ({rel.split('/')[0]})",
+                })
+                continue
+
+            # Skip trivial / huge
+            if size < 50:
+                skipped.append({
+                    "path": str(src_root / rel),
+                    "reason": f"trivial file ({size}B)",
+                })
+                continue
+            if size > _MAX_CODE_FILE_BYTES:
+                skipped.append({
+                    "path": str(src_root / rel),
+                    "reason": f"too large ({_human_size(size)})",
+                })
+                continue
+
+            # Binary check
+            if _code_is_binary(entry):
+                skipped.append({
+                    "path": str(src_root / rel),
+                    "reason": "binary file",
+                })
+                continue
+
+            code_file_count += 1
+            score = _score_code_source(rel, name_lower, suffix, size, catalog)
+
+            reason = _code_reason(rel, name_lower, suffix, score)
+
+            if score <= 0:
+                skipped.append({
+                    "path": str(src_root / rel),
+                    "reason": reason,
+                })
+                continue
+
+            est_val = "high" if score >= 13 else ("medium" if score >= 8 else "low")
+
+            all_entries.append({
+                "source_path": str(src_root / rel),
+                "catalog_source_name": source_name,
+                "source_type": "file",
+                "category": _code_category(name_lower, suffix),
+                "reason": reason,
+                "score": score,
+                "estimated_value": est_val,
+                "size_human": _human_size(size),
+                "extension": suffix,
+                "suggested_command": f"python3 link.py growth archive-mine --source {src_root / rel}",
+            })
+
+        if code_file_count == 0 and not catalog_path:
+            warnings.append(
+                f"no_code_files: {source_name}: no code files found"
+            )
+
+    # Sort descending by score, then by name
+    all_entries.sort(key=lambda e: (-e["score"], e["source_path"].lower()))
+
+    # Assign ranks, limit to top
+    for i, entry in enumerate(all_entries):
+        entry["rank"] = i + 1
+
+    displayed = all_entries[:effective_top]
+
+    # Recommendations
+    recommendations: list[str] = []
+    for e in displayed[:3]:
+        recommendations.append(e["suggested_command"])
+
+    if not displayed and not skipped:
+        warnings.append(
+            "no_code_files: no eligible code files found in any catalog"
+        )
+
+    return {
+        "catalog_count": len(catalogs),
+        "queue_count": len(displayed),
+        "skipped_count": len(skipped),
+        "total_discovered": len(all_entries),
+        "top_requested": effective_top,
+        "source_queue": displayed,
+        "skipped_entries": skipped[:20],
+        "recommendations": recommendations,
+        "warnings": warnings if warnings else [],
+        "error": None,
+    }
+
+
+def _code_is_binary(path: Path) -> bool:
+    """Return True if the first 512 bytes contain a null byte."""
+    try:
+        with open(path, "rb") as fh:
+            return b"\x00" in fh.read(512)
+    except Exception:
+        return True
+
+
+def _score_code_source(
+    rel: str, name: str, suffix: str, size: int, catalog: dict,
+) -> int:
+    """Score a code file for architecture research value."""
+    score = 0
+    path_lower = rel.lower()
+
+    # Exact high-value filenames
+    if name in _CODE_HIGH_VALUE_NAMES:
+        score += 10
+    # Config/build prefixes
+    elif any(name.startswith(p) for p in _CODE_CONFIG_PREFIXES):
+        score += 8
+
+    # Architecture keywords in path
+    for kw in _CODE_ARCHITECTURE_KEYWORDS:
+        if kw in path_lower:
+            score += 6
+            break
+
+    # Source code bonus (TS/JS/Py carry more weight than JSON/YAML)
+    if suffix in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".py"):
+        score += 3
+    elif suffix in (".json", ".yaml", ".yml", ".toml", ".cfg"):
+        score -= 2
+
+    # Catalog context bonuses
+    important_files = catalog.get("important_files", []) or []
+    imp_types = {i.get("type") for i in important_files}
+    if "package_json" in imp_types:
+        score += 2
+    if "tsconfig" in str(imp_types) or "pyproject_toml" in imp_types:
+        score += 2
+
+    # Source directory bonus
+    if "/src/" in f"/{path_lower}" or "/lib/" in f"/{path_lower}" or "/app/" in f"/{path_lower}":
+        score += 2
+
+    # Penalties
+    if name in _CODE_LOCKFILE_NAMES:
+        score -= 10
+    if suffix in (".json", ".yaml", ".yml") and size > 50_000:
+        score -= 5  # Huge config files are usually generated
+
+    return max(score, -100)
+
+
+def _code_reason(rel: str, name: str, suffix: str, score: int) -> str:
+    """Generate a human-readable reason for a code file's score."""
+    path_lower = rel.lower()
+    parts = []
+
+    if name in _CODE_HIGH_VALUE_NAMES:
+        parts.append(f"key file: {name}")
+    elif any(name.startswith(p) for p in _CODE_CONFIG_PREFIXES):
+        parts.append(f"config file: {name}")
+    elif any(k in path_lower for k in _CODE_ARCHITECTURE_KEYWORDS):
+        matched = [k for k in _CODE_ARCHITECTURE_KEYWORDS if k in path_lower]
+        parts.append(f"architecture keywords: {', '.join(matched[:3])}")
+
+    if suffix in (".ts", ".tsx"):
+        parts.append("TypeScript source")
+    elif suffix in (".js", ".jsx", ".mjs"):
+        parts.append("JavaScript source")
+    elif suffix == ".py":
+        parts.append("Python source")
+    elif suffix in (".json", ".yaml", ".yml"):
+        parts.append("config/metadata")
+
+    if not parts:
+        parts.append(f"code file ({suffix})")
+
+    if score >= 13:
+        parts.append("— high-priority")
+    elif score >= 8:
+        parts.append("— medium-priority")
+
+    return " | ".join(parts)
+
+
+def _code_category(name: str, suffix: str) -> str:
+    """Return a human-readable category label for a code file."""
+    cat_map = {
+        ".ts": "typescript", ".tsx": "typescript",
+        ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript",
+        ".cjs": "javascript", ".py": "python",
+        ".json": "json_config", ".yaml": "yaml_config", ".yml": "yaml_config",
+        ".toml": "toml_config", ".cfg": "config_file",
+    }
+    return cat_map.get(suffix, "code_file")
+
+
+def _code_queue_empty(
+    warnings: list | None = None,
+    top: int = 0,
+) -> dict[str, Any]:
+    return {
+        "catalog_count": 0,
+        "queue_count": 0,
+        "skipped_count": 0,
+        "total_discovered": 0,
+        "top_requested": top or _DEFAULT_CODE_QUEUE_TOP,
+        "source_queue": [],
+        "skipped_entries": [],
+        "recommendations": [],
+        "warnings": warnings or [
+            {"type": "no_catalogs", "detail": "no catalogs found"},
+        ],
+        "error": None,
+    }
+
+
+# ── code queue rich renderer ────────────────────────────────────────────
+
+
+def render_archive_code_queue_with_rich(data: dict[str, Any]) -> None:
+    """Render a code queue using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    catalog_count: int = data.get("catalog_count", 0)
+    queue_count: int = data.get("queue_count", 0)
+    skipped_count: int = data.get("skipped_count", 0)
+    total: int = data.get("total_discovered", 0)
+    queue: list = data.get("source_queue", [])
+    recs: list = data.get("recommendations", [])
+    warnings: list = data.get("warnings", [])
+
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH CODE QUEUE[/]",
+        f"[dim]{catalog_count} catalog{'s' if catalog_count != 1 else ''}  "
+        f"{queue_count} queued  (top {data.get('top_requested', '?')})[/]",
+    )
+    console.print(header)
+    console.print(Rule(style="dim"))
+
+    if catalog_count == 0:
+        empty = Text()
+        empty.append("\nNo catalog files found.\n\n", style="dim")
+        empty.append("To create a catalog:\n", style="dim")
+        empty.append("  python3 link.py growth archive-extract --archive <path> --write\n", style="dim")
+        empty.append("  python3 link.py growth archive-catalog --source <dir> --write\n", style="dim")
+        empty.append("\n")
+        empty.append("  [dim]python3 link.py growth archive-inventory  -- find archives[/]\n", style="dim")
+        empty.append("  [dim]python3 link.py growth run               -- guided workflow[/]\n", style="dim")
+        console.print(Panel(empty, border_style="dim"))
+        console.print(Rule(style="dim"))
+        return
+
+    for w in warnings:
+        console.print(Panel(Text(str(w), style="yellow"), border_style="yellow"))
+
+    if queue_count == 0:
+        empty_q = Text()
+        empty_q.append(
+            f"\n{catalog_count} catalog(s) scanned — {total} code files discovered, "
+            f"0 eligible for queue.\n",
+            style="dim",
+        )
+        if skipped_count:
+            empty_q.append(f"{skipped_count} file(s) were skipped.\n", style="dim")
+        console.print(Panel(empty_q, border_style="dim"))
+        console.print(Rule(style="dim"))
+        console.print("  [dim]python3 link.py growth run  -- guided workflow dashboard[/]")
+        return
+
+    value_colors = {"high": "green", "medium": "yellow", "low": "dim"}
+    for entry in queue[:15]:
+        entry_text = Text()
+        ev = entry.get("estimated_value", "medium")
+        vc = value_colors.get(ev, "dim")
+
+        entry_text.append(
+            f"[bold]#{entry.get('rank')}[/]  "
+            f"[{vc}]{ev.upper()}[/]  "
+            f"score: {entry.get('score')}  "
+            f"[dim]{entry.get('category', '')}[/]"
+        )
+        entry_text.append(
+            f"\n[dim]path:  [/]{entry.get('source_path', '?')}"
+        )
+        entry_text.append(
+            f"\n[dim]reason:[/] {entry.get('reason', '?')}"
+        )
+        entry_text.append(
+            f"\n[dim]size:  [/]{entry.get('size_human', '?')}"
+        )
+        entry_text.append(
+            f"\n[dim]cmd:   [/]$ {entry.get('suggested_command', '?')}"
+        )
+
+        panel_title = f"CODE QUEUE  {entry.get('catalog_source_name', '?')}"
+        console.print(Panel(entry_text, title=panel_title, border_style=vc))
+
+    if len(queue) > 15:
+        console.print(f"  [dim]... and {len(queue) - 15} more entries[/]")
+
+    if recs:
+        rec_text = Text()
+        rec_text.append("Top command:\n", style="bold green")
+        rec_text.append(f"  $ {recs[0]}\n\n", style="dim")
+        if len(recs) > 1:
+            rec_text.append("Next:\n", style="bold")
+            for r in recs[1:4]:
+                rec_text.append(f"  $ {r}\n", style="dim")
+        console.print(Panel(rec_text, title="RECOMMENDED NEXT STEPS", border_style="green"))
+
+    console.print(Rule(style="dim"))
+    console.print("  [dim]python3 link.py growth archive-mine --source <path>  -- mine a source[/]")
+    console.print("  [dim]python3 link.py growth run                         -- guided workflow[/]")
+
+
+# ── code queue plain fallback ───────────────────────────────────────────
+
+
+def render_archive_code_queue_plain(data: dict[str, Any]) -> None:
+    """Render a code queue using plain print."""
+    catalog_count: int = data.get("catalog_count", 0)
+    queue_count: int = data.get("queue_count", 0)
+    skipped_count: int = data.get("skipped_count", 0)
+    total: int = data.get("total_discovered", 0)
+    queue: list = data.get("source_queue", [])
+    recs: list = data.get("recommendations", [])
+    warnings: list = data.get("warnings", [])
+    out: list[str] = []
+    out.append(
+        f"== LINK GROWTH CODE QUEUE ({catalog_count} catalogs, "
+        f"{queue_count} queued, {skipped_count} skipped) =="
+    )
+    out.append("")
+
+    if catalog_count == 0:
+        out.append("No catalog files found.")
+        out.append("To create a catalog:")
+        out.append("  python3 link.py growth archive-extract --archive <path> --write")
+        out.append("  python3 link.py growth archive-catalog --source <dir> --write")
+        out.append("")
+        out.append("python3 link.py growth archive-inventory  -- find archives")
+        out.append("python3 link.py growth run               -- guided workflow")
+        print("\n".join(out))
+        return
+
+    for w in warnings:
+        out.append(f"WARNING: {w}")
+
+    if queue_count == 0:
+        out.append("")
+        out.append(f"{catalog_count} catalog(s) scanned — {total} code files discovered, 0 eligible.")
+        out.append("")
+        out.append("python3 link.py growth run  -- guided workflow dashboard")
+        print("\n".join(out))
+        return
+
+    for entry in queue[:15]:
+        out.append(
+            f"--- #{entry.get('rank')} [{entry.get('estimated_value', 'medium').upper()}] "
+            f"score={entry.get('score')}  {entry.get('category', '')} ---"
+        )
+        out.append(f"path:   {entry.get('source_path', '?')}")
+        out.append(f"reason: {entry.get('reason', '?')}")
+        out.append(f"size:   {entry.get('size_human', '?')}")
+        out.append(f"cmd:    $ {entry.get('suggested_command', '?')}")
+        out.append("")
+
+    if recs:
+        out.append("-- RECOMMENDED NEXT STEPS --")
+        out.append(f"Top: $ {recs[0]}")
+        for r in recs[1:4]:
+            out.append(f"Next: $ {r}")
+        out.append("")
+
+    out.append("python3 link.py growth archive-mine --source <path>  -- mine a source")
+    out.append("python3 link.py growth run                         -- guided workflow")
+    print("\n".join(out))
+
+
+# ── code queue render orchestrator ──────────────────────────────────────
+
+
+def render_archive_code_queue_view(data: dict[str, Any]) -> None:
+    """Render code queue with rich if available; fall back to plain."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_archive_code_queue_plain(data)
+        return
+    render_archive_code_queue_with_rich(data)
+
+
 # ── run guide entry point ────────────────────────────────────────────────
 
 
