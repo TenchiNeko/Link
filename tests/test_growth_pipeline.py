@@ -1484,6 +1484,82 @@ def check_growth_receipts_populated() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 27. Growth archive-inventory -- empty state
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_inventory_empty() -> None:
+    """collect_archive_inventory returns count=0 when no archives exist."""
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_archive_inventory
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        research_dir = root / "research"
+        research_dir.mkdir()
+
+        data = collect_archive_inventory(root=str(root))
+        _require(isinstance(data, dict), "collect_archive_inventory must return a dict")
+        _require(data.get("count") == 0,
+                 f"empty dir must have count=0, got {data.get('count')}")
+        _require(data.get("archives") == [],
+                 "empty dir must have archives=[]")
+        _require(isinstance(data.get("scan_dir"), str),
+                 "scan_dir must be a string")
+
+    print("growth archive-inventory empty OK")
+
+
+# ---------------------------------------------------------------------------
+# 28. Growth archive-inventory -- populated state
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_inventory_populated() -> None:
+    """collect_archive_inventory discovers and inspects a synthetic zip file."""
+    import zipfile
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_archive_inventory
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        research_dir = root / "research"
+        research_dir.mkdir()
+
+        archive_path = research_dir / "test_research.zip"
+        with zipfile.ZipFile(str(archive_path), "w") as zf:
+            zf.writestr("test-project/README.md", "# Test Research Archive\n")
+            zf.writestr("test-project/src/main.py", "print('hello')\n")
+            zf.writestr("test-project/docs/notes.md", "# Docs\n")
+
+        data = collect_archive_inventory(root=str(root))
+        _require(data.get("count") == 1,
+                 f"must find 1 archive, got {data.get('count')}")
+        archives = data.get("archives", [])
+        _require(len(archives) == 1, "archives list must have 1 entry")
+
+        a = archives[0]
+        _require(a.get("name") == "test_research.zip",
+                 f"name must be 'test_research.zip', got {a.get('name')!r}")
+        _require(a.get("archive_type") == "zip",
+                 f"archive_type must be 'zip', got {a.get('archive_type')!r}")
+        _require(a.get("file_count") == 3,
+                 f"file_count must be 3, got {a.get('file_count')}")
+        _require(a.get("top_dir") == "test-project",
+                 f"top_dir must be 'test-project', got {a.get('top_dir')!r}")
+        _require(a.get("is_clean") is True,
+                 "synthetic zip must be clean")
+        _require(a.get("safety_flags") == [],
+                 "synthetic zip must have no safety flags")
+        _require(a.get("error") is None,
+                 "synthetic zip must have no error")
+        _require(bool(a.get("estimated_extracted_bytes")) is True,
+                 "estimated_extracted_bytes must be non-zero")
+        _require(isinstance(a.get("relative_path"), str),
+                 "relative_path must be a string")
+
+    print("growth archive-inventory populated OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -1515,6 +1591,8 @@ def main() -> None:
     check_growth_execute_errors()
     check_growth_receipts_empty()
     check_growth_receipts_populated()
+    check_growth_archive_inventory_empty()
+    check_growth_archive_inventory_populated()
     print("Growth pipeline smoke tests passed")
 
 

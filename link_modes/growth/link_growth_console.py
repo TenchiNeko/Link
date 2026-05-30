@@ -2254,6 +2254,344 @@ def render_receipts_view(data: dict[str, Any]) -> None:
     render_receipts_with_rich(data)
 
 
+# ── archive inventory entry point ────────────────────────────────────────
+_RESEARCH_DIR = "research"
+
+
+def archive_inventory_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth archive-inventory``.
+
+    Discovers archive files (`.zip`, `.tar.gz`, etc.) under the repo's
+    ``research/`` directory and lists their metadata without extracting.
+    No files are written. No archives are extracted.
+
+    Flags:
+        --json  Machine-readable output.
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if "--help" in args or "-h" in args:
+        print("Growth archive-inventory: scan research archives without extraction")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth archive-inventory")
+        print("  python3 link.py growth archive-inventory --json")
+        print("")
+        print("This command is read-only. It discovers archive files under")
+        print("research/ and lists their metadata (type, size, file count,")
+        print("safety flags). No extraction. No file writes.")
+        return 0
+
+    data = collect_archive_inventory()
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+
+    render_archive_inventory_view(data)
+    return 0
+
+
+def collect_archive_inventory(
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Discover archive files under the research directory and collect metadata.
+
+    Opens each archive with ``zipfile`` for read-only inspection.
+    Detects safety flags: absolute paths, ``../`` traversal, high file
+    count, huge estimated extraction size.  ``__MACOSX/`` entries are
+    excluded from file counts.
+
+    No files are written. No archives are extracted.
+
+    Args:
+        root: Override repo root (for test isolation).
+
+    Returns a dict with ``count``, ``total_bytes_uncompressed`` (estimate),
+    ``archives`` list, and ``scan_dir``.
+    """
+    import zipfile
+    from pathlib import Path
+
+    repo_root = Path(root) if root else Path.cwd()
+    scan_dir = repo_root / _RESEARCH_DIR
+
+    if not scan_dir.exists():
+        return {
+            "count": 0,
+            "total_bytes_uncompressed": 0,
+            "archives": [],
+            "scan_dir": str(scan_dir),
+        }
+
+    archive_suffixes = {
+        ".zip",
+        ".tar.gz",
+        ".tgz",
+        ".tar",
+        ".tar.bz2",
+        ".tar.xz",
+        ".7z",
+        ".rar",
+    }
+
+    archives: list[dict] = []
+    total_uncompressed = 0
+
+    for file_path in sorted(scan_dir.rglob("*")):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix not in archive_suffixes:
+            # Also check compound suffixes: .tar.gz, .tgz, .tar.bz2, .tar.xz
+            name = file_path.name.lower()
+            if not any(name.endswith(s) for s in (".tar.gz", ".tgz", ".tar.bz2", ".tar.xz")):
+                continue
+
+        abs_path = file_path.resolve()
+        size_bytes_on_disk = file_path.stat().st_size
+        safety_flags: list[str] = []
+        file_count = 0
+        top_dir = ""
+        estimated_extracted = 0
+        error: str | None = None
+        is_zip = False
+        is_tar = False
+
+        try:
+            if abs_path.suffix == ".zip":
+                is_zip = True
+                with zipfile.ZipFile(str(abs_path), "r") as zf:
+                    names = zf.namelist()
+                    infos = zf.infolist()
+                    for n in names:
+                        if n.startswith("__MACOSX/"):
+                            continue
+                        file_count += 1
+                        if not top_dir:
+                            # First non-dir entry sets the root
+                            parts = n.lstrip("/").split("/")
+                            if len(parts) >= 1:
+                                top_dir = parts[0]
+                        if n.startswith("/"):
+                            safety_flags.append("absolute_path")
+                        if "../" in n:
+                            safety_flags.append("path_traversal")
+                    for info in infos:
+                        if not info.filename.startswith("__MACOSX/"):
+                            estimated_extracted += info.file_size
+            else:
+                # tar variants: we can list with tarfile but only check .tar suffixes
+                name_lower = abs_path.name.lower()
+                if any(name_lower.endswith(s) for s in (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz")):
+                    is_tar = True
+                    import tarfile
+                    try:
+                        with tarfile.open(str(abs_path), "r:*") as tf:
+                            for member in tf.getmembers():
+                                if member.isdir():
+                                    continue
+                                if "__MACOSX/" in member.name:
+                                    continue
+                                file_count += 1
+                                if not top_dir:
+                                    parts = member.name.lstrip("/").split("/")
+                                    if len(parts) >= 1:
+                                        top_dir = parts[0]
+                                if member.name.startswith("/"):
+                                    safety_flags.append("absolute_path")
+                                if "../" in member.name:
+                                    safety_flags.append("path_traversal")
+                                estimated_extracted += member.size
+                    except tarfile.TarError as te:
+                        error = f"tar read error: {te}"
+                else:
+                    error = f"archive format not supported for inspection: {abs_path.name}"
+        except zipfile.BadZipFile:
+            error = "corrupt or invalid zip file"
+        except Exception as exc:
+            error = f"inspection failed: {exc}"
+
+        if file_count > 50000:
+            safety_flags.append("high_file_count")
+        if estimated_extracted > 1_000_000_000:
+            safety_flags.append("huge_extracted_size")
+
+        if is_zip:
+            archive_type = "zip"
+        elif is_tar:
+            archive_type = "tar"
+        else:
+            archive_type = abs_path.suffix.lstrip(".")
+
+        total_uncompressed += estimated_extracted
+
+        archives.append({
+            "name": abs_path.name,
+            "relative_path": str(file_path),
+            "abs_path": str(abs_path),
+            "size_bytes": size_bytes_on_disk,
+            "size_human": _human_size(size_bytes_on_disk),
+            "archive_type": archive_type,
+            "file_count": file_count,
+            "top_dir": top_dir,
+            "estimated_extracted_bytes": estimated_extracted,
+            "estimated_extracted_human": _human_size(estimated_extracted) if estimated_extracted else "0",
+            "safety_flags": sorted(set(safety_flags)),
+            "is_clean": len(safety_flags) == 0 and error is None,
+            "error": error,
+        })
+
+    return {
+        "count": len(archives),
+        "total_bytes_uncompressed": total_uncompressed,
+        "total_uncompressed_human": _human_size(total_uncompressed),
+        "archives": archives,
+        "scan_dir": str(scan_dir),
+    }
+
+
+def _human_size(size_bytes: int) -> str:
+    """Human-readable byte size string."""
+    if size_bytes < 1024:
+        return f"{size_bytes}B"
+    for unit in ("K", "M", "G", "T"):
+        size_bytes /= 1024.0
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f}{unit}"
+    return f"{size_bytes:.1f}P"
+
+
+# ── archive inventory rich renderer ─────────────────────────────────────
+
+
+def render_archive_inventory_with_rich(data: dict[str, Any]) -> None:
+    """Render archive inventory using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    count: int = data.get("count", 0)
+    archives: list[dict] = data.get("archives", [])
+
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH ARCHIVE INVENTORY[/]",
+        f"[dim]{count} archive{'s' if count != 1 else ''}[/]",
+    )
+    console.print(header)
+    console.print(Rule(style="dim"))
+
+    if count == 0:
+        empty = Text()
+        empty.append("\nNo archive files found in ", style="dim")
+        empty.append(data.get("scan_dir", "research/"), style="bold")
+        empty.append("\n\nSupported formats: .zip, .tar, .tar.gz, .tgz, .tar.bz2, .tar.xz\n\n", style="dim")
+        empty.append("  [dim]python3 link.py growth run  -- guided workflow dashboard[/]\n", style="dim")
+        console.print(Panel(empty, border_style="dim"))
+        console.print(Rule(style="dim"))
+        return
+
+    for i, a in enumerate(archives):
+        card = Text()
+        card.append(f"[bold]{a.get('name', '?')}[/]")
+        card.append(f"  [dim]type: {a.get('archive_type', '?')}[/]")
+        card.append(f"  [dim]size on disk: {a.get('size_human', '?')}[/]")
+        card.append(f"  [dim]files: {a.get('file_count', 0)}[/]")
+        card.append(f"  [dim]extracted est: {a.get('estimated_extracted_human', '?')}[/]")
+
+        top = a.get("top_dir", "")
+        if top:
+            card.append(f"\n[dim]top dir:  [/]{top}")
+
+        error = a.get("error")
+        if error:
+            card.append(f"\n[red]error: {error}[/]")
+            console.print(Panel(card, title=f"ARCHIVE [{i + 1}/{count}]", border_style="red"))
+            continue
+
+        flags: list = a.get("safety_flags", [])
+        if flags:
+            card.append("\n[dim]safety flags:[/]")
+            for f in flags:
+                card.append(f"\n  [red]\u2718 {f}[/]")
+        else:
+            card.append("\n[green]\u2714 clean — no safety issues detected[/]")
+
+        border = "dim green" if a.get("is_clean") else "dim yellow"
+        console.print(Panel(card, title=f"ARCHIVE [{i + 1}/{count}]", border_style=border))
+
+    console.print(Rule(style="dim"))
+    console.print(f"  [dim]total estimated extracted: {data.get('total_uncompressed_human', '?')}[/]")
+    console.print("  [dim]python3 link.py growth run  -- guided workflow dashboard[/]")
+
+
+# ── archive inventory plain fallback ────────────────────────────────────
+
+
+def render_archive_inventory_plain(data: dict[str, Any]) -> None:
+    """Render archive inventory using plain print."""
+    count: int = data.get("count", 0)
+    archives: list[dict] = data.get("archives", [])
+    out: list[str] = []
+    out.append(f"== LINK GROWTH ARCHIVE INVENTORY ({count}) ==")
+    out.append(f"scan dir: {data.get('scan_dir', '?')}")
+    out.append("")
+
+    if count == 0:
+        out.append("No archive files found.")
+        out.append("Supported formats: .zip, .tar, .tar.gz, .tgz, .tar.bz2, .tar.xz")
+        out.append("")
+        out.append("python3 link.py growth run  -- guided workflow dashboard")
+        print("\n".join(out))
+        return
+
+    for i, a in enumerate(archives):
+        out.append(f"--- ARCHIVE [{i + 1}/{count}] ---")
+        out.append(f"name:               {a.get('name', '?')}")
+        out.append(f"type:               {a.get('archive_type', '?')}")
+        out.append(f"size on disk:       {a.get('size_human', '?')}")
+        out.append(f"files:              {a.get('file_count', 0)}")
+        out.append(f"extracted est:      {a.get('estimated_extracted_human', '?')}")
+        top = a.get("top_dir", "")
+        if top:
+            out.append(f"top dir:            {top}")
+        error = a.get("error")
+        if error:
+            out.append(f"error:              {error}")
+        flags = a.get("safety_flags", [])
+        if flags:
+            out.append("safety flags:")
+            for f in flags:
+                out.append(f"  - {f}")
+        elif not error:
+            out.append("safety: CLEAN")
+        out.append("")
+
+    out.append(f"total estimated extracted: {data.get('total_uncompressed_human', '?')}")
+    out.append("")
+    out.append("python3 link.py growth run  -- guided workflow dashboard")
+
+    print("\n".join(out))
+
+
+# ── archive inventory render orchestrator ────────────────────────────────
+
+
+def render_archive_inventory_view(data: dict[str, Any]) -> None:
+    """Render archive inventory with rich if available; fall back to plain."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_archive_inventory_plain(data)
+        return
+    render_archive_inventory_with_rich(data)
+
+
 # ── run guide entry point ────────────────────────────────────────────────
 
 
