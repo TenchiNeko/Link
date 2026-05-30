@@ -391,6 +391,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import archive_extract_main as _growth_archive_extract_main
 
         return _growth_archive_extract_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "archive-catalog":
+        from link_modes.growth.link_growth_console import archive_catalog_main as _growth_archive_catalog_main
+
+        return _growth_archive_catalog_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "run":
         from link_modes.growth.link_growth_console import run_main as _growth_run_main
 
@@ -408,6 +412,7 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  receipts           View verifier receipts")
         print("  archive-inventory  Scan research archives without extraction")
         print("  archive-extract    Safely extract a research archive")
+        print("  archive-catalog    Catalog extracted research contents")
         print("  run                Guided Growth workflow dashboard")
         return 0
     print(f"growth: unknown subcommand: {subcommand}", file=sys.stderr)

@@ -3076,6 +3076,626 @@ def render_extraction_view(data: dict[str, Any]) -> None:
     render_extraction_with_rich(data)
 
 
+# ── archive catalog entry point ─────────────────────────────────────────
+_CATALOG_OUTPUT_DIR = "research/_catalog/archive_catalogs"
+
+_SKIP_DIR_NAMES: set[str] = {
+    "__pycache__", ".git", ".agents", ".link", "node_modules",
+    "venv", ".venv", ".pytest_cache", "__MACOSX", ".mypy_cache",
+    ".tox", ".eggs", "dist", "build",
+}
+
+_IMPORTANT_FILENAMES: dict[str, str] = {
+    "pyproject.toml": "pyproject_toml",
+    "package.json": "package_json",
+    "requirements.txt": "requirements_txt",
+    "setup.py": "setup_py",
+    "setup.cfg": "setup_cfg",
+    "Dockerfile": "dockerfile",
+    "Makefile": "makefile",
+    "docker-compose.yml": "docker_compose",
+    "docker-compose.yaml": "docker_compose",
+    "README.md": "readme",
+    "README.rst": "readme",
+    "README.txt": "readme",
+    "README": "readme",
+    "LICENSE": "license",
+    "LICENSE.md": "license",
+    "LICENSE.txt": "license",
+}
+
+_MAX_CATALOG_FILES = 100_000
+_MAX_CATALOG_BYTES = 2_000_000_000
+_MAX_SINGLE_FILE_BYTES = 10_000_000
+
+
+def archive_catalog_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth archive-catalog --source <path>``.
+
+    Scans an extracted research directory and produces a structured catalog
+    of its contents: file types, important project files, candidate research
+    sources, and recommendations.  Dry-run by default; ``--write`` persists
+    the catalog to ``research/_catalog/archive_catalogs/<name>.json``.
+
+    No files are unzipped, moved, deleted, or modified.
+
+    Flags:
+        --source <path>  Required. Extracted directory to catalog.
+        --write          Persist the catalog to disk.
+        --json           Machine-readable output.
+        --root <path>    Override repo root (for test isolation).
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if not args or "--help" in args or "-h" in args:
+        print("Growth archive-catalog: catalog extracted research contents")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth archive-catalog --source <path>")
+        print("  python3 link.py growth archive-catalog --source <path> --write")
+        print("  python3 link.py growth archive-catalog --source <path> --json")
+        print("")
+        print("Scans an extracted research directory and builds a structured")
+        print("catalog.  Default is dry-run.  No files are written without --write.")
+        print("No extraction, no mutation of source files.")
+        return 0
+
+    source_arg = _parse_arg(args, "--source")
+    if not source_arg:
+        print("error: --source <path> is required", file=sys.stderr)
+        print("Run 'python3 link.py growth archive-catalog --help' for usage.",
+              file=sys.stderr)
+        return 2
+
+    write = "--write" in args
+    root_override = _parse_arg(args, "--root")
+    data = collect_archive_catalog(
+        source_arg, write=write, root=root_override
+    )
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0 if data.get("ok") else 1
+
+    render_archive_catalog_view(data)
+    return 0 if data.get("ok") else 1
+
+
+def collect_archive_catalog(
+    source: str,
+    write: bool = False,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Scan an extracted directory and produce a structured catalog.
+
+    Walks the source directory, classifies files by type, identifies
+    important project files and candidate research sources, and builds
+    recommendations for further mining.  When ``write=True`` the catalog
+    is persisted to ``research/_catalog/archive_catalogs/<name>.json``.
+
+    Returns a dict with ``ok``, source metadata, file type counts,
+    important files, recommendations, ``safety_flags``, and ``error``.
+    """
+    import hashlib
+    from pathlib import Path
+
+    repo_root = Path(root) if root else Path.cwd()
+    source_path = (repo_root / source).resolve()
+
+    # ── pre-check ──
+    if not source_path.exists():
+        return _catalog_error(source, "source_missing", f"source not found: {source_path}")
+
+    if not source_path.is_dir():
+        return _catalog_error(source, "source_not_directory", f"source is not a directory: {source_path}")
+
+    # ── scan ──
+    source_name = source_path.name
+    catalog_id = hashlib.sha256(str(source_path).encode()).hexdigest()[:8]
+
+    file_count = 0
+    directory_count = 0
+    skipped_count = 0
+    total_bytes = 0
+    skipped = {"binary": 0, "symlink": 0, "too_large": 0, "hidden_dir": 0}
+    file_type_counts: dict[str, int] = {}
+    top_level_dirs: list[str] = []
+    likely_project_roots: list[str] = []
+    important_files: list[dict] = []
+    candidate_sources: list[dict] = []
+    safety_flags: list[str] = []
+
+    try:
+        for entry in sorted(source_path.iterdir()):
+            if entry.is_dir() and not entry.name.startswith("."):
+                top_level_dirs.append(entry.name)
+
+        for entry in source_path.rglob("*"):
+            # Skip hidden/system dirs
+            if entry.is_dir():
+                if entry.name in _SKIP_DIR_NAMES or entry.name.startswith("."):
+                    continue
+
+            if entry.is_dir():
+                directory_count += 1
+                # Check for project root signals
+                for signal in ("pyproject.toml", "package.json", "setup.py", "setup.cfg"):
+                    if (entry / signal).exists():
+                        rel = entry.relative_to(source_path)
+                        likely_project_roots.append(str(rel))
+                        break
+                continue
+
+            if entry.is_symlink():
+                skipped["symlink"] += 1
+                skipped_count += 1
+                continue
+
+            if not entry.is_file():
+                continue
+
+            st_size = entry.stat().st_size
+
+            if st_size > _MAX_SINGLE_FILE_BYTES:
+                skipped["too_large"] += 1
+                skipped_count += 1
+                continue
+
+            if _is_binary_file_path(entry):
+                skipped["binary"] += 1
+                skipped_count += 1
+                continue
+
+            file_count += 1
+            total_bytes += st_size
+
+            suffix = entry.suffix.lower()
+            category = _suffix_category(suffix)
+            file_type_counts[category] = file_type_counts.get(category, 0) + 1
+
+            # Important file detection
+            imp_type = _match_important_file(entry.name)
+            if imp_type:
+                rel = entry.relative_to(source_path)
+                important_files.append({
+                    "path": str(rel),
+                    "type": imp_type,
+                    "size_human": _human_size(st_size),
+                })
+
+            # Candidate research source detection
+            cand_type = _match_candidate_research(entry, suffix, st_size)
+            if cand_type:
+                rel = entry.relative_to(source_path)
+                candidate_sources.append({
+                    "path": str(rel),
+                    "type": cand_type,
+                    "size_bytes": st_size,
+                })
+
+    except Exception as exc:
+        return _catalog_error(source, "scan_error", str(exc))
+
+    # ── safety flags ──
+    if file_count > _MAX_CATALOG_FILES:
+        safety_flags.append("too_many_files")
+    if total_bytes > _MAX_CATALOG_BYTES:
+        safety_flags.append("too_large")
+    binary_ratio = skipped["binary"] / max(file_count + skipped["binary"], 1)
+    if binary_ratio > 0.5:
+        safety_flags.append("binary_heavy")
+
+    is_clean = len(safety_flags) == 0
+
+    # ── recommendations ──
+    recommendations = _build_catalog_recommendations(
+        file_type_counts, important_files, candidate_sources,
+        source_name,
+    )
+
+    # ── write ──
+    catalog_path = ""
+    if write:
+        if not is_clean:
+            return _catalog_error(
+                source, "safety_flags",
+                f"cannot write catalog with safety flags: {', '.join(safety_flags)}",
+                safety_flags=safety_flags,
+            )
+
+        catalog_dir = repo_root / _CATALOG_OUTPUT_DIR
+        catalog_dir.mkdir(parents=True, exist_ok=True)
+        catalog_file = catalog_dir / f"{source_name}.json"
+        if catalog_file.exists():
+            return _catalog_error(
+                source, "already_exists",
+                f"catalog already exists: {catalog_file}",
+            )
+
+        catalog_out = _build_catalog_dict(
+            source_path=str(source_path),
+            source_name=source_name,
+            catalog_id=catalog_id,
+            total_bytes=total_bytes,
+            file_count=file_count,
+            directory_count=directory_count,
+            skipped_count=skipped_count,
+            skipped=skipped,
+            file_type_counts=file_type_counts,
+            top_level_dirs=top_level_dirs,
+            likely_project_roots=likely_project_roots,
+            important_files=important_files,
+            candidate_sources=candidate_sources,
+            safety_flags=safety_flags,
+            recommendations=recommendations,
+        )
+        catalog_file.write_text(
+            json.dumps(catalog_out, indent=2, default=str), encoding="utf-8",
+        )
+        catalog_path = str(catalog_file)
+
+    return {
+        "ok": is_clean,
+        "source_path": str(source_path),
+        "source_name": source_name,
+        "catalog_id": catalog_id,
+        "created_at": _utc_now(),
+        "total_bytes": total_bytes,
+        "total_human": _human_size(total_bytes),
+        "file_count": file_count,
+        "directory_count": directory_count,
+        "skipped_count": skipped_count,
+        "skipped_details": skipped,
+        "file_type_counts": file_type_counts,
+        "top_level_dirs": top_level_dirs,
+        "likely_project_roots": likely_project_roots,
+        "important_files": important_files,
+        "candidate_research_sources": candidate_sources,
+        "recommendations": recommendations,
+        "safety_flags": safety_flags,
+        "is_clean": is_clean,
+        "catalog_path": catalog_path,
+        "dry_run": not write,
+        "error": None,
+    }
+
+
+# ── catalog helpers ─────────────────────────────────────────────────────
+
+
+def _is_binary_file_path(path: Path) -> bool:
+    """Return True if the first 512 bytes contain a null byte."""
+    try:
+        with open(path, "rb") as fh:
+            chunk = fh.read(512)
+        return b"\x00" in chunk
+    except Exception:
+        return True  # treat unreadable as binary, skip
+
+
+_SUFFIX_MAP: dict[str, str] = {
+    ".py": "python", ".pyi": "python", ".pyx": "python",
+    ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".ts": "typescript", ".tsx": "typescript",
+    ".md": "markdown", ".mdx": "markdown",
+    ".json": "json", ".jsonl": "json",
+    ".txt": "text", ".csv": "text", ".log": "text",
+    ".rst": "text", ".yaml": "text", ".yml": "text",
+    ".toml": "text", ".cfg": "text", ".ini": "text",
+    ".sh": "shell", ".bash": "shell", ".zsh": "shell",
+    ".html": "html", ".htm": "html",
+    ".css": "css", ".scss": "css", ".sass": "css", ".less": "css",
+    ".rs": "rust", ".go": "go", ".java": "java",
+    ".png": "image", ".jpg": "image", ".jpeg": "image",
+    ".gif": "image", ".svg": "image", ".ico": "image", ".webp": "image",
+    ".ttf": "font", ".woff": "font", ".woff2": "font", ".eot": "font",
+}
+
+
+def _suffix_category(suffix: str) -> str:
+    return _SUFFIX_MAP.get(suffix, "other")
+
+
+def _match_important_file(name: str) -> str | None:
+    return _IMPORTANT_FILENAMES.get(name)
+
+
+def _match_candidate_research(path: Path, suffix: str, size: int) -> str | None:
+    """Return a research source type label or None."""
+    name = path.name.lower()
+    rel = str(path).lower()
+    if suffix == ".md" and size > 500:
+        # Skip files inside skipped dirs
+        if any(skip in rel for skip in ("node_modules", "__pycache__")):
+            return None
+        return "markdown_doc"
+    if suffix == ".py" and size > 1000:
+        if any(skip in rel for skip in ("node_modules", "__pycache__", "test", "tests")):
+            return None
+        return "python_source"
+    if name.startswith("readme") and suffix in (".md", ".rst", ".txt", ""):
+        return "readme_file"
+    return None
+
+
+def _build_catalog_recommendations(
+    counts: dict[str, int],
+    important: list[dict],
+    candidates: list[dict],
+    source_name: str,
+) -> list[str]:
+    recs: list[str] = []
+    md_count = counts.get("markdown", 0)
+    py_count = counts.get("python", 0)
+    imp_types = {i["type"] for i in important}
+
+    if md_count > 0:
+        recs.append(
+            f"{md_count} markdown documents found — suitable for growth propose mining"
+        )
+    if py_count > 0:
+        recs.append(
+            f"{py_count} Python source files found — check for design patterns"
+        )
+    if "package_json" in imp_types:
+        recs.append("package.json detected — this is a JavaScript/TypeScript project")
+    if "pyproject_toml" in imp_types or "setup_py" in imp_types:
+        recs.append("Python project root detected — check for architecture patterns")
+    if "dockerfile" in imp_types:
+        recs.append("Dockerfile detected — infrastructure source available")
+    if md_count == 0:
+        recs.append(
+            "No markdown documents found — archive may not be suitable for text mining"
+        )
+
+    return recs
+
+
+def _build_catalog_dict(
+    source_path: str,
+    source_name: str,
+    catalog_id: str,
+    total_bytes: int,
+    file_count: int,
+    directory_count: int,
+    skipped_count: int,
+    skipped: dict[str, int],
+    file_type_counts: dict[str, int],
+    top_level_dirs: list[str],
+    likely_project_roots: list[str],
+    important_files: list[dict],
+    candidate_sources: list[dict],
+    safety_flags: list[str],
+    recommendations: list[str],
+) -> dict[str, Any]:
+    return {
+        "catalog_version": "link-archive-catalog-v1",
+        "source_path": source_path,
+        "source_name": source_name,
+        "catalog_id": catalog_id,
+        "created_at": _utc_now(),
+        "total_bytes": total_bytes,
+        "total_human": _human_size(total_bytes),
+        "file_count": file_count,
+        "directory_count": directory_count,
+        "skipped_count": skipped_count,
+        "skipped_details": skipped,
+        "file_type_counts": file_type_counts,
+        "top_level_dirs": top_level_dirs,
+        "likely_project_roots": likely_project_roots,
+        "important_files": important_files,
+        "candidate_research_sources": candidate_sources,
+        "recommendations": recommendations,
+        "safety_flags": safety_flags,
+    }
+
+
+def _catalog_error(
+    source: str,
+    flag: str,
+    error: str,
+    safety_flags: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "source_path": source,
+        "source_name": "",
+        "catalog_id": "",
+        "created_at": _utc_now(),
+        "total_bytes": 0,
+        "total_human": "0",
+        "file_count": 0,
+        "directory_count": 0,
+        "skipped_count": 0,
+        "skipped_details": {},
+        "file_type_counts": {},
+        "top_level_dirs": [],
+        "likely_project_roots": [],
+        "important_files": [],
+        "candidate_research_sources": [],
+        "recommendations": [],
+        "safety_flags": safety_flags or [flag],
+        "is_clean": False,
+        "catalog_path": "",
+        "dry_run": True,
+        "error": error,
+    }
+
+
+# ── catalog rich renderer ──────────────────────────────────────────────
+
+
+def render_archive_catalog_with_rich(data: dict[str, Any]) -> None:
+    """Render an archive catalog preview/receipt using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    ok: bool = data.get("ok", True)
+    dry_run: bool = data.get("dry_run", True)
+
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    if not ok:
+        label, color = "ERROR", "red"
+    elif dry_run:
+        label, color = "DRY RUN", "yellow"
+    else:
+        label, color = "WRITTEN", "bold green"
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH ARCHIVE CATALOG[/]",
+        f"[{color}]{label}[/]",
+    )
+    console.print(header)
+
+    if not ok:
+        error_text = Text()
+        error_text.append(data.get("error", "unknown error"), style="bold red")
+        flags = data.get("safety_flags", [])
+        if flags:
+            error_text.append(f"\n[dim]flags: [/]{', '.join(flags)}", style="red")
+        console.print(Panel(error_text, border_style="red"))
+        console.print(Rule(style="dim"))
+        return
+
+    # ── source summary ──
+    info = Text()
+    info.append("source: ", style="dim")
+    info.append(data.get("source_path", "?"), style="bold")
+    info.append(f"\n[dim]catalog_id: [/]{data.get('catalog_id', '?')}")
+    info.append(
+        f"\n[dim]files: {data.get('file_count', 0)}  "
+        f"dirs: {data.get('directory_count', 0)}  "
+        f"total: {data.get('total_human', '?')}  "
+        f"skipped: {data.get('skipped_count', 0)}[/]"
+    )
+    console.print(Panel(info, title="SOURCE", border_style="dim"))
+
+    # ── file types ──
+    counts = data.get("file_type_counts", {})
+    if counts:
+        top = sorted(counts.items(), key=lambda x: -x[1])[:12]
+        types_line = "  ".join(
+            f"[dim]{cat}:[/] {n}" for cat, n in top
+        )
+        console.print(Panel(Text(types_line), title="FILE TYPES", border_style="dim"))
+
+    # ── important files ──
+    imp = data.get("important_files", [])
+    if imp:
+        imp_text = Text()
+        for i in imp[:10]:
+            imp_text.append(
+                f"\n[dim]\u2022 {i.get('type', '?')}:[/] "
+                f"{i.get('path', '?')}  [dim]({i.get('size_human', '?')})[/]"
+            )
+        console.print(Panel(imp_text, title="IMPORTANT FILES", border_style="dim"))
+
+    # ── recommendations ──
+    recs = data.get("recommendations", [])
+    if recs:
+        rec_text = Text()
+        for r in recs:
+            rec_text.append(f"\n\u2022 {r}")
+        console.print(Panel(rec_text, title="RECOMMENDATIONS", border_style="green"))
+
+    if dry_run and data.get("catalog_path", "") == "":
+        console.print(Rule(style="dim"))
+        console.print("  [dim]Use --write to persist the catalog to disk[/]")
+    else:
+        catalog_path = data.get("catalog_path", "")
+        if catalog_path:
+            wrote_text = Text()
+            wrote_text.append("Catalog written to:\n", style="bold green")
+            wrote_text.append(f"  {catalog_path}", style="dim")
+            console.print(Panel(wrote_text, border_style="dim green"))
+
+    console.print(Rule(style="dim"))
+    console.print("  [dim]python3 link.py growth run  -- guided workflow dashboard[/]")
+
+
+# ── catalog plain fallback ──────────────────────────────────────────────
+
+
+def render_archive_catalog_plain(data: dict[str, Any]) -> None:
+    """Render an archive catalog using plain print."""
+    ok: bool = data.get("ok", True)
+    dry_run: bool = data.get("dry_run", True)
+    label = "ERROR" if not ok else ("DRY RUN" if dry_run else "WRITTEN")
+    out: list[str] = []
+    out.append(f"== LINK GROWTH ARCHIVE CATALOG ({label}) ==")
+    out.append("")
+
+    if not ok:
+        out.append(f"error: {data.get('error', 'unknown error')}")
+        flags = data.get("safety_flags", [])
+        if flags:
+            out.append(f"flags: {', '.join(flags)}")
+        print("\n".join(out))
+        return
+
+    out.append(f"source:     {data.get('source_path', '?')}")
+    out.append(f"catalog_id: {data.get('catalog_id', '?')}")
+    out.append(
+        f"files: {data.get('file_count', 0)}  "
+        f"dirs: {data.get('directory_count', 0)}  "
+        f"total: {data.get('total_human', '?')}  "
+        f"skipped: {data.get('skipped_count', 0)}"
+    )
+    out.append("")
+
+    counts = data.get("file_type_counts", {})
+    if counts:
+        out.append("-- FILE TYPES --")
+        for cat, n in sorted(counts.items(), key=lambda x: -x[1])[:12]:
+            out.append(f"  {cat}: {n}")
+        out.append("")
+
+    imp = data.get("important_files", [])
+    if imp:
+        out.append("-- IMPORTANT FILES --")
+        for i in imp[:10]:
+            out.append(
+                f"  {i.get('type', '?')}: {i.get('path', '?')} "
+                f"({i.get('size_human', '?')})"
+            )
+        out.append("")
+
+    recs = data.get("recommendations", [])
+    if recs:
+        out.append("-- RECOMMENDATIONS --")
+        for r in recs:
+            out.append(f"  - {r}")
+        out.append("")
+
+    catalog_path = data.get("catalog_path", "")
+    if catalog_path:
+        out.append(f"Catalog written to: {catalog_path}")
+        out.append("")
+
+    if dry_run and not catalog_path:
+        out.append("Use --write to persist the catalog to disk.")
+    out.append("python3 link.py growth run  -- guided workflow dashboard")
+    print("\n".join(out))
+
+
+# ── catalog render orchestrator ─────────────────────────────────────────
+
+
+def render_archive_catalog_view(data: dict[str, Any]) -> None:
+    """Render archive catalog with rich if available; fall back to plain."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_archive_catalog_plain(data)
+        return
+    render_archive_catalog_with_rich(data)
+
+
 # ── run guide entry point ────────────────────────────────────────────────
 
 

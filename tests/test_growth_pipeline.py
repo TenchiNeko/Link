@@ -1710,6 +1710,148 @@ def check_growth_archive_extract_blocked() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 32. Growth archive-catalog -- dry-run scans, writes nothing
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_catalog_dry_run() -> None:
+    """archive-catalog dry-run scans a directory without writing a catalog file."""
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_archive_catalog
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        extracted = root / "research/_extracted/test_project"
+        extracted.mkdir(parents=True)
+
+        (extracted / "README.md").write_text("# Test Project\nContent here.\n", encoding="utf-8")
+        (extracted / "pyproject.toml").write_text("[tool]\nname = \"test\"\n", encoding="utf-8")
+        (extracted / "src").mkdir(parents=True, exist_ok=True)
+        (extracted / "src/main.py").write_text("def main():\n    print('hello')  # test\n\n\n\n\n\n\n", encoding="utf-8")
+        (extracted / "docs").mkdir(parents=True, exist_ok=True)
+        (extracted / "docs/notes.md").write_text("# Notes\nResearch findings.\n", encoding="utf-8")
+
+        data = collect_archive_catalog(
+            "research/_extracted/test_project", write=False, root=str(root)
+        )
+        _require(data.get("ok") is True, "dry-run must set ok=True")
+        _require(data.get("dry_run") is True, "dry-run must set dry_run=True")
+        _require(data.get("catalog_path") == "",
+                 "dry-run must have empty catalog_path")
+        _require(data.get("file_count", 0) >= 3,
+                 f"file_count must be >= 3, got {data.get('file_count')}")
+        _require(data.get("source_name") == "test_project",
+                 f"source_name mismatch: {data.get('source_name')}")
+
+        counts = data.get("file_type_counts", {})
+        _require(counts.get("markdown", 0) >= 2,
+                 f"must have >= 2 markdown files, got {counts.get('markdown', 0)}")
+        _require(counts.get("python", 0) >= 1,
+                 f"must have >= 1 python file, got {counts.get('python', 0)}")
+
+        imp = data.get("important_files", [])
+        imp_types = {i["type"] for i in imp}
+        _require("readme" in imp_types, "readme must be in important_files")
+        _require("pyproject_toml" in imp_types, "pyproject_toml must be in important_files")
+
+        recs = data.get("recommendations", [])
+        _require(len(recs) >= 1, "must have >= 1 recommendation")
+
+        catalog_dir = root / "research/_catalog/archive_catalogs"
+        _require(not catalog_dir.exists(),
+                 f"dry-run must not create catalog dir: {catalog_dir}")
+
+    print("growth archive-catalog dry-run OK")
+
+
+# ---------------------------------------------------------------------------
+# 33. Growth archive-catalog -- --write persists catalog
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_catalog_write() -> None:
+    """archive-catalog --write persists the catalog JSON file."""
+    import json as _json
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_archive_catalog
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        extracted = root / "research/_extracted/catalog_write_test"
+        extracted.mkdir(parents=True)
+
+        (extracted / "README.md").write_text("# Catalog write test\n", encoding="utf-8")
+        (extracted / "setup.py").write_text(
+            "from setuptools import setup\nsetup(name='test')\n", encoding="utf-8"
+        )
+        (extracted / "src").mkdir(parents=True, exist_ok=True)
+        (extracted / "src/module.py").write_text(
+            "def foo():\n    return 42\n\n\n\n\n\n\n\n", encoding="utf-8"
+        )
+
+        data = collect_archive_catalog(
+            "research/_extracted/catalog_write_test", write=True, root=str(root)
+        )
+        _require(data.get("ok") is True, "write must set ok=True")
+        _require(data.get("dry_run") is False, "write must set dry_run=False")
+        _require(bool(data.get("catalog_path")),
+                 "catalog_path must be non-empty after write")
+        _require(data.get("source_name") == "catalog_write_test",
+                 "source_name must match directory name")
+
+        catalog_file = Path(data.get("catalog_path", ""))
+        _require(catalog_file.exists(), f"catalog file must exist: {catalog_file}")
+
+        catalog_data = _json.loads(catalog_file.read_text(encoding="utf-8"))
+        _require(catalog_data.get("catalog_version") == "link-archive-catalog-v1",
+                 "catalog must have correct version")
+        _require(catalog_data.get("source_name") == "catalog_write_test",
+                 "catalog on-disk source_name must match")
+        _require(catalog_data.get("file_count") >= 2,
+                 f"catalog on-disk file_count must be >= 2, got {catalog_data.get('file_count')}")
+
+        # Verify extracted files are untouched
+        _require((extracted / "README.md").exists(),
+                 "original README.md must remain untouched")
+
+    print("growth archive-catalog write OK")
+
+
+# ---------------------------------------------------------------------------
+# 34. Growth archive-catalog -- refuses existing catalog
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_catalog_refuses_existing() -> None:
+    """archive-catalog --write refuses to overwrite an existing catalog file."""
+    import json as _json
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import collect_archive_catalog
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        extracted = root / "research/_extracted/refuse_test"
+        extracted.mkdir(parents=True)
+        (extracted / "README.md").write_text("# Refuse test\n", encoding="utf-8")
+
+        # First write succeeds
+        data1 = collect_archive_catalog(
+            "research/_extracted/refuse_test", write=True, root=str(root)
+        )
+        _require(data1.get("ok") is True, "first write must succeed")
+
+        # Second write must fail
+        data2 = collect_archive_catalog(
+            "research/_extracted/refuse_test", write=True, root=str(root)
+        )
+        _require(data2.get("ok") is False,
+                 "second write must be blocked")
+        _require(isinstance(data2.get("error"), str),
+                 "second write must have error string")
+        _require("already exists" in data2.get("error", "").lower(),
+                 f"error must mention 'already exists', got {data2.get('error')!r}")
+
+    print("growth archive-catalog refuse existing OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -1746,6 +1888,9 @@ def main() -> None:
     check_growth_archive_extract_dry_run()
     check_growth_archive_extract_write()
     check_growth_archive_extract_blocked()
+    check_growth_archive_catalog_dry_run()
+    check_growth_archive_catalog_write()
+    check_growth_archive_catalog_refuses_existing()
     print("Growth pipeline smoke tests passed")
 
 
