@@ -1852,6 +1852,169 @@ def check_growth_archive_catalog_refuses_existing() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 35. Growth archive-queue -- empty state (no catalogs)
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_queue_empty() -> None:
+    """collect_archive_queue returns no catalogs when none exist."""
+    from link_modes.growth.link_growth_console import collect_archive_queue
+
+    with tempfile.TemporaryDirectory() as td:
+        data = collect_archive_queue(root=td)
+        _require(isinstance(data, dict), "collect_archive_queue must return a dict")
+        _require(data.get("catalog_count") == 0,
+                 f"no catalogs must have catalog_count=0, got {data.get('catalog_count')}")
+        _require(data.get("queue_count") == 0,
+                 f"no catalogs must have queue_count=0, got {data.get('queue_count')}")
+        _require(len(data.get("source_queue", [])) == 0,
+                 "no catalogs must have empty source_queue")
+        warnings = data.get("warnings", [])
+        _require(len(warnings) >= 1, "no catalogs must have at least 1 warning")
+
+    print("growth archive-queue empty OK")
+
+
+# ---------------------------------------------------------------------------
+# 36. Growth archive-queue -- populated with ranked entries
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_queue_populated() -> None:
+    """collect_archive_queue ranks sources from a catalog file."""
+    import json as _json
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import (
+        collect_archive_queue, _CATALOG_OUTPUT_DIR,
+    )
+
+    catalog_data = {
+        "catalog_version": "link-archive-catalog-v1",
+        "source_name": "queue_populated_test",
+        "source_path": "/tmp/extracted/queue_populated_test",
+        "catalog_id": "abc12345",
+        "created_at": "2026-05-30T00:00:00Z",
+        "total_bytes": 5000,
+        "total_human": "5K",
+        "file_count": 4,
+        "directory_count": 2,
+        "skipped_count": 0,
+        "skipped_details": {},
+        "file_type_counts": {"markdown": 3, "python": 1},
+        "top_level_dirs": ["docs", "notes"],
+        "likely_project_roots": ["."],
+        "important_files": [
+            {"path": "README.md", "type": "readme", "size_human": "1K"},
+        ],
+        "candidate_research_sources": [
+            {"path": "README.md", "type": "readme_file", "size_bytes": 1024},
+            {"path": "docs/design.md", "type": "markdown_doc", "size_bytes": 2048},
+            {"path": "docs/research.md", "type": "markdown_doc", "size_bytes": 800},
+            {"path": "notes/ideas.md", "type": "markdown_doc", "size_bytes": 600},
+        ],
+        "recommendations": [],
+        "safety_flags": [],
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        catalogs_dir = root / _CATALOG_OUTPUT_DIR
+        catalogs_dir.mkdir(parents=True)
+
+        # Write the catalog, but source_path must point to existing files
+        # Update source_path to point into our td
+        extracted = root / "extracted" / "queue_populated_test"
+        extracted.mkdir(parents=True)
+        (extracted / "README.md").write_text("# Test\n", encoding="utf-8")
+        (extracted / "docs").mkdir(parents=True, exist_ok=True)
+        (extracted / "docs/design.md").write_text("# Design\n", encoding="utf-8")
+        (extracted / "docs/research.md").write_text("# Research\n", encoding="utf-8")
+        (extracted / "notes").mkdir(parents=True, exist_ok=True)
+        (extracted / "notes/ideas.md").write_text("# Ideas\n", encoding="utf-8")
+
+        catalog_data["source_path"] = str(extracted)
+        (catalogs_dir / "queue_populated_test.json").write_text(
+            _json.dumps(catalog_data), encoding="utf-8"
+        )
+
+        data = collect_archive_queue(root=str(root))
+        _require(data.get("catalog_count") == 1,
+                 f"catalog_count must be 1, got {data.get('catalog_count')}")
+        _require(data.get("queue_count", 0) >= 3,
+                 f"queue_count must be >= 3, got {data.get('queue_count')}")
+
+        queue = data.get("source_queue", [])
+        _require(len(queue) >= 3, f"source_queue must have >= 3 entries, got {len(queue)}")
+
+        # First entry should be highest score
+        first = queue[0]
+        _require(first.get("rank") == 1, f"first entry rank must be 1, got {first.get('rank')}")
+        _require(isinstance(first.get("score"), int),
+                 "score must be an int")
+        _require(first.get("estimated_value") in ("high", "medium", "low"),
+                 f"estimated_value must be high/medium/low, got {first.get('estimated_value')}")
+        _require(bool(first.get("reason")), "reason must be non-empty")
+        _require(bool(first.get("suggested_command")), "suggested_command must be non-empty")
+        _require(first.get("source_type") == "file",
+                 "source_type must be 'file'")
+
+        # Scores should be descending
+        for i in range(1, len(queue)):
+            _require(queue[i]["rank"] == i + 1,
+                     f"rank must be sequential, expected {i + 1}, got {queue[i]['rank']}")
+            _require(queue[i - 1]["score"] >= queue[i]["score"],
+                     f"scores must be descending: {queue[i - 1]['score']} < {queue[i]['score']}")
+
+        recs = data.get("recommendations", [])
+        _require(len(recs) >= 1, "must have at least 1 recommendation")
+
+    print("growth archive-queue populated OK")
+
+
+# ---------------------------------------------------------------------------
+# 37. Growth archive-queue -- tolerates invalid catalog JSON
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_queue_invalid_catalog() -> None:
+    """collect_archive_queue tolerates invalid JSON without crashing."""
+    import json as _json
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import (
+        collect_archive_queue, _CATALOG_OUTPUT_DIR,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        catalogs_dir = root / _CATALOG_OUTPUT_DIR
+        catalogs_dir.mkdir(parents=True)
+
+        # Write a valid catalog
+        valid_catalog = {
+            "catalog_version": "link-archive-catalog-v1",
+            "source_name": "valid_cat",
+            "source_path": str(root),
+            "candidate_research_sources": [],
+            "important_files": [],
+        }
+        (catalogs_dir / "valid.json").write_text(
+            _json.dumps(valid_catalog), encoding="utf-8"
+        )
+
+        # Write an invalid catalog (not JSON)
+        (catalogs_dir / "invalid.json").write_text(
+            "this is not valid json {{{", encoding="utf-8"
+        )
+
+        data = collect_archive_queue(root=str(root))
+        _require(data.get("catalog_count") == 1,
+                 f"only valid catalog should count, got {data.get('catalog_count')}")
+
+        warnings = data.get("warnings", [])
+        invalid_warnings = [w for w in warnings if w.get("type") == "catalog_invalid_json"]
+        _require(len(invalid_warnings) >= 1, "must have invalid_json warning")
+
+    print("growth archive-queue invalid catalog OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -1891,6 +2054,9 @@ def main() -> None:
     check_growth_archive_catalog_dry_run()
     check_growth_archive_catalog_write()
     check_growth_archive_catalog_refuses_existing()
+    check_growth_archive_queue_empty()
+    check_growth_archive_queue_populated()
+    check_growth_archive_queue_invalid_catalog()
     print("Growth pipeline smoke tests passed")
 
 

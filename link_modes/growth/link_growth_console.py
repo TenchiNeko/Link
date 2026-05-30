@@ -3696,6 +3696,503 @@ def render_archive_catalog_view(data: dict[str, Any]) -> None:
     render_archive_catalog_with_rich(data)
 
 
+# ── archive queue entry point ───────────────────────────────────────────
+
+
+def archive_queue_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth archive-queue``.
+
+    Reads archive catalog JSON files from ``research/_catalog/archive_catalogs/``
+    and produces a ranked source queue for Growth mining.  Each queue entry
+    points to a specific file from a catalog's ``candidate_research_sources``
+    or ``important_files``, scored and sorted by mining priority.
+
+    Read-only.  No files are written.  No proposals are mined.
+
+    Flags:
+        --catalog <path>  Read only this one catalog file.
+        --json            Machine-readable output.
+        --root <path>     Override repo root (for test isolation).
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if "--help" in args or "-h" in args:
+        print("Growth archive-queue: rank extracted sources for mining")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth archive-queue")
+        print("  python3 link.py growth archive-queue --json")
+        print("  python3 link.py growth archive-queue --catalog <path>")
+        print("  python3 link.py growth archive-queue --catalog <path> --json")
+        print("")
+        print("Reads archive catalog JSON files and produces a ranked")
+        print("source queue.  Each entry suggests a specific file to mine")
+        print("with 'growth propose'.  Read-only — no files are written.")
+        return 0
+
+    catalog_arg = _parse_arg(args, "--catalog")
+    root_override = _parse_arg(args, "--root")
+    data = collect_archive_queue(catalog_path=catalog_arg, root=root_override)
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+
+    render_archive_queue_view(data)
+    return 0
+
+
+def collect_archive_queue(
+    catalog_path: str | None = None,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Load catalog JSON(s) and produce a ranked source queue for mining.
+
+    When ``catalog_path`` is omitted every ``*.json`` file under
+    ``_CATALOG_OUTPUT_DIR`` is loaded.  When provided, only that one
+    catalog is read.
+
+    Each candidate research source and important file is scored using
+    type-, path-, and catalog-context bonuses.  Entries that fall below
+    a threshold or point to skipped directories are placed in
+    ``skipped_entries``.
+
+    Returns a dict with ``catalog_count``, ``queue_count``,
+    ``skipped_count``, ``source_queue``, ``skipped_entries``,
+    ``recommendations``, ``warnings``, and ``error``.
+
+    Read-only.  No files are written.
+    """
+    import json as _json
+    from pathlib import Path
+
+    repo_root = Path(root) if root else Path.cwd()
+    catalogs_dir = repo_root / _CATALOG_OUTPUT_DIR
+
+    # ── load catalogs ──
+    if catalog_path:
+        catalog_file = repo_root / catalog_path
+        if not catalog_file.exists():
+            return _queue_empty(
+                warnings=[{
+                    "type": "catalog_missing",
+                    "detail": f"catalog not found: {catalog_file}",
+                }],
+            )
+        if catalog_file.suffix != ".json":
+            return _queue_empty(
+                warnings=[{
+                    "type": "catalog_not_json",
+                    "detail": f"catalog must be a .json file: {catalog_file}",
+                }],
+            )
+        raw_catalogs = [catalog_file]
+    else:
+        if not catalogs_dir.exists():
+            return _queue_empty(
+                warnings=[{
+                    "type": "no_catalogs",
+                    "detail": f"no catalogs directory: {catalogs_dir}",
+                }],
+            )
+        raw_catalogs = sorted(catalogs_dir.glob("*.json"))
+
+    catalogs: list[dict] = []
+    warnings: list[dict] = []
+
+    for cf in raw_catalogs:
+        try:
+            catalog = _json.loads(cf.read_text(encoding="utf-8"))
+        except Exception as exc:
+            warnings.append({
+                "type": "catalog_invalid_json",
+                "detail": f"{cf.name}: {exc}",
+            })
+            continue
+        if not isinstance(catalog, dict):
+            warnings.append({
+                "type": "catalog_not_dict",
+                "detail": f"{cf.name}: not a JSON object",
+            })
+            continue
+        catalogs.append(catalog)
+
+    if not catalogs:
+        if not warnings:
+            warnings.append({
+                "type": "no_catalogs",
+                "detail": f"no catalog files found in {catalogs_dir}",
+            })
+        return _queue_empty(warnings=warnings)
+
+    # ── score and rank ──
+    all_entries: list[dict] = []
+    skipped: list[dict] = []
+
+    for catalog in catalogs:
+        source_name = catalog.get("source_name", "?")
+        source_root = catalog.get("source_path", "")
+
+        # Collect sources to score: candidate_research_sources + important_files (deduped by path)
+        seen_paths: set[str] = set()
+        to_score: list[dict] = []
+
+        for src in catalog.get("candidate_research_sources", []) or []:
+            p = src.get("path", "")
+            if p and p not in seen_paths:
+                seen_paths.add(p)
+                to_score.append(src)
+
+        for imp in catalog.get("important_files", []) or []:
+            p = imp.get("path", "")
+            if p and p not in seen_paths:
+                seen_paths.add(p)
+                to_score.append({
+                    "path": p,
+                    "type": imp.get("type", "important_file"),
+                    "size_bytes": 0,
+                })
+
+        if not to_score:
+            warnings.append({
+                "type": "no_candidate_sources",
+                "detail": f"{source_name}: no candidate sources or important files",
+            })
+            continue
+
+        for src in to_score:
+            score = _score_queue_source(src, catalog)
+            full_path = Path(source_root) / src["path"]
+            reason = _queue_reason(src, score)
+
+            if score <= 0:
+                skipped.append({"path": str(full_path), "reason": reason})
+                continue
+            if not full_path.exists():
+                skipped.append({"path": str(full_path), "reason": "source_missing"})
+                continue
+
+            estimated_value = "high" if score >= 13 else ("medium" if score >= 8 else "low")
+
+            all_entries.append({
+                "source_path": str(full_path),
+                "catalog_source_name": source_name,
+                "source_type": "file",
+                "reason": reason,
+                "score": score,
+                "estimated_value": estimated_value,
+                "suggested_command": f"python3 link.py growth propose --source {full_path}",
+            })
+
+    # Sort descending by score, then by type priority, then alphabetically
+    _type_priority = {"readme_file": 0, "markdown_doc": 1, "python_source": 2, "readme": 0}
+    all_entries.sort(key=lambda e: (
+        -e["score"],
+        _type_priority.get(e.get("source_type", ""), 99),
+        e["source_path"].lower(),
+    ))
+
+    # Assign ranks
+    for i, entry in enumerate(all_entries):
+        entry["rank"] = i + 1
+
+    # Build recommendations (top 3 commands)
+    recommendations: list[str] = []
+    for e in all_entries[:3]:
+        recommendations.append(e["suggested_command"])
+
+    if not all_entries and not skipped:
+        warnings.append({
+            "type": "no_queue_items",
+            "detail": "catalogs found but no sources eligible for queue",
+        })
+
+    return {
+        "catalog_count": len(catalogs),
+        "queue_count": len(all_entries),
+        "skipped_count": len(skipped),
+        "source_queue": all_entries,
+        "skipped_entries": skipped,
+        "recommendations": recommendations,
+        "warnings": warnings,
+        "error": None,
+    }
+
+
+def _score_queue_source(src: dict[str, Any], catalog: dict[str, Any]) -> int:
+    """Score a candidate source for mining priority."""
+    src_type = src.get("type", "")
+    path_lower = src.get("path", "").lower()
+    size = src.get("size_bytes", 0)
+
+    base_scores = {
+        "readme_file": 12,
+        "readme": 10,
+        "markdown_doc": 8,
+        "python_source": 6,
+    }
+    score = base_scores.get(src_type, 4)
+
+    # Path-based bonuses
+    research_keywords = ("docs", "notes", "research", "papers", "design", "architecture", "examples")
+    for kw in research_keywords:
+        if f"/{kw}/" in f"/{path_lower}" or path_lower.startswith(f"{kw}/"):
+            score += 3
+            break
+
+    if path_lower.startswith("readme"):
+        score += 2
+
+    # Catalog-context bonuses
+    important_files = catalog.get("important_files", []) or []
+    imp_types = {i.get("type") for i in important_files}
+    if "pyproject_toml" in imp_types or "setup_py" in imp_types:
+        score += 2
+
+    roots = catalog.get("likely_project_roots", []) or []
+    if roots:
+        score += 3
+
+    top_dirs = catalog.get("top_level_dirs", []) or []
+    if any(kw in str(top_dirs).lower() for kw in research_keywords):
+        score += 1
+
+    # Penalties
+    skip_segments = ("node_modules", "__pycache__", ".git", "dist", "build", "__macosx")
+    if any(seg in path_lower for seg in skip_segments):
+        score -= 99
+
+    if size < 200:
+        score -= 5
+
+    if size > 1_000_000:
+        score -= 3
+
+    return max(score, -100)
+
+
+def _queue_reason(src: dict[str, Any], score: int) -> str:
+    src_type = src.get("type", "")
+    path = src.get("path", "")
+    size = src.get("size_bytes", 0)
+
+    type_labels = {
+        "readme_file": "README with content",
+        "readme": "README file",
+        "markdown_doc": "markdown document",
+        "python_source": "Python source file",
+    }
+    label = type_labels.get(src_type, f"{src_type} file")
+
+    if score <= 0:
+        if size < 200:
+            return f"{label} too small ({size}B)"
+        return f"{label} in skipped directory"
+    if score >= 13:
+        return f"{label} — high-priority research source"
+    if score >= 8:
+        return f"{label} — medium-priority source"
+    return f"{label}"
+
+
+def _queue_empty(
+    warnings: list[dict] | None = None,
+) -> dict[str, Any]:
+    return {
+        "catalog_count": 0,
+        "queue_count": 0,
+        "skipped_count": 0,
+        "source_queue": [],
+        "skipped_entries": [],
+        "recommendations": [],
+        "warnings": warnings or [
+            {"type": "no_catalogs", "detail": "no catalogs found"},
+        ],
+        "error": None,
+    }
+
+
+# ── queue rich renderer ─────────────────────────────────────────────────
+
+
+def render_archive_queue_with_rich(data: dict[str, Any]) -> None:
+    """Render an archive queue using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    catalog_count: int = data.get("catalog_count", 0)
+    queue_count: int = data.get("queue_count", 0)
+    skipped_count: int = data.get("skipped_count", 0)
+    queue: list = data.get("source_queue", [])
+    skipped: list = data.get("skipped_entries", [])
+    recs: list = data.get("recommendations", [])
+    warnings: list = data.get("warnings", [])
+
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH ARCHIVE QUEUE[/]",
+        f"[dim]{catalog_count} catalog{'s' if catalog_count != 1 else ''}  "
+        f"{queue_count} queued  {skipped_count} skipped[/]",
+    )
+    console.print(header)
+    console.print(Rule(style="dim"))
+
+    # ── empty state ──
+    if catalog_count == 0:
+        empty = Text()
+        empty.append("\nNo catalog files found.\n\n", style="dim")
+        empty.append("To create a catalog:\n", style="dim")
+        empty.append("  python3 link.py growth archive-extract --archive <path> --write\n", style="dim")
+        empty.append("  python3 link.py growth archive-catalog --source <dir> --write\n", style="dim")
+        empty.append("\n")
+        empty.append("  [dim]python3 link.py growth archive-inventory  -- find archives[/]\n", style="dim")
+        empty.append("  [dim]python3 link.py growth run               -- guided workflow[/]\n", style="dim")
+        console.print(Panel(empty, border_style="dim"))
+        console.print(Rule(style="dim"))
+        return
+
+    # ── warnings ──
+    for w in warnings:
+        w_text = Text()
+        w_text.append(f"[yellow]{w.get('type', '?')}: [/]")
+        w_text.append(w.get("detail", ""))
+        console.print(Panel(w_text, border_style="yellow"))
+        console.print(Rule(style="dim"))
+
+    # ── empty queue but catalogs exist ──
+    if queue_count == 0:
+        empty_q = Text()
+        empty_q.append(f"\n{catalog_count} catalog(s) found but no sources eligible for queue.\n", style="dim")
+        if skipped:
+            empty_q.append(f"\n{skipped_count} source(s) were skipped.\n", style="dim")
+        console.print(Panel(empty_q, border_style="dim"))
+        console.print(Rule(style="dim"))
+        console.print("  [dim]python3 link.py growth run  -- guided workflow dashboard[/]")
+        return
+
+    # ── queue entries ──
+    value_colors = {"high": "green", "medium": "yellow", "low": "dim"}
+    for entry in queue[:15]:
+        entry_text = Text()
+        ev = entry.get("estimated_value", "medium")
+        vc = value_colors.get(ev, "dim")
+
+        entry_text.append(
+            f"[bold]#{entry.get('rank')}[/]  "
+            f"[{vc}]{ev.upper()}[/]  "
+            f"score: {entry.get('score')}"
+        )
+        entry_text.append(
+            f"\n[dim]source:[/] {entry.get('source_path', '?')}"
+        )
+        entry_text.append(
+            f"\n[dim]reason:[/] {entry.get('reason', '?')}"
+        )
+        entry_text.append(
+            f"\n[dim]cmd:    [/]$ {entry.get('suggested_command', '?')}"
+        )
+
+        panel_title = f"QUEUE  {entry.get('catalog_source_name', '?')}"
+        console.print(Panel(entry_text, title=panel_title, border_style=vc))
+
+    if len(queue) > 15:
+        console.print(f"  [dim]... and {len(queue) - 15} more entries[/]")
+
+    # ── recommendations ──
+    if recs:
+        rec_text = Text()
+        rec_text.append("Top command:\n", style="bold green")
+        rec_text.append(f"  $ {recs[0]}\n\n", style="dim")
+        if len(recs) > 1:
+            rec_text.append("Next:\n", style="bold")
+            for r in recs[1:4]:
+                rec_text.append(f"  $ {r}\n", style="dim")
+        console.print(Panel(rec_text, title="RECOMMENDED NEXT STEPS", border_style="green"))
+
+    console.print(Rule(style="dim"))
+    console.print("  [dim]python3 link.py growth propose --source <path>  -- run miner on a source[/]")
+    console.print("  [dim]python3 link.py growth run                     -- guided workflow[/]")
+
+
+# ── queue plain fallback ────────────────────────────────────────────────
+
+
+def render_archive_queue_plain(data: dict[str, Any]) -> None:
+    """Render an archive queue using plain print."""
+    catalog_count: int = data.get("catalog_count", 0)
+    queue_count: int = data.get("queue_count", 0)
+    skipped_count: int = data.get("skipped_count", 0)
+    queue: list = data.get("source_queue", [])
+    recs: list = data.get("recommendations", [])
+    warnings: list = data.get("warnings", [])
+    out: list[str] = []
+    out.append(
+        f"== LINK GROWTH ARCHIVE QUEUE ({catalog_count} catalogs, "
+        f"{queue_count} queued, {skipped_count} skipped) =="
+    )
+    out.append("")
+
+    if catalog_count == 0:
+        out.append("No catalog files found.")
+        out.append("")
+        out.append("To create a catalog:")
+        out.append("  python3 link.py growth archive-extract --archive <path> --write")
+        out.append("  python3 link.py growth archive-catalog --source <dir> --write")
+        out.append("")
+        out.append("python3 link.py growth archive-inventory  -- find archives")
+        out.append("python3 link.py growth run               -- guided workflow")
+        print("\n".join(out))
+        return
+
+    for w in warnings:
+        out.append(f"WARNING [{w.get('type', '?')}]: {w.get('detail', '')}")
+        out.append("")
+
+    if queue_count == 0:
+        out.append(f"{catalog_count} catalog(s) found but no sources eligible for queue.")
+        out.append("")
+        out.append("python3 link.py growth run  -- guided workflow dashboard")
+        print("\n".join(out))
+        return
+
+    for entry in queue[:15]:
+        out.append(f"--- #{entry.get('rank')} [{entry.get('estimated_value', 'medium').upper()}] score={entry.get('score')} ---")
+        out.append(f"source: {entry.get('source_path', '?')}")
+        out.append(f"reason: {entry.get('reason', '?')}")
+        out.append(f"cmd:    $ {entry.get('suggested_command', '?')}")
+        out.append("")
+
+    if recs:
+        out.append("-- RECOMMENDED NEXT STEPS --")
+        out.append(f"Top: $ {recs[0]}")
+        for r in recs[1:4]:
+            out.append(f"Next: $ {r}")
+        out.append("")
+
+    out.append("python3 link.py growth propose --source <path>  -- run miner on a source")
+    out.append("python3 link.py growth run                     -- guided workflow")
+    print("\n".join(out))
+
+
+# ── queue render orchestrator ───────────────────────────────────────────
+
+
+def render_archive_queue_view(data: dict[str, Any]) -> None:
+    """Render archive queue with rich if available; fall back to plain."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_archive_queue_plain(data)
+        return
+    render_archive_queue_with_rich(data)
+
+
 # ── run guide entry point ────────────────────────────────────────────────
 
 
