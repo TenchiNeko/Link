@@ -1209,6 +1209,178 @@ def check_growth_handoffs_populated() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 22. Growth execute -- dry-run builds receipt, writes nothing
+# ---------------------------------------------------------------------------
+
+def check_growth_execute_dry_run() -> None:
+    """collect_execute_data builds a verifier receipt without writing files."""
+    from pathlib import Path
+    from link_core.control_plane import write_proposal, update_proposal_status
+    from link_core.control_plane.link_control_plane_proposals import (
+        load_proposal,
+        proposal_storage_dir,
+    )
+    from link_core.control_plane.link_control_plane_patch_plan import (
+        build_patch_plan_from_proposal,
+    )
+    from link_core.control_plane.link_control_plane_worker_handoff import (
+        build_worker_handoff_from_plan,
+        write_worker_handoff,
+    )
+
+    proposal = {
+        "proposal_id": "execute-dr-test-xyz",
+        "title": "execute dry-run smoke test",
+        "source_path": "research/smoke.md",
+        "source_summary": "Smoke test for execute dry-run.",
+        "extracted_capabilities": ["smoke"],
+        "link_takeaways": ["execute dry-run works"],
+        "affected_files": ["link_growth_console.py"],
+        "risk_level": "low",
+        "expected_behavior_change": "none",
+        "implementation_plan": ["Build receipt.", "Write receipt."],
+        "verification_commands": ["echo ok"],
+        "rollback_plan": "Revert patch branch.",
+        "recommendation": "accept",
+        "status": "pending",
+        "created_at": "2026-05-29T00:00:00",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        write_proposal(proposal, root=td)
+        update_proposal_status("execute-dr-test-xyz", "accepted", root=td)
+        accepted = load_proposal(proposal_storage_dir(td) / "execute-dr-test-xyz.json")
+        plan = build_patch_plan_from_proposal(accepted)
+        hf = build_worker_handoff_from_plan(plan)
+
+        hf_dir = Path(td) / ".agents/control_plane/worker_handoffs"
+        write_worker_handoff(hf, root=hf_dir)
+
+        from link_modes.growth.link_growth_console import collect_execute_data
+
+        data = collect_execute_data(hf["handoff_id"], write=False, root=td)
+        _require(data.get("ok") is True, "execute dry-run must set ok=True")
+        _require(data.get("dry_run") is True, "execute default must be dry_run=True")
+        _require(data.get("written_paths") == [],
+                 "execute dry-run must have empty written_paths")
+        _require(data["handoff_id"] == hf["handoff_id"],
+                 "execute must return correct handoff_id")
+        _require(data["handoff_status"] == "queued",
+                 f"handoff_status must be 'queued', got {data['handoff_status']!r}")
+
+        receipt = data.get("receipt")
+        _require(receipt is not None, "execute must build a receipt dict")
+        _require(bool(receipt.get("verification_id")),
+                 "verification_id must be non-empty")
+        _require(receipt.get("stage") == "Verifier",
+                 f"receipt stage must be 'Verifier', got {receipt.get('stage')!r}")
+        _require(receipt.get("status") == "pending",
+                 f"receipt status must be 'pending', got {receipt.get('status')!r}")
+        _require(data.get("verification_id") == receipt["verification_id"],
+                 "verification_id in top-level must match receipt dict")
+
+        # Verify no files written
+        receipt_dir = Path(td) / ".agents" / "control_plane" / "verifier_receipts"
+        r_files = list(receipt_dir.glob("*.json")) if receipt_dir.exists() else []
+        _require(len(r_files) == 0,
+                 f"execute dry-run must not write receipt files, found {len(r_files)}")
+
+    print("growth execute dry-run OK")
+
+
+# ---------------------------------------------------------------------------
+# 23. Growth execute -- --write persists verifier receipt
+# ---------------------------------------------------------------------------
+
+def check_growth_execute_write() -> None:
+    """collect_execute_data with write=True persists the verifier receipt."""
+    from pathlib import Path
+    from link_core.control_plane import write_proposal, update_proposal_status
+    from link_core.control_plane.link_control_plane_proposals import (
+        load_proposal,
+        proposal_storage_dir,
+    )
+    from link_core.control_plane.link_control_plane_patch_plan import (
+        build_patch_plan_from_proposal,
+    )
+    from link_core.control_plane.link_control_plane_worker_handoff import (
+        build_worker_handoff_from_plan,
+        write_worker_handoff,
+    )
+
+    proposal = {
+        "proposal_id": "execute-wr-test-xyz",
+        "title": "execute write smoke test",
+        "source_path": "research/smoke.md",
+        "source_summary": "Smoke test for execute --write.",
+        "extracted_capabilities": ["write"],
+        "link_takeaways": ["write receipt works"],
+        "affected_files": ["link_growth_console.py"],
+        "risk_level": "medium",
+        "expected_behavior_change": "none",
+        "implementation_plan": ["Step 1", "Step 2"],
+        "verification_commands": ["echo ok"],
+        "rollback_plan": "Revert patch branch.",
+        "recommendation": "accept",
+        "status": "pending",
+        "created_at": "2026-05-29T00:00:00",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        write_proposal(proposal, root=td)
+        update_proposal_status("execute-wr-test-xyz", "accepted", root=td)
+        accepted = load_proposal(proposal_storage_dir(td) / "execute-wr-test-xyz.json")
+        plan = build_patch_plan_from_proposal(accepted)
+        hf = build_worker_handoff_from_plan(plan)
+
+        hf_dir = Path(td) / ".agents/control_plane/worker_handoffs"
+        write_worker_handoff(hf, root=hf_dir)
+
+        from link_modes.growth.link_growth_console import collect_execute_data
+
+        data = collect_execute_data(hf["handoff_id"], write=True, root=td)
+        _require(data.get("ok") is True, "execute --write must set ok=True")
+        _require(data.get("dry_run") is False, "execute --write must set dry_run=False")
+        _require(len(data.get("written_paths", [])) == 1,
+                 f"execute --write must have 1 written path, got {len(data.get('written_paths', []))}")
+
+        receipt = data.get("receipt")
+        _require(receipt is not None, "execute --write must build a receipt dict")
+        vid = receipt.get("verification_id", "")
+
+        receipt_dir = Path(td) / ".agents" / "control_plane" / "verifier_receipts"
+        receipt_file = receipt_dir / f"{vid}.json"
+        _require(receipt_file.exists(), f"receipt file must exist: {receipt_file}")
+
+        loaded = json.loads(receipt_file.read_text(encoding="utf-8"))
+        _require(loaded["verification_id"] == vid,
+                 "verification_id must match on-disk content")
+        _require(loaded["status"] == "pending",
+                 f"on-disk status must be 'pending', got {loaded['status']!r}")
+
+    print("growth execute write OK")
+
+
+# ---------------------------------------------------------------------------
+# 24. Growth execute -- error states
+# ---------------------------------------------------------------------------
+
+def check_growth_execute_errors() -> None:
+    """collect_execute_data returns ok=False for missing or invalid handoffs."""
+    from link_modes.growth.link_growth_console import collect_execute_data
+
+    with tempfile.TemporaryDirectory() as td:
+        # Not found
+        data_nf = collect_execute_data("nonexistent-execute-xyz", root=td)
+        _require(data_nf.get("ok") is False, "not-found must set ok=False")
+        _require(isinstance(data_nf.get("error"), str), "not-found must set error")
+        _require("not found" in data_nf.get("error", "").lower(),
+                 "not-found error must mention 'not found'")
+
+    print("growth execute errors OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -1235,6 +1407,9 @@ def main() -> None:
     check_growth_run_with_source()
     check_growth_handoffs_empty()
     check_growth_handoffs_populated()
+    check_growth_execute_dry_run()
+    check_growth_execute_write()
+    check_growth_execute_errors()
     print("Growth pipeline smoke tests passed")
 
 

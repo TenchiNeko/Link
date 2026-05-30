@@ -1629,6 +1629,419 @@ def render_handoffs_view(data: dict[str, Any]) -> None:
     render_handoffs_with_rich(data)
 
 
+# ── execute entry point ──────────────────────────────────────────────────
+_VERIFIER_RECEIPT_DIR = ".agents/control_plane/verifier_receipts"
+
+
+def execute_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth execute <handoff_id>``.
+
+    Loads an existing worker handoff and builds a verifier receipt from
+    it.  Dry-run by default; ``--write`` persists the receipt to the
+    canonical ``_VERIFIER_RECEIPT_DIR``.
+
+    **No code is executed by this command.**  It creates a verification
+    receipt only.  Actual worker execution belongs to a future slice.
+
+    Flags:
+        --write  Persist the verifier receipt to canonical path.
+        --json   Machine-readable output.
+        --root <path>  Override repo root (for test isolation).
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if not args or "--help" in args or "-h" in args:
+        print("Growth execute: prepare a worker handoff for verification")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth execute <handoff_id>")
+        print("  python3 link.py growth execute <handoff_id> --json")
+        print("  python3 link.py growth execute <handoff_id> --write")
+        print("")
+        print("No code is executed by this command. It reads an existing")
+        print("handoff and optionally creates a verifier receipt. Default")
+        print("is dry-run. Use --write to persist the receipt to disk.")
+        return 0
+
+    handoff_id = args[0]
+    add_json = True  # .json extension if not already present
+    if handoff_id.endswith(".json"):
+        add_json = False
+    write = "--write" in args
+    root_override = _parse_arg(args, "--root")
+    data = collect_execute_data(
+        handoff_id, write=write, add_json_extension=add_json, root=root_override
+    )
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0 if data.get("ok") else 1
+
+    render_execute(data)
+    return 0 if data.get("ok") else 1
+
+
+def collect_execute_data(
+    handoff_id: str,
+    write: bool = False,
+    add_json_extension: bool = True,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Load a worker handoff by ID and build a verifier receipt.
+
+    Reads the handoff from ``_HANDOFF_WORKER_DIR``, validates it, and
+    calls ``build_verifier_receipt_from_handoff`` to produce a receipt.
+    When ``write=True`` the receipt is persisted to ``_VERIFIER_RECEIPT_DIR``.
+
+    Returns a dict with ``ok``, handoff/receipt metadata, ``written_paths``,
+    and ``error``.  Ready-for-execution handoffs get a verifier receipt;
+    blocked or already-done handoffs return their state with a message.
+    """
+    from pathlib import Path
+
+    from link_core.control_plane.link_control_plane_verifier_receipt import (
+        build_verifier_receipt_from_handoff,
+        write_verifier_receipt,
+    )
+    from link_core.control_plane.link_control_plane_worker_handoff import (
+        load_worker_handoff,
+    )
+
+    repo_root = Path(root) if root else Path.cwd()
+    handoff_dir = repo_root / _HANDOFF_WORKER_DIR
+
+    filename = f"{handoff_id}.json" if add_json_extension else handoff_id
+    hf_path = handoff_dir / filename
+
+    if not hf_path.exists():
+        return _execute_error(
+            handoff_id,
+            f"handoff not found: {hf_path}",
+        )
+
+    try:
+        handoff = load_worker_handoff(hf_path)
+    except Exception as exc:
+        return _execute_error(
+            handoff_id,
+            f"failed to load handoff: {exc}",
+        )
+
+    hf_status = str(handoff.get("status", ""))
+
+    if hf_status == "blocked":
+        return _execute_error(
+            handoff_id,
+            "handoff is blocked — cannot create verifier receipt",
+            handoff=handoff,
+        )
+
+    if hf_status == "done":
+        return _execute_done(handoff_id, handoff)
+
+    try:
+        receipt = build_verifier_receipt_from_handoff(
+            handoff, status="pending",
+        )
+    except Exception as exc:
+        return _execute_error(
+            handoff_id,
+            f"build_verifier_receipt_from_handoff failed: {exc}",
+        )
+
+    written_paths: list[str] = []
+    if write:
+        receipt_dir = repo_root / _VERIFIER_RECEIPT_DIR
+        receipt_path = write_verifier_receipt(receipt, root=receipt_dir)
+        written_paths = [str(receipt_path)]
+
+    return {
+        "ok": True,
+        "handoff_id": handoff.get("handoff_id", handoff_id),
+        "handoff_title": handoff.get("title", ""),
+        "handoff_status": hf_status,
+        "handoff_stage": handoff.get("stage", ""),
+        "handoff": handoff,
+        "receipt": receipt,
+        "verification_id": receipt.get("verification_id", ""),
+        "written_paths": written_paths,
+        "dry_run": not write,
+        "recommended_next_action": (
+            "Use --write to persist the verifier receipt to disk."
+            if not write
+            else "No code is executed by this command."
+        ),
+        "error": None,
+    }
+
+
+def _execute_error(
+    handoff_id: str,
+    error: str,
+    handoff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "handoff_id": handoff_id,
+        "handoff_title": handoff.get("title", "") if handoff else "",
+        "handoff_status": handoff.get("status", "") if handoff else "",
+        "handoff_stage": handoff.get("stage", "") if handoff else "",
+        "handoff": handoff,
+        "receipt": None,
+        "verification_id": None,
+        "written_paths": [],
+        "dry_run": True,
+        "recommended_next_action": "",
+        "error": error,
+    }
+
+
+def _execute_done(
+    handoff_id: str,
+    handoff: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "handoff_id": handoff.get("handoff_id", handoff_id),
+        "handoff_title": handoff.get("title", ""),
+        "handoff_status": handoff.get("status", ""),
+        "handoff_stage": handoff.get("stage", ""),
+        "handoff": handoff,
+        "receipt": None,
+        "verification_id": None,
+        "written_paths": [],
+        "dry_run": True,
+        "recommended_next_action": "Handoff is already completed.",
+        "error": None,
+    }
+
+
+# ── execute rich renderer ───────────────────────────────────────────────
+
+
+def render_execute_with_rich(data: dict[str, Any]) -> None:
+    """Render an execute preview/receipt using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    ok: bool = data.get("ok", False)
+    dry_run: bool = data.get("dry_run", True)
+    hf_status = data.get("handoff_status", "")
+
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    if not ok:
+        state_label = "FAILED"
+        state_color = "red"
+    elif hf_status == "done":
+        state_label = "DONE"
+        state_color = "green"
+    elif dry_run:
+        state_label = "DRY RUN"
+        state_color = "yellow"
+    else:
+        state_label = "WRITTEN"
+        state_color = "bold green"
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH EXECUTE[/]",
+        f"[{state_color}]{state_label}[/]",
+    )
+    console.print(header)
+
+    if not ok:
+        error_text = Text()
+        if data.get("handoff"):
+            hf = data["handoff"]
+            error_text.append(f"[bold]Handoff exists but is {hf.get('status', '?')}.[/]\n\n")
+            error_text.append(f"[dim]title: {hf.get('title', '?')}[/]")
+        error_text.append(f"\n[red]{data.get('error', 'unknown error')}[/]")
+        if hf_status == "blocked":
+            error_text.append("\n[dim]Recommendation: unblock or create a new handoff.[/]")
+        console.print(Panel(error_text, border_style="red"))
+        console.print(Rule(style="dim"))
+        return
+
+    handoff = data.get("handoff") or {}
+    receipt = data.get("receipt") or {}
+
+    # ── handoff summary ──
+    status_colors = {
+        "queued": "yellow", "running": "cyan", "done": "green",
+        "failed": "red", "blocked": "red",
+    }
+    risk_colors = {"low": "green", "medium": "yellow", "high": "red"}
+    sc = status_colors.get(hf_status, "")
+    risk = handoff.get("risk_level", "?")
+    rc = risk_colors.get(risk, "")
+
+    hf_text = Text()
+    hf_text.append("handoff_id: ", style="dim")
+    hf_text.append(data.get("handoff_id", "?"), style="bold")
+    hf_text.append("\n[dim]proposal_id: [/]")
+    hf_text.append(handoff.get("proposal_id", "?"))
+    hf_text.append("\n[dim]plan_id:     [/]")
+    hf_text.append(handoff.get("plan_id", "?"))
+    hf_text.append("\n[dim]title:       [/]")
+    hf_text.append(data.get("handoff_title", "?"))
+    hf_text.append("\n[dim]stage:       [/]")
+    hf_text.append(data.get("handoff_stage", "?"))
+    hf_text.append("\n[dim]status:      [/]")
+    hf_text.append(f"[{sc}]{hf_status}[/]")
+    hf_text.append("\n[dim]risk_level:  [/]")
+    hf_text.append(f"[{rc}]{risk}[/]")
+
+    files = handoff.get("allowed_files", [])
+    if files:
+        hf_text.append(f"\n[dim]files:       [/]{', '.join(files[:5])}")
+    steps = handoff.get("implementation_steps", [])
+    if steps:
+        hf_text.append(f"\n[dim]steps ({len(steps)}):[/]")
+        for s in steps[:5]:
+            hf_text.append(f"\n  \u2022 {s}")
+    cmds = handoff.get("verification_commands", [])
+    if cmds:
+        hf_text.append(f"\n[dim]verification commands ({len(cmds)}):[/]")
+        for c in cmds[:3]:
+            hf_text.append(f"\n  $ {c}")
+
+    console.print(Panel(hf_text, title="HANDOFF", border_style="dim"))
+
+    # ── receipt preview ──
+    if receipt:
+        rcpt = receipt
+        rcpt_text = Text()
+        rcpt_text.append("verification_id: ", style="dim")
+        rcpt_text.append(rcpt.get("verification_id", "?"), style="bold")
+        rcpt_text.append("\n[dim]stage:          [/][cyan]Verifier[/]")
+        rcpt_text.append("\n[dim]status:         [/][yellow]pending[/]")
+        findings = rcpt.get("findings", [])
+        if findings:
+            rcpt_text.append(f"\n[dim]findings:       [/]{', '.join(findings[:3])}")
+        rcpt_text.append("\n")
+        rcpt_text.append("\n[bold yellow]No code is executed by this command.[/]")
+        console.print(Panel(rcpt_text, title="VERIFIER RECEIPT", border_style="dim"))
+
+    if hf_status == "done":
+        done_text = Text("This handoff is already completed.", style="green")
+        done_text.append("\n[dim]No verifier receipt was created.[/]")
+        console.print(Panel(done_text, border_style="green"))
+
+    written = data.get("written_paths", [])
+    if written:
+        wrote_text = Text()
+        wrote_text.append("Persisted:\n", style="bold green")
+        for w in written:
+            wrote_text.append(f"  {w}\n", style="dim")
+        console.print(Panel(wrote_text, title="PERSISTED", border_style="dim green"))
+
+    console.print(Rule(style="dim"))
+    if dry_run and hf_status != "done":
+        console.print("  [dim]Use --write to persist the verifier receipt to disk[/]")
+    console.print("  [dim]python3 link.py growth run     -- guided workflow dashboard[/]")
+    console.print("  [dim]python3 link.py growth handoffs -- view all handoffs[/]")
+
+
+# ── execute plain fallback ──────────────────────────────────────────────
+
+
+def render_execute_plain(data: dict[str, Any]) -> None:
+    """Render an execute preview/receipt using plain print."""
+    ok: bool = data.get("ok", False)
+    dry_run: bool = data.get("dry_run", True)
+    hf_status = data.get("handoff_status", "")
+
+    if not ok:
+        state_label = "FAILED"
+    elif hf_status == "done":
+        state_label = "DONE"
+    elif dry_run:
+        state_label = "DRY RUN"
+    else:
+        state_label = "WRITTEN"
+
+    out: list[str] = []
+    out.append(f"== LINK GROWTH EXECUTE ({state_label}) ==")
+    out.append("")
+    out.append("No code is executed by this command.")
+    out.append("")
+
+    if not ok:
+        if data.get("handoff"):
+            hf = data["handoff"]
+            out.append(f"Handoff exists but is {hf.get('status', '?')}.")
+            out.append(f"title: {hf.get('title', '?')}")
+        out.append(f"error: {data.get('error', 'unknown error')}")
+        print("\n".join(out))
+        return
+
+    handoff = data.get("handoff") or {}
+    receipt = data.get("receipt") or {}
+
+    out.append("-- HANDOFF --")
+    out.append(f"handoff_id:   {data.get('handoff_id', '?')}")
+    out.append(f"proposal_id:  {handoff.get('proposal_id', '?')}")
+    out.append(f"plan_id:      {handoff.get('plan_id', '?')}")
+    out.append(f"title:        {data.get('handoff_title', '?')}")
+    out.append(f"stage:        {data.get('handoff_stage', '?')}")
+    out.append(f"status:       {hf_status}")
+    out.append(f"risk_level:   {handoff.get('risk_level', '?')}")
+    files = handoff.get("allowed_files", [])
+    if files:
+        out.append(f"files:        {', '.join(files[:5])}")
+    steps = handoff.get("implementation_steps", [])
+    if steps:
+        out.append(f"steps ({len(steps)}):")
+        for s in steps[:5]:
+            out.append(f"  - {s}")
+    out.append("")
+
+    if receipt:
+        out.append("-- VERIFIER RECEIPT --")
+        out.append(f"verification_id: {receipt.get('verification_id', '?')}")
+        out.append("stage:           Verifier")
+        out.append("status:          pending")
+        findings = receipt.get("findings", [])
+        if findings:
+            out.append(f"findings:        {', '.join(findings[:3])}")
+        out.append("")
+
+    if hf_status == "done":
+        out.append("This handoff is already completed. No receipt created.")
+        out.append("")
+
+    written = data.get("written_paths", [])
+    if written:
+        out.append("Persisted:")
+        for w in written:
+            out.append(f"  {w}")
+        out.append("")
+
+    if dry_run and hf_status != "done":
+        out.append("Use --write to persist the verifier receipt to disk.")
+    out.append("python3 link.py growth run     -- guided workflow dashboard")
+    out.append("python3 link.py growth handoffs -- view all handoffs")
+
+    print("\n".join(out))
+
+
+# ── execute render orchestrator ─────────────────────────────────────────
+
+
+def render_execute(data: dict[str, Any]) -> None:
+    """Render an execute preview/receipt with rich if available."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_execute_plain(data)
+        return
+    render_execute_with_rich(data)
+
+
 # ── run guide entry point ────────────────────────────────────────────────
 
 
