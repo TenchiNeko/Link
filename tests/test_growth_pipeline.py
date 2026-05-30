@@ -648,6 +648,153 @@ def check_growth_propose_command() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 12. Growth approve command -- approves a proposal by ID
+# ---------------------------------------------------------------------------
+
+def check_growth_approve_command() -> None:
+    """collect_approve_data approves a temp proposal and records the receipt."""
+    import json as _json
+    from link_core.control_plane import write_proposal, load_proposal
+    from link_core.control_plane.link_control_plane_proposals import proposal_storage_dir
+
+    proposal = {
+        "proposal_id": "test-approve-smoke-xyz123",
+        "title": "test approve smoke proposal",
+        "source_path": "research/smoke.md",
+        "source_summary": "Smoke test for approve command.",
+        "extracted_capabilities": ["smoke"],
+        "link_takeaways": ["approve works"],
+        "affected_files": [],
+        "risk_level": "low",
+        "expected_behavior_change": "none",
+        "implementation_plan": ["smoke step"],
+        "verification_commands": ["echo ok"],
+        "rollback_plan": "revert",
+        "recommendation": "accept",
+        "status": "pending",
+        "created_at": "2026-05-29T00:00:00",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        write_proposal(proposal, root=td)
+
+        from link_modes.growth.link_growth_console import collect_approve_data
+
+        data = collect_approve_data("test-approve-smoke-xyz123", root=td)
+        _require(data.get("ok") is True, "approve must set ok=True")
+        _require(data["proposal_id"] == "test-approve-smoke-xyz123",
+                 "approve must return correct proposal_id")
+        _require(data["title"] == "test approve smoke proposal",
+                 "approve must return correct title")
+        _require(data["previous_status"] == "pending",
+                 f"previous_status must be 'pending', got {data['previous_status']!r}")
+        _require(data["new_status"] == "accepted",
+                 f"new_status must be 'accepted', got {data['new_status']!r}")
+        _require(bool(data["path"]), "path must be non-empty")
+        _require(data.get("error") is None, "approve must have no error")
+
+        # Verify on-disk mutation
+        storage = proposal_storage_dir(td)
+        loaded = load_proposal(storage / "test-approve-smoke-xyz123.json")
+        _require(loaded["status"] == "accepted",
+                 f"on-disk status must be 'accepted', got {loaded['status']!r}")
+
+    print("growth approve command OK")
+
+
+# ---------------------------------------------------------------------------
+# 13. Growth reject command -- rejects a proposal by ID, stores reason
+# ---------------------------------------------------------------------------
+
+def check_growth_reject_command() -> None:
+    """collect_reject_data rejects a temp proposal and stores the reason."""
+    from link_core.control_plane import write_proposal, load_proposal
+    from link_core.control_plane.link_control_plane_proposals import proposal_storage_dir
+
+    proposal = {
+        "proposal_id": "test-reject-smoke-abc456",
+        "title": "test reject smoke proposal",
+        "source_path": "research/smoke.md",
+        "source_summary": "Smoke test for reject command.",
+        "extracted_capabilities": ["smoke"],
+        "link_takeaways": ["reject works"],
+        "affected_files": [],
+        "risk_level": "medium",
+        "expected_behavior_change": "none",
+        "implementation_plan": ["smoke step"],
+        "verification_commands": ["echo ok"],
+        "rollback_plan": "revert",
+        "recommendation": "accept",
+        "status": "pending",
+        "created_at": "2026-05-29T00:00:00",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        write_proposal(proposal, root=td)
+
+        from link_modes.growth.link_growth_console import collect_reject_data
+
+        data = collect_reject_data(
+            "test-reject-smoke-abc456",
+            reason="out of scope for current slice",
+            root=td,
+        )
+        _require(data.get("ok") is True, "reject must set ok=True")
+        _require(data["proposal_id"] == "test-reject-smoke-abc456",
+                 "reject must return correct proposal_id")
+        _require(data["title"] == "test reject smoke proposal",
+                 "reject must return correct title")
+        _require(data["previous_status"] == "pending",
+                 f"previous_status must be 'pending', got {data['previous_status']!r}")
+        _require(data["new_status"] == "rejected",
+                 f"new_status must be 'rejected', got {data['new_status']!r}")
+        _require(data.get("reason") == "out of scope for current slice",
+                 f"reason must be passed through, got {data.get('reason')!r}")
+        _require(data.get("error") is None, "reject must have no error")
+
+        # Verify on-disk mutation
+        storage = proposal_storage_dir(td)
+        loaded = load_proposal(storage / "test-reject-smoke-abc456.json")
+        _require(loaded["status"] == "rejected",
+                 f"on-disk status must be 'rejected', got {loaded['status']!r}")
+        _require(loaded.get("rejection_reason") == "out of scope for current slice",
+                 "rejection_reason must be stored on disk")
+
+    print("growth reject command OK")
+
+
+# ---------------------------------------------------------------------------
+# 14. Growth approve/reject -- missing ID fails cleanly
+# ---------------------------------------------------------------------------
+
+def check_growth_approve_reject_missing_id() -> None:
+    """Missing proposal ID returns ok=False with a descriptive error."""
+    from link_modes.growth.link_growth_console import (
+        collect_approve_data,
+        collect_reject_data,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        data_approve = collect_approve_data("nonexistent-id-xyz", root=td)
+        _require(data_approve.get("ok") is False,
+                 "approve with missing ID must set ok=False")
+        _require(isinstance(data_approve.get("error"), str),
+                 "approve with missing ID must set error string")
+        _require("not found" in data_approve.get("error", "").lower(),
+                 "approve error must mention 'not found'")
+
+        data_reject = collect_reject_data("nonexistent-id-xyz", root=td)
+        _require(data_reject.get("ok") is False,
+                 "reject with missing ID must set ok=False")
+        _require(isinstance(data_reject.get("error"), str),
+                 "reject with missing ID must set error string")
+        _require("not found" in data_reject.get("error", "").lower(),
+                 "reject error must mention 'not found'")
+
+    print("growth approve/reject missing ID OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -664,6 +811,9 @@ def main() -> None:
     check_growth_console_data()
     check_growth_proposals_data()
     check_growth_propose_command()
+    check_growth_approve_command()
+    check_growth_reject_command()
+    check_growth_approve_reject_missing_id()
     print("Growth pipeline smoke tests passed")
 
 

@@ -773,17 +773,327 @@ def render_propose_plain(data: dict[str, Any]) -> None:
     print("\n".join(out))
 
 
-# ── propose render orchestrator ──────────────────────────────────────────
+# ── approve / reject entry points ────────────────────────────────────────
 
 
-def render_propose(data: dict[str, Any]) -> None:
-    """Render propose results with rich if available; fall back to plain text."""
+def approve_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth approve <proposal_id>``.
+
+    Sets the proposal status to *accepted* via ``update_proposal_status``.
+    The proposal must already exist in the control-plane registry.
+
+    Flags:
+        --root <path>  Override repo root (for test isolation).
+        --json         Machine-readable output.
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if not args or "--help" in args or "-h" in args:
+        print("Growth approve: accept a pending proposal")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth approve <proposal_id>")
+        print("  python3 link.py growth approve <proposal_id> --json")
+        return 0
+
+    proposal_id = args[0]
+    root_override = _parse_arg(args, "--root")
+    data = collect_approve_data(proposal_id, root=root_override)
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0 if data.get("ok") else 1
+
+    render_decision(data)
+    return 0 if data.get("ok") else 1
+
+
+def reject_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth reject <proposal_id>``.
+
+    Sets the proposal status to *rejected* via ``update_proposal_status``.
+    An optional ``--reason`` flag stores a rejection note.
+    The proposal must already exist in the control-plane registry.
+
+    Flags:
+        --root <path>    Override repo root (for test isolation).
+        --reason <text>  Rejection reason stored on the proposal.
+        --json           Machine-readable output.
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if not args or "--help" in args or "-h" in args:
+        print("Growth reject: reject a pending proposal")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth reject <proposal_id>")
+        print("  python3 link.py growth reject <proposal_id> --reason \"...\"")
+        print("  python3 link.py growth reject <proposal_id> --reason \"...\" --json")
+        return 0
+
+    proposal_id = args[0]
+    reason = _parse_arg(args, "--reason")
+    root_override = _parse_arg(args, "--root")
+    data = collect_reject_data(proposal_id, reason=reason, root=root_override)
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0 if data.get("ok") else 1
+
+    render_decision(data)
+    return 0 if data.get("ok") else 1
+
+
+# ── decision data collectors ─────────────────────────────────────────────
+
+
+def collect_approve_data(
+    proposal_id: str,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Approve a proposal by setting its status to *accepted*.
+
+    Returns a receipt dict with ``ok``, ``proposal_id``, ``title``,
+    ``previous_status``, ``new_status``, ``path``, and ``error`` when
+    the proposal was not found or the update failed.
+    """
+    from pathlib import Path
+
+    from link_core.control_plane import update_proposal_status
+    from link_core.control_plane.link_control_plane_proposals import (
+        load_proposal,
+        proposal_storage_dir,
+    )
+
+    repo_root = Path(root) if root else Path.cwd()
+    storage = proposal_storage_dir(repo_root)
+    prop_path = storage / f"{proposal_id}.json"
+
+    if not prop_path.exists():
+        return _decision_error(proposal_id, str(prop_path), "proposal not found on disk")
+
+    try:
+        previous = load_proposal(prop_path)
+    except Exception as exc:
+        return _decision_error(proposal_id, str(prop_path), f"failed to load proposal: {exc}")
+
+    previous_status = previous.get("status", "?")
+
+    try:
+        updated = update_proposal_status(proposal_id, "accepted", root=repo_root)
+    except Exception as exc:
+        return _decision_error(proposal_id, str(prop_path), f"update_proposal_status failed: {exc}")
+
+    return _decision_receipt(
+        proposal_id=proposal_id,
+        title=updated.get("title", ""),
+        previous_status=previous_status,
+        new_status=updated.get("status", "?"),
+        path=str(prop_path),
+    )
+
+
+def collect_reject_data(
+    proposal_id: str,
+    reason: str | None = None,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Reject a proposal by setting its status to *rejected*.
+
+    When ``reason`` is provided, it is stored as ``rejection_reason``
+    on the proposal via ``write_proposal`` after the status update.
+
+    Returns a receipt dict with ``ok``, ``proposal_id``, ``title``,
+    ``previous_status``, ``new_status``, ``path``, ``reason``, and
+    ``error`` when the proposal was not found or the update failed.
+    """
+    from pathlib import Path
+
+    from link_core.control_plane import update_proposal_status, write_proposal
+    from link_core.control_plane.link_control_plane_proposals import (
+        load_proposal,
+        proposal_storage_dir,
+    )
+
+    repo_root = Path(root) if root else Path.cwd()
+    storage = proposal_storage_dir(repo_root)
+    prop_path = storage / f"{proposal_id}.json"
+
+    if not prop_path.exists():
+        return _decision_error(proposal_id, str(prop_path), "proposal not found on disk")
+
+    try:
+        previous = load_proposal(prop_path)
+    except Exception as exc:
+        return _decision_error(proposal_id, str(prop_path), f"failed to load proposal: {exc}")
+
+    previous_status = previous.get("status", "?")
+
+    try:
+        updated = update_proposal_status(proposal_id, "rejected", root=repo_root)
+    except Exception as exc:
+        return _decision_error(proposal_id, str(prop_path), f"update_proposal_status failed: {exc}")
+
+    if reason:
+        updated["rejection_reason"] = reason
+        write_proposal(updated, root=repo_root)
+
+    return _decision_receipt(
+        proposal_id=proposal_id,
+        title=updated.get("title", ""),
+        previous_status=previous_status,
+        new_status=updated.get("status", "?"),
+        path=str(prop_path),
+        reason=reason,
+    )
+
+
+def _decision_error(
+    proposal_id: str,
+    path: str,
+    error: str,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "proposal_id": proposal_id,
+        "title": "",
+        "previous_status": "",
+        "new_status": "",
+        "path": path,
+        "reason": None,
+        "error": error,
+    }
+
+
+def _decision_receipt(
+    proposal_id: str,
+    title: str,
+    previous_status: str,
+    new_status: str,
+    path: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": True,
+        "proposal_id": proposal_id,
+        "title": title,
+        "previous_status": previous_status,
+        "new_status": new_status,
+        "path": path,
+        "error": None,
+    }
+    if reason:
+        result["reason"] = reason
+    return result
+
+
+# ── decision rich renderer ──────────────────────────────────────────────
+
+
+def render_decision_with_rich(data: dict[str, Any]) -> None:
+    """Render an approve/reject decision receipt using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    ok: bool = data.get("ok", False)
+    proposal_id: str = data.get("proposal_id", "?")
+
+    status_colors = {
+        "accepted": "green", "rejected": "red", "deferred": "magenta",
+        "pending": "yellow", "needs_smaller_plan": "orange1",
+    }
+
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    action = "approved" if data.get("new_status") == "accepted" else "rejected"
+    state_color = "green" if ok else "red"
+    state_label = action.upper() if ok else "FAILED"
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH DECISION[/]",
+        f"[{state_color}]{state_label}[/]",
+    )
+    console.print(header)
+
+    if not ok:
+        error_text = Text()
+        error_text.append(data.get("error", "unknown error"), style="bold red")
+        console.print(Panel(error_text, border_style="red"))
+        console.print(Rule(style="dim"))
+        return
+
+    receipt = Text()
+    receipt.append("proposal_id: ", style="dim")
+    receipt.append(proposal_id, style="bold")
+    receipt.append("\n[dim]title:          [/]")
+    receipt.append(data.get("title", "?"))
+    receipt.append("\n[dim]previous status:[/] ")
+    prev = data.get("previous_status", "?")
+    receipt.append(f"[{status_colors.get(prev, '')}]{prev}[/]")
+    receipt.append("\n[dim]new status:     [/] ")
+    new_s = data.get("new_status", "?")
+    receipt.append(f"[{status_colors.get(new_s, '')}]{new_s}[/]")
+    receipt.append("\n[dim]path:           [/]")
+    receipt.append(data.get("path", "?"))
+
+    reason = data.get("reason")
+    if reason:
+        receipt.append("\n[dim]reason:         [/]")
+        receipt.append(reason)
+
+    console.print(Panel(receipt, border_style="green" if ok else "red"))
+    console.print(Rule(style="dim"))
+    console.print("  [dim]python3 link.py growth status   -- back to status console[/]")
+    console.print("  [dim]python3 link.py growth proposals -- view proposal cards[/]")
+
+
+# ── decision plain fallback ──────────────────────────────────────────────
+
+
+def render_decision_plain(data: dict[str, Any]) -> None:
+    """Render an approve/reject decision receipt using plain print."""
+    ok: bool = data.get("ok", False)
+    action = "APPROVED" if data.get("new_status") == "accepted" else "REJECTED"
+    label = action if ok else "FAILED"
+    out: list[str] = []
+    out.append(f"== LINK GROWTH DECISION ({label}) ==")
+    out.append("")
+
+    if not ok:
+        out.append(f"error: {data.get('error', 'unknown error')}")
+        print("\n".join(out))
+        return
+
+    out.append(f"proposal_id:     {data.get('proposal_id', '?')}")
+    out.append(f"title:           {data.get('title', '?')}")
+    out.append(f"previous status: {data.get('previous_status', '?')}")
+    out.append(f"new status:      {data.get('new_status', '?')}")
+    out.append(f"path:            {data.get('path', '?')}")
+    reason = data.get("reason")
+    if reason:
+        out.append(f"reason:          {reason}")
+    out.append("")
+    out.append("python3 link.py growth status   -- back to status console")
+    out.append("python3 link.py growth proposals -- view proposal cards")
+
+    print("\n".join(out))
+
+
+# ── decision render orchestrator ─────────────────────────────────────────
+
+
+def render_decision(data: dict[str, Any]) -> None:
+    """Render an approve/reject decision receipt with rich if available."""
     try:
         import rich  # noqa: F401
     except ImportError:
-        render_propose_plain(data)
+        render_decision_plain(data)
         return
-    render_propose_with_rich(data)
+    render_decision_with_rich(data)
 
 
 def main(argv: list[str] | None = None) -> int:
