@@ -4629,6 +4629,521 @@ def render_archive_mine_view(data: dict[str, Any]) -> None:
     render_archive_mine_with_rich(data)
 
 
+# ── archive batch mine entry point ──────────────────────────────────────
+_MAX_BATCH_TOP = 10
+_DEFAULT_BATCH_TOP = 3
+
+
+def archive_batch_mine_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth archive-batch-mine --top <N>``.
+
+    Batch-mines the top N ranked archive queue sources into Growth proposals.
+    Defaults to top 3.  Hard cap at 10.  Dry-run by default; ``--write``
+    persists all proposals to the control-plane registry.
+
+    No archive extraction.  No queue mutation.  Per-source failures are
+    recorded but do not stop the batch.
+
+    Flags:
+        --top <N>   Number of top-ranked sources to mine (default 3, max 10).
+        --write     Persist proposals to disk.
+        --json      Machine-readable output.
+        --root <path>  Override repo root (for test isolation).
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if "--help" in args or "-h" in args:
+        print("Growth archive-batch-mine: batch-mine top ranked sources")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth archive-batch-mine")
+        print("  python3 link.py growth archive-batch-mine --top <N>")
+        print("  python3 link.py growth archive-batch-mine --top <N> --write")
+        print("  python3 link.py growth archive-batch-mine --top <N> --json")
+        print("")
+        print("Mines the top N sources from the archive queue into proposals.")
+        print(f"Default top is {_DEFAULT_BATCH_TOP}.  Hard cap at {_MAX_BATCH_TOP}.")
+        print("Dry-run by default.  No files are written without --write.")
+        return 0
+
+    top_arg = _parse_arg(args, "--top")
+    top = _resolve_batch_top(top_arg)
+
+    if isinstance(top, str):
+        print(f"error: {top}", file=sys.stderr)
+        print("Run 'python3 link.py growth archive-batch-mine --help' for usage.",
+              file=sys.stderr)
+        return 1
+
+    write = "--write" in args
+    root_override = _parse_arg(args, "--root")
+    data = collect_archive_batch_mine(top=top, write=write, root=root_override,
+                                      top_raw=top_arg)
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0 if data.get("ok") else 1
+
+    render_archive_batch_mine_view(data)
+    return 0 if data.get("ok") else 1
+
+
+def _resolve_batch_top(top_arg: str | None) -> int | str:
+    """Parse and validate the --top argument. Returns int or error string."""
+    if top_arg is None:
+        return _DEFAULT_BATCH_TOP
+    try:
+        n = int(top_arg)
+    except ValueError:
+        return f"top must be an integer, got {top_arg!r}"
+    if n < 1:
+        return f"top must be >= 1, got {n}"
+    return n
+
+
+def collect_archive_batch_mine(
+    top: int = _DEFAULT_BATCH_TOP,
+    write: bool = False,
+    root: str | None = None,
+    top_raw: str | None = None,
+) -> dict[str, Any]:
+    """Load the archive queue and batch-mine the top N ranked sources.
+
+    Calls ``collect_propose_data`` on each source's ``source_path``.
+    Per-source failures are recorded but do not stop the batch.  Proposals
+    are deduplicated by ``proposal_id`` across all sources.
+
+    Args:
+        top: Number of top-ranked sources to mine (clamped to _MAX_BATCH_TOP).
+        write: Forwarded to collect_propose_data for each source.
+        root: Override repo root.
+        top_raw: Original --top arg value (for warning messages).
+
+    Returns a dict with batch summary, per-source results, deduplicated
+    proposals, and ``written_paths``.
+    """
+    from pathlib import Path
+
+    repo_root = Path(root) if root else Path.cwd()
+
+    if top < 1:
+        return _batch_error(f"top must be >= 1, got {top}", top=top)
+
+    effective_top = min(top, _MAX_BATCH_TOP)
+    warnings: list[str] = []
+    if top > _MAX_BATCH_TOP:
+        warnings.append(
+            f"top {top} capped at {_MAX_BATCH_TOP} (hard limit)"
+        )
+
+    try:
+        queue_data = collect_archive_queue(root=str(repo_root))
+    except Exception as exc:
+        return _batch_error(f"failed to load archive queue: {exc}",
+                            top=effective_top, warnings=warnings)
+
+    q_warnings = queue_data.get("warnings", [])
+    for w in q_warnings:
+        warnings.append(w.get("detail", w.get("type", "?")))
+
+    source_queue = queue_data.get("source_queue", [])
+    if not source_queue:
+        return _batch_empty(top=effective_top, warnings=warnings)
+
+    selected = source_queue[:effective_top]
+
+    per_source_results: list[dict] = []
+    all_proposals: list[dict] = []
+    all_written: list[str] = []
+    processed_count = 0
+    failed_count = 0
+    candidate_total = 0
+    proposal_total = 0
+
+    for entry in selected:
+        source_path = entry.get("source_path", "")
+        if not source_path:
+            per_source_results.append(_ps_result(entry, False, 0, 0,
+                                                  error="no source_path in queue entry"))
+            failed_count += 1
+            continue
+
+        try:
+            propose_data = collect_propose_data(source_path, write=write, root=str(repo_root))
+        except Exception as exc:
+            per_source_results.append(_ps_result(entry, False, 0, 0,
+                                                  error=str(exc)))
+            failed_count += 1
+            continue
+
+        ps_ok = propose_data.get("source_exists", False)
+        ps_cand = propose_data.get("candidate_count", 0)
+        ps_prop = propose_data.get("proposal_count", 0)
+        ps_error = None if ps_ok else (propose_data.get("error") or "source not found or no candidates")
+
+        if ps_ok:
+            processed_count += 1
+            all_proposals.extend(propose_data.get("proposals", []))
+            all_written.extend(propose_data.get("written_paths", []))
+        else:
+            failed_count += 1
+
+        candidate_total += ps_cand
+        proposal_total += ps_prop
+
+        per_source_results.append(_ps_result(entry, ps_ok, ps_cand, ps_prop,
+                                              error=ps_error))
+
+    # Deduplicate proposals by proposal_id (first occurrence wins)
+    seen_ids: set[str] = set()
+    unique = []
+    for p in all_proposals:
+        pid = p.get("proposal_id", "")
+        if pid and pid not in seen_ids:
+            seen_ids.add(pid)
+            unique.append(p)
+
+    return {
+        "ok": True,
+        "top": effective_top,
+        "top_raw": top_raw,
+        "queue_count": len(source_queue),
+        "selected_count": len(selected),
+        "processed_count": processed_count,
+        "failed_count": failed_count,
+        "candidate_count_total": candidate_total,
+        "proposal_count_total": proposal_total,
+        "unique_proposal_count": len(unique),
+        "per_source_results": per_source_results,
+        "proposals": unique,
+        "written_paths": all_written,
+        "dry_run": not write,
+        "next_commands": [
+            "python3 link.py growth proposals",
+            "python3 link.py growth approve <proposal_id>",
+            "python3 link.py growth run",
+        ],
+        "warnings": warnings if warnings else [],
+        "error": None,
+    }
+
+
+def _ps_result(
+    entry: dict, ok: bool, cand: int, prop: int, error: str | None = None,
+) -> dict:
+    return {
+        "rank": entry.get("rank", 0),
+        "source_path": entry.get("source_path", ""),
+        "queue_score": entry.get("score", 0),
+        "queue_reason": entry.get("reason", ""),
+        "ok": ok,
+        "candidate_count": cand,
+        "proposal_count": prop,
+        "error": error,
+    }
+
+
+def _batch_error(
+    error: str, top: int = 0, warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "top": top,
+        "top_raw": None,
+        "queue_count": 0,
+        "selected_count": 0,
+        "processed_count": 0,
+        "failed_count": 0,
+        "candidate_count_total": 0,
+        "proposal_count_total": 0,
+        "unique_proposal_count": 0,
+        "per_source_results": [],
+        "proposals": [],
+        "written_paths": [],
+        "dry_run": True,
+        "next_commands": [
+            "python3 link.py growth archive-queue",
+            "python3 link.py growth run",
+        ],
+        "warnings": warnings or [],
+        "error": error,
+    }
+
+
+def _batch_empty(
+    top: int = 0, warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "top": top,
+        "top_raw": None,
+        "queue_count": 0,
+        "selected_count": 0,
+        "processed_count": 0,
+        "failed_count": 0,
+        "candidate_count_total": 0,
+        "proposal_count_total": 0,
+        "unique_proposal_count": 0,
+        "per_source_results": [],
+        "proposals": [],
+        "written_paths": [],
+        "dry_run": True,
+        "next_commands": [
+            "python3 link.py growth archive-queue",
+            "python3 link.py growth run",
+        ],
+        "warnings": warnings or [],
+        "error": "no queue entries available",
+    }
+
+
+# ── batch mine rich renderer ────────────────────────────────────────────
+
+
+def render_archive_batch_mine_with_rich(data: dict[str, Any]) -> None:
+    """Render a batch mine result using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    ok: bool = data.get("ok", True)
+    dry_run: bool = data.get("dry_run", True)
+    top: int = data.get("top", 0)
+    selected: int = data.get("selected_count", 0)
+    processed: int = data.get("processed_count", 0)
+    failed: int = data.get("failed_count", 0)
+    cand_total: int = data.get("candidate_count_total", 0)
+    prop_total: int = data.get("proposal_count_total", 0)
+    uniq: int = data.get("unique_proposal_count", 0)
+    per_source: list = data.get("per_source_results", [])
+    proposals: list = data.get("proposals", [])
+    written: list = data.get("written_paths", [])
+    warnings: list = data.get("warnings", [])
+
+    status_colors = {
+        "pending": "yellow", "accepted": "green", "rejected": "red",
+        "deferred": "magenta", "converted_to_patch": "cyan",
+        "needs_smaller_plan": "orange1",
+    }
+    risk_colors = {"low": "green", "medium": "yellow", "high": "red"}
+
+    # ── header ──
+    header = Table.grid(padding=(0, 1))
+    header.add_column(justify="left")
+    header.add_column(justify="right")
+    if not ok:
+        label, color = "ERROR", "red"
+    elif dry_run:
+        label, color = "DRY RUN", "yellow"
+    else:
+        label, color = "WRITTEN", "bold green"
+    header.add_row(
+        f"[bold bright_cyan]LINK GROWTH BATCH MINE[/]",
+        f"[{color}]{label}[/]  [dim]top {top}[/]",
+    )
+    console.print(header)
+
+    # ── warnings ──
+    for w in warnings:
+        console.print(Panel(Text(str(w), style="yellow"), border_style="yellow"))
+
+    if not ok:
+        error_text = Text()
+        error_text.append(data.get("error", "unknown error"), style="bold red")
+        console.print(Panel(error_text, border_style="red"))
+        console.print(Rule(style="dim"))
+        return
+
+    # ── empty state ──
+    if selected == 0:
+        empty = Text()
+        empty.append("\nNo queue entries available.\n\n", style="dim")
+        empty.append("Run archive-queue first:\n", style="dim")
+        empty.append("  python3 link.py growth archive-queue\n", style="dim")
+        empty.append("\n  [dim]python3 link.py growth run  -- guided workflow[/]\n", style="dim")
+        console.print(Panel(empty, border_style="dim"))
+        console.print(Rule(style="dim"))
+        return
+
+    # ── summary ──
+    summary = Text()
+    summary.append(
+        f"[dim]selected: [/][bold]{selected}[/]  "
+        f"[dim]processed: [/][green]{processed}[/]  "
+        f"[dim]failed: [/][red]{failed}[/]"
+    )
+    summary.append(
+        f"\n[dim]candidates: [/]{cand_total}  "
+        f"[dim]proposals: [/]{prop_total}  "
+        f"[dim]unique: [/][bold]{uniq}[/]"
+    )
+    console.print(Panel(summary, title="SUMMARY", border_style="dim"))
+
+    # ── per-source results ──
+    if per_source:
+        ps_text = Text()
+        for ps in per_source:
+            mark = "[green]\u2713[/]" if ps.get("ok") else "[red]\u2717[/]"
+            ps_text.append(
+                f"{mark} [bold]#{ps.get('rank', '?')}[/]  "
+                f"score:{ps.get('queue_score', '?')}  "
+                f"[dim]{ps.get('queue_reason', '?')[:60]}[/]"
+            )
+            if ps.get("ok"):
+                ps_text.append(
+                    f"\n          [dim]({ps.get('candidate_count')} candidates, "
+                    f"{ps.get('proposal_count')} proposals)[/]"
+                )
+            else:
+                ps_text.append(
+                    f"\n          [red]error: {ps.get('error', 'failed')}[/]"
+                )
+            ps_text.append("\n")
+        console.print(Panel(ps_text, title="PER-SOURCE RESULTS", border_style="dim"))
+
+    # ── deduplicated proposals (compact) ──
+    if proposals:
+        console.print(Rule(style="dim"))
+        for i, p in enumerate(proposals[:10]):
+            card = Text()
+            status = p.get("status", "?")
+            risk = p.get("risk_level", "?")
+            sc = status_colors.get(status, "")
+            rc = risk_colors.get(risk, "")
+            card.append(
+                f"[bold]{p.get('title', '(untitled)')}[/]  "
+                f"[{sc}]STATUS: {status}[/]  "
+                f"[{rc}]RISK: {risk}[/]"
+            )
+            summary_text = p.get("source_summary", "")
+            if summary_text and len(summary_text) > 100:
+                summary_text = summary_text[:97] + "..."
+            if summary_text:
+                card.append(f"\n[dim]{summary_text}[/]")
+            panel_title = f"PROPOSAL [{i + 1}/{min(len(proposals), 10)}]  {p.get('proposal_id', '?')[:24]}"
+            console.print(Panel(card, title=panel_title, border_style="dim"))
+        if len(proposals) > 10:
+            console.print(f"  [dim]... and {len(proposals) - 10} more[/]")
+
+    # ── written ──
+    if written:
+        wrote = Text()
+        wrote.append(f"Written {len(written)} proposal(s):\n", style="bold green")
+        for wp in written[:5]:
+            wrote.append(f"  {wp}\n", style="dim")
+        if len(written) > 5:
+            wrote.append(f"  ... and {len(written) - 5} more\n", style="dim")
+        console.print(Panel(wrote, title="PERSISTED", border_style="dim green"))
+
+    # ── next ──
+    next_cmds = data.get("next_commands", [])
+    cmd_text = Text()
+    cmd_text.append("Next:\n", style="bold")
+    for nc in next_cmds:
+        cmd_text.append(f"  $ {nc}\n", style="dim")
+
+    console.print(Rule(style="dim"))
+    console.print(Panel(cmd_text, title="SUGGESTED NEXT STEPS", border_style="green"))
+    console.print("  [dim]python3 link.py growth run  -- guided workflow dashboard[/]")
+
+
+# ── batch mine plain fallback ───────────────────────────────────────────
+
+
+def render_archive_batch_mine_plain(data: dict[str, Any]) -> None:
+    """Render a batch mine result using plain print."""
+    ok: bool = data.get("ok", True)
+    dry_run: bool = data.get("dry_run", True)
+    top: int = data.get("top", 0)
+    selected: int = data.get("selected_count", 0)
+    processed: int = data.get("processed_count", 0)
+    failed: int = data.get("failed_count", 0)
+    cand_total: int = data.get("candidate_count_total", 0)
+    prop_total: int = data.get("proposal_count_total", 0)
+    uniq: int = data.get("unique_proposal_count", 0)
+    per_source: list = data.get("per_source_results", [])
+    proposals: list = data.get("proposals", [])
+    written: list = data.get("written_paths", [])
+    warnings: list = data.get("warnings", [])
+    next_cmds: list = data.get("next_commands", [])
+
+    label = "ERROR" if not ok else ("DRY RUN" if dry_run else "WRITTEN")
+    out: list[str] = []
+    out.append(f"== LINK GROWTH BATCH MINE ({label}) top {top} ==")
+    out.append("")
+
+    for w in warnings:
+        out.append(f"WARNING: {w}")
+
+    if not ok:
+        out.append(f"error: {data.get('error', 'unknown error')}")
+        print("\n".join(out))
+        return
+
+    if selected == 0:
+        out.append("No queue entries available.")
+        out.append("Run: python3 link.py growth archive-queue")
+        out.append("")
+        out.append("python3 link.py growth run  -- guided workflow")
+        print("\n".join(out))
+        return
+
+    out.append(f"selected: {selected}  processed: {processed}  failed: {failed}")
+    out.append(f"candidates: {cand_total}  proposals: {prop_total}  unique: {uniq}")
+    out.append("")
+
+    for ps in per_source:
+        mark = "OK" if ps.get("ok") else "FAIL"
+        out.append(
+            f"[{mark}] #{ps.get('rank', '?')}  score:{ps.get('queue_score', '?')}  "
+            f"{ps.get('queue_reason', '?')[:60]}"
+        )
+        if ps.get("ok"):
+            out.append(
+                f"    ({ps.get('candidate_count')} candidates, "
+                f"{ps.get('proposal_count')} proposals)"
+            )
+        else:
+            out.append(f"    error: {ps.get('error', 'failed')}")
+        out.append("")
+
+    if proposals:
+        out.append(f"--- DEDUPLICATED PROPOSALS ({uniq} unique) ---")
+        for i, p in enumerate(proposals[:10]):
+            out.append(
+                f"  {i + 1}. {p.get('title', '?')}  "
+                f"STATUS:{p.get('status', '?')}  RISK:{p.get('risk_level', '?')}"
+            )
+        out.append("")
+
+    if written:
+        out.append(f"Written {len(written)} proposal(s).")
+        out.append("")
+
+    out.append("-- SUGGESTED NEXT STEPS --")
+    for nc in next_cmds:
+        out.append(f"  $ {nc}")
+    out.append("")
+    out.append("python3 link.py growth run  -- guided workflow dashboard")
+    print("\n".join(out))
+
+
+# ── batch mine render orchestrator ──────────────────────────────────────
+
+
+def render_archive_batch_mine_view(data: dict[str, Any]) -> None:
+    """Render batch mine with rich if available; fall back to plain."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_archive_batch_mine_plain(data)
+        return
+    render_archive_batch_mine_with_rich(data)
+
+
 # ── run guide entry point ────────────────────────────────────────────────
 
 

@@ -403,6 +403,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import archive_mine_main as _growth_archive_mine_main
 
         return _growth_archive_mine_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "archive-batch-mine":
+        from link_modes.growth.link_growth_console import archive_batch_mine_main as _growth_archive_batch_mine_main
+
+        return _growth_archive_batch_mine_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "run":
         from link_modes.growth.link_growth_console import run_main as _growth_run_main
 
@@ -423,6 +427,7 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  archive-catalog    Catalog extracted research contents")
         print("  archive-queue      Rank extracted sources for mining")
         print("  archive-mine       Mine a ranked archive source into proposals")
+        print("  archive-batch-mine Batch-mine top ranked sources")
         print("  run                Guided Growth workflow dashboard")
         return 0
     print(f"growth: unknown subcommand: {subcommand}", file=sys.stderr)

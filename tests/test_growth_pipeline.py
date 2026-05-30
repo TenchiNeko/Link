@@ -2152,6 +2152,198 @@ def check_growth_archive_mine_errors() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 41. Growth archive-batch-mine -- dry-run processes top 3
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_batch_mine_dry_run() -> None:
+    """archive-batch-mine dry-run processes top N sources, writes nothing."""
+    import json as _json
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import (
+        collect_archive_batch_mine, _CATALOG_OUTPUT_DIR,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        catalogs_dir = root / _CATALOG_OUTPUT_DIR
+        catalogs_dir.mkdir(parents=True)
+
+        # Create two sources with mining-worthy content
+        for name in ("source_a", "source_b"):
+            ext = root / "extracted" / name
+            ext.mkdir(parents=True)
+            (ext / "README.md").write_text(
+                "evidence citation source research document\n"
+                "missing gap upgrade not in link improve\n"
+                "proposal approval candidate human oversight\n",
+                encoding="utf-8",
+            )
+            catalog = {
+                "catalog_version": "link-archive-catalog-v1",
+                "source_name": name,
+                "source_path": str(ext),
+                "candidate_research_sources": [
+                    {"path": "README.md", "type": "readme_file", "size_bytes": 200},
+                ],
+                "important_files": [
+                    {"path": "README.md", "type": "readme", "size_human": "200B"},
+                ],
+                "file_type_counts": {"markdown": 1},
+                "top_level_dirs": [],
+                "likely_project_roots": [],
+                "recommendations": [],
+                "safety_flags": [],
+                "total_bytes": 200,
+                "total_human": "200B",
+                "file_count": 1,
+                "directory_count": 0,
+                "skipped_count": 0,
+                "skipped_details": {},
+            }
+            (catalogs_dir / f"{name}.json").write_text(
+                _json.dumps(catalog), encoding="utf-8"
+            )
+
+        data = collect_archive_batch_mine(top=2, write=False, root=str(root))
+        _require(data.get("ok") is True, "batch dry-run must set ok=True")
+        _require(data.get("dry_run") is True,
+                 "batch dry-run must set dry_run=True")
+        _require(data.get("selected_count") == 2,
+                 "selected_count must be 2")
+        _require(data.get("processed_count") == 2,
+                 "all sources must be processed")
+        _require(data.get("failed_count") == 0,
+                 "no sources should fail")
+        _require(data.get("candidate_count_total", 0) >= 2,
+                 "must have candidates across both sources")
+        _require(data.get("proposal_count_total", 0) >= 2,
+                 "must have proposals across both sources")
+        _require(len(data.get("written_paths", [])) == 0,
+                 "dry-run must have empty written_paths")
+
+        per_source = data.get("per_source_results", [])
+        _require(len(per_source) == 2,
+                 "per_source_results must have 2 entries")
+        for ps in per_source:
+            _require(isinstance(ps.get("ok"), bool),
+                     "per-source must have ok field")
+            _require(ps.get("queue_score", -1) >= 0,
+                     "per-source must have queue_score >= 0")
+
+        # Check deduplication: both sources have same content so proposals overlap
+        uq = data.get("unique_proposal_count", 0)
+        pr = data.get("proposal_count_total", 0)
+        _require(uq <= pr,
+                 f"unique proposals ({uq}) must be <= raw total ({pr})")
+
+        # Verify no proposal files written
+        prop_dir = root / ".agents/control_plane/proposals"
+        p_files = list(prop_dir.glob("*.json")) if prop_dir.exists() else []
+        _require(len(p_files) == 0,
+                 f"dry-run must not write proposal files, found {len(p_files)}")
+
+    print("growth archive-batch-mine dry-run OK")
+
+
+# ---------------------------------------------------------------------------
+# 42. Growth archive-batch-mine -- top clamping
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_batch_mine_top_clamp() -> None:
+    """archive-batch-mine clamps top > 10 and rejects invalid values."""
+    from link_modes.growth.link_growth_console import (
+        collect_archive_batch_mine, _MAX_BATCH_TOP,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        data_top15 = collect_archive_batch_mine(top=15, write=False, root=td)
+        _require(data_top15.get("top") == _MAX_BATCH_TOP,
+                 f"top 15 must be clamped to {_MAX_BATCH_TOP}, got {data_top15.get('top')}")
+        warnings = data_top15.get("warnings", [])
+        cap_warnings = [w for w in warnings if "capped" in w.lower()]
+        _require(len(cap_warnings) >= 1, "must have capped warning")
+
+        data_top0 = collect_archive_batch_mine(top=0, write=False, root=td)
+        _require(data_top0.get("ok") is False,
+                 "top 0 must set ok=False")
+        _require("must be >= 1" in data_top0.get("error", "").lower(),
+                 "top 0 error must mention 'must be >= 1'")
+
+    print("growth archive-batch-mine top clamp OK")
+
+
+# ---------------------------------------------------------------------------
+# 43. Growth archive-batch-mine -- partial failure
+# ---------------------------------------------------------------------------
+
+def check_growth_archive_batch_mine_partial_failure() -> None:
+    """archive-batch-mine continues on per-source failures."""
+    import json as _json
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import (
+        collect_archive_batch_mine, _CATALOG_OUTPUT_DIR,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        catalogs_dir = root / _CATALOG_OUTPUT_DIR
+        catalogs_dir.mkdir(parents=True)
+
+        # Source 1: valid
+        ext1 = root / "extracted/good_source"
+        ext1.mkdir(parents=True)
+        (ext1 / "README.md").write_text(
+            "evidence citation source research document\n"
+            "missing gap upgrade not in link improve\n",
+            encoding="utf-8",
+        )
+
+        # Source 2: empty content — likely produces zero candidates
+        ext2 = root / "extracted/empty_source"
+        ext2.mkdir(parents=True)
+        (ext2 / "README.md").write_text("just random text nothing relevant", encoding="utf-8")
+
+        for name, ext_path in [("good_source", ext1), ("empty_source", ext2)]:
+            catalog = {
+                "catalog_version": "link-archive-catalog-v1",
+                "source_name": name,
+                "source_path": str(ext_path),
+                "candidate_research_sources": [
+                    {"path": "README.md", "type": "readme_file", "size_bytes": 50},
+                ],
+                "important_files": [],
+                "file_type_counts": {},
+                "top_level_dirs": [],
+                "likely_project_roots": [],
+                "recommendations": [],
+                "safety_flags": [],
+                "total_bytes": 50,
+                "total_human": "50B",
+                "file_count": 1,
+                "directory_count": 0,
+                "skipped_count": 0,
+                "skipped_details": {},
+            }
+            (catalogs_dir / f"{name}.json").write_text(
+                _json.dumps(catalog), encoding="utf-8"
+            )
+
+        data = collect_archive_batch_mine(top=2, write=False, root=str(root))
+        _require(data.get("ok") is True,
+                 "batch must be ok even with partial failure")
+        _require(data.get("processed_count", 0) >= 1,
+                 "at least one source must be processed")
+        _require(data.get("selected_count") == 2,
+                 "both sources must be selected")
+
+        per_source = data.get("per_source_results", [])
+        _require(len(per_source) == 2,
+                 "per_source_results must have 2 entries")
+
+    print("growth archive-batch-mine partial failure OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -2197,6 +2389,9 @@ def main() -> None:
     check_growth_archive_mine_dry_run_rank()
     check_growth_archive_mine_dry_run_source()
     check_growth_archive_mine_errors()
+    check_growth_archive_batch_mine_dry_run()
+    check_growth_archive_batch_mine_top_clamp()
+    check_growth_archive_batch_mine_partial_failure()
     print("Growth pipeline smoke tests passed")
 
 
