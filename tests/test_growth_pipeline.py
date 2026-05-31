@@ -2528,6 +2528,13 @@ def check_growth_archive_code_brief_dry_run() -> None:
         preview = data.get("brief_preview", [])
         _require(len(preview) >= 1, "dry-run must populate brief_preview")
 
+        # Verify Growth Upgrade Candidates section is present
+        preview_text = "\n".join(preview)
+        _require("## Growth Upgrade Candidates" in preview_text,
+                 "dry-run brief must include Growth Upgrade Candidates section")
+        _require("### UPGRADE CANDIDATE:" in preview_text,
+                 "dry-run brief must include at least one UPGRADE CANDIDATE block")
+
         # Verify no files written
         briefs_dir = root / "research/_catalog/code_briefs"
         _require(not briefs_dir.exists(),
@@ -2586,7 +2593,25 @@ def check_growth_archive_code_brief_write() -> None:
         _require("Tool" in content or "tool" in content.lower(),
                  "brief should detect tool patterns")
 
-    print("growth archive-code-brief write OK")
+        # Verify Growth Upgrade Candidates section with structured blocks
+        _require("## Growth Upgrade Candidates" in content,
+                 "brief must include Growth Upgrade Candidates section")
+        _require("### UPGRADE CANDIDATE:" in content,
+                 "brief must include at least one UPGRADE CANDIDATE block")
+        _require("**Problem:**" in content,
+                 "candidate block must include Problem field")
+        _require("**Evidence from source:**" in content,
+                 "candidate block must include Evidence from source field")
+        _require("**Pattern observed:**" in content,
+                 "candidate block must include Pattern observed field")
+        _require("**Proposed Link upgrade:**" in content,
+                 "candidate block must include Proposed Link upgrade field")
+        _require("**Risk level:**" in content,
+                 "candidate block must include Risk level field")
+        _require("**Acceptance test idea:**" in content,
+                 "candidate block must include Acceptance test idea field")
+
+        # Verify no proposals were written
 
 
 # ---------------------------------------------------------------------------

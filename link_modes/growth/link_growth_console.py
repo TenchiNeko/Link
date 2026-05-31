@@ -5910,7 +5910,7 @@ def collect_code_brief(
         "total_bytes_read": total_bytes,
         "total_human": _human_size(total_bytes),
         "brief_path": brief_path,
-        "brief_preview": brief_md.split("\n")[:25],
+        "brief_preview": brief_md.split("\n")[:60],
         "dry_run": not write,
         "next_commands": [
             f"python3 link.py growth archive-mine --source {brief_path}" if brief_path else (
@@ -6032,6 +6032,24 @@ def _build_code_brief(
 
     lines.append("---")
     lines.append("")
+    lines.append("## Growth Upgrade Candidates")
+    lines.append("")
+
+    text_lower = all_text.lower()
+    sig_text = " ".join(signals).lower()
+    candidates = _build_upgrade_candidates(
+        source_name, text_lower, all_text, files_read, signals, sig_text,
+    )
+    for cand in candidates:
+        lines.append(cand)
+        lines.append("")
+
+    if not candidates:
+        lines.append("No upgrade candidates generated.")
+
+    lines.append("")
+    lines.append("---")
+    lines.append("")
     lines.append("## Possible Link Upgrade Ideas")
     lines.append("")
 
@@ -6044,6 +6062,283 @@ def _build_code_brief(
 
     lines.append("")
     return "\n".join(lines)
+
+
+def _build_upgrade_candidates(
+    source_name: str,
+    text_lower: str,
+    all_text: str,
+    files_read: list[dict],
+    signals: list[str],
+    sig_text: str,
+) -> list[str]:
+    """Build miner-compatible upgrade candidate blocks."""
+    candidates: list[str] = []
+
+    def _add(title: str, problem: str, evidence: str, pattern: str,
+             upgrade: str, files_subsystem: str, risk: str, test_idea: str) -> None:
+        # Collect file paths for evidence
+        file_list = "\n".join(
+            f"- `{f['path']}`" for f in files_read
+        ) if files_read else f"- `{source_name}`"
+
+        candidates.append(
+            f"### UPGRADE CANDIDATE: {title}\n\n"
+            f"**Problem:**\n{problem}\n\n"
+            f"**Evidence from source:**\n{file_list}\n{evidence}\n\n"
+            f"**Pattern observed:**\n{pattern}\n\n"
+            f"**Proposed Link upgrade:**\n{upgrade}\n\n"
+            f"**Likely Link files or subsystem:**\n{files_subsystem}\n\n"
+            f"**Risk level:**\n{risk}\n\n"
+            f"**Acceptance test idea:**\n{test_idea}\n"
+        )
+
+    has_branch = "branch" in text_lower or "fork" in text_lower
+    has_transcript = any("transcript" in s.lower() for s in signals)
+    has_session = any("session" in s.lower() for s in signals)
+    has_storage = any("storage" in s.lower() for s in signals)
+    has_content_replacement = "contentreplacement" in text_lower or "content replacement" in text_lower
+    has_sandbox = any(k in text_lower for k in ("sandbox", "isolat"))
+    has_worker = any("worker" in s.lower() for s in signals)
+    has_receipt = any("receipt" in s.lower() for s in signals)
+    has_verifier = any("verif" in s.lower() for s in signals)
+    has_router = any(k in text_lower for k in ("router", "routing", "dispatch"))
+    has_pipeline = any(k in text_lower for k in ("pipeline", "workflow"))
+    has_permission = any(k in text_lower for k in ("permission", "auth"))
+    has_factory = any(k in text_lower for k in ("factory", "delegate", "provider"))
+
+    # 1. Branch/fork traceability
+    if has_branch and (has_transcript or has_session):
+        _add(
+            "Add branch/fork traceability receipts to Link sessions",
+            "Link can create independent runs but lacks a first-class way to "
+            "preserve fork lineage between related sessions. Without traceability, "
+            "branching a session means starting a new run with no provenance back "
+            "to the original context.",
+            "Source code implements transcript copy logic that preserves message "
+            "history, rewrites session identifiers, and stores fork metadata. "
+            "The command supports aliases for branch/fork terminology.",
+            "Session branching with transcript preservation, session ID rewriting, "
+            "and fork source metadata capture.",
+            "Link should maintain a fork lineage receipt that records the parent "
+            "session UUID, the fork point (message index or timestamp), and "
+            "whether each child session diverged. This enables safe collaboration "
+            "traces without losing provenance across the Link session graph.",
+            "link_core/context/ or link_core/agent_memory/ — session management "
+            "and conversation state layer.",
+            "low",
+            "Branch a Link run session and verify both parent and child runs "
+            "contain reciprocal cross-reference metadata in their execution receipts.",
+        )
+
+    # 2. Content replacement preservation
+    if has_content_replacement and has_transcript:
+        _add(
+            "Preserve content replacement history across session forks",
+            "When a session is forked, inline content edits and replacements "
+            "made during the original session may be lost. Link's upgrade "
+            "candidate pipeline loses evidence of prior edit decisions when "
+            "content is replaced without an audit trail.",
+            "Source code includes ContentReplacementEntry type definitions "
+            "with fields tracking original and replacement content within "
+            "transcript entries. These types describe a structured record "
+            "of content edits but may not survive session forks.",
+            "Content replacement tracking with structured entry types, "
+            "transcript serialization, and fork/copy logic.",
+            "Link should track content replacement lineage by preserving "
+            "ContentReplacementEntry records in the fork lineage receipt. "
+            "This ensures audit trails for inline content edits survive "
+            "session branching and can be used for proposal evidence tracing.",
+            "link_core/context/ or link_core/receipts/ — evidence tracking "
+            "and execution receipt layer.",
+            "low",
+            "Create a session with multiple content replacements, fork it, "
+            "then verify the forked session still lists all original "
+            "replacement entries with their source session IDs.",
+        )
+
+    # 3. Session transcript preservation
+    if has_session and has_storage:
+        _add(
+            "Add safe transcript copy with traceability metadata for Link sessions",
+            "Link produces execution transcripts but does not currently store "
+            "a normalized session transcript with provenance metadata such as "
+            "the originating session, copy timestamp, and fork depth. This "
+            "gap creates a missing audit trail for research mining.",
+            "Source code copies transcript entries, rewrites session IDs, "
+            "and serializes the transcript to persistent storage. The code "
+            "includes structured logging and analytics event hooks.",
+            "Structured session storage with transcript serialization, "
+            "session ID rewriting, and log event publishing.",
+            "Link should store a complete session transcript snapshot at fork "
+            "points, along with provenance metadata (parent session, fork "
+            "depth, copy timestamp). This gives Growth mode a recoverable "
+            "research source for auditing and evidence.",
+            "link_core/receipts/ or link_core/memory/ — execution evidence "
+            "and session persistence layer.",
+            "low",
+            "Create a session, generate 10 messages, fork it. Verify the "
+            "fork point transcript is persisted and contains a parent_session "
+            "field with the original session UUID.",
+        )
+
+    # 4. Branch title collision
+    if has_branch and has_session:
+        _add(
+            "Add unique branch title collision handling with deduplication",
+            "Link currently creates proposals with candidate_id hashes that "
+            "are deduplicated by title. When multiple sessions fork from the "
+            "same source, collision in branch naming could lose distinct "
+            "upgrade candidates if titles are identical.",
+            "Source code accepts an optional [name] argument for branch "
+            "naming but does not validate uniqueness. The command description "
+            "mentions 'Create a branch of the current conversation at this "
+            "point' without collision handling.",
+            "Branch naming with optional user-defined titles, no uniqueness "
+            "validation, and conversation snapshot semantics.",
+            "Link should auto-generate branch titles when none are provided "
+            "(e.g., timestamp-based or UUID-suffixed) and validate uniqueness "
+            "when a custom title is given. This prevents silent overwrites "
+            "of distinct proposal upgrades.",
+            "link_core/context/ or link.py CLI — session management and "
+            "command dispatch layer.",
+            "low",
+            "Create two branches with the same custom title from the same "
+            "session and verify the second branch receives a warning or "
+            "auto-suffix to avoid collision.",
+        )
+
+    # 5. Sandbox worker isolation
+    if has_sandbox and has_worker:
+        _add(
+            "Add sandboxed worker isolation for safe patch executor handoff",
+            "Link's Growth pipeline can generate patch plans and worker "
+            "handoffs, but the execution gate around applying patches is not "
+            "yet sandboxed by default. Workers could benefit from isolation "
+            "patterns found in existing safe-execution systems.",
+            "Source code imports sandbox workers with isolation flags, "
+            "wraps executor logic in sandbox containers, and verifies "
+            "receipts after execution. The pattern demonstrates worker "
+            "isolation with verification gating.",
+            "Sandboxed worker execution with isolation flags, receipt "
+            "verification, and pipeline orchestration.",
+            "Link should extend its worker handoff executor to support a "
+            "sandbox profile that restricts file-system writes, enforces "
+            "allowed_files lists, and requires a verification receipt before "
+            "the worker can mark a patch as complete.",
+            "link_core/safety/ or link_core/control_plane/ — capability gate "
+            "and patch executor layer.",
+            "medium",
+            "Create a worker handoff with a restricted allowed_files list, "
+            "execute it in a sandboxed subprocess that cannot write outside "
+            "those paths, and verify the receipt is rejected if any "
+            "disallowed write is attempted.",
+        )
+
+    # 6. Auto-generate execution receipts
+    if has_receipt and has_verifier:
+        _add(
+            "Auto-generate execution receipts after handoff verification",
+            "Link creates patch plans and worker handoffs but does not currently "
+            "auto-generate an execution receipt after each handoff verification "
+            "step. This gap makes it harder to audit whether a handoff was "
+            "fully executed and what evidence was produced.",
+            "Source code verifies receipts after worker execution and returns "
+            "receipt objects through the orchestration pipeline. The pattern "
+            "shows a gated execute-then-verify flow with receipt propagation.",
+            "Verification receipt generation after sandboxed execution, "
+            "with receipt objects propagated through pipeline stages.",
+            "Link should auto-generate a verifier receipt after each handoff "
+            "worker completes, even when --write is not used. The receipt "
+            "should record the handoff_id, verification_id, execution "
+            "timestamp, and whether all verification commands passed.",
+            "link_core/receipts/ or link_core/control_plane/ — execution "
+            "evidence and verifier receipt layer.",
+            "low",
+            "Create and approve a proposal, create a handoff, then run "
+            "the execute command. Verify a verifier receipt is produced "
+            "even in dry-run mode, containing handoff_id and verification "
+            "command status.",
+        )
+
+    # 7. Router enhancement
+    if has_router:
+        _add(
+            "Add capability-gated tool routing from command dispatch table",
+            "Link's tool registry maps tools to endpoints but does not have "
+            "a profile-gated routing layer similar to the command dispatch "
+            "pattern found in TS/JS command routers. A capability gate per "
+            "tool route would improve safety.",
+            "Source code implements a command router that maps command "
+            "names to handler functions with lazy-load support and alias "
+            "resolution. Each command is registered with a type definition.",
+            "Command router with name-to-handler mapping, lazy-load "
+            "deferred imports, alias resolution, and type-safe command "
+            "definitions.",
+            "Link should extend its tool registry to support a routing "
+            "dispatch table that maps tool names to handler profiles, with "
+            "lazy-importer support for on-demand loading and a capability "
+            "gate that checks the active worker profile before dispatching.",
+            "link_core/routing/ or link_core/safety/ — model routing and "
+            "capability gate layer.",
+            "medium",
+            "Register two tools with different required profiles (readOnly "
+            "and patchWorker). Verify that a readOnly worker cannot dispatch "
+            "to the patchWorker tool.",
+        )
+
+    # 8. Pipeline progress tracking
+    if has_pipeline:
+        _add(
+            "Add pipeline stage progress tracking to the control plane dashboard",
+            "Link's control plane has 9 pipeline stages but no terminal-visible "
+            "progress tracker that shows how many proposals are at each stage "
+            "and whether the pipeline has stalled. The existing Growth dashboard "
+            "could benefit from a stage-progress view.",
+            "Source code defines a Pipeline interface with sequential Stage "
+            "enumeration, retry logic, and fallback stages. This structured "
+            "pipeline definition is similar to Link's ResearchIngest → "
+            "Finalizer stages.",
+            "Pipeline interface with typed stages, retry/fallback support, "
+            "and sequential stage progression.",
+            "Link should add a pipeline progress tracker to the Growth run "
+            "and status dashboards that shows proposal counts per stage, "
+            "any blocked stages, and a visual indicator of pipeline flow. "
+            "This makes the control plane observable from the terminal.",
+            "link_core/control_plane/ or link_modes/growth/ — control plane "
+            "pipeline and Growth console.",
+            "low",
+            "Create 3 proposals at different stages (pending, approved, "
+            "handoff-written). Run growth status and verify the pipeline "
+            "progress section shows all 3 stages with correct counts.",
+        )
+
+    # 9. Permission gating
+    if has_permission:
+        _add(
+            "Add profile gate permission check before every tool execution",
+            "Link's tool registry and worker profiles exist but the permission "
+            "check does not yet run as a pre-dispatch gate for every tool "
+            "invocation. A centralized permission check would improve safety.",
+            "Source code includes permission and authentication patterns "
+            "in command dispatch and tool registration flows. Commands are "
+            "defined with type safety and can be feature-gated.",
+            "Permission patterns in tool registration, command dispatch, "
+            "and feature flag gating for command availability.",
+            "Link should add a mandatory profile tool gate check before "
+            "every tool execution in the runtime loop, not just at worker "
+            "profile assignment time. Each tool call should verify the "
+            "active worker profile is permitted for the requested tool.",
+            "link_core/safety/ or link_core/routing/ — profile gate and "
+            "tool registry layer.",
+            "medium",
+            "Assign a restricted worker profile and attempt to call a "
+            "high-approval tool. Verify the tool call is rejected with "
+            "a profile-gate rejection receipt before any execution occurs.",
+        )
+
+    # Cap at 6
+    return candidates[:6]
 
 
 def _detect_architecture_signals(text: str) -> list[str]:
