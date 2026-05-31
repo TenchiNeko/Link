@@ -2504,6 +2504,23 @@ def check_growth_archive_code_queue_populated() -> None:
             "// Used by agent, router, and pipeline modules.\n",
             encoding="utf-8",
         )
+        wrapper_dir = ext / "commands/foo"
+        wrapper_dir.mkdir(parents=True)
+        (wrapper_dir / "index.ts").write_text(
+            "export { runFooCommand } from './run';\n"
+            "export { fooSchema } from './schema';\n",
+            encoding="utf-8",
+        )
+        (wrapper_dir / "run.ts").write_text(
+            "// Foo command handler with agent workflow routing.\n"
+            "export function runFooCommand() { return 'foo'; }\n",
+            encoding="utf-8",
+        )
+        (wrapper_dir / "schema.ts").write_text(
+            "// Foo command schema and validation metadata.\n"
+            "export const fooSchema = { command: 'foo' };\n",
+            encoding="utf-8",
+        )
         (ext / "package.json").write_text(
             '{"name":"test-project","scripts":{"build":"tsc"}}',
             encoding="utf-8",
@@ -2570,6 +2587,43 @@ def check_growth_archive_code_queue_populated() -> None:
         recs = data.get("recommendations", [])
         _require(recs and "archive-code-brief --source" in recs[0],
                  "code queue recommendations must route to archive-code-brief")
+
+        for entry in queue:
+            recommended = entry.get("recommended_source_path")
+            _require(bool(recommended), "queue entry must include recommended_source_path")
+            _require(entry.get("recommended_source_type") in ("file", "directory"),
+                     "queue entry must include recommended_source_type")
+            _require(recommended in entry.get("suggested_command", ""),
+                     "suggested_command must use recommended_source_path")
+
+        index_entry = next(
+            e for e in queue
+            if e.get("source_path", "").endswith("commands/foo/index.ts")
+        )
+        _require(index_entry.get("is_index_wrapper") is True,
+                 "tiny index.ts must be marked as index wrapper")
+        _require(index_entry.get("sibling_code_file_count") == 2,
+                 "index wrapper must count sibling code files")
+        _require(index_entry.get("recommended_source_path") == str(wrapper_dir),
+                 "index wrapper with siblings must recommend parent directory")
+        _require(index_entry.get("recommended_source_type") == "directory",
+                 "index wrapper with siblings must recommend directory source type")
+        _require(
+            index_entry.get("suggested_command") ==
+            f"python3 link.py growth archive-code-brief --source {wrapper_dir} --write",
+            "index wrapper suggested_command must brief the parent directory",
+        )
+
+        agent_entry = next(
+            e for e in queue
+            if e.get("source_path", "").endswith("src/agent.ts")
+        )
+        _require(agent_entry.get("is_index_wrapper") is False,
+                 "non-index code file must not be marked as index wrapper")
+        _require(agent_entry.get("recommended_source_path") == agent_entry.get("source_path"),
+                 "standalone non-index code file must recommend itself")
+        _require(agent_entry.get("recommended_source_type") == "file",
+                 "standalone non-index code file must recommend file source type")
 
         # Verify skipped contains node_modules
         skipped = data.get("skipped_entries", [])

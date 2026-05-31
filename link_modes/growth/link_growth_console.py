@@ -5178,6 +5178,10 @@ _CODE_LOCKFILE_NAMES: set[str] = {
     "poetry.lock", "pipfile.lock", "cargo.lock",
 }
 
+_INDEX_WRAPPER_NAMES: set[str] = {
+    "index.ts", "index.tsx", "index.js", "index.jsx",
+}
+_MAX_INDEX_WRAPPER_BYTES = 1_200
 _MAX_CODE_FILE_BYTES = 500_000
 _MAX_CODE_QUEUE_TOP = 20
 _DEFAULT_CODE_QUEUE_TOP = 10
@@ -5387,7 +5391,15 @@ def collect_archive_code_queue(
                 })
                 continue
 
+            is_index_wrapper = _is_index_wrapper(entry, size)
+            sibling_count = _sibling_code_file_count(entry)
+            if is_index_wrapper and sibling_count > 0:
+                score = max(score - 8, 1)
+                reason = f"{reason} | tiny index wrapper; brief parent directory"
+
             est_val = "high" if score >= 13 else ("medium" if score >= 8 else "low")
+            recommended_source = entry.parent if is_index_wrapper and sibling_count > 0 else entry
+            recommended_type = "directory" if recommended_source == entry.parent else "file"
 
             all_entries.append({
                 "source_path": str(src_root / rel),
@@ -5399,7 +5411,11 @@ def collect_archive_code_queue(
                 "estimated_value": est_val,
                 "size_human": _human_size(size),
                 "extension": suffix,
-                "suggested_command": f"python3 link.py growth archive-code-brief --source {src_root / rel}",
+                "is_index_wrapper": is_index_wrapper,
+                "sibling_code_file_count": sibling_count,
+                "recommended_source_path": str(recommended_source),
+                "recommended_source_type": recommended_type,
+                "suggested_command": f"python3 link.py growth archive-code-brief --source {recommended_source} --write",
             })
 
         if code_file_count == 0 and not catalog_path:
@@ -5438,6 +5454,46 @@ def collect_archive_code_queue(
         "warnings": warnings if warnings else [],
         "error": None,
     }
+
+
+def _is_index_wrapper(path: Path, size: int) -> bool:
+    """Return True for tiny JS/TS index wrapper files."""
+    return path.name.lower() in _INDEX_WRAPPER_NAMES and size <= _MAX_INDEX_WRAPPER_BYTES
+
+
+def _sibling_code_file_count(path: Path) -> int:
+    """Count meaningful sibling code files near a tiny index wrapper."""
+    if path.name.lower() not in _INDEX_WRAPPER_NAMES:
+        return 0
+
+    count = 0
+    try:
+        siblings = sorted(path.parent.iterdir())
+    except Exception:
+        return 0
+
+    for sibling in siblings:
+        if sibling == path or not sibling.is_file() or sibling.is_symlink():
+            continue
+        parts = {part.lower() for part in sibling.parts}
+        if parts.intersection(_SKIP_DIR_NAMES):
+            continue
+        suffix = sibling.suffix.lower()
+        if suffix not in _CODE_EXTS:
+            continue
+        if sibling.name.lower() in _CODE_LOCKFILE_NAMES or sibling.name.lower() in _INDEX_WRAPPER_NAMES:
+            continue
+        try:
+            size = sibling.stat().st_size
+        except OSError:
+            continue
+        if size < 50 or size > _MAX_CODE_FILE_BYTES:
+            continue
+        if _code_is_binary(sibling):
+            continue
+        count += 1
+
+    return count
 
 
 def _code_is_binary(path: Path) -> bool:
