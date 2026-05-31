@@ -2455,6 +2455,13 @@ def check_growth_archive_code_queue_populated() -> None:
                  f"top file should score >= 10, got {first.get('score')}")
         _require(first.get("estimated_value") in ("high", "medium"),
                  "top file should be high or medium value")
+        _require("archive-code-brief --source" in first.get("suggested_command", ""),
+                 "code queue suggested_command must route to archive-code-brief")
+        _require("archive-mine --source" not in first.get("suggested_command", ""),
+                 "code queue suggested_command must not route directly to archive-mine")
+        recs = data.get("recommendations", [])
+        _require(recs and "archive-code-brief --source" in recs[0],
+                 "code queue recommendations must route to archive-code-brief")
 
         # Verify skipped contains node_modules
         skipped = data.get("skipped_entries", [])
@@ -2582,10 +2589,15 @@ def check_growth_archive_code_brief_write() -> None:
         content = brief_file.read_text(encoding="utf-8")
         _require("Code Research Brief" in content,
                  "brief must contain title")
-        _require("python3 link.py growth archive-mine" in content,
-                 "brief must suggest archive-mine command")
+        _require("python3 link.py growth code-brief-propose" in content,
+                 "brief must suggest code-brief-propose command")
+        _require("python3 link.py growth archive-mine" not in content,
+                 "brief must not suggest archive-mine command")
         _require("archive-code-brief" in content,
                  "brief must mention archive-code-brief")
+        next_cmds = data.get("next_commands", [])
+        _require(next_cmds and "code-brief-propose --source" in next_cmds[0],
+                 "archive-code-brief next command must route to code-brief-propose")
 
         # Architecture signals should be detected
         _require("agent" in content.lower() or "Agent" in content,
@@ -2685,6 +2697,12 @@ medium
 
 **Acceptance test idea:**
 Attempt a restricted tool call and verify the gate returns deny before execution.
+
+---
+
+## Possible Link Upgrade Ideas
+
+- This trailing section must not leak into candidate fields.
 """
 
     with tempfile.TemporaryDirectory() as td:
@@ -2718,6 +2736,11 @@ Attempt a restricted tool call and verify the gate returns deny before execution
                  "second proposal risk must be medium")
         _require(proposals[1]["recommendation"] == "review",
                  "medium risk proposal must recommend review")
+        second_acceptance = proposals[1]["verification_commands"][0]
+        _require("Possible Link Upgrade Ideas" not in second_acceptance,
+                 "trailing markdown section must not leak into acceptance test")
+        _require("trailing section" not in second_acceptance,
+                 "trailing markdown body must not leak into acceptance test")
 
         for proposal in proposals:
             validate_proposal(proposal)
