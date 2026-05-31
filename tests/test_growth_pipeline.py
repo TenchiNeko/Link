@@ -3426,6 +3426,68 @@ Attempt a restricted tool call and verify the gate returns deny before execution
 
 
 # ---------------------------------------------------------------------------
+# 56. Receipts make_unique_title helper
+# ---------------------------------------------------------------------------
+
+def check_make_unique_title() -> None:
+    """make_unique_title produces deterministic unique titles."""
+    from link_core.receipts import make_unique_title
+
+    # Unique title is unchanged
+    t1 = make_unique_title("add branch traceability", existing_titles=set())
+    _require(t1 == "add branch traceability",
+             f"unique title must be unchanged, got {t1!r}")
+
+    # Duplicate title gets numeric suffix
+    seen = {"add branch traceability"}
+    t2 = make_unique_title("add branch traceability", existing_titles=seen)
+    _require(t2 == "add branch traceability 2",
+             f"duplicate title must get ' 2' suffix, got {t2!r}")
+
+    # Second duplicate gets " 3"
+    seen.add(" ".join(t2.split()).lower())
+    t3 = make_unique_title("add branch traceability", existing_titles=seen)
+    _require(t3 == "add branch traceability 3",
+             f"second duplicate must get ' 3' suffix, got {t3!r}")
+
+    # None title gets a timestamp-based fallback
+    t_none = make_unique_title(None)
+    _require(t_none.startswith("untitled-upgrade-"),
+             f"None title must start with 'untitled-upgrade-', got {t_none!r}")
+
+    # Empty title gets a timestamp-based fallback
+    t_empty = make_unique_title("")
+    _require(t_empty.startswith("untitled-upgrade-"),
+             f"empty title must start with 'untitled-upgrade-', got {t_empty!r}")
+
+    # Whitespace-only title gets a fallback
+    t_ws = make_unique_title("   ")
+    _require(t_ws.startswith("untitled-upgrade-"),
+             f"whitespace-only title must get fallback, got {t_ws!r}")
+
+    # Different casing is treated as collision
+    seen2 = {"Add Branch Traceability"}
+    t_case = make_unique_title("add branch traceability", existing_titles=seen2)
+    _require(t_case == "add branch traceability 2",
+             f"case-insensitive collision must get suffix, got {t_case!r}")
+
+    # Title is returned unchanged when no set given
+    t_no_set = make_unique_title("some brand new title")
+    _require(t_no_set == "some brand new title",
+             f"no set implies unique, got {t_no_set!r}")
+
+    # High count of duplicates still works (tests hash fallback)
+    full = set()
+    for i in range(1, 101):
+        full.add(f"overwhelmed {i}")
+    t_many = make_unique_title("overwhelmed 5", existing_titles=full)
+    _require(t_many.startswith("overwhelmed 5 "),
+             f"hash fallback must keep original prefix, got {t_many!r}")
+
+    print("make_unique_title OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -3484,6 +3546,7 @@ def main() -> None:
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()
+    check_make_unique_title()
     print("Growth pipeline smoke tests passed")
 
 

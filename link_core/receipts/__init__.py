@@ -57,6 +57,54 @@ def _slugify(value: str) -> str:
     return slug or "session"
 
 
+def make_unique_title(
+    requested_title: str | None,
+    existing_titles: set[str] | None = None,
+    *,
+    max_attempts: int = 100,
+) -> str:
+    """Return a unique title not already in ``existing_titles``.
+
+    If ``requested_title`` is ``None`` or empty, a stable timestamp-based
+    fallback is generated.  When the requested title collides with an
+    existing title the function appends a numeric suffix (``" 2"``,
+    ``" 3"``, …) until a free slot is found — up to ``max_attempts``.
+    If all attempts are exhausted, a short collision-resistant hash
+    suffix is appended instead.
+
+    Titles are compared whitespace-normalised and case-insensitively.
+    The returned title preserves the original casing of the request.
+    """
+    if existing_titles is None:
+        existing_titles = set()
+
+    if not requested_title or not str(requested_title).strip():
+        import datetime as _dt
+        ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        return f"untitled-upgrade-{ts}"
+
+    requested = str(requested_title).strip()
+    key = _normalise_title_key(requested)
+
+    seen = {_normalise_title_key(t) for t in existing_titles}
+
+    if key not in seen:
+        return requested
+
+    for attempt in range(2, max_attempts + 1):
+        candidate = f"{requested} {attempt}"
+        if _normalise_title_key(candidate) not in seen:
+            return candidate
+
+    digest = hashlib.sha256(requested.encode("utf-8")).hexdigest()[:8]
+    return f"{requested} {digest}"
+
+
+def _normalise_title_key(title: str) -> str:
+    """Produce a whitespace-normalised, lowercase comparison key."""
+    return " ".join(title.split()).lower()
+
+
 def _stable_json(data: Any) -> str:
     return json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
 
@@ -291,6 +339,7 @@ def transcript_snapshot_receipt_from_json(text: str) -> dict[str, Any]:
 __all__ = [
     "FORK_LINEAGE_RECEIPT_VERSION",
     "TRANSCRIPT_SNAPSHOT_RECEIPT_VERSION",
+    "make_unique_title",
     "build_fork_lineage_receipt",
     "build_transcript_snapshot_receipt",
     "fork_lineage_receipt_from_json",

@@ -6928,7 +6928,11 @@ def collect_code_brief_propose_batch(
         if brief_data.get("ok"):
             brief_md = str(brief_data.get("brief_markdown") or "")
             candidates = _parse_code_brief_candidates(brief_md, source_path)
-            proposals = [_code_brief_candidate_to_proposal(c, source_path) for c in candidates]
+            seen_titles: set[str] = set()
+            proposals = [
+                _code_brief_candidate_to_proposal(c, source_path, seen_titles=seen_titles)
+                for c in candidates
+            ]
             quality = _analyze_code_brief_proposal_quality(
                 candidates,
                 proposals,
@@ -7148,7 +7152,11 @@ def collect_code_brief_propose(
         )
 
     candidates = _parse_code_brief_candidates(brief_text, str(source_path))
-    proposals = [_code_brief_candidate_to_proposal(c, str(source_path)) for c in candidates]
+    seen_titles: set[str] = set()
+    proposals = [
+        _code_brief_candidate_to_proposal(c, str(source_path), seen_titles=seen_titles)
+        for c in candidates
+    ]
     quality = _analyze_code_brief_proposal_quality(
         candidates,
         proposals,
@@ -7390,11 +7398,18 @@ def _split_code_brief_list(text: str) -> list[str]:
 def _code_brief_candidate_to_proposal(
     candidate: dict[str, Any],
     source_path: str,
+    seen_titles: set[str] | None = None,
 ) -> dict[str, Any]:
     """Convert one parsed code-brief candidate to a proposal artifact."""
     from link_core.control_plane import make_proposal_id
+    from link_core.receipts import make_unique_title
 
-    title = str(candidate.get("title") or "").strip()
+    title = make_unique_title(
+        candidate.get("title"),
+        existing_titles=seen_titles,
+    )
+    if seen_titles is not None:
+        seen_titles.add(" ".join(title.split()).lower())
     risk = _normalize_code_brief_risk(str(candidate.get("risk") or ""))
     problem = str(candidate.get("problem") or "").strip()
     pattern = str(candidate.get("pattern_observed") or "").strip()
