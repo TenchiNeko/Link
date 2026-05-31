@@ -152,6 +152,108 @@ def check_fork_lineage_receipt_helper() -> None:
     print("fork lineage receipt helper OK")
 
 
+def check_transcript_snapshot_receipt_helper() -> None:
+    """Transcript snapshot receipts preserve normalized messages without writes."""
+    from link_core.receipts import (
+        TRANSCRIPT_SNAPSHOT_RECEIPT_VERSION,
+        build_transcript_snapshot_receipt,
+        transcript_snapshot_receipt_from_json,
+        transcript_snapshot_receipt_to_json,
+        validate_transcript_snapshot_receipt,
+    )
+
+    transcript = [
+        {
+            "role": "user" if index % 2 == 0 else "assistant",
+            "content": f"message {index}",
+            "message_index": index,
+        }
+        for index in range(10)
+    ]
+    receipt = build_transcript_snapshot_receipt(
+        parent_session_id="parent-session-001",
+        source_session_id="source-session-001",
+        transcript_entries=transcript,
+        fork_depth=3,
+        metadata={"source": "growth-proposal", "proposal_id": "transcript-copy"},
+        copied_at="2026-05-31T00:00:00Z",
+    )
+    same_receipt = build_transcript_snapshot_receipt(
+        parent_session_id="parent-session-001",
+        source_session_id="source-session-001",
+        transcript_entries=transcript,
+        fork_depth=3,
+        metadata={"source": "growth-proposal", "proposal_id": "transcript-copy"},
+        copied_at="2026-05-31T00:00:01Z",
+    )
+
+    _require(receipt["receipt_version"] == TRANSCRIPT_SNAPSHOT_RECEIPT_VERSION,
+             "transcript snapshot receipt version mismatch")
+    _require(receipt["parent_session_id"] == "parent-session-001",
+             "parent_session_id must be preserved")
+    _require(receipt["source_session_id"] == "source-session-001",
+             "source_session_id must be preserved")
+    _require(receipt["snapshot_id"] == same_receipt["snapshot_id"],
+             "snapshot_id must be deterministic for the same source transcript")
+    _require(receipt["fork_depth"] == 3, "fork_depth must be preserved")
+    _require(receipt["message_count"] == 10,
+             "message_count must match transcript length")
+    _require(receipt["transcript_entries"] == transcript,
+             "transcript entries must be preserved as dictionaries")
+    _require(receipt["metadata"]["proposal_id"] == "transcript-copy",
+             "optional metadata must be preserved")
+
+    encoded = transcript_snapshot_receipt_to_json(receipt)
+    _require(encoded == transcript_snapshot_receipt_to_json(receipt),
+             "transcript snapshot JSON serialization must be stable")
+    decoded = transcript_snapshot_receipt_from_json(encoded)
+    _require(decoded == receipt,
+             "transcript snapshot JSON round-trip must preserve data")
+    validate_transcript_snapshot_receipt(receipt)
+
+    try:
+        build_transcript_snapshot_receipt(
+            source_session_id="source-session-001",
+            transcript_entries=transcript,
+            fork_depth=-1,
+            copied_at="2026-05-31T00:00:02Z",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("negative fork_depth must be rejected")
+
+    for bad_entries in (
+        "not-a-list",
+        [{"role": "user"}],
+        [{"content": "missing role"}],
+        ["not-a-dict"],
+    ):
+        try:
+            build_transcript_snapshot_receipt(
+                source_session_id="source-session-001",
+                transcript_entries=bad_entries,
+                copied_at="2026-05-31T00:00:03Z",
+            )
+        except (TypeError, ValueError):
+            pass
+        else:
+            raise AssertionError(f"invalid transcript entries must be rejected: {bad_entries!r}")
+
+    try:
+        build_transcript_snapshot_receipt(
+            source_session_id="",
+            transcript_entries=transcript,
+            copied_at="2026-05-31T00:00:04Z",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("missing source session must be rejected")
+
+    print("transcript snapshot receipt helper OK")
+
+
 # ---------------------------------------------------------------------------
 # 1. Growth facade surface
 # ---------------------------------------------------------------------------
@@ -3329,6 +3431,7 @@ Attempt a restricted tool call and verify the gate returns deny before execution
 
 def main() -> None:
     check_fork_lineage_receipt_helper()
+    check_transcript_snapshot_receipt_helper()
     check_growth_facade()
     check_upgrade_miner_candidates()
     check_research_archive_miner()

@@ -32,6 +32,20 @@ ALLOWED_DIVERGENCE_STATUSES: Final[set[str]] = {
     "diverged",
 }
 
+TRANSCRIPT_SNAPSHOT_RECEIPT_VERSION: Final[str] = "link-transcript-snapshot-receipt-v1"
+
+REQUIRED_TRANSCRIPT_SNAPSHOT_FIELDS: Final[tuple[str, ...]] = (
+    "receipt_version",
+    "snapshot_id",
+    "parent_session_id",
+    "source_session_id",
+    "copied_at",
+    "fork_depth",
+    "message_count",
+    "transcript_entries",
+    "metadata",
+)
+
 
 def utc_now() -> str:
     """Return a UTC timestamp suitable for deterministic receipt fields."""
@@ -167,11 +181,124 @@ def fork_lineage_receipt_from_json(text: str) -> dict[str, Any]:
     return receipt
 
 
+def make_transcript_snapshot_id(
+    source_session_id: str,
+    transcript_entries: list[dict[str, Any]],
+    *,
+    parent_session_id: str | None = None,
+    fork_depth: int | None = None,
+) -> str:
+    """Build a stable snapshot id from the source session and normalized messages."""
+    source_slug = _slugify(source_session_id)[:48]
+    digest_source = _stable_json(
+        {
+            "fork_depth": 0 if fork_depth is None else fork_depth,
+            "parent_session_id": parent_session_id,
+            "receipt_version": TRANSCRIPT_SNAPSHOT_RECEIPT_VERSION,
+            "source_session_id": source_session_id,
+            "transcript_entries": transcript_entries,
+        }
+    )
+    digest = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()[:12]
+    return f"transcript-snapshot-{source_slug}-{digest}"
+
+
+def build_transcript_snapshot_receipt(
+    *,
+    source_session_id: str,
+    transcript_entries: list[dict[str, Any]],
+    parent_session_id: str | None = None,
+    fork_depth: int | None = None,
+    metadata: dict[str, Any] | None = None,
+    copied_at: str | None = None,
+) -> dict[str, Any]:
+    """Create a normalized transcript snapshot receipt without writing state."""
+    if not isinstance(transcript_entries, list):
+        raise TypeError("transcript_entries must be a list")
+    normalized_entries = []
+    for index, entry in enumerate(transcript_entries):
+        if not isinstance(entry, dict):
+            raise TypeError(f"transcript entry {index} must be a dict")
+        normalized_entries.append(dict(entry))
+    normalized_depth = 0 if fork_depth is None else fork_depth
+    receipt = {
+        "receipt_version": TRANSCRIPT_SNAPSHOT_RECEIPT_VERSION,
+        "snapshot_id": make_transcript_snapshot_id(
+            source_session_id,
+            normalized_entries,
+            parent_session_id=parent_session_id,
+            fork_depth=normalized_depth,
+        ),
+        "parent_session_id": parent_session_id,
+        "source_session_id": source_session_id,
+        "copied_at": copied_at or utc_now(),
+        "fork_depth": normalized_depth,
+        "message_count": len(normalized_entries),
+        "transcript_entries": normalized_entries,
+        "metadata": dict(metadata or {}),
+    }
+    validate_transcript_snapshot_receipt(receipt)
+    return receipt
+
+
+def validate_transcript_snapshot_receipt(receipt: dict[str, Any]) -> None:
+    """Validate the stable shape of a transcript snapshot receipt."""
+    missing = [field for field in REQUIRED_TRANSCRIPT_SNAPSHOT_FIELDS if field not in receipt]
+    if missing:
+        raise ValueError(f"transcript snapshot receipt missing fields: {', '.join(missing)}")
+    if receipt["receipt_version"] != TRANSCRIPT_SNAPSHOT_RECEIPT_VERSION:
+        raise ValueError("unsupported transcript snapshot receipt version")
+    for field in ("snapshot_id", "source_session_id", "copied_at"):
+        if not isinstance(receipt[field], str) or not receipt[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    parent_session_id = receipt["parent_session_id"]
+    if parent_session_id is not None and (
+        not isinstance(parent_session_id, str) or not parent_session_id.strip()
+    ):
+        raise ValueError("parent_session_id must be null or a non-empty string")
+    if not isinstance(receipt["fork_depth"], int) or receipt["fork_depth"] < 0:
+        raise ValueError("fork_depth must be a non-negative integer")
+    if not isinstance(receipt["transcript_entries"], list):
+        raise TypeError("transcript_entries must be a list")
+    if not isinstance(receipt["message_count"], int):
+        raise TypeError("message_count must be an integer")
+    if receipt["message_count"] != len(receipt["transcript_entries"]):
+        raise ValueError("message_count must match transcript_entries length")
+    if not isinstance(receipt["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+
+    for index, entry in enumerate(receipt["transcript_entries"]):
+        if not isinstance(entry, dict):
+            raise TypeError(f"transcript entry {index} must be a dict")
+        for field in ("role", "content"):
+            if not isinstance(entry.get(field), str) or not entry[field].strip():
+                raise ValueError(f"transcript entry {index} must include non-empty {field}")
+
+
+def transcript_snapshot_receipt_to_json(receipt: dict[str, Any]) -> str:
+    """Serialize a validated transcript snapshot receipt to stable JSON."""
+    validate_transcript_snapshot_receipt(receipt)
+    return json.dumps(receipt, indent=2, sort_keys=True, default=str) + "\n"
+
+
+def transcript_snapshot_receipt_from_json(text: str) -> dict[str, Any]:
+    """Deserialize and validate a transcript snapshot receipt."""
+    receipt = json.loads(text)
+    validate_transcript_snapshot_receipt(receipt)
+    return receipt
+
+
 __all__ = [
     "FORK_LINEAGE_RECEIPT_VERSION",
+    "TRANSCRIPT_SNAPSHOT_RECEIPT_VERSION",
     "build_fork_lineage_receipt",
+    "build_transcript_snapshot_receipt",
     "fork_lineage_receipt_from_json",
     "fork_lineage_receipt_to_json",
     "make_fork_lineage_receipt_id",
+    "make_transcript_snapshot_id",
+    "transcript_snapshot_receipt_from_json",
+    "transcript_snapshot_receipt_to_json",
     "validate_fork_lineage_receipt",
+    "validate_transcript_snapshot_receipt",
 ]
