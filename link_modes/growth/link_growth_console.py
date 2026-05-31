@@ -2042,6 +2042,248 @@ def render_execute(data: dict[str, Any]) -> None:
     render_execute_with_rich(data)
 
 
+# ── finalize entry point ─────────────────────────────────────────────────
+_FINALIZER_RECEIPT_DIR = ".agents/control_plane/finalizer_receipts"
+
+
+def finalize_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``python3 link.py growth finalize <verification_id>``.
+
+    Loads an existing verifier receipt and builds a finalizer receipt from it.
+    Dry-run by default; ``--write`` persists the receipt to the canonical
+    ``_FINALIZER_RECEIPT_DIR``. No code is executed by this command.
+    """
+    args = sys.argv[1:] if argv is None else argv
+
+    if not args or "--help" in args or "-h" in args:
+        print("Growth finalize: create finalizer receipt from verifier receipt")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth finalize <verification_id-or-path>")
+        print("  python3 link.py growth finalize <verification_id-or-path> --json")
+        print("  python3 link.py growth finalize <verification_id-or-path> --write")
+        print("")
+        print("No code is executed by this command. It reads an existing")
+        print("verifier receipt and optionally creates a finalizer receipt.")
+        print("Default is dry-run. Use --write to persist the receipt to disk.")
+        return 0
+
+    verification_ref = args[0]
+    write = "--write" in args
+    root_override = _parse_arg(args, "--root")
+    data = collect_finalize_data(verification_ref, write=write, root=root_override)
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0 if data.get("ok") else 1
+
+    render_finalize(data)
+    return 0 if data.get("ok") else 1
+
+
+def collect_finalize_data(
+    verification_ref: str,
+    write: bool = False,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Load a verifier receipt and build a finalizer receipt.
+
+    ``verification_ref`` may be a verifier receipt id or a JSON file path.
+    The command is dry-run by default. When ``write=True`` it writes only the
+    finalizer receipt under ``_FINALIZER_RECEIPT_DIR`` and never executes code.
+    """
+    from pathlib import Path
+
+    from link_core.control_plane.link_control_plane_finalizer_receipt import (
+        build_finalizer_receipt_from_verifier,
+        load_finalizer_receipt,
+        make_finalization_id,
+        write_finalizer_receipt,
+    )
+    from link_core.control_plane.link_control_plane_verifier_receipt import (
+        load_verifier_receipt,
+    )
+
+    repo_root = Path(root) if root else Path.cwd()
+    verifier_path = _resolve_verifier_receipt_path(verification_ref, repo_root)
+
+    if verifier_path is None or not verifier_path.exists():
+        return _finalize_error(
+            verification_ref,
+            f"verifier receipt not found: {verification_ref}",
+        )
+
+    try:
+        verifier_receipt = load_verifier_receipt(verifier_path)
+    except Exception as exc:
+        return _finalize_error(
+            verification_ref,
+            f"failed to load verifier receipt: {exc}",
+        )
+
+    verification_id = str(verifier_receipt.get("verification_id", verification_ref))
+    finalization_id = make_finalization_id(verification_id)
+    finalizer_dir = repo_root / _FINALIZER_RECEIPT_DIR
+    finalizer_path = finalizer_dir / f"{finalization_id}.json"
+
+    if finalizer_path.exists():
+        try:
+            existing = load_finalizer_receipt(finalizer_path)
+        except Exception as exc:
+            return _finalize_error(
+                verification_ref,
+                f"failed to load existing finalizer receipt: {exc}",
+                verifier_receipt=verifier_receipt,
+                verifier_path=verifier_path,
+            )
+        return {
+            "ok": True,
+            "verification_ref": verification_ref,
+            "verification_id": verification_id,
+            "verifier_receipt_path": str(verifier_path),
+            "verifier_receipt": verifier_receipt,
+            "finalization_id": existing.get("finalization_id", finalization_id),
+            "finalizer_receipt": existing,
+            "finalizer_receipt_path": str(finalizer_path),
+            "already_finalized": True,
+            "written_paths": [],
+            "dry_run": True,
+            "recommended_next_action": "Finalizer receipt already exists. No duplicate was written.",
+            "error": None,
+        }
+
+    try:
+        finalizer_receipt = build_finalizer_receipt_from_verifier(
+            verifier_receipt,
+            status="finalized",
+        )
+    except Exception as exc:
+        return _finalize_error(
+            verification_ref,
+            f"build_finalizer_receipt_from_verifier failed: {exc}",
+            verifier_receipt=verifier_receipt,
+            verifier_path=verifier_path,
+        )
+
+    written_paths: list[str] = []
+    if write:
+        written_path = write_finalizer_receipt(finalizer_receipt, root=finalizer_dir)
+        written_paths = [str(written_path)]
+
+    return {
+        "ok": True,
+        "verification_ref": verification_ref,
+        "verification_id": verification_id,
+        "verifier_receipt_path": str(verifier_path),
+        "verifier_receipt": verifier_receipt,
+        "finalization_id": finalizer_receipt.get("finalization_id", ""),
+        "finalizer_receipt": finalizer_receipt,
+        "finalizer_receipt_path": str(finalizer_path),
+        "already_finalized": False,
+        "written_paths": written_paths,
+        "dry_run": not write,
+        "recommended_next_action": (
+            "Use --write to persist the finalizer receipt to disk."
+            if not write
+            else "Finalizer receipt persisted. No code was executed."
+        ),
+        "error": None,
+    }
+
+
+def _resolve_verifier_receipt_path(verification_ref: str, repo_root: Any) -> Any:
+    from pathlib import Path
+
+    ref_path = Path(verification_ref)
+    if ref_path.exists():
+        return ref_path
+    if ref_path.is_absolute() or ref_path.parent != Path("."):
+        candidate = repo_root / ref_path
+        if candidate.exists():
+            return candidate
+        return ref_path
+    filename = verification_ref if verification_ref.endswith(".json") else f"{verification_ref}.json"
+    return repo_root / _VERIFIER_RECEIPT_DIR / filename
+
+
+def _finalize_error(
+    verification_ref: str,
+    error: str,
+    verifier_receipt: dict[str, Any] | None = None,
+    verifier_path: Any | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "verification_ref": verification_ref,
+        "verification_id": verifier_receipt.get("verification_id") if verifier_receipt else None,
+        "verifier_receipt_path": str(verifier_path) if verifier_path else "",
+        "verifier_receipt": verifier_receipt,
+        "finalization_id": None,
+        "finalizer_receipt": None,
+        "finalizer_receipt_path": "",
+        "already_finalized": False,
+        "written_paths": [],
+        "dry_run": True,
+        "recommended_next_action": "",
+        "error": error,
+    }
+
+
+def render_finalize_plain(data: dict[str, Any]) -> None:
+    ok = bool(data.get("ok"))
+    already = bool(data.get("already_finalized"))
+    dry_run = bool(data.get("dry_run", True))
+    if not ok:
+        state = "FAILED"
+    elif already:
+        state = "ALREADY FINALIZED"
+    elif dry_run:
+        state = "DRY RUN"
+    else:
+        state = "WRITTEN"
+
+    out: list[str] = []
+    out.append(f"== LINK GROWTH FINALIZE ({state}) ==")
+    out.append("")
+    out.append("No code is executed by this command.")
+    out.append("")
+
+    if not ok:
+        out.append(f"error: {data.get('error', 'unknown error')}")
+        print("\n".join(out))
+        return
+
+    receipt = data.get("finalizer_receipt") or {}
+    out.append("-- FINALIZER RECEIPT --")
+    out.append(f"verification_id: {data.get('verification_id', '?')}")
+    out.append(f"finalization_id: {data.get('finalization_id', '?')}")
+    out.append(f"proposal_id:      {receipt.get('proposal_id', '?')}")
+    out.append(f"handoff_id:       {receipt.get('handoff_id', '?')}")
+    out.append(f"stage:            {receipt.get('stage', '?')}")
+    out.append(f"status:           {receipt.get('status', '?')}")
+    out.append(f"summary:          {receipt.get('final_summary', '?')}")
+    out.append("")
+
+    written = data.get("written_paths", [])
+    if written:
+        out.append("Persisted:")
+        for path in written:
+            out.append(f"  {path}")
+        out.append("")
+
+    if already:
+        out.append("Finalizer receipt already exists. No duplicate was written.")
+    elif dry_run:
+        out.append("Use --write to persist the finalizer receipt to disk.")
+    out.append("python3 link.py growth receipts -- view verifier receipts")
+    out.append("python3 link.py growth run      -- guided workflow dashboard")
+    print("\n".join(out))
+
+
+def render_finalize(data: dict[str, Any]) -> None:
+    render_finalize_plain(data)
+
+
 # ── receipts list entry point ────────────────────────────────────────────
 
 

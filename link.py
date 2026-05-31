@@ -383,6 +383,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import receipts_main as _growth_receipts_main
 
         return _growth_receipts_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "finalize":
+        from link_modes.growth.link_growth_console import finalize_main as _growth_finalize_main
+
+        return _growth_finalize_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "archive-inventory":
         from link_modes.growth.link_growth_console import archive_inventory_main as _growth_archive_inventory_main
 
@@ -438,6 +442,7 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  handoffs           View existing worker handoffs")
         print("  execute            Prepare handoff for verification")
         print("  receipts           View verifier receipts")
+        print("  finalize           Create finalizer receipt from verifier receipt")
         print("  archive-inventory  Scan research archives without extraction")
         print("  archive-extract    Safely extract a research archive")
         print("  archive-catalog    Catalog extracted research contents")

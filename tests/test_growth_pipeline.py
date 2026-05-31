@@ -1819,6 +1819,119 @@ def check_growth_receipts_populated() -> None:
     print("growth receipts populated OK")
 
 
+
+# ---------------------------------------------------------------------------
+# 27. Growth finalize -- verifier receipt to finalizer receipt
+# ---------------------------------------------------------------------------
+
+def check_growth_finalize_command() -> None:
+    """collect_finalize_data previews and writes finalizer receipts safely."""
+    from pathlib import Path
+
+    from link_core.control_plane import write_proposal, update_proposal_status
+    from link_core.control_plane.link_control_plane_patch_plan import (
+        build_patch_plan_from_proposal,
+    )
+    from link_core.control_plane.link_control_plane_proposals import (
+        load_proposal,
+        proposal_storage_dir,
+    )
+    from link_core.control_plane.link_control_plane_verifier_receipt import (
+        build_verifier_receipt_from_handoff,
+        write_verifier_receipt,
+    )
+    from link_core.control_plane.link_control_plane_worker_handoff import (
+        build_worker_handoff_from_plan,
+        write_worker_handoff,
+    )
+    from link_modes.growth.link_growth_console import (
+        _FINALIZER_RECEIPT_DIR,
+        _VERIFIER_RECEIPT_DIR,
+        collect_finalize_data,
+    )
+
+    proposal = {
+        "proposal_id": "finalize-smoke-xyz",
+        "title": "finalize smoke test",
+        "source_path": "research/smoke.md",
+        "source_summary": "Smoke test for Growth finalize.",
+        "extracted_capabilities": ["finalizer"],
+        "link_takeaways": ["finalizer receipt works"],
+        "affected_files": ["link_growth_console.py"],
+        "risk_level": "low",
+        "expected_behavior_change": "none",
+        "implementation_plan": ["Step one.", "Step two."],
+        "verification_commands": ["echo ok"],
+        "rollback_plan": "Revert patch branch.",
+        "recommendation": "accept",
+        "status": "pending",
+        "created_at": "2026-05-31T00:00:00",
+    }
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        write_proposal(proposal, root=td)
+        update_proposal_status("finalize-smoke-xyz", "accepted", root=td)
+        accepted = load_proposal(proposal_storage_dir(td) / "finalize-smoke-xyz.json")
+        plan = build_patch_plan_from_proposal(accepted)
+        handoff = build_worker_handoff_from_plan(plan)
+        handoff_dir = root / ".agents/control_plane/worker_handoffs"
+        write_worker_handoff(handoff, root=handoff_dir)
+        verifier = build_verifier_receipt_from_handoff(
+            handoff,
+            status="passed",
+            evidence_paths=["tests/test_growth_pipeline.py"],
+            findings=["verification passed"],
+        )
+        verifier_dir = root / _VERIFIER_RECEIPT_DIR
+        verifier_path = write_verifier_receipt(verifier, root=verifier_dir)
+        finalizer_dir = root / _FINALIZER_RECEIPT_DIR
+
+        dry = collect_finalize_data(verifier["verification_id"], write=False, root=td)
+        _require(dry.get("ok") is True, "finalize dry-run must set ok=True")
+        _require(dry.get("dry_run") is True, "finalize dry-run must report dry_run=True")
+        _require(dry.get("written_paths") == [], "finalize dry-run must not write paths")
+        _require(not finalizer_dir.exists(), "finalize dry-run must not create finalizer dir")
+        finalizer = dry.get("finalizer_receipt") or {}
+        _require(finalizer.get("verification_id") == verifier["verification_id"],
+                 "finalizer must reference verifier id")
+        _require(finalizer.get("status") == "finalized",
+                 "finalizer status must default to finalized")
+        _require(finalizer.get("stage") == "Finalizer",
+                 "finalizer stage must be Finalizer")
+
+        by_path = collect_finalize_data(str(verifier_path), write=False, root=td)
+        _require(by_path.get("ok") is True, "finalize must accept verifier receipt path")
+        _require(by_path.get("verification_id") == verifier["verification_id"],
+                 "path finalize must load the same verifier")
+
+        missing = collect_finalize_data("missing-verifier-id", write=False, root=td)
+        _require(missing.get("ok") is False, "missing verifier must return ok=False")
+        _require("not found" in str(missing.get("error", "")),
+                 "missing verifier error must be clear")
+
+        written = collect_finalize_data(verifier["verification_id"], write=True, root=td)
+        _require(written.get("ok") is True, "finalize --write must set ok=True")
+        _require(written.get("dry_run") is False, "finalize --write must report dry_run=False")
+        paths = written.get("written_paths", [])
+        _require(len(paths) == 1, "finalize --write must write one finalizer receipt")
+        written_path = Path(paths[0])
+        _require(written_path.exists(), "finalize --write path must exist")
+        _require(written_path.parent == finalizer_dir,
+                 "finalize --write must use finalizer receipt dir")
+
+        again = collect_finalize_data(verifier["verification_id"], write=True, root=td)
+        _require(again.get("ok") is True, "already finalized must be safe ok=True")
+        _require(again.get("already_finalized") is True,
+                 "already finalized must report already_finalized=True")
+        _require(again.get("written_paths") == [],
+                 "already finalized must not write a duplicate")
+        _require(len(list(finalizer_dir.glob("*.json"))) == 1,
+                 "already finalized must leave one finalizer file")
+
+    print("growth finalize command OK")
+
+
 # ---------------------------------------------------------------------------
 # 27. Growth archive-inventory -- empty state
 # ---------------------------------------------------------------------------
@@ -3728,6 +3841,7 @@ def main() -> None:
     check_growth_execute_errors()
     check_growth_receipts_empty()
     check_growth_receipts_populated()
+    check_growth_finalize_command()
     check_growth_archive_inventory_empty()
     check_growth_archive_inventory_populated()
     check_growth_archive_extract_dry_run()
