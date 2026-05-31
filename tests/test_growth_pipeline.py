@@ -53,6 +53,29 @@ def _require_keys(d: dict[str, Any], keys: tuple[str, ...], label: str) -> None:
             raise AssertionError(f"{label} is missing required key: {key!r}")
 
 
+def _sample_control_plane_proposal(
+    proposal_id: str = "router-proposal-001",
+    status: str = "pending",
+) -> dict[str, Any]:
+    return {
+        "proposal_id": proposal_id,
+        "title": "router smoke proposal",
+        "source_path": "research/router.md",
+        "source_summary": "Smoke proposal for Growth router tests.",
+        "extracted_capabilities": ["router"],
+        "link_takeaways": ["route next safe Growth command"],
+        "affected_files": ["link_modes/growth/link_growth_console.py"],
+        "risk_level": "low",
+        "expected_behavior_change": "Growth run recommends the next safe command.",
+        "implementation_plan": ["Update the read-only Growth run router."],
+        "verification_commands": ["python3 tests/test_growth_pipeline.py"],
+        "rollback_plan": "Revert the Growth router change.",
+        "recommendation": "accept",
+        "status": status,
+        "created_at": "2026-05-31T00:00:00",
+    }
+
+
 # ---------------------------------------------------------------------------
 # 1. Growth facade surface
 # ---------------------------------------------------------------------------
@@ -1113,7 +1136,92 @@ def check_growth_run_with_source() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 20. Growth handoffs -- empty state
+# 20. Growth run smart router -- read-only next command selection
+# ---------------------------------------------------------------------------
+
+def check_growth_run_smart_router() -> None:
+    """collect_run_data recommends the next safest Growth command without writes."""
+    from link_core.control_plane import write_proposal
+    from link_modes.growth.link_growth_console import collect_run_data
+
+    brief_text = """# Code Research Brief: router
+
+### UPGRADE CANDIDATE: Improve router visibility
+
+**Problem:**
+Growth run does not route to the best next command.
+
+**Evidence from source:**
+- `router.md` records the missing guidance.
+
+**Pattern observed:**
+State-aware command guidance.
+
+**Proposed Link upgrade:**
+Recommend the next safe Growth command from current local artifacts.
+
+**Likely Link files or subsystem:**
+link_modes/growth/link_growth_console.py
+
+**Risk level:**
+low
+
+**Acceptance test idea:**
+Create a temp code brief and verify growth run recommends code-brief-propose.
+"""
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        data = collect_run_data(root=td)
+        commands = "\n".join(data.get("commands", []))
+        _require("archive-inventory" in commands or "propose --source" in commands,
+                 "empty router state must recommend archive inventory or ingest start")
+        _require(not (root / ".agents").exists(), "empty router must not create .agents")
+        _require(not (root / ".link").exists(), "empty router must not create .link")
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        brief = root / "research" / "_catalog" / "code_briefs" / "router.md"
+        brief.parent.mkdir(parents=True)
+        brief.write_text(brief_text, encoding="utf-8")
+
+        before = sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+        data = collect_run_data(root=td)
+        after = sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+        commands = "\n".join(data.get("commands", []))
+        _require(data.get("pipeline_stage") == "ProposalWriter",
+                 "code brief state must route to ProposalWriter")
+        _require("code-brief-propose --source" in commands,
+                 "code brief state must recommend code-brief-propose")
+        _require("research/_catalog/code_briefs/router.md" in commands,
+                 "code brief command must include repo-relative brief path")
+        _require(before == after, "router must not write files while inspecting code briefs")
+
+    with tempfile.TemporaryDirectory() as td:
+        write_proposal(_sample_control_plane_proposal("router-pending-001", "pending"), root=td)
+        data = collect_run_data(root=td)
+        commands = "\n".join(data.get("commands", []))
+        _require(data.get("pipeline_stage") == "HumanApproval",
+                 "pending proposals must route to HumanApproval")
+        _require("growth proposals" in commands,
+                 "pending proposals must recommend proposals view")
+        _require("growth approve <id>" in commands,
+                 "pending proposals must recommend approve placeholder")
+
+    with tempfile.TemporaryDirectory() as td:
+        write_proposal(_sample_control_plane_proposal("router-accepted-001", "accepted"), root=td)
+        data = collect_run_data(root=td)
+        commands = "\n".join(data.get("commands", []))
+        _require(data.get("pipeline_stage") == "PatchWorker",
+                 "accepted proposal must route to PatchWorker")
+        _require("growth handoff router-accepted-001 --write" in commands,
+                 "accepted proposal must recommend handoff for the accepted id")
+
+    print("growth run smart router OK")
+
+
+# ---------------------------------------------------------------------------
+# 21. Growth handoffs -- empty state
 # ---------------------------------------------------------------------------
 
 def check_growth_handoffs_empty() -> None:
@@ -2820,6 +2928,7 @@ def main() -> None:
     check_growth_handoff_errors()
     check_growth_run_guide()
     check_growth_run_with_source()
+    check_growth_run_smart_router()
     check_growth_handoffs_empty()
     check_growth_handoffs_populated()
     check_growth_execute_dry_run()

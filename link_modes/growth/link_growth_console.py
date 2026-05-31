@@ -7131,15 +7131,12 @@ def collect_run_data(
     from pathlib import Path
 
     from link_core.control_plane import list_proposals
-    from link_modes.growth.link_self_learning_dashboard import (
-        build_dashboard,
-    )
 
     repo_root = Path(root) if root else Path.cwd()
-    console_data = collect_console_data()
+    base_data = _collect_growth_run_base_data(repo_root)
 
     proposals = list_proposals(root=repo_root)
-    sd = build_dashboard(root=repo_root)
+    patch_draft_counts = _collect_patch_draft_counts(repo_root)
 
     status_counts: dict[str, int] = {}
     accepted_ids: list[str] = []
@@ -7154,28 +7151,30 @@ def collect_run_data(
     handoff_dir = repo_root / ".agents" / "control_plane" / "worker_handoffs"
     has_handoffs = handoff_dir.exists() and any(handoff_dir.glob("*.json"))
 
+    router_state = _collect_growth_router_state(repo_root, proposals)
+    router_state["accepted_proposal_ids"] = accepted_ids
+
     stage, next_action, commands = _derive_workflow_state(
         total=total,
         accepted_count=status_counts.get("accepted", 0),
         pending_count=status_counts.get("pending", 0),
         has_handoffs=has_handoffs,
+        router_state=router_state,
     )
 
     result: dict[str, Any] = {
-        "version": console_data.get("version", ""),
-        "repo": console_data.get("repo", {}),
-        "healthcheck": console_data.get("healthcheck", {}),
-        "mode": console_data.get("mode", {}),
-        "pipeline_stages": console_data.get("pipeline", {}).get(
-            "canonical_stages",
-            console_data.get("pipeline", {}).get("stages", []),
-        ),
+        "version": base_data.get("version", ""),
+        "repo": base_data.get("repo", {}),
+        "healthcheck": base_data.get("healthcheck", {}),
+        "mode": base_data.get("mode", {}),
+        "pipeline_stages": base_data.get("pipeline_stages", []),
         "pipeline_stage": stage,
         "proposal_counts": status_counts,
         "proposals_total": total,
         "accepted_proposal_ids": accepted_ids,
         "has_handoffs": has_handoffs,
-        "patch_draft_counts": sd.get("patch_draft_counts", {}),
+        "router_state": router_state,
+        "patch_draft_counts": patch_draft_counts,
         "next_action": next_action,
         "commands": commands,
         "source_preview": None,
@@ -7205,41 +7204,241 @@ def collect_run_data(
     return result
 
 
+def _collect_growth_run_base_data(repo_root: "Path") -> dict[str, Any]:
+    """Collect Growth run header data without mutating runtime state."""
+    import subprocess
+
+    from link_core.control_plane import CONTROL_PLANE_STAGES
+    from link_modes.growth import MODE_NAME, TEAM_CONFIG, control_plane_stages
+    from link_modes.growth.link_candidate_proposal_bridge import BRIDGE_VERSION
+
+    def git(args: list[str]) -> str:
+        try:
+            proc = subprocess.run(
+                ["git", *args],
+                cwd=repo_root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except Exception:
+            return ""
+        if proc.returncode != 0:
+            return ""
+        return (proc.stdout or "").strip()
+
+    status = git(["status", "--short"])
+    return {
+        "version": CONSOLE_VERSION,
+        "repo": {
+            "branch": git(["branch", "--show-current"]),
+            "head": git(["rev-parse", "--short", "HEAD"]),
+            "safe_tag": git(["rev-parse", "--short", "safe-link-latest"]),
+            "dirty": bool(status),
+        },
+        "healthcheck": {"ok": None, "note": "not run by growth run"},
+        "mode": {
+            "name": MODE_NAME,
+            "team_config": TEAM_CONFIG,
+            "entrypoint": "link_modes.growth.propose()",
+            "bridge_version": BRIDGE_VERSION,
+            "has_propose": True,
+        },
+        "pipeline_stages": list(CONTROL_PLANE_STAGES) or list(control_plane_stages()),
+    }
+
+
+def _collect_patch_draft_counts(repo_root: "Path") -> dict[str, int]:
+    """Count patch draft runtime files without creating directories."""
+    draft_root = repo_root / ".link" / "patch_drafts"
+    states = ("pending", "approved", "rejected", "retry", "receipts")
+    return {
+        state: len(list((draft_root / state).glob("*.json")))
+        if (draft_root / state).exists() else 0
+        for state in states
+    }
+
+
+def _collect_growth_router_state(
+    repo_root: "Path",
+    proposals: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Collect read-only Growth routing signals from local artifacts."""
+    proposal_ids = {str(p.get("proposal_id", "")) for p in proposals}
+    briefs_dir = repo_root / _CODE_BRIEFS_DIR
+    catalogs_dir = repo_root / _CATALOG_OUTPUT_DIR
+    extracted_dir = repo_root / _EXTRACTED_DIR
+    handoff_dir = repo_root / ".agents" / "control_plane" / "worker_handoffs"
+    receipt_dir = repo_root / ".agents" / "control_plane" / "verifier_receipts"
+
+    candidate_briefs: list[dict[str, Any]] = []
+    if briefs_dir.exists():
+        for path in sorted(briefs_dir.glob("*.md")):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            candidates = _parse_code_brief_candidates(text, str(path))
+            if not candidates:
+                continue
+            generated_ids = {
+                _code_brief_candidate_to_proposal(c, str(path))["proposal_id"]
+                for c in candidates
+            }
+            missing_count = len(generated_ids - proposal_ids)
+            if missing_count > 0:
+                try:
+                    display_path = str(path.relative_to(repo_root))
+                except ValueError:
+                    display_path = str(path)
+                candidate_briefs.append({
+                    "path": display_path,
+                    "absolute_path": str(path),
+                    "candidate_count": len(candidates),
+                    "ungenerated_proposal_count": missing_count,
+                    "suggested_command": (
+                        f"python3 link.py growth code-brief-propose --source {display_path}"
+                    ),
+                })
+
+    handoff_paths = sorted(handoff_dir.glob("*.json")) if handoff_dir.exists() else []
+    receipt_paths = sorted(receipt_dir.glob("*.json")) if receipt_dir.exists() else []
+    catalog_paths = sorted(catalogs_dir.glob("*.json")) if catalogs_dir.exists() else []
+    if extracted_dir.exists():
+        extracted_paths = [p for p in sorted(extracted_dir.iterdir()) if p.is_dir()]
+    else:
+        extracted_paths = []
+
+    return {
+        "code_brief_count": len(list(briefs_dir.glob("*.md"))) if briefs_dir.exists() else 0,
+        "candidate_brief_count": len(candidate_briefs),
+        "next_candidate_brief": candidate_briefs[0] if candidate_briefs else None,
+        "catalog_count": len(catalog_paths),
+        "extracted_source_count": len(extracted_paths),
+        "archive_count": len(_discover_growth_archives(repo_root)),
+        "handoff_count": len(handoff_paths),
+        "next_handoff_id": handoff_paths[0].stem if handoff_paths else None,
+        "verifier_receipt_count": len(receipt_paths),
+    }
+
+
+def _discover_growth_archives(repo_root: "Path") -> list[str]:
+    """Return research archive paths without reading archive contents."""
+    research_root = repo_root / "research"
+    if not research_root.exists():
+        return []
+
+    archives: list[str] = []
+    for path in sorted(research_root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = str(path.relative_to(research_root))
+        if rel.startswith("_extracted/") or rel.startswith("_catalog/"):
+            continue
+        lower_name = path.name.lower()
+        if any(lower_name.endswith(suffix) for suffix in _ARCHIVE_SUFFIXES):
+            archives.append(str(path))
+    return archives
+
+
 def _derive_workflow_state(
     total: int,
     accepted_count: int,
     pending_count: int,
     has_handoffs: bool,
+    router_state: dict[str, Any] | None = None,
 ) -> tuple[str, str, list[str]]:
     """Derive pipeline stage, next_action, and recommended commands."""
+    router_state = router_state or {}
+    next_brief = router_state.get("next_candidate_brief") or {}
+
     if total == 0:
+        if next_brief:
+            brief_path = next_brief.get("path", "<brief.md>")
+            return (
+                "ProposalWriter",
+                "Code brief candidates are ready to convert into pending proposals.",
+                [
+                    f"python3 link.py growth code-brief-propose --source {brief_path}",
+                    f"python3 link.py growth code-brief-propose --source {brief_path} --write",
+                    "python3 link.py growth proposals",
+                ],
+            )
+
+        if router_state.get("catalog_count", 0) > 0 and router_state.get("code_brief_count", 0) == 0:
+            return (
+                "CandidateExtractor",
+                "Cataloged extracted code exists. Queue code sources, then write a code brief for one source.",
+                [
+                    "python3 link.py growth archive-code-queue",
+                    "python3 link.py growth archive-code-brief --source <path> --write",
+                    "python3 link.py growth code-brief-propose --source research/_catalog/code_briefs/<slug>.md",
+                ],
+            )
+
+        if router_state.get("extracted_source_count", 0) > 0 and router_state.get("catalog_count", 0) == 0:
+            return (
+                "ResearchIngest",
+                "Extracted archives exist. Catalog them before mining code upgrade candidates.",
+                [
+                    "python3 link.py growth archive-catalog --source <extracted_path> --write",
+                    "python3 link.py growth archive-code-queue",
+                ],
+            )
+
+        if router_state.get("archive_count", 0) > 0:
+            return (
+                "ResearchIngest",
+                "Research archives exist. Inventory, extract, and catalog them before mining proposals.",
+                [
+                    "python3 link.py growth archive-inventory",
+                    "python3 link.py growth archive-extract --source <archive_path> --write",
+                    "python3 link.py growth archive-catalog --source <extracted_path> --write",
+                ],
+            )
+
         return (
             "ResearchIngest",
-            "No proposals found. Mine research into proposals.",
+            "No proposals or cataloged research found. Start with archive inventory or provide a source.",
             [
+                "python3 link.py growth archive-inventory",
                 "python3 link.py growth propose --source <path>",
-                "python3 link.py growth propose --source <path> --write",
             ],
         )
 
     if accepted_count > 0 and not has_handoffs:
+        accepted_ids = router_state.get("accepted_proposal_ids") or []
+        proposal_id = accepted_ids[0] if accepted_ids else "<id>"
         return (
             "PatchWorker",
             "Accepted proposals are ready for handoff creation.",
             [
                 "python3 link.py growth proposals",
-                "python3 link.py growth handoff <id>",
-                "python3 link.py growth handoff <id> --write",
+                f"python3 link.py growth handoff {proposal_id}",
+                f"python3 link.py growth handoff {proposal_id} --write",
+            ],
+        )
+
+    if has_handoffs and router_state.get("verifier_receipt_count", 0) == 0:
+        handoff_id = router_state.get("next_handoff_id") or "<handoff_id>"
+        return (
+            "Verifier",
+            "Worker handoffs exist. Create a verifier receipt through the safe execute path.",
+            [
+                "python3 link.py growth handoffs",
+                f"python3 link.py growth execute {handoff_id}",
+                f"python3 link.py growth execute {handoff_id} --write",
             ],
         )
 
     if accepted_count > 0 and has_handoffs:
         return (
             "Verifier",
-            "Handoffs exist. Verify and execute worker handoffs.",
+            "Handoffs and verifier receipts exist. Review receipts and finish the accepted work.",
             [
-                "python3 link.py growth proposals",
-                "python3 link.py growth handoff <id> --write",
+                "python3 link.py growth receipts",
+                "python3 link.py growth handoffs",
             ],
         )
 
@@ -7317,18 +7516,20 @@ def render_run_with_rich(data: dict[str, Any]) -> None:
     sc = stage_colors.get(stage, "")
     stage_text = Text()
     stage_text.append("Current stage: ", style="dim")
-    stage_text.append(f"[{sc}]{stage}[/]")
+    stage_text.append(str(stage), style=sc or "")
     if next_action:
-        stage_text.append(f"\n[dim]{next_action}[/]")
+        stage_text.append(f"\n{next_action}", style="dim")
     console.print(Panel(stage_text, title="PIPELINE STAGE", border_style=sc or "dim"))
 
     # ── health quick status ──
-    hc_ok = hc.get("ok", False)
-    hc_color = "green" if hc_ok else "red"
-    status_line = f"healthcheck: [{hc_color}]{'PASS' if hc_ok else 'FAIL'}[/]  "
+    hc_ok = hc.get("ok")
+    hc_label = "PASS" if hc_ok is True else ("FAIL" if hc_ok is False else "not run")
+    hc_color = "green" if hc_ok is True else ("red" if hc_ok is False else "yellow")
     hc_text = Text()
-    hc_text.append(f"healthcheck: [{hc_color}]{'PASS' if hc_ok else 'FAIL'}[/]")
-    console.print(Panel(hc_text, border_style=hc_color if hc_ok else "red"))
+    hc_text.append(f"healthcheck: {hc_label}", style=hc_color)
+    if hc.get("note"):
+        hc_text.append(f"  ({hc.get('note')})", style="dim")
+    console.print(Panel(hc_text, border_style=hc_color))
 
     # ── proposal counts panel ──
     count_text = Text()
@@ -7345,8 +7546,8 @@ def render_run_with_rich(data: dict[str, Any]) -> None:
         if not first:
             count_text.append("  ")
         first = False
-        count_text.append(f"[{color}]{label}: {val}[/]")
-    count_text.append(f"\n[dim]total: {total}[/]")
+        count_text.append(f"{label}: {val}", style=color)
+    count_text.append(f"\ntotal: {total}", style="dim")
     console.print(Panel(count_text, title="PROPOSAL COUNTS", border_style="dim"))
 
     # ── accepted ready for handoff ──
@@ -7386,10 +7587,21 @@ def render_run_with_rich(data: dict[str, Any]) -> None:
         console.print(Panel(sp_text, title="SOURCE PREVIEW", border_style="dim"))
 
     # ── next commands panel ──
+    import textwrap
+
     cmd_text = Text()
     cmd_text.append("Next commands:\n", style="bold")
     for cmd in commands:
-        cmd_text.append(f"  $ {cmd}\n", style="dim")
+        wrapped = textwrap.wrap(
+            f"$ {cmd}",
+            width=68,
+            subsequent_indent="  ",
+            break_long_words=False,
+            break_on_hyphens=False,
+        ) or [f"$ {cmd}"]
+        for idx, line in enumerate(wrapped):
+            prefix = "  " if idx == 0 else "    "
+            cmd_text.append(f"{prefix}{line}\n", style="dim")
     console.print(Panel(cmd_text, title="RECOMMENDED NEXT STEP", border_style="green"))
 
     console.print(Rule(style="dim"))
@@ -7425,8 +7637,9 @@ def render_run_plain(data: dict[str, Any]) -> None:
     out.append(f"-- PIPELINE STAGE: {stage} --")
     out.append(next_action)
     out.append("")
-    hc_ok = hc.get("ok", False)
-    out.append(f"healthcheck: {'PASS' if hc_ok else 'FAIL'}")
+    hc_ok = hc.get("ok")
+    hc_label = "PASS" if hc_ok is True else ("FAIL" if hc_ok is False else "not run")
+    out.append(f"healthcheck: {hc_label}")
     out.append("")
     out.append("-- PROPOSAL COUNTS --")
     out.append(
