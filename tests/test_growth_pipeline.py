@@ -2828,6 +2828,12 @@ Attempt a restricted tool call and verify the gate returns deny before execution
                  f"must create 2 proposals, got {data.get('proposal_count')}")
         _require(data.get("dry_run") is True, "default must be dry_run=True")
         _require(data.get("written_paths") == [], "dry-run must not write paths")
+        _require(data.get("quality_warnings") == [],
+                 "valid candidates must not emit quality warnings")
+        _require(data.get("weak_candidate_count") == 0,
+                 "valid candidates must have weak_candidate_count=0")
+        _require(data.get("duplicate_count") == 0,
+                 "valid candidates must have duplicate_count=0")
 
         prop_dir = root / ".agents/control_plane/proposals"
         p_files = list(prop_dir.glob("*.json")) if prop_dir.exists() else []
@@ -2871,6 +2877,71 @@ Attempt a restricted tool call and verify the gate returns deny before execution
         rendered = json.loads(json_out.getvalue())
         _require(rendered.get("proposal_count") == 2,
                  "--json output must contain 2 proposals")
+        _require(isinstance(rendered.get("quality_warnings"), list),
+                 "--json output must include quality_warnings list")
+        _require(rendered.get("weak_candidate_count") == 0,
+                 "--json output must include weak_candidate_count")
+        _require(rendered.get("duplicate_count") == 0,
+                 "--json output must include duplicate_count")
+        for proposal in rendered.get("proposals", []):
+            _require(proposal.get("duplicate_existing") is False,
+                     "--json proposals must include duplicate_existing=False")
+
+        weak = root / "research/_catalog/code_briefs/weak.md"
+        weak.write_text(
+            "# Code Research Brief: weak\n\n"
+            "### UPGRADE CANDIDATE: Weak acceptance\n\n"
+            "**Problem:**\nNeeds a better proposal gate.\n\n"
+            "**Evidence from source:**\n- `gate.md` mentions weak candidates.\n\n"
+            "**Pattern observed:**\nQuality checks before writes.\n\n"
+            "**Proposed Link upgrade:**\nWarn before writing weak proposals.\n\n"
+            "**Likely Link files or subsystem:**\nlink_modes/growth/link_growth_console.py\n\n"
+            "**Risk level:**\nlow\n\n"
+            "**Acceptance test idea:**\n\n"
+            "### UPGRADE CANDIDATE: Vague likely files\n\n"
+            "**Problem:**\nWeak proposals lack file targeting.\n\n"
+            "**Evidence from source:**\n- `files.md` records vague targeting.\n\n"
+            "**Pattern observed:**\nFile targeting previews.\n\n"
+            "**Proposed Link upgrade:**\nWarn about vague file targeting.\n\n"
+            "**Likely Link files or subsystem:**\nruntime\n\n"
+            "**Risk level:**\nlow\n\n"
+            "**Acceptance test idea:**\nVerify vague file targets emit a warning.\n",
+            encoding="utf-8",
+        )
+        weak_data = collect_code_brief_propose(str(weak), root=td)
+        weak_codes = {w.get("code") for w in weak_data.get("quality_warnings", [])}
+        _require("weak_acceptance_test" in weak_codes,
+                 "missing acceptance test must emit weak_acceptance_test warning")
+        _require("weak_likely_files" in weak_codes,
+                 "vague likely files must emit weak_likely_files warning")
+        _require(weak_data.get("weak_candidate_count") == 2,
+                 "two weak candidates must be counted")
+
+        duplicate = root / "research/_catalog/code_briefs/duplicate.md"
+        duplicate.write_text(brief_text.replace(
+            "### UPGRADE CANDIDATE: Add profile-gated tool routing",
+            "### UPGRADE CANDIDATE: Add branch traceability receipts",
+        ), encoding="utf-8")
+        duplicate_data = collect_code_brief_propose(str(duplicate), root=td)
+        duplicate_codes = {w.get("code") for w in duplicate_data.get("quality_warnings", [])}
+        _require("duplicate_candidate_title" in duplicate_codes,
+                 "duplicate candidate titles must emit warning")
+        _require(duplicate_data.get("duplicate_count", 0) >= 2,
+                 "duplicate candidate titles must increase duplicate_count")
+
+        existing_preview = collect_code_brief_propose(str(brief), root=td)
+        existing_id = existing_preview["proposals"][0]["proposal_id"]
+        prop_dir.mkdir(parents=True, exist_ok=True)
+        (prop_dir / f"{existing_id}.json").write_text("{}", encoding="utf-8")
+        existing_data = collect_code_brief_propose(str(brief), root=td)
+        existing_codes = {w.get("code") for w in existing_data.get("quality_warnings", [])}
+        _require("existing_proposal_id" in existing_codes,
+                 "existing proposal_id must emit duplicate_existing warning")
+        _require(existing_data["proposals"][0].get("duplicate_existing") is True,
+                 "existing proposal must set duplicate_existing=True")
+        _require(existing_data["candidates"][0].get("duplicate_existing") is True,
+                 "existing candidate must set duplicate_existing=True")
+
 
         data_w = collect_code_brief_propose(str(brief), write=True, root=td)
         _require(data_w.get("dry_run") is False, "write=True must set dry_run=False")

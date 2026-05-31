@@ -6741,6 +6741,9 @@ def collect_code_brief_propose(
     from pathlib import Path
 
     from link_core.control_plane import write_proposal as _write_proposal
+    from link_core.control_plane.link_control_plane_proposals import (
+        proposal_storage_dir as _proposal_storage_dir,
+    )
 
     repo_root = Path(root) if root else Path.cwd()
     source_path = Path(source)
@@ -6769,6 +6772,11 @@ def collect_code_brief_propose(
 
     candidates = _parse_code_brief_candidates(brief_text, str(source_path))
     proposals = [_code_brief_candidate_to_proposal(c, str(source_path)) for c in candidates]
+    quality = _analyze_code_brief_proposal_quality(
+        candidates,
+        proposals,
+        proposal_dir=_proposal_storage_dir(repo_root),
+    )
 
     written_paths: list[str] = []
     if write:
@@ -6786,6 +6794,9 @@ def collect_code_brief_propose(
         "proposals": proposals,
         "dry_run": not write,
         "written_paths": written_paths,
+        "quality_warnings": quality["quality_warnings"],
+        "weak_candidate_count": quality["weak_candidate_count"],
+        "duplicate_count": quality["duplicate_count"],
         "next_commands": [
             "python3 link.py growth proposals",
             "python3 link.py growth approve <proposal_id>",
@@ -6865,6 +6876,122 @@ def _normalize_code_brief_risk(risk: str) -> str:
     if value in ("low", "medium", "high"):
         return value
     return "medium"
+
+
+def _code_brief_text_is_vague(text: str) -> bool:
+    value = " ".join(str(text or "").strip().lower().split())
+    if not value:
+        return True
+    vague_values = {
+        "n/a", "na", "none", "unknown", "tbd", "todo",
+        "needs tests", "add tests", "write tests", "test", "tests",
+        "link", "growth", "repo", "repository", "system", "subsystem",
+        "files", "code", "runtime",
+    }
+    if value in vague_values:
+        return True
+    vague_markers = ("tbd", "todo", "unknown", "not sure", "unclear", "needs research")
+    return any(marker in value for marker in vague_markers)
+
+
+def _code_brief_likely_files_are_vague(text: str) -> bool:
+    value = str(text or "").strip()
+    if _code_brief_text_is_vague(value):
+        return True
+    items = _split_code_brief_list(value)
+    if not items:
+        return True
+    for item in items:
+        lower = item.lower()
+        if "/" in item or "." in item:
+            return False
+        if lower.startswith(("link_core", "link_modes", "tests")):
+            return False
+    return True
+
+
+def _analyze_code_brief_proposal_quality(
+    candidates: list[dict[str, Any]],
+    proposals: list[dict[str, Any]],
+    proposal_dir: Any,
+) -> dict[str, Any]:
+    """Return warnings for weak or duplicate code-brief proposal candidates."""
+    from pathlib import Path
+
+    warnings: list[dict[str, Any]] = []
+    weak_indexes: set[int] = set()
+    duplicate_count = 0
+    title_counts: dict[str, int] = {}
+
+    for candidate in candidates:
+        title_key = str(candidate.get("title") or "").strip().lower()
+        if title_key:
+            title_counts[title_key] = title_counts.get(title_key, 0) + 1
+
+    seen_titles: set[str] = set()
+    storage = Path(proposal_dir)
+    for idx, candidate in enumerate(candidates):
+        proposal = proposals[idx] if idx < len(proposals) else {}
+        title = str(candidate.get("title") or proposal.get("title") or "").strip()
+        title_key = title.lower()
+        proposal_id = str(proposal.get("proposal_id") or "").strip()
+
+        def add_warning(code: str, message: str, weak: bool = True) -> None:
+            warnings.append({
+                "code": code,
+                "candidate_index": idx,
+                "title": title,
+                "proposal_id": proposal_id,
+                "message": message,
+            })
+            if weak:
+                weak_indexes.add(idx)
+
+        acceptance = str(candidate.get("acceptance_test_idea") or "").strip()
+        if _code_brief_text_is_vague(acceptance):
+            add_warning("weak_acceptance_test", "missing or vague acceptance test idea")
+
+        likely_files = str(candidate.get("likely_link_files_or_subsystem") or "").strip()
+        if _code_brief_likely_files_are_vague(likely_files):
+            add_warning("weak_likely_files", "missing or vague likely Link files/subsystem")
+
+        risk_raw = str(candidate.get("risk_raw") or "").strip().lower()
+        if risk_raw not in ("low", "medium", "high"):
+            add_warning("unknown_risk_level", "unknown or empty risk level")
+
+        evidence = str(candidate.get("evidence_from_source") or "").strip()
+        if _code_brief_text_is_vague(evidence):
+            add_warning("missing_source_evidence", "missing evidence from source")
+
+        duplicate_title = bool(title_key and title_counts.get(title_key, 0) > 1)
+        if duplicate_title:
+            duplicate_count += 1
+            if title_key in seen_titles:
+                add_warning(
+                    "duplicate_candidate_title",
+                    "duplicate candidate title within this brief",
+                    weak=False,
+                )
+            seen_titles.add(title_key)
+
+        duplicate_existing = bool(proposal_id and (storage / f"{proposal_id}.json").exists())
+        if duplicate_existing:
+            duplicate_count += 1
+            add_warning(
+                "existing_proposal_id",
+                "proposal_id already exists in .agents/control_plane/proposals",
+                weak=False,
+            )
+
+        candidate["duplicate_existing"] = duplicate_existing
+        if proposal:
+            proposal["duplicate_existing"] = duplicate_existing
+
+    return {
+        "quality_warnings": warnings,
+        "weak_candidate_count": len(weak_indexes),
+        "duplicate_count": duplicate_count,
+    }
 
 
 def _code_brief_recommendation(risk: str) -> str:
@@ -6951,6 +7078,9 @@ def _code_brief_propose_error(
         "proposals": [],
         "dry_run": dry_run,
         "written_paths": [],
+        "quality_warnings": [],
+        "weak_candidate_count": 0,
+        "duplicate_count": 0,
         "next_commands": [
             "python3 link.py growth archive-code-brief --source <path> --write",
             "python3 link.py growth run",
@@ -7007,6 +7137,15 @@ def render_code_brief_propose_with_rich(data: dict[str, Any]) -> None:
         console.print(Panel(Text(str(data.get("error")), style="yellow"),
                             border_style="yellow"))
 
+    quality_warnings = data.get("quality_warnings", [])
+    if quality_warnings:
+        warn_text = Text()
+        for warning in quality_warnings:
+            title = warning.get("title") or "candidate"
+            message = warning.get("message") or warning.get("code") or "quality warning"
+            warn_text.append(f"- {title}: {message}\n", style="yellow")
+        console.print(Panel(warn_text, title="QUALITY WARNINGS", border_style="yellow"))
+
     for proposal in data.get("proposals", [])[:8]:
         card = Text()
         card.append(f"[bold]{proposal.get('title', '?')}[/]")
@@ -7050,6 +7189,15 @@ def render_code_brief_propose_plain(data: dict[str, Any]) -> None:
     out.append(f"candidates: {data.get('candidate_count', 0)}  proposals: {data.get('proposal_count', 0)}")
     if data.get("error"):
         out.append(f"note: {data.get('error')}")
+
+    quality_warnings = data.get("quality_warnings", [])
+    if quality_warnings:
+        out.append("")
+        out.append("-- QUALITY WARNINGS --")
+        for warning in quality_warnings:
+            title = warning.get("title") or "candidate"
+            message = warning.get("message") or warning.get("code") or "quality warning"
+            out.append(f"  - {title}: {message}")
     out.append("")
 
     for proposal in data.get("proposals", []):
