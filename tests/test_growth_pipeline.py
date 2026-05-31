@@ -77,6 +77,82 @@ def _sample_control_plane_proposal(
 
 
 # ---------------------------------------------------------------------------
+# 0. Fork lineage receipt helper -- pure model/JSON slice
+# ---------------------------------------------------------------------------
+
+def check_fork_lineage_receipt_helper() -> None:
+    """Fork lineage receipts model parent/child traceability without writes."""
+    from link_core.receipts import (
+        FORK_LINEAGE_RECEIPT_VERSION,
+        build_fork_lineage_receipt,
+        fork_lineage_receipt_from_json,
+        fork_lineage_receipt_to_json,
+        validate_fork_lineage_receipt,
+    )
+
+    receipt = build_fork_lineage_receipt(
+        parent_session_id="parent-session-001",
+        child_session_id="child-session-001",
+        fork_point={"message_index": 7, "run_step": "planner"},
+        fork_depth=2,
+        diverged=True,
+        source_metadata={"source": "growth-proposal", "proposal_id": "branch-trace"},
+        created_at="2026-05-31T00:00:00Z",
+    )
+
+    _require(receipt["receipt_version"] == FORK_LINEAGE_RECEIPT_VERSION,
+             "fork receipt version mismatch")
+    _require(receipt["parent_session_id"] == "parent-session-001",
+             "parent_session_id must be preserved")
+    _require(receipt["child_session_id"] == "child-session-001",
+             "child_session_id must be preserved")
+    _require(receipt["fork_point"]["message_index"] == 7,
+             "fork_point message_index must be preserved")
+    _require(receipt["fork_depth"] == 2, "fork_depth must be preserved")
+    _require(receipt["diverged"] is True, "diverged must be preserved")
+    _require(receipt["divergence_status"] == "diverged",
+             "divergence_status must reflect diverged=True")
+    _require(receipt["parent_trace"]["child_session_id"] == "child-session-001",
+             "parent trace must point to child session")
+    _require(receipt["child_trace"]["parent_session_id"] == "parent-session-001",
+             "child trace must point back to parent session")
+
+    encoded = fork_lineage_receipt_to_json(receipt)
+    _require(encoded == fork_lineage_receipt_to_json(receipt),
+             "fork receipt JSON serialization must be stable")
+    decoded = fork_lineage_receipt_from_json(encoded)
+    _require(decoded == receipt, "fork receipt JSON round-trip must preserve data")
+
+    minimal = build_fork_lineage_receipt(
+        parent_session_id="parent-session-002",
+        child_session_id="child-session-002",
+        created_at="2026-05-31T00:00:01Z",
+    )
+    _require(minimal["fork_point"] == {},
+             "missing optional fork_point must default to empty dict")
+    _require(minimal["fork_depth"] == 1,
+             "missing optional fork_depth must default to 1")
+    _require(minimal["diverged"] is False,
+             "missing optional diverged must default to False")
+    _require(minimal["source_metadata"] == {},
+             "missing optional source_metadata must default to empty dict")
+    validate_fork_lineage_receipt(minimal)
+
+    try:
+        build_fork_lineage_receipt(
+            parent_session_id="same-session",
+            child_session_id="same-session",
+            created_at="2026-05-31T00:00:02Z",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("same parent/child session ids must be rejected")
+
+    print("fork lineage receipt helper OK")
+
+
+# ---------------------------------------------------------------------------
 # 1. Growth facade surface
 # ---------------------------------------------------------------------------
 
@@ -3252,6 +3328,7 @@ Attempt a restricted tool call and verify the gate returns deny before execution
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    check_fork_lineage_receipt_helper()
     check_growth_facade()
     check_upgrade_miner_candidates()
     check_research_archive_miner()
