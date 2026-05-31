@@ -46,6 +46,16 @@ REQUIRED_TRANSCRIPT_SNAPSHOT_FIELDS: Final[tuple[str, ...]] = (
     "metadata",
 )
 
+CONTENT_REPLACEMENT_VERSION: Final[str] = "link-content-replacement-v1"
+
+REQUIRED_CONTENT_REPLACEMENT_FIELDS: Final[tuple[str, ...]] = (
+    "replacement_id",
+    "session_id",
+    "previous_content_hash",
+    "replacement_content_hash",
+    "created_at",
+)
+
 
 def utc_now() -> str:
     """Return a UTC timestamp suitable for deterministic receipt fields."""
@@ -138,9 +148,15 @@ def build_fork_lineage_receipt(
     diverged: bool | None = None,
     divergence_status: str | None = None,
     source_metadata: dict[str, Any] | None = None,
+    content_replacements: list[dict[str, Any]] | None = None,
     created_at: str | None = None,
 ) -> dict[str, Any]:
-    """Create a fork lineage receipt without writing runtime state."""
+    """Create a fork lineage receipt without writing runtime state.
+
+    When ``content_replacements`` is provided each entry is validated
+    as a ``ContentReplacementEntry`` before inclusion.  Only content
+    hashes are stored — raw replacement content is never embedded.
+    """
     normalized_fork_point = dict(fork_point or {})
     normalized_depth = 1 if fork_depth is None else fork_depth
     normalized_diverged = False if diverged is None else diverged
@@ -175,6 +191,12 @@ def build_fork_lineage_receipt(
             "parent_session_id": parent_session_id,
         },
     }
+    if content_replacements is not None:
+        validated: list[dict[str, Any]] = []
+        for cr in content_replacements:
+            validate_content_replacement_entry(cr)
+            validated.append(dict(cr))
+        receipt["content_replacements"] = validated
     validate_fork_lineage_receipt(receipt)
     return receipt
 
@@ -201,6 +223,17 @@ def validate_fork_lineage_receipt(receipt: dict[str, Any]) -> None:
         raise ValueError("divergence_status must be unknown, not_diverged, or diverged")
     if not isinstance(receipt["source_metadata"], dict):
         raise TypeError("source_metadata must be a dict")
+
+    content_replacements = receipt.get("content_replacements")
+    if content_replacements is not None:
+        if not isinstance(content_replacements, list):
+            raise TypeError("content_replacements must be a list")
+        for index, cr in enumerate(content_replacements):
+            if not isinstance(cr, dict):
+                raise TypeError(
+                    f"content_replacements entry {index} must be a dict"
+                )
+            validate_content_replacement_entry(cr)
 
     parent_trace = receipt["parent_trace"]
     child_trace = receipt["child_trace"]
@@ -336,18 +369,160 @@ def transcript_snapshot_receipt_from_json(text: str) -> dict[str, Any]:
     return receipt
 
 
+def make_content_replacement_id(
+    session_id: str,
+    previous_content_hash: str,
+    replacement_content_hash: str,
+    *,
+    message_index: int | None = None,
+) -> str:
+    """Build a stable content replacement id.
+
+    Derived from the session, the two content hashes, and an optional
+    message index.  Uses SHA-256 for collision resistance with a
+    human-readable slug prefix.
+    """
+    session_slug = _slugify(session_id)[:40]
+    digest_source = _stable_json(
+        {
+            "message_index": message_index,
+            "previous_content_hash": previous_content_hash,
+            "receipt_version": CONTENT_REPLACEMENT_VERSION,
+            "replacement_content_hash": replacement_content_hash,
+            "session_id": session_id,
+        }
+    )
+    digest = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()[:12]
+    return f"content-replacement-{session_slug}-{digest}"
+
+
+def build_content_replacement_entry(
+    *,
+    session_id: str,
+    previous_content_hash: str,
+    replacement_content_hash: str,
+    created_at: str | None = None,
+    message_index: int | None = None,
+    fork_point: dict[str, Any] | None = None,
+    reason: str | None = None,
+    source: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a validated content replacement entry.
+
+    Stores content hashes only — never raw transcript content.  The
+    entry is designed to be embedded inside a fork lineage receipt or
+    stored independently.
+    """
+    entry: dict[str, Any] = {
+        "replacement_id": make_content_replacement_id(
+            session_id,
+            previous_content_hash,
+            replacement_content_hash,
+            message_index=message_index,
+        ),
+        "session_id": session_id,
+        "previous_content_hash": previous_content_hash,
+        "replacement_content_hash": replacement_content_hash,
+        "created_at": created_at or utc_now(),
+    }
+    if message_index is not None:
+        entry["message_index"] = message_index
+    if fork_point is not None and fork_point:
+        entry["fork_point"] = dict(fork_point)
+    if reason is not None:
+        entry["reason"] = reason
+    if source is not None:
+        entry["source"] = source
+    if metadata is not None:
+        entry["metadata"] = dict(metadata)
+    validate_content_replacement_entry(entry)
+    return entry
+
+
+def validate_content_replacement_entry(entry: dict[str, Any]) -> None:
+    """Validate the stable shape of a content replacement entry."""
+    missing = [
+        field for field in REQUIRED_CONTENT_REPLACEMENT_FIELDS
+        if field not in entry
+    ]
+    if missing:
+        raise ValueError(
+            f"content replacement entry missing fields: {', '.join(missing)}"
+        )
+
+    for field in ("replacement_id", "session_id", "created_at"):
+        if not isinstance(entry[field], str) or not entry[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+
+    for hash_field in ("previous_content_hash", "replacement_content_hash"):
+        val = entry[hash_field]
+        if not isinstance(val, str) or not val.strip():
+            raise ValueError(f"{hash_field} must be a non-empty string")
+        if len(val) != 64 or not _is_hex_string(val):
+            raise ValueError(
+                f"{hash_field} must be a 64-character hex string (sha-256 hash)"
+            )
+
+    if entry["previous_content_hash"] == entry["replacement_content_hash"]:
+        raise ValueError(
+            "previous_content_hash and replacement_content_hash must differ"
+        )
+
+    optional_checks: dict[str, type] = {
+        "message_index": int,
+        "fork_point": dict,
+        "reason": str,
+        "source": str,
+        "metadata": dict,
+    }
+    for field, expected_type in optional_checks.items():
+        if field in entry and entry[field] is not None:
+            if not isinstance(entry[field], expected_type):
+                raise TypeError(
+                    f"{field} must be {expected_type.__name__} or None, "
+                    f"got {type(entry[field]).__name__}"
+                )
+            if expected_type in (str, int) and isinstance(entry[field], str) and not entry[field].strip():
+                raise ValueError(f"{field} must be a non-empty string")
+
+
+def _is_hex_string(value: str) -> bool:
+    """Return True if value consists solely of lowercase hex chars."""
+    return all(c in "0123456789abcdef" for c in value)
+
+
+def content_replacement_entry_to_json(entry: dict[str, Any]) -> str:
+    """Serialize a validated content replacement entry to stable JSON."""
+    validate_content_replacement_entry(entry)
+    return json.dumps(entry, indent=2, sort_keys=True, default=str) + "\n"
+
+
+def content_replacement_entry_from_json(text: str) -> dict[str, Any]:
+    """Deserialize and validate a content replacement entry."""
+    entry = json.loads(text)
+    validate_content_replacement_entry(entry)
+    return entry
+
+
 __all__ = [
+    "CONTENT_REPLACEMENT_VERSION",
     "FORK_LINEAGE_RECEIPT_VERSION",
     "TRANSCRIPT_SNAPSHOT_RECEIPT_VERSION",
     "make_unique_title",
+    "build_content_replacement_entry",
     "build_fork_lineage_receipt",
     "build_transcript_snapshot_receipt",
+    "content_replacement_entry_from_json",
+    "content_replacement_entry_to_json",
     "fork_lineage_receipt_from_json",
     "fork_lineage_receipt_to_json",
+    "make_content_replacement_id",
     "make_fork_lineage_receipt_id",
     "make_transcript_snapshot_id",
     "transcript_snapshot_receipt_from_json",
     "transcript_snapshot_receipt_to_json",
+    "validate_content_replacement_entry",
     "validate_fork_lineage_receipt",
     "validate_transcript_snapshot_receipt",
 ]

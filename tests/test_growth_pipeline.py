@@ -3488,6 +3488,212 @@ def check_make_unique_title() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 57. Content replacement entry helper
+# ---------------------------------------------------------------------------
+
+def check_content_replacement_entry_helper() -> None:
+    """Build, validate, and round-trip content replacement entries."""
+    from link_core.receipts import (
+        CONTENT_REPLACEMENT_VERSION,
+        build_content_replacement_entry,
+        content_replacement_entry_from_json,
+        content_replacement_entry_to_json,
+        validate_content_replacement_entry,
+    )
+
+    prev_hash = "a" * 64
+    new_hash = "b" * 64
+
+    # Full entry with all optional fields
+    entry = build_content_replacement_entry(
+        session_id="session-cr-001",
+        previous_content_hash=prev_hash,
+        replacement_content_hash=new_hash,
+        created_at="2026-05-31T00:00:00Z",
+        message_index=7,
+        fork_point={"message_index": 7, "run_step": "planner"},
+        reason="User edited content inline",
+        source="content-regeneration",
+        metadata={"tool": "unknown"},
+    )
+
+    _require(entry["session_id"] == "session-cr-001",
+             "session_id must be preserved")
+    _require(entry["previous_content_hash"] == prev_hash,
+             "previous_content_hash must be preserved")
+    _require(entry["replacement_content_hash"] == new_hash,
+             "replacement_content_hash must be preserved")
+    _require(entry["message_index"] == 7,
+             "message_index must be preserved")
+    _require(entry["reason"] == "User edited content inline",
+             "reason must be preserved")
+    _require(entry["source"] == "content-regeneration",
+             "source must be preserved")
+    _require(isinstance(entry["replacement_id"], str) and entry["replacement_id"].startswith("content-replacement-"),
+             "replacement_id must have content-replacement prefix")
+    _require(entry["fork_point"]["message_index"] == 7,
+             "fork_point message_index must be preserved")
+
+    # Stable JSON serialization
+    encoded = content_replacement_entry_to_json(entry)
+    _require(encoded == content_replacement_entry_to_json(entry),
+             "content replacement JSON serialization must be stable")
+    decoded = content_replacement_entry_from_json(encoded)
+    _require(decoded == entry,
+             "content replacement JSON round-trip must preserve data")
+
+    # Minimal entry (only required fields)
+    minimal = build_content_replacement_entry(
+        session_id="session-cr-002",
+        previous_content_hash=prev_hash,
+        replacement_content_hash=new_hash,
+        created_at="2026-05-31T00:00:01Z",
+    )
+    validate_content_replacement_entry(minimal)
+    _require("message_index" not in minimal,
+             "missing optional message_index should be absent")
+    _require("reason" not in minimal,
+             "missing optional reason should be absent")
+    _require("source" not in minimal,
+             "missing optional source should be absent")
+
+    # Same hash must be rejected (no-op replacement)
+    try:
+        build_content_replacement_entry(
+            session_id="session-cr-003",
+            previous_content_hash=prev_hash,
+            replacement_content_hash=prev_hash,
+        )
+    except ValueError as exc:
+        _require("must differ" in str(exc).lower(),
+                 "same hashes must be rejected with 'must differ'")
+    else:
+        raise AssertionError("identical hashes must be rejected")
+
+    # Missing required field must be rejected
+    try:
+        validate_content_replacement_entry(
+            {"replacement_id": "bad", "session_id": "s", "created_at": "t"}
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("missing required fields must be rejected")
+
+    # Non-hex hash must be rejected
+    try:
+        build_content_replacement_entry(
+            session_id="session-cr-004",
+            previous_content_hash="not-a-hex-hash",
+            replacement_content_hash=new_hash,
+        )
+    except ValueError as exc:
+        _require("hex" in str(exc).lower(),
+                 "non-hex hash must be rejected with 'hex' mention")
+    else:
+        raise AssertionError("non-hex hash must be rejected")
+
+    print("content replacement entry helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 58. Fork lineage with content replacements
+# ---------------------------------------------------------------------------
+
+def check_fork_lineage_with_content_replacements() -> None:
+    """Fork lineage receipts accept optional content replacement entries."""
+    from link_core.receipts import (
+        build_content_replacement_entry,
+        build_fork_lineage_receipt,
+        fork_lineage_receipt_from_json,
+        fork_lineage_receipt_to_json,
+        validate_fork_lineage_receipt,
+    )
+
+    prev_hash = "a" * 64
+    new_hash = "b" * 64
+    prev_hash_2 = "c" * 64
+    new_hash_2 = "d" * 64
+
+    cr1 = build_content_replacement_entry(
+        session_id="fork-cr-001",
+        previous_content_hash=prev_hash,
+        replacement_content_hash=new_hash,
+        message_index=3,
+        reason="edited by user",
+        created_at="2026-05-31T00:00:00Z",
+    )
+    cr2 = build_content_replacement_entry(
+        session_id="fork-cr-001",
+        previous_content_hash=prev_hash_2,
+        replacement_content_hash=new_hash_2,
+        message_index=7,
+        reason="content regeneration",
+        created_at="2026-05-31T00:00:01Z",
+    )
+
+    receipt = build_fork_lineage_receipt(
+        parent_session_id="parent-cr-001",
+        child_session_id="child-cr-001",
+        fork_point={"message_index": 10, "run_step": "planner"},
+        fork_depth=2,
+        diverged=True,
+        content_replacements=[cr1, cr2],
+        created_at="2026-05-31T00:00:02Z",
+    )
+
+    _require("content_replacements" in receipt,
+             "receipt must have content_replacements field")
+    crs = receipt["content_replacements"]
+    _require(isinstance(crs, list) and len(crs) == 2,
+             f"content_replacements must be list of 2, got {len(crs) if isinstance(crs, list) else type(crs)}")
+    _require(crs[0]["replacement_id"] == cr1["replacement_id"],
+             "first replacement_id must match input")
+    _require(crs[0]["session_id"] == "fork-cr-001",
+             "first session_id must match input")
+    _require(crs[0]["message_index"] == 3,
+             "first message_index must be preserved")
+    _require(crs[1]["replacement_id"] == cr2["replacement_id"],
+             "second replacement_id must match input")
+    _require(crs[1]["reason"] == "content regeneration",
+             "second reason must be preserved")
+
+    # JSON round-trip for the combined receipt
+    encoded = fork_lineage_receipt_to_json(receipt)
+    _require(encoded == fork_lineage_receipt_to_json(receipt),
+             "combined receipt JSON serialization must be stable")
+    decoded = fork_lineage_receipt_from_json(encoded)
+    _require(decoded == receipt,
+             "combined receipt JSON round-trip must preserve data")
+    _require(decoded["content_replacements"] == receipt["content_replacements"],
+             "content_replacements must survive JSON round-trip")
+
+    # Backward-compatible: no content_replacements
+    no_cr = build_fork_lineage_receipt(
+        parent_session_id="parent-cr-002",
+        child_session_id="child-cr-002",
+        created_at="2026-05-31T00:00:03Z",
+    )
+    _require("content_replacements" not in no_cr,
+             "receipt without content_replacements must not have the field")
+    validate_fork_lineage_receipt(no_cr)
+
+    # content_replacements must be a list
+    try:
+        build_fork_lineage_receipt(
+            parent_session_id="parent-cr-003",
+            child_session_id="child-cr-003",
+            content_replacements={"not": "a list"},  # type: ignore[arg-type]
+        )
+    except (TypeError, ValueError):
+        pass
+    else:
+        raise AssertionError("non-list content_replacements must be rejected")
+
+    print("fork lineage with content replacements OK")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -3547,6 +3753,8 @@ def main() -> None:
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()
     check_make_unique_title()
+    check_content_replacement_entry_helper()
+    check_fork_lineage_with_content_replacements()
     print("Growth pipeline smoke tests passed")
 
 
