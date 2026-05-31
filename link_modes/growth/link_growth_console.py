@@ -7613,7 +7613,7 @@ def run_main(argv: list[str] | None = None) -> int:
         --source <path>  Optional research source for a mining preview.
         --json           Machine-readable output.
     """
-    args = sys.argv[1:] if argv is None else argv
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
 
     if "--help" in args or "-h" in args:
         print("Growth run: guided Growth workflow dashboard")
@@ -7686,6 +7686,13 @@ def collect_run_data(
         has_handoffs=has_handoffs,
         router_state=router_state,
     )
+    coverage = _collect_growth_coverage_data(
+        repo_root=repo_root,
+        proposals=proposals,
+        proposal_counts=status_counts,
+        router_state=router_state,
+        commands=commands,
+    )
 
     result: dict[str, Any] = {
         "version": base_data.get("version", ""),
@@ -7700,6 +7707,7 @@ def collect_run_data(
         "has_handoffs": has_handoffs,
         "router_state": router_state,
         "patch_draft_counts": patch_draft_counts,
+        "coverage": coverage,
         "next_action": next_action,
         "commands": commands,
         "source_preview": None,
@@ -7727,6 +7735,53 @@ def collect_run_data(
             }
 
     return result
+
+
+def _collect_growth_coverage_data(
+    repo_root: "Path",
+    proposals: list[dict[str, Any]],
+    proposal_counts: dict[str, int],
+    router_state: dict[str, Any],
+    commands: list[str],
+) -> dict[str, Any]:
+    """Collect read-only Growth pipeline coverage counts for run JSON."""
+    code_queue = collect_archive_code_queue(
+        top=_MAX_CODE_QUEUE_TOP,
+        root=str(repo_root),
+    )
+    code_queue_count = int(code_queue.get("queue_count", 0) or 0)
+    skipped_count = int(code_queue.get("skipped_count", 0) or 0)
+    discovered_count = int(code_queue.get("total_discovered", 0) or 0) + skipped_count
+
+    candidate_count = 0
+    briefs_dir = repo_root / _CODE_BRIEFS_DIR
+    if briefs_dir.exists():
+        for path in sorted(briefs_dir.glob("*.md")):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            candidate_count += len(_parse_code_brief_candidates(text, str(path)))
+
+    next_commands = list(commands or [])
+    return {
+        "archive_count": int(router_state.get("archive_count", 0) or 0),
+        "extracted_source_count": int(router_state.get("extracted_source_count", 0) or 0),
+        "catalog_count": int(router_state.get("catalog_count", 0) or 0),
+        "discovered_code_file_count": discovered_count,
+        "queued_code_file_count": code_queue_count,
+        "skipped_code_file_count": skipped_count,
+        "code_brief_count": int(router_state.get("code_brief_count", 0) or 0),
+        "candidate_count": candidate_count,
+        "proposal_count": len(proposals),
+        "pending_proposal_count": int(proposal_counts.get("pending", 0) or 0),
+        "accepted_proposal_count": int(proposal_counts.get("accepted", 0) or 0),
+        "rejected_proposal_count": int(proposal_counts.get("rejected", 0) or 0),
+        "handoff_count": int(router_state.get("handoff_count", 0) or 0),
+        "verifier_receipt_count": int(router_state.get("verifier_receipt_count", 0) or 0),
+        "next_safest_command": next_commands[0] if next_commands else "",
+        "next_commands": next_commands,
+    }
 
 
 def _collect_growth_run_base_data(repo_root: "Path") -> dict[str, Any]:

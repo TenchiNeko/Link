@@ -1067,7 +1067,7 @@ def check_growth_run_guide() -> None:
 
     for key in ("repo", "healthcheck", "mode", "pipeline_stage",
                 "proposal_counts", "proposals_total",
-                "accepted_proposal_ids", "next_action", "commands",
+                "accepted_proposal_ids", "coverage", "next_action", "commands",
                 "source_preview"):
         if key not in data:
             raise AssertionError(
@@ -1086,6 +1086,24 @@ def check_growth_run_guide() -> None:
     _require(isinstance(data["commands"], list), "commands must be a list")
     _require(len(data["commands"]) >= 1, "commands must be non-empty")
     _require(data["pipeline_stage"] is not None, "pipeline_stage must not be None")
+
+    coverage = data["coverage"]
+    _require(isinstance(coverage, dict), "coverage must be a dict")
+    int_keys = (
+        "archive_count", "extracted_source_count", "catalog_count",
+        "discovered_code_file_count", "queued_code_file_count",
+        "skipped_code_file_count", "code_brief_count", "candidate_count",
+        "proposal_count", "pending_proposal_count", "accepted_proposal_count",
+        "rejected_proposal_count", "handoff_count", "verifier_receipt_count",
+    )
+    for key in int_keys:
+        _require(key in coverage, f"coverage missing key: {key}")
+        _require(isinstance(coverage[key], int), f"coverage {key} must be an int")
+        _require(coverage[key] >= 0, f"coverage {key} must be >= 0")
+    _require(isinstance(coverage.get("next_safest_command"), str),
+             "coverage next_safest_command must be a string")
+    _require(isinstance(coverage.get("next_commands"), list),
+             "coverage next_commands must be a list")
 
     # source_preview is None when no --source given
     _require(data["source_preview"] is None,
@@ -1176,6 +1194,19 @@ Create a temp code brief and verify growth run recommends code-brief-propose.
         commands = "\n".join(data.get("commands", []))
         _require("archive-inventory" in commands or "propose --source" in commands,
                  "empty router state must recommend archive inventory or ingest start")
+        coverage = data.get("coverage", {})
+        _require(coverage.get("next_safest_command") == data.get("commands", [""])[0],
+                 "coverage next_safest_command must mirror router first command")
+        _require(coverage.get("next_commands") == data.get("commands"),
+                 "coverage next_commands must preserve router commands")
+        for key in (
+            "archive_count", "extracted_source_count", "catalog_count",
+            "discovered_code_file_count", "queued_code_file_count",
+            "skipped_code_file_count", "code_brief_count", "candidate_count",
+            "proposal_count", "pending_proposal_count", "accepted_proposal_count",
+            "rejected_proposal_count", "handoff_count", "verifier_receipt_count",
+        ):
+            _require(coverage.get(key) == 0, f"empty coverage {key} must be 0")
         _require(not (root / ".agents").exists(), "empty router must not create .agents")
         _require(not (root / ".link").exists(), "empty router must not create .link")
 
@@ -1195,6 +1226,15 @@ Create a temp code brief and verify growth run recommends code-brief-propose.
                  "code brief state must recommend code-brief-propose")
         _require("research/_catalog/code_briefs/router.md" in commands,
                  "code brief command must include repo-relative brief path")
+        coverage = data.get("coverage", {})
+        _require(coverage.get("code_brief_count") == 1,
+                 "coverage must count code briefs")
+        _require(coverage.get("candidate_count") == 1,
+                 "coverage must count code brief candidates")
+        _require(coverage.get("proposal_count") == 0,
+                 "coverage proposal_count must be 0 before proposal write")
+        _require(coverage.get("next_safest_command") == data.get("commands", [""])[0],
+                 "coverage next_safest_command must not change router behavior")
         _require(before == after, "router must not write files while inspecting code briefs")
 
     with tempfile.TemporaryDirectory() as td:
@@ -1207,6 +1247,11 @@ Create a temp code brief and verify growth run recommends code-brief-propose.
                  "pending proposals must recommend proposals view")
         _require("growth approve <id>" in commands,
                  "pending proposals must recommend approve placeholder")
+        coverage = data.get("coverage", {})
+        _require(coverage.get("proposal_count") == 1,
+                 "coverage must count generated proposals")
+        _require(coverage.get("pending_proposal_count") == 1,
+                 "coverage must count pending proposals")
 
     with tempfile.TemporaryDirectory() as td:
         write_proposal(_sample_control_plane_proposal("router-accepted-001", "accepted"), root=td)
@@ -1216,6 +1261,11 @@ Create a temp code brief and verify growth run recommends code-brief-propose.
                  "accepted proposal must route to PatchWorker")
         _require("growth handoff router-accepted-001 --write" in commands,
                  "accepted proposal must recommend handoff for the accepted id")
+        coverage = data.get("coverage", {})
+        _require(coverage.get("accepted_proposal_count") == 1,
+                 "coverage must count accepted proposals")
+        _require(coverage.get("next_safest_command") == data.get("commands", [""])[0],
+                 "coverage next_safest_command must mirror accepted router command")
 
     print("growth run smart router OK")
 
