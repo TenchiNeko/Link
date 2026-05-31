@@ -5954,6 +5954,7 @@ def collect_code_brief(
     source: str,
     write: bool = False,
     root: str | None = None,
+    include_brief_text: bool = False,
 ) -> dict[str, Any]:
     """Read a code file or directory and produce a markdown research brief.
 
@@ -6046,7 +6047,7 @@ def collect_code_brief(
         brief_file.write_text(brief_md, encoding="utf-8")
         brief_path = str(brief_file)
 
-    return {
+    result = {
         "ok": True,
         "source_path": str(source_path),
         "source_name": source_name,
@@ -6070,6 +6071,9 @@ def collect_code_brief(
         "warnings": [],
         "error": None,
     }
+    if include_brief_text:
+        result["brief_markdown"] = brief_md
+    return result
 
 
 def _collect_brief_files(
@@ -6827,6 +6831,231 @@ def render_code_brief_view(data: dict[str, Any]) -> None:
         render_code_brief_plain(data)
         return
     render_code_brief_with_rich(data)
+
+
+
+# ── batch code brief proposal preview entry point ───────────────────────
+
+
+def _normalize_cli_dashes(args: list[str]) -> list[str]:
+    """Normalize pasted en/em dash options to regular CLI dashes."""
+    return [arg.replace("\u2013", "--", 1).replace("\u2014", "--", 1) for arg in args]
+
+
+def code_brief_propose_batch_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth code-brief-propose-batch``.
+
+    Dry-run only. Ranks code sources, builds in-memory code briefs, and previews
+    proposal generation. No proposal JSON or code brief files are written.
+    """
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+
+    if "--write" in args:
+        print("error: code-brief-propose-batch is dry-run only in this slice", file=sys.stderr)
+        return 2
+
+    if "--help" in args or "-h" in args:
+        print("Growth code-brief-propose-batch: preview proposals for top code queue entries")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth code-brief-propose-batch --top <N>")
+        print("  python3 link.py growth code-brief-propose-batch --top <N> --json")
+        print("")
+        print("Dry-run only. Reads source text and writes no briefs or proposals.")
+        return 0
+
+    top_arg = _parse_arg(args, "--top")
+    top = _resolve_code_queue_top(top_arg)
+    if isinstance(top, str):
+        print(f"error: {top}", file=sys.stderr)
+        return 1
+
+    root_override = _parse_arg(args, "--root")
+    data = collect_code_brief_propose_batch(top=top, root=root_override)
+
+    if "--json" in args:
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+
+    render_code_brief_propose_batch_view(data)
+    return 0
+
+
+def collect_code_brief_propose_batch(
+    top: int = _DEFAULT_CODE_QUEUE_TOP,
+    root: str | None = None,
+) -> dict[str, Any]:
+    """Preview code-brief proposal generation for top archive-code-queue entries."""
+    from pathlib import Path
+
+    from link_core.control_plane.link_control_plane_proposals import (
+        proposal_storage_dir as _proposal_storage_dir,
+    )
+
+    repo_root = Path(root) if root else Path.cwd()
+    effective_top = min(max(int(top), 1), _MAX_CODE_QUEUE_TOP)
+    warnings: list[Any] = []
+    if top > _MAX_CODE_QUEUE_TOP:
+        warnings.append(f"top {top} capped at {_MAX_CODE_QUEUE_TOP} (hard limit)")
+
+    queue_data = collect_archive_code_queue(top=effective_top, root=str(repo_root))
+    queue_entries = list(queue_data.get("source_queue", []))[:effective_top]
+    warnings.extend(queue_data.get("warnings", []) or [])
+
+    source_summaries: list[dict[str, Any]] = []
+    candidate_total = 0
+    proposal_total = 0
+    weak_total = 0
+    duplicate_total = 0
+
+    for entry in queue_entries:
+        source_path = str(entry.get("recommended_source_path") or entry.get("source_path") or "")
+        source_warnings: list[Any] = []
+        brief_data = collect_code_brief(
+            source_path,
+            write=False,
+            root=str(repo_root),
+            include_brief_text=True,
+        )
+        source_warnings.extend(brief_data.get("warnings", []) or [])
+
+        candidates: list[dict[str, Any]] = []
+        proposals: list[dict[str, Any]] = []
+        quality_warnings: list[dict[str, Any]] = []
+        weak_count = 0
+        duplicate_count = 0
+
+        if brief_data.get("ok"):
+            brief_md = str(brief_data.get("brief_markdown") or "")
+            candidates = _parse_code_brief_candidates(brief_md, source_path)
+            proposals = [_code_brief_candidate_to_proposal(c, source_path) for c in candidates]
+            quality = _analyze_code_brief_proposal_quality(
+                candidates,
+                proposals,
+                proposal_dir=_proposal_storage_dir(repo_root),
+            )
+            quality_warnings = quality["quality_warnings"]
+            weak_count = quality["weak_candidate_count"]
+            duplicate_count = quality["duplicate_count"]
+        else:
+            source_warnings.append(brief_data.get("error") or "code brief preview failed")
+
+        candidate_total += len(candidates)
+        proposal_total += len(proposals)
+        weak_total += weak_count
+        duplicate_total += duplicate_count
+
+        source_summaries.append({
+            "source_path": source_path,
+            "source_type": brief_data.get("source_type") or entry.get("recommended_source_type", ""),
+            "rank": entry.get("rank"),
+            "suggested_brief_command": f"python3 link.py growth archive-code-brief --source {source_path} --write",
+            "suggested_propose_command": "python3 link.py growth code-brief-propose --source <brief.md>",
+            "candidate_count": len(candidates),
+            "proposal_count": len(proposals),
+            "weak_candidate_count": weak_count,
+            "duplicate_count": duplicate_count,
+            "warnings": source_warnings + quality_warnings,
+            "ok": bool(brief_data.get("ok")),
+        })
+
+    if not queue_entries:
+        warnings.append("no code queue entries available for batch preview")
+
+    return {
+        "ok": True,
+        "dry_run": True,
+        "top_requested": effective_top,
+        "queued_source_count": len(queue_entries),
+        "processed_source_count": len(source_summaries),
+        "candidate_count": candidate_total,
+        "proposal_count": proposal_total,
+        "weak_candidate_count": weak_total,
+        "duplicate_count": duplicate_total,
+        "sources": source_summaries,
+        "warnings": warnings,
+        "written_paths": [],
+        "next_commands": [
+            "python3 link.py growth archive-code-queue",
+            "python3 link.py growth archive-code-brief --source <path> --write",
+            "python3 link.py growth code-brief-propose --source <brief.md>",
+        ],
+        "error": None,
+    }
+
+
+def render_code_brief_propose_batch_view(data: dict[str, Any]) -> None:
+    """Render batch proposal preview with rich if available."""
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_code_brief_propose_batch_plain(data)
+        return
+    render_code_brief_propose_batch_with_rich(data)
+
+
+def render_code_brief_propose_batch_with_rich(data: dict[str, Any]) -> None:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.text import Text
+
+    console = Console(highlight=False, soft_wrap=True)
+    header = Text()
+    header.append("LINK GROWTH CODE BRIEF PROPOSE BATCH", style="bold bright_cyan")
+    header.append("  DRY RUN", style="yellow")
+    console.print(header)
+    console.print(Panel(
+        f"queued: {data.get('queued_source_count', 0)}  "
+        f"processed: {data.get('processed_source_count', 0)}  "
+        f"candidates: {data.get('candidate_count', 0)}  "
+        f"proposals: {data.get('proposal_count', 0)}",
+        border_style="dim",
+    ))
+
+    for warning in data.get("warnings", []):
+        console.print(Panel(Text(str(warning), style="yellow"), title="WARNING", border_style="yellow"))
+
+    for source in data.get("sources", [])[:10]:
+        body = Text()
+        body.append(str(source.get("source_path", "?")), style="bold")
+        body.append(f"\ncandidates: {source.get('candidate_count', 0)}  proposals: {source.get('proposal_count', 0)}")
+        body.append(f"\ncmd: $ {source.get('suggested_brief_command', '?')}", style="dim")
+        console.print(Panel(body, title=f"SOURCE #{source.get('rank', '?')}", border_style="dim"))
+
+    next_text = Text()
+    for command in data.get("next_commands", []):
+        next_text.append(f"  $ {command}\n", style="dim")
+    console.print(Rule(style="dim"))
+    console.print(Panel(next_text, title="SUGGESTED NEXT STEPS", border_style="green"))
+
+
+def render_code_brief_propose_batch_plain(data: dict[str, Any]) -> None:
+    out: list[str] = []
+    out.append("== LINK GROWTH CODE BRIEF PROPOSE BATCH (DRY RUN) ==")
+    out.append(
+        f"queued: {data.get('queued_source_count', 0)}  "
+        f"processed: {data.get('processed_source_count', 0)}  "
+        f"candidates: {data.get('candidate_count', 0)}  "
+        f"proposals: {data.get('proposal_count', 0)}"
+    )
+    if data.get("warnings"):
+        out.append("")
+        out.append("-- WARNINGS --")
+        for warning in data.get("warnings", []):
+            out.append(f"  - {warning}")
+    out.append("")
+    for source in data.get("sources", []):
+        out.append(f"--- SOURCE #{source.get('rank', '?')} ---")
+        out.append(f"source:     {source.get('source_path', '?')}")
+        out.append(f"candidates: {source.get('candidate_count', 0)}")
+        out.append(f"proposals:  {source.get('proposal_count', 0)}")
+        out.append(f"brief:      $ {source.get('suggested_brief_command', '?')}")
+        out.append("")
+    out.append("-- SUGGESTED NEXT STEPS --")
+    for command in data.get("next_commands", []):
+        out.append(f"  $ {command}")
+    print("\n".join(out))
 
 
 # ── code brief propose entry point ───────────────────────────────────────

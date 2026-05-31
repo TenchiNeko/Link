@@ -2713,6 +2713,121 @@ def check_growth_archive_code_queue_top_clamp() -> None:
     print("growth archive-code-queue top clamp OK")
 
 
+
+# ---------------------------------------------------------------------------
+# 47. Growth code-brief-propose-batch -- dry-run preview
+# ---------------------------------------------------------------------------
+
+def check_growth_code_brief_propose_batch() -> None:
+    """code-brief-propose-batch previews top code queue proposals without writes."""
+    import contextlib
+    import io
+    import json as _json
+    from pathlib import Path
+    from link_modes.growth.link_growth_console import (
+        collect_code_brief_propose_batch,
+        code_brief_propose_batch_main,
+        _CATALOG_OUTPUT_DIR,
+        _MAX_CODE_QUEUE_TOP,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        ext = root / "extracted/batch_proj"
+        (ext / "src").mkdir(parents=True)
+        (ext / "src/agent.ts").write_text(
+            "// Agent tool orchestration workflow.\n"
+            "export function agentToolRouter() { return 'agent'; }\n",
+            encoding="utf-8",
+        )
+        (ext / "src/router.ts").write_text(
+            "// Router dispatch table for command handlers.\n"
+            "export function routeCommand() { return 'router'; }\n",
+            encoding="utf-8",
+        )
+        catalogs_dir = root / _CATALOG_OUTPUT_DIR
+        catalogs_dir.mkdir(parents=True)
+        catalog = {
+            "catalog_version": "link-archive-catalog-v1",
+            "source_name": "batch_proj",
+            "source_path": str(ext),
+            "candidate_research_sources": [],
+            "important_files": [],
+            "file_type_counts": {"typescript": 2},
+            "top_level_dirs": ["src"],
+            "likely_project_roots": [],
+            "recommendations": [],
+            "safety_flags": [],
+            "total_bytes": 200,
+            "total_human": "200B",
+            "file_count": 2,
+            "directory_count": 1,
+            "skipped_count": 0,
+            "skipped_details": {},
+        }
+        (catalogs_dir / "batch_proj.json").write_text(
+            _json.dumps(catalog), encoding="utf-8"
+        )
+
+        data = collect_code_brief_propose_batch(top=2, root=td)
+        _require(data.get("ok") is True, "batch preview must set ok=True")
+        _require(data.get("dry_run") is True, "batch preview must be dry-run")
+        _require(data.get("queued_source_count") == 2,
+                 f"top 2 must queue 2 sources, got {data.get('queued_source_count')}")
+        _require(data.get("processed_source_count") == 2,
+                 "top 2 must process 2 sources")
+        _require(data.get("candidate_count", 0) >= 2,
+                 "batch preview must produce candidate previews")
+        _require(data.get("proposal_count") == data.get("candidate_count"),
+                 "proposal_count must match candidate_count")
+        _require(isinstance(data.get("sources"), list) and len(data["sources"]) == 2,
+                 "batch preview must include two per-source summaries")
+        for source in data["sources"]:
+            _require(bool(source.get("source_path")), "source summary must include source_path")
+            _require("archive-code-brief --source" in source.get("suggested_brief_command", ""),
+                     "source summary must include brief command")
+            _require(isinstance(source.get("warnings"), list),
+                     "source summary warnings must be a list")
+
+        prop_dir = root / ".agents/control_plane/proposals"
+        p_files = list(prop_dir.glob("*.json")) if prop_dir.exists() else []
+        _require(len(p_files) == 0, "batch preview must not write proposal files")
+        briefs_dir = root / "research/_catalog/code_briefs"
+        b_files = list(briefs_dir.glob("*.md")) if briefs_dir.exists() else []
+        _require(len(b_files) == 0, "batch preview must not write code brief files")
+
+        clamped = collect_code_brief_propose_batch(top=25, root=td)
+        _require(clamped.get("top_requested") == _MAX_CODE_QUEUE_TOP,
+                 "batch preview top value must clamp to max code queue top")
+        clamp_warnings = [w for w in clamped.get("warnings", []) if "capped" in str(w)]
+        _require(clamp_warnings, "clamped batch preview must include capped warning")
+
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            rc = code_brief_propose_batch_main([
+                "--top", "2", "--json", "--root", td,
+            ])
+        _require(rc == 0, f"batch --json command must return 0, got {rc}")
+        rendered = _json.loads(json_out.getvalue())
+        _require(rendered.get("queued_source_count") == 2,
+                 "batch --json output must include queued_source_count")
+        _require(isinstance(rendered.get("sources"), list) and len(rendered["sources"]) == 2,
+                 "batch --json output must include per-source summaries")
+
+    with tempfile.TemporaryDirectory() as empty_td:
+        empty = collect_code_brief_propose_batch(top=2, root=empty_td)
+        _require(empty.get("ok") is True, "empty batch preview must still be ok")
+        _require(empty.get("queued_source_count") == 0,
+                 "empty batch preview must have 0 queued sources")
+        _require(empty.get("processed_source_count") == 0,
+                 "empty batch preview must have 0 processed sources")
+        _require(empty.get("next_commands") and "archive-code-queue" in empty["next_commands"][0],
+                 "empty batch preview must suggest archive-code-queue next")
+        _require(empty.get("warnings"), "empty batch preview must include helpful warning")
+
+    print("growth code-brief-propose-batch OK")
+
+
 # ---------------------------------------------------------------------------
 # 47. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
@@ -3135,6 +3250,7 @@ def main() -> None:
     check_growth_archive_code_queue_empty()
     check_growth_archive_code_queue_populated()
     check_growth_archive_code_queue_top_clamp()
+    check_growth_code_brief_propose_batch()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()
