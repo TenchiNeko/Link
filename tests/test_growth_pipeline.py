@@ -2507,8 +2507,8 @@ def check_growth_archive_code_queue_populated() -> None:
         wrapper_dir = ext / "commands/foo"
         wrapper_dir.mkdir(parents=True)
         (wrapper_dir / "index.ts").write_text(
-            "export { runFooCommand } from './run';\n"
-            "export { fooSchema } from './schema';\n",
+            "// Foo command index wrapper with sibling implementation files.\n"
+            "export const fooCommandName = 'foo';\n",
             encoding="utf-8",
         )
         (wrapper_dir / "run.ts").write_text(
@@ -2519,6 +2519,24 @@ def check_growth_archive_code_queue_populated() -> None:
         (wrapper_dir / "schema.ts").write_text(
             "// Foo command schema and validation metadata.\n"
             "export const fooSchema = { command: 'foo' };\n",
+            encoding="utf-8",
+        )
+        resolve_dir = ext / "commands/bar"
+        resolve_dir.mkdir(parents=True)
+        (resolve_dir / "index.js").write_text(
+            "// Bar command wrapper with local implementation target.\n"
+            "export { runBarCommand } from './main.js';\n",
+            encoding="utf-8",
+        )
+        (resolve_dir / "main.js").write_text(
+            "// Bar command main implementation with agent workflow routing.\n"
+            "export function runBarCommand() { return 'bar'; }\n",
+            encoding="utf-8",
+        )
+        trivial_dir = ext / "commands/empty"
+        trivial_dir.mkdir(parents=True)
+        (trivial_dir / "index.js").write_text(
+            "export const empty = true;\n",
             encoding="utf-8",
         )
         (ext / "package.json").write_text(
@@ -2613,6 +2631,36 @@ def check_growth_archive_code_queue_populated() -> None:
             f"python3 link.py growth archive-code-brief --source {wrapper_dir} --write",
             "index wrapper suggested_command must brief the parent directory",
         )
+        _require(index_entry.get("resolved_target_path") == "",
+                 "directory fallback wrapper must have empty resolved_target_path")
+        _require(index_entry.get("resolved_target_type") == "",
+                 "directory fallback wrapper must have empty resolved_target_type")
+
+        resolved_entry = next(
+            e for e in queue
+            if e.get("source_path", "").endswith("commands/bar/index.js")
+        )
+        resolved_target = str(resolve_dir / "main.js")
+        _require(resolved_entry.get("is_index_wrapper") is True,
+                 "tiny index.js must be marked as index wrapper")
+        _require(resolved_entry.get("resolved_target_path") == resolved_target,
+                 "tiny index.js must resolve local main.js target")
+        _require(resolved_entry.get("resolved_target_type") == "file",
+                 "resolved target type must be file")
+        _require(resolved_entry.get("recommended_source_path") == resolved_target,
+                 "resolved wrapper must recommend target file")
+        _require(
+            resolved_entry.get("suggested_command") ==
+            f"python3 link.py growth archive-code-brief --source {resolved_target} --write",
+            "resolved wrapper suggested_command must brief resolved target",
+        )
+
+        unresolved = [
+            e for e in queue
+            if e.get("source_path", "").endswith("commands/empty/index.js")
+        ]
+        _require(not unresolved,
+                 "tiny index.js with no safe local target must not stay in source_queue")
 
         agent_entry = next(
             e for e in queue
@@ -2625,10 +2673,16 @@ def check_growth_archive_code_queue_populated() -> None:
         _require(agent_entry.get("recommended_source_type") == "file",
                  "standalone non-index code file must recommend file source type")
 
-        # Verify skipped contains node_modules
+        # Verify skipped contains node_modules and unresolved tiny wrappers
         skipped = data.get("skipped_entries", [])
         node_skipped = [s for s in skipped if "node_modules" in s.get("path", "")]
         _require(len(node_skipped) >= 1, "node_modules file must be skipped")
+        unresolved_skipped = [
+            s for s in skipped
+            if s.get("path", "").endswith("commands/empty/index.js")
+        ]
+        _require(unresolved_skipped,
+                 "tiny index wrapper with no target must appear in skipped_entries")
 
         # Verify no proposal files written
         prop_dir = root / ".agents/control_plane/proposals"

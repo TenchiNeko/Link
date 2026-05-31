@@ -5393,13 +5393,32 @@ def collect_archive_code_queue(
 
             is_index_wrapper = _is_index_wrapper(entry, size)
             sibling_count = _sibling_code_file_count(entry)
-            if is_index_wrapper and sibling_count > 0:
+            resolved_target = _resolve_index_wrapper_target(entry) if is_index_wrapper else None
+            resolved_type = "file" if resolved_target else ""
+
+            if is_index_wrapper and resolved_target:
+                score = max(score - 4, 1)
+                reason = f"{reason} | tiny index wrapper; brief resolved target"
+            elif is_index_wrapper and sibling_count > 0:
                 score = max(score - 8, 1)
                 reason = f"{reason} | tiny index wrapper; brief parent directory"
+            elif is_index_wrapper:
+                skipped.append({
+                    "path": str(src_root / rel),
+                    "reason": "tiny index wrapper with no safe local target",
+                })
+                continue
 
             est_val = "high" if score >= 13 else ("medium" if score >= 8 else "low")
-            recommended_source = entry.parent if is_index_wrapper and sibling_count > 0 else entry
-            recommended_type = "directory" if recommended_source == entry.parent else "file"
+            if resolved_target:
+                recommended_source = resolved_target
+                recommended_type = "file"
+            elif is_index_wrapper and sibling_count > 0:
+                recommended_source = entry.parent
+                recommended_type = "directory"
+            else:
+                recommended_source = entry
+                recommended_type = "file"
 
             all_entries.append({
                 "source_path": str(src_root / rel),
@@ -5413,6 +5432,8 @@ def collect_archive_code_queue(
                 "extension": suffix,
                 "is_index_wrapper": is_index_wrapper,
                 "sibling_code_file_count": sibling_count,
+                "resolved_target_path": str(resolved_target) if resolved_target else "",
+                "resolved_target_type": resolved_type,
                 "recommended_source_path": str(recommended_source),
                 "recommended_source_type": recommended_type,
                 "suggested_command": f"python3 link.py growth archive-code-brief --source {recommended_source} --write",
@@ -5459,6 +5480,77 @@ def collect_archive_code_queue(
 def _is_index_wrapper(path: Path, size: int) -> bool:
     """Return True for tiny JS/TS index wrapper files."""
     return path.name.lower() in _INDEX_WRAPPER_NAMES and size <= _MAX_INDEX_WRAPPER_BYTES
+
+
+def _resolve_index_wrapper_target(path: Path) -> Path | None:
+    """Resolve a tiny index wrapper's first safe local import/export target."""
+    import re
+
+    if path.name.lower() not in _INDEX_WRAPPER_NAMES:
+        return None
+    try:
+        if path.stat().st_size > _MAX_INDEX_WRAPPER_BYTES:
+            return None
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+
+    patterns = (
+        r"(?:import|export)\s+(?:[^;]*?\s+from\s+)?[\"']([^\"']+)[\"']",
+        r"require\(\s*[\"']([^\"']+)[\"']\s*\)",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            target = _safe_local_code_target(path, match.group(1))
+            if target:
+                return target
+    return None
+
+
+def _safe_local_code_target(wrapper_path: Path, specifier: str) -> Path | None:
+    """Return a safe local file target for a relative JS/TS import specifier."""
+    raw = str(specifier or "").strip()
+    if not raw.startswith("."):
+        return None
+
+    base_dir = wrapper_path.parent.resolve()
+    candidate_base = (wrapper_path.parent / raw).resolve()
+    try:
+        candidate_base.relative_to(base_dir)
+    except ValueError:
+        return None
+
+    candidates: list[Path] = []
+    if candidate_base.suffix:
+        candidates.append(candidate_base)
+    else:
+        preferred = [wrapper_path.suffix.lower(), ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]
+        for suffix in dict.fromkeys(preferred):
+            candidates.append(Path(str(candidate_base) + suffix))
+        candidates.extend(candidate_base / f"index{suffix}" for suffix in dict.fromkeys(preferred))
+
+    for candidate in candidates:
+        try:
+            candidate.relative_to(base_dir)
+        except ValueError:
+            continue
+        if candidate == wrapper_path or not candidate.is_file() or candidate.is_symlink():
+            continue
+        if candidate.suffix.lower() not in _CODE_EXTS:
+            continue
+        if candidate.name.lower() in _CODE_LOCKFILE_NAMES:
+            continue
+        try:
+            size = candidate.stat().st_size
+        except OSError:
+            continue
+        if size < 50 or size > _MAX_CODE_FILE_BYTES:
+            continue
+        if _code_is_binary(candidate):
+            continue
+        return candidate
+
+    return None
 
 
 def _sibling_code_file_count(path: Path) -> int:
