@@ -415,6 +415,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import archive_code_brief_main as _growth_archive_code_brief_main
 
         return _growth_archive_code_brief_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "code-brief-propose":
+        from link_modes.growth.link_growth_console import code_brief_propose_main as _growth_code_brief_propose_main
+
+        return _growth_code_brief_propose_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "run":
         from link_modes.growth.link_growth_console import run_main as _growth_run_main
 
@@ -438,6 +442,7 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  archive-batch-mine Batch-mine top ranked sources")
         print("  archive-code-queue Rank code files for research mining")
         print("  archive-code-brief Create markdown brief from code files")
+        print("  code-brief-propose Convert code brief candidates to proposals")
         print("  run                Guided Growth workflow dashboard")
         return 0
     print(f"growth: unknown subcommand: {subcommand}", file=sys.stderr)

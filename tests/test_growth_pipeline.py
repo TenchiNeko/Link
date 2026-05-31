@@ -2612,6 +2612,164 @@ def check_growth_archive_code_brief_write() -> None:
                  "candidate block must include Acceptance test idea field")
 
         # Verify no proposals were written
+        prop_dir = root / ".agents/control_plane/proposals"
+        p_files = list(prop_dir.glob("*.json")) if prop_dir.exists() else []
+        _require(len(p_files) == 0, "archive-code-brief must not write proposal files")
+
+    print("growth archive-code-brief write OK")
+
+
+# ---------------------------------------------------------------------------
+# 49. Growth code-brief-propose -- parses brief blocks into proposals
+# ---------------------------------------------------------------------------
+
+def check_growth_code_brief_propose() -> None:
+    """code-brief-propose parses candidate blocks, dry-runs, writes, and JSON-renders."""
+    import contextlib
+    import io
+    from link_core.control_plane import validate_proposal
+    from link_modes.growth.link_growth_console import (
+        code_brief_propose_main,
+        collect_code_brief_propose,
+    )
+
+    brief_text = """# Code Research Brief: sample
+
+## Growth Upgrade Candidates
+
+### UPGRADE CANDIDATE: Add branch traceability receipts
+
+**Problem:**
+Link lacks source-grounded branch lineage receipts.
+
+**Evidence from source:**
+- `branch.ts`
+Transcript copy logic records branch metadata.
+
+**Pattern observed:**
+Session branching with transcript preservation.
+
+**Proposed Link upgrade:**
+Add a branch lineage receipt that records parent session and fork point.
+
+**Likely Link files or subsystem:**
+link_core/context/
+
+**Risk level:**
+low
+
+**Acceptance test idea:**
+Create a fork and verify the receipt records parent session metadata.
+
+### UPGRADE CANDIDATE: Add profile-gated tool routing
+
+**Problem:**
+Workers can see tool metadata but routing lacks a mandatory pre-dispatch profile gate.
+
+**Evidence from source:**
+- `router.ts`
+Command routing maps names to handlers.
+
+**Pattern observed:**
+Command router with lazy handler loading.
+
+**Proposed Link upgrade:**
+Check the profile tool gate before dispatching registered tools.
+
+**Likely Link files or subsystem:**
+link_tool_registry.py
+link_profile_gate.py
+
+**Risk level:**
+medium
+
+**Acceptance test idea:**
+Attempt a restricted tool call and verify the gate returns deny before execution.
+"""
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        brief = root / "research/_catalog/code_briefs/sample.md"
+        brief.parent.mkdir(parents=True)
+        brief.write_text(brief_text, encoding="utf-8")
+
+        data = collect_code_brief_propose(str(brief), write=False, root=td)
+        _require(data.get("ok") is True, "dry-run must set ok=True")
+        _require(data.get("source_exists") is True, "source must exist")
+        _require(data.get("candidate_count") == 2,
+                 f"must parse 2 candidates, got {data.get('candidate_count')}")
+        _require(data.get("proposal_count") == 2,
+                 f"must create 2 proposals, got {data.get('proposal_count')}")
+        _require(data.get("dry_run") is True, "default must be dry_run=True")
+        _require(data.get("written_paths") == [], "dry-run must not write paths")
+
+        prop_dir = root / ".agents/control_plane/proposals"
+        p_files = list(prop_dir.glob("*.json")) if prop_dir.exists() else []
+        _require(len(p_files) == 0, "dry-run must not write proposal files")
+
+        proposals = data.get("proposals", [])
+        _require(proposals[0]["title"] == "Add branch traceability receipts",
+                 "first proposal title must come from heading")
+        _require(proposals[0]["risk_level"] == "low",
+                 "first proposal risk must be low")
+        _require(proposals[0]["recommendation"] == "accept",
+                 "low risk proposal must recommend accept")
+        _require(proposals[1]["risk_level"] == "medium",
+                 "second proposal risk must be medium")
+        _require(proposals[1]["recommendation"] == "review",
+                 "medium risk proposal must recommend review")
+
+        for proposal in proposals:
+            validate_proposal(proposal)
+            _require(proposal["status"] == "pending", "status must be pending")
+            _require(str(brief) in proposal["source_path"],
+                     "source_path must include the brief path")
+            _require(str(brief) in proposal.get("source_reference", ""),
+                     "source_reference must include the brief path")
+            _require(bool(proposal["source_summary"]),
+                     "proposal must include source_summary")
+            _require(bool(proposal["verification_commands"]),
+                     "proposal must include acceptance test as verification command")
+
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            rc = code_brief_propose_main([
+                "--source", str(brief), "--json", "--root", td,
+            ])
+        _require(rc == 0, f"--json command must return 0, got {rc}")
+        rendered = json.loads(json_out.getvalue())
+        _require(rendered.get("proposal_count") == 2,
+                 "--json output must contain 2 proposals")
+
+        data_w = collect_code_brief_propose(str(brief), write=True, root=td)
+        _require(data_w.get("dry_run") is False, "write=True must set dry_run=False")
+        _require(len(data_w.get("written_paths", [])) == 2,
+                 "--write must write 2 proposal files")
+        for wp in data_w.get("written_paths", []):
+            path = Path(wp)
+            _require(path.exists(), f"written proposal must exist: {path}")
+            _require(str(prop_dir) in str(path),
+                     "written proposal must be under .agents/control_plane/proposals")
+
+        missing = collect_code_brief_propose(str(root / "missing.md"), root=td)
+        _require(missing.get("ok") is False, "missing source must set ok=False")
+        _require(missing.get("source_exists") is False,
+                 "missing source must set source_exists=False")
+        _require(isinstance(missing.get("error"), str),
+                 "missing source must include error string")
+
+        empty = root / "research/_catalog/code_briefs/empty.md"
+        empty.write_text("# Empty brief\nNo candidate blocks here.\n", encoding="utf-8")
+        empty_data = collect_code_brief_propose(str(empty), root=td)
+        _require(empty_data.get("ok") is True, "no-block source must be ok")
+        _require(empty_data.get("candidate_count") == 0,
+                 "no-block source must have 0 candidates")
+        _require(empty_data.get("proposal_count") == 0,
+                 "no-block source must have 0 proposals")
+        _require("no upgrade candidate" in empty_data.get("error", "").lower(),
+                 "no-block source must include clear error note")
+
+    print("growth code-brief-propose OK")
 
 
 # ---------------------------------------------------------------------------
@@ -2668,6 +2826,7 @@ def main() -> None:
     check_growth_archive_code_queue_top_clamp()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
+    check_growth_code_brief_propose()
     print("Growth pipeline smoke tests passed")
 
 

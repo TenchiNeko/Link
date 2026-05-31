@@ -28,7 +28,7 @@ REQUIRED_PROPOSAL_FIELDS: Final[tuple[str, ...]] = (
 )
 
 ALLOWED_RISK_LEVELS: Final[set[str]] = {"low", "medium", "high"}
-ALLOWED_RECOMMENDATIONS: Final[set[str]] = {"accept", "defer", "reject"}
+ALLOWED_RECOMMENDATIONS: Final[set[str]] = {"accept", "review", "defer", "reject"}
 ALLOWED_STATUSES: Final[set[str]] = {
     "pending",
     "accepted",
