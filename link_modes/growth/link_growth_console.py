@@ -5751,6 +5751,8 @@ def _resolve_index_wrapper_target(path: Path) -> Path | None:
 
 def _safe_local_code_target(wrapper_path: Path, specifier: str) -> Path | None:
     """Return a safe local file target for a relative JS/TS import specifier."""
+    from pathlib import Path
+
     raw = str(specifier or "").strip()
     if not raw.startswith("."):
         return None
