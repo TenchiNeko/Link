@@ -6753,6 +6753,102 @@ def check_growth_planning_chain_cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62. Growth planning-chain review bundle helper
+# ---------------------------------------------------------------------------
+
+def check_planning_chain_review_bundle_helper() -> None:
+    """planning-chain review bundle summarizes the full chain without writes."""
+    from link_modes.growth.link_growth_console import (
+        collect_growth_planning_chain_preview,
+        collect_planning_chain_review_bundle,
+        parse_planning_chain_review_bundle_json,
+        stable_planning_chain_review_bundle_json,
+        validate_planning_chain_review_bundle,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    bundle = collect_planning_chain_review_bundle(chain)
+    same = collect_planning_chain_review_bundle(chain)
+    _require(bundle["review_bundle_id"] == same["review_bundle_id"],
+             "planning-chain review bundle id must be deterministic")
+    encoded = stable_planning_chain_review_bundle_json(bundle)
+    _require(encoded == stable_planning_chain_review_bundle_json(bundle),
+             "planning-chain review bundle JSON must be stable")
+    decoded = parse_planning_chain_review_bundle_json(encoded)
+    _require(decoded == bundle, "planning-chain review bundle JSON must round trip")
+    validate_planning_chain_review_bundle(bundle, chain)
+
+    action = chain["top_recommended_next_action"]
+    patch_plan = chain["verified_patch_plan"]
+    quality_gate = chain["patch_behavior_quality_gate"]
+    execution = chain["autonomous_execution_package"]
+    _require(bundle["planning_chain_id"] == chain["planning_chain_id"],
+             "review bundle must preserve planning_chain_id")
+    _require(bundle["top_upgrade_id"] == action["upgrade_id"],
+             "review bundle must preserve top upgrade id")
+    _require(bundle["top_upgrade_title"] == action["title"],
+             "review bundle must preserve top upgrade title")
+    _require(bundle["branch_plan_id"] == action["branch_plan_id"],
+             "review bundle must preserve branch plan id")
+    _require(bundle["work_package_id"] == action["package_id"],
+             "review bundle must preserve work package id")
+    _require(bundle["verification_plan_id"] == action["verification_plan_id"],
+             "review bundle must preserve verification plan id")
+    _require(bundle["verified_patch_plan_id"] == action["verified_patch_plan_id"],
+             "review bundle must preserve verified patch plan id")
+    _require(bundle["verified_patch_diff_id"] == action["verified_patch_diff_id"],
+             "review bundle must preserve verified patch diff id")
+    _require(bundle["autonomous_execution_package_id"] == action["execution_package_id"],
+             "review bundle must preserve autonomous execution package id")
+    _require(bundle["execution_stage_count"] == execution["stage_count"],
+             "review bundle must preserve execution stage count")
+    _require(bundle["required_evidence"] == sorted(patch_plan["required_evidence"]),
+             "review bundle must summarize required evidence")
+    _require(bundle["missing_evidence"] == sorted(patch_plan["missing_evidence"]),
+             "review bundle must summarize missing evidence")
+    _require(bundle["patch_behavior_quality_gate"]["quality_gate_id"] == quality_gate["quality_gate_id"],
+             "review bundle must summarize quality gate id")
+    _require(bundle["patch_behavior_quality_gate"]["pass_status"] == quality_gate["pass_status"],
+             "review bundle must summarize quality gate status")
+    _require(bundle["top_risks"], "review bundle must include a risk summary")
+    _require(bundle["recommended_next_action"] == action["summary"],
+             "review bundle must preserve recommended next action")
+    _require(bundle["dry_run"] is True and bundle["write_allowed"] is False,
+             "review bundle must remain read-only")
+    _require(bundle["automation_allowed"] is False and bundle["writes"] == [],
+             "review bundle must not allow automation or writes")
+
+    bad_missing = dict(bundle)
+    bad_missing.pop("review_bundle_id")
+    try:
+        validate_planning_chain_review_bundle(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("review bundle must reject missing review_bundle_id")
+
+    bad_writes = dict(bundle)
+    bad_writes["writes"] = [".agents/runtime.json"]
+    try:
+        validate_planning_chain_review_bundle(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("review bundle must reject writes")
+
+    bad_chain_ref = dict(bundle)
+    bad_chain_ref["planning_chain_id"] = "growth-planning-chain-other"
+    try:
+        validate_planning_chain_review_bundle(bad_chain_ref, chain)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("review bundle must reject planning-chain id mismatch")
+
+    print("planning-chain review bundle helper OK")
+
+
+# ---------------------------------------------------------------------------
 # 58. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
 
@@ -7467,6 +7563,7 @@ def main() -> None:
     check_patch_behavior_quality_gate_helper()
     check_autonomous_execution_package_helper()
     check_growth_planning_chain_cli()
+    check_planning_chain_review_bundle_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()

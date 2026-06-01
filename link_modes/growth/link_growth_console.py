@@ -9924,6 +9924,186 @@ VERIFIED_PATCH_OPERATION_TYPES = (
 VERIFIED_PATCH_DIFF_VERSION = "link-verified-patch-diff-v1"
 PATCH_BEHAVIOR_QUALITY_GATE_VERSION = "link-patch-behavior-quality-gate-v1"
 AUTONOMOUS_EXECUTION_PACKAGE_VERSION = "link-autonomous-execution-package-v1"
+PLANNING_CHAIN_REVIEW_BUNDLE_VERSION = "link-planning-chain-review-bundle-v1"
+
+
+def make_planning_chain_review_bundle_id(chain: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "execution_package_id": chain["autonomous_execution_package"]["execution_package_id"],
+        "planning_chain_id": chain["planning_chain_id"],
+        "quality_gate_id": chain["patch_behavior_quality_gate"]["quality_gate_id"],
+        "verified_patch_diff_id": chain["verified_patch_diff"]["verified_patch_diff_id"],
+        "verified_patch_plan_id": chain["verified_patch_plan"]["verified_patch_plan_id"],
+        "version": PLANNING_CHAIN_REVIEW_BUNDLE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"planning-chain-review-bundle-{digest}"
+
+
+def collect_planning_chain_review_bundle(
+    chain: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize a full read-only planning chain for human review."""
+    source_chain = chain if chain is not None else collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(source_chain)
+    action = source_chain["top_recommended_next_action"]
+    patch_plan = source_chain["verified_patch_plan"]
+    quality_gate = source_chain["patch_behavior_quality_gate"]
+    execution_package = source_chain["autonomous_execution_package"]
+    bundle = {
+        "review_bundle_version": PLANNING_CHAIN_REVIEW_BUNDLE_VERSION,
+        "review_bundle_id": make_planning_chain_review_bundle_id(source_chain),
+        "planning_chain_id": source_chain["planning_chain_id"],
+        "top_upgrade_id": action["upgrade_id"],
+        "top_upgrade_title": action["title"],
+        "branch_plan_id": action["branch_plan_id"],
+        "work_package_id": action["package_id"],
+        "verification_plan_id": action["verification_plan_id"],
+        "verified_patch_plan_id": action["verified_patch_plan_id"],
+        "verified_patch_diff_id": action["verified_patch_diff_id"],
+        "patch_behavior_quality_gate": {
+            "quality_gate_id": quality_gate["quality_gate_id"],
+            "pass_status": quality_gate["pass_status"],
+            "quality_score": quality_gate["quality_score"],
+            "risk_score": quality_gate["risk_score"],
+        },
+        "autonomous_execution_package_id": action["execution_package_id"],
+        "execution_stage_count": execution_package["stage_count"],
+        "required_evidence": _normalize_implementation_branch_refs(patch_plan["required_evidence"]),
+        "missing_evidence": _normalize_implementation_branch_refs(patch_plan["missing_evidence"]),
+        "top_risks": _planning_chain_review_top_risks(quality_gate, source_chain["verified_patch_diff"]),
+        "required_clarifications": _normalize_patch_behavior_text_list(quality_gate["required_clarifications"])
+        if quality_gate["required_clarifications"] else [],
+        "recommended_next_action": source_chain["top_recommended_next_action"]["summary"],
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_planning_chain_review_bundle(bundle, source_chain)
+    return bundle
+
+
+def validate_planning_chain_review_bundle(
+    bundle: dict[str, Any],
+    chain: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "review_bundle_version", "review_bundle_id", "planning_chain_id", "top_upgrade_id",
+        "top_upgrade_title", "branch_plan_id", "work_package_id", "verification_plan_id",
+        "verified_patch_plan_id", "verified_patch_diff_id", "patch_behavior_quality_gate",
+        "autonomous_execution_package_id", "execution_stage_count", "required_evidence",
+        "missing_evidence", "top_risks", "required_clarifications", "recommended_next_action",
+        "dry_run", "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in bundle]
+    if missing:
+        raise ValueError(f"planning-chain review bundle missing fields: {missing}")
+    if bundle["review_bundle_version"] != PLANNING_CHAIN_REVIEW_BUNDLE_VERSION:
+        raise ValueError("unsupported planning-chain review bundle version")
+    for field in (
+        "review_bundle_id", "planning_chain_id", "top_upgrade_id", "top_upgrade_title",
+        "branch_plan_id", "work_package_id", "verification_plan_id", "verified_patch_plan_id",
+        "verified_patch_diff_id", "autonomous_execution_package_id", "recommended_next_action",
+    ):
+        if not isinstance(bundle[field], str) or not bundle[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if bundle["dry_run"] is not True or bundle["write_allowed"] is not False or bundle["automation_allowed"] is not False:
+        raise ValueError("planning-chain review bundle must remain read-only")
+    if bundle["writes"] != []:
+        raise ValueError("planning-chain review bundle must not write files")
+    if not isinstance(bundle["metadata"], dict):
+        raise TypeError("planning-chain review bundle metadata must be a dict")
+    if not isinstance(bundle["execution_stage_count"], int) or bundle["execution_stage_count"] < 0:
+        raise ValueError("execution_stage_count must be a non-negative integer")
+    gate = bundle["patch_behavior_quality_gate"]
+    if not isinstance(gate, dict):
+        raise TypeError("patch_behavior_quality_gate must be a dict")
+    for field in ("quality_gate_id", "pass_status"):
+        if not isinstance(gate.get(field), str) or not gate[field].strip():
+            raise ValueError(f"patch_behavior_quality_gate.{field} must be a non-empty string")
+    if gate["pass_status"] not in {"pass", "review", "block"}:
+        raise ValueError("patch_behavior_quality_gate.pass_status must be pass, review, or block")
+    _validate_probability_score(gate.get("quality_score"), "patch_behavior_quality_gate.quality_score")
+    _validate_probability_score(gate.get("risk_score"), "patch_behavior_quality_gate.risk_score")
+    for field in ("required_evidence", "missing_evidence", "top_risks", "required_clarifications"):
+        values = bundle[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            raise TypeError(f"{field} must contain non-empty strings")
+    for field in ("required_evidence", "missing_evidence"):
+        if bundle[field] != _normalize_implementation_branch_refs(bundle[field]):
+            raise ValueError(f"{field} must be normalized and sorted")
+    for field in ("top_risks", "required_clarifications"):
+        if bundle[field] and bundle[field] != _normalize_patch_behavior_text_list(bundle[field]):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if chain is not None:
+        validate_growth_planning_chain_preview(chain)
+        action = chain["top_recommended_next_action"]
+        patch_plan = chain["verified_patch_plan"]
+        quality_gate = chain["patch_behavior_quality_gate"]
+        execution_package = chain["autonomous_execution_package"]
+        expected = {
+            "planning_chain_id": chain["planning_chain_id"],
+            "top_upgrade_id": action["upgrade_id"],
+            "top_upgrade_title": action["title"],
+            "branch_plan_id": action["branch_plan_id"],
+            "work_package_id": action["package_id"],
+            "verification_plan_id": action["verification_plan_id"],
+            "verified_patch_plan_id": action["verified_patch_plan_id"],
+            "verified_patch_diff_id": action["verified_patch_diff_id"],
+            "autonomous_execution_package_id": action["execution_package_id"],
+        }
+        for field, value in expected.items():
+            if bundle[field] != value:
+                raise ValueError(f"planning-chain review bundle {field} does not match planning chain")
+        if bundle["review_bundle_id"] != make_planning_chain_review_bundle_id(chain):
+            raise ValueError("planning-chain review bundle id does not match planning chain")
+        if bundle["execution_stage_count"] != execution_package["stage_count"]:
+            raise ValueError("execution_stage_count must match autonomous execution package")
+        if bundle["required_evidence"] != _normalize_implementation_branch_refs(patch_plan["required_evidence"]):
+            raise ValueError("required_evidence must summarize verified patch plan")
+        if bundle["missing_evidence"] != _normalize_implementation_branch_refs(patch_plan["missing_evidence"]):
+            raise ValueError("missing_evidence must summarize verified patch plan")
+        if bundle["patch_behavior_quality_gate"]["quality_gate_id"] != quality_gate["quality_gate_id"]:
+            raise ValueError("quality gate summary must reference planning-chain quality gate")
+        if bundle["patch_behavior_quality_gate"]["pass_status"] != quality_gate["pass_status"]:
+            raise ValueError("quality gate summary must preserve pass_status")
+
+
+def stable_planning_chain_review_bundle_json(bundle: dict[str, Any]) -> str:
+    validate_planning_chain_review_bundle(bundle)
+    return _stable_ruflo_json(bundle, indent=2) + "\n"
+
+
+def parse_planning_chain_review_bundle_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    bundle = _json.loads(text)
+    validate_planning_chain_review_bundle(bundle)
+    return bundle
+
+
+def _planning_chain_review_top_risks(
+    quality_gate: dict[str, Any],
+    patch_diff: dict[str, Any],
+) -> list[str]:
+    risks: list[str] = []
+    for finding in quality_gate["findings"]:
+        if finding["severity"] in {"block", "review"}:
+            risks.append(f"{finding['severity']}: {finding['message']}")
+    if patch_diff["risk_score"] >= 0.55:
+        risks.append(f"patch diff risk score is {patch_diff['risk_score']}")
+    if not risks and quality_gate["pass_status"] == "pass":
+        risks.append("no blocking or review-level patch behavior risks detected")
+    return _normalize_patch_behavior_text_list(risks)
+
 
 
 def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:
