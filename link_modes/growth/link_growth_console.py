@@ -8599,6 +8599,951 @@ def _capability_intelligence_discovery_summary(discovery: dict[str, Any]) -> dic
     }
 
 
+UPGRADE_EXECUTION_PLAN_VERSION = "link-upgrade-execution-plan-v1"
+UPGRADE_COMPLEXITY_LEVELS = ("trivial", "small", "medium", "large", "major")
+UPGRADE_RISK_LEVELS = ("low", "medium", "high")
+UPGRADE_PLAN_PHASES = ("discovery", "design", "implementation", "verification", "rollout")
+_UPGRADE_PLAN_SECTION_ORDER = {
+    "direct_gaps": 0,
+    "maturity_gaps": 1,
+    "onboarding_gaps": 2,
+    "optional_cross_cluster_ideas": 3,
+}
+_UPGRADE_TARGET_SUBSYSTEM_BY_CATEGORY = {
+    "safety": "link_capability_gate.py / modern_command_guard.py",
+    "receipts": "link_core/receipts/",
+    "routing": "link_model_routing_profiles.py / link_profile_gate.py",
+    "research_mining": "link_modes/growth/link_growth_console.py research mining helpers",
+    "repo_value_scan": "link_modes/growth/link_growth_console.py repo value scanning helpers",
+    "self_learning": "link_modes/growth/link_growth_console.py self-learning helpers",
+    "tests": "tests/test_growth_pipeline.py / link_healthcheck.py",
+    "workflow_ux": "link_modes/growth/link_growth_console.py Growth CLI/dashboard helpers",
+}
+
+
+def make_upgrade_execution_plan_id(upgrade_plans: list[dict[str, Any]]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "upgrade_plan_ids": [plan["upgrade_plan_id"] for plan in upgrade_plans],
+        "version": UPGRADE_EXECUTION_PLAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"link-upgrade-execution-plan-{digest}"
+
+
+def make_upgrade_execution_entry_id(gap: dict[str, Any], capability_inventory_id: str) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "capability_inventory_id": capability_inventory_id,
+        "gap_id": gap["gap_id"],
+        "gap_type": gap["gap_type"],
+        "target_category": gap["target_category"],
+        "version": UPGRADE_EXECUTION_PLAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"upgrade-plan-{digest}"
+
+
+def collect_upgrade_execution_plan(
+    capability_gap_preview: dict[str, Any],
+    capability_inventory: dict[str, Any],
+    repo_value_scan: dict[str, Any] | list[dict[str, Any]],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Convert capability gaps into deterministic read-only implementation plans."""
+    validate_capability_gap_preview(capability_gap_preview)
+    validate_link_capability_inventory(capability_inventory)
+    repo_findings = _capability_gap_findings_from_input(repo_value_scan)
+    findings_by_id = {finding["finding_id"]: finding for finding in repo_findings}
+    upgrade_plans: list[dict[str, Any]] = []
+    for section in _CAPABILITY_GAP_SECTIONS:
+        for gap in capability_gap_preview[section]:
+            finding = findings_by_id.get(gap["finding_id"], {})
+            upgrade_plans.append(_build_upgrade_execution_entry(
+                gap,
+                finding,
+                capability_inventory,
+                section,
+            ))
+    upgrade_plans.sort(key=lambda item: (item["rank"], item["upgrade_plan_id"]))
+    plan = {
+        "plan_version": UPGRADE_EXECUTION_PLAN_VERSION,
+        "plan_id": make_upgrade_execution_plan_id(upgrade_plans),
+        "source_gap_preview_id": capability_gap_preview["preview_id"],
+        "source_inventory_id": capability_inventory["inventory_id"],
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "upgrade_plan_count": len(upgrade_plans),
+        "upgrade_plans": upgrade_plans,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_upgrade_execution_plan(plan)
+    return plan
+
+
+def validate_upgrade_execution_plan(plan: dict[str, Any]) -> None:
+    required = (
+        "plan_version", "plan_id", "source_gap_preview_id", "source_inventory_id",
+        "dry_run", "write_allowed", "automation_allowed", "upgrade_plan_count",
+        "upgrade_plans", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in plan]
+    if missing:
+        raise ValueError(f"upgrade execution plan missing fields: {missing}")
+    if plan["plan_version"] != UPGRADE_EXECUTION_PLAN_VERSION:
+        raise ValueError("unsupported upgrade execution plan version")
+    for field in ("plan_id", "source_gap_preview_id", "source_inventory_id"):
+        if not isinstance(plan[field], str) or not plan[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if plan["dry_run"] is not True or plan["write_allowed"] is not False or plan["automation_allowed"] is not False:
+        raise ValueError("upgrade execution plan must remain read-only")
+    if plan["writes"] != []:
+        raise ValueError("upgrade execution plan must not write files")
+    if not isinstance(plan["metadata"], dict):
+        raise TypeError("upgrade execution plan metadata must be a dict")
+    upgrade_plans = plan["upgrade_plans"]
+    if not isinstance(upgrade_plans, list):
+        raise TypeError("upgrade_plans must be a list")
+    if not isinstance(plan["upgrade_plan_count"], int) or plan["upgrade_plan_count"] != len(upgrade_plans):
+        raise ValueError("upgrade_plan_count must match upgrade_plans length")
+    seen_ids: set[str] = set()
+    ranks: list[int] = []
+    for entry in upgrade_plans:
+        validate_upgrade_execution_entry(entry)
+        if entry["upgrade_plan_id"] in seen_ids:
+            raise ValueError(f"duplicate upgrade execution plan id: {entry['upgrade_plan_id']}")
+        seen_ids.add(entry["upgrade_plan_id"])
+        ranks.append(entry["rank"])
+    if ranks != sorted(ranks):
+        raise ValueError("upgrade execution plans must be sorted by rank")
+
+
+def stable_upgrade_execution_plan_json(plan: dict[str, Any]) -> str:
+    validate_upgrade_execution_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def parse_upgrade_execution_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    plan = _json.loads(text)
+    validate_upgrade_execution_plan(plan)
+    return plan
+
+
+def validate_upgrade_execution_entry(entry: dict[str, Any]) -> None:
+    required = (
+        "upgrade_plan_id", "gap_id", "finding_id", "title", "rank", "gap_type",
+        "target_category", "target_link_subsystems", "complexity", "risk",
+        "phases", "required_evidence", "verification_requirements", "reason",
+        "recommended_action",
+    )
+    missing = [field for field in required if field not in entry]
+    if missing:
+        raise ValueError(f"upgrade execution entry missing fields: {missing}")
+    for field in ("upgrade_plan_id", "gap_id", "finding_id", "title", "gap_type", "target_category", "complexity", "risk", "reason", "recommended_action"):
+        if not isinstance(entry[field], str) or not entry[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if entry["gap_type"] not in {"direct_gap", "maturity_gap", "onboarding_gap", "optional_cross_cluster_idea"}:
+        raise ValueError(f"invalid upgrade gap_type: {entry['gap_type']}")
+    if entry["target_category"] not in LINK_CAPABILITY_CATEGORIES:
+        raise ValueError(f"invalid upgrade target_category: {entry['target_category']}")
+    if entry["complexity"] not in UPGRADE_COMPLEXITY_LEVELS:
+        raise ValueError(f"invalid upgrade complexity: {entry['complexity']}")
+    if entry["risk"] not in UPGRADE_RISK_LEVELS:
+        raise ValueError(f"invalid upgrade risk: {entry['risk']}")
+    if not isinstance(entry["rank"], int) or entry["rank"] < 1:
+        raise ValueError("upgrade execution rank must be a positive integer")
+    for field in ("target_link_subsystems", "phases", "required_evidence", "verification_requirements"):
+        values = entry[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            raise TypeError(f"{field} must contain non-empty strings")
+    if tuple(entry["phases"]) != UPGRADE_PLAN_PHASES:
+        raise ValueError("upgrade execution phases must use the stable phase sequence")
+
+
+def _build_upgrade_execution_entry(
+    gap: dict[str, Any],
+    finding: dict[str, Any],
+    capability_inventory: dict[str, Any],
+    section: str,
+) -> dict[str, Any]:
+    complexity = _upgrade_execution_complexity(gap, finding)
+    risk = _upgrade_execution_risk(gap, finding, complexity)
+    entry = {
+        "upgrade_plan_id": make_upgrade_execution_entry_id(gap, capability_inventory["inventory_id"]),
+        "gap_id": gap["gap_id"],
+        "finding_id": gap["finding_id"],
+        "title": gap["finding_title"],
+        "rank": _upgrade_execution_rank(section, gap, finding, complexity, risk),
+        "gap_type": gap["gap_type"],
+        "target_category": gap["target_category"],
+        "target_link_subsystems": _upgrade_execution_target_subsystems(gap, finding),
+        "complexity": complexity,
+        "risk": risk,
+        "phases": list(UPGRADE_PLAN_PHASES),
+        "required_evidence": _upgrade_execution_required_evidence(gap, risk),
+        "verification_requirements": _upgrade_execution_verification_requirements(gap, complexity),
+        "reason": gap["reason"],
+        "recommended_action": gap["recommended_action"],
+    }
+    validate_upgrade_execution_entry(entry)
+    return entry
+
+
+def _upgrade_execution_rank(section: str, gap: dict[str, Any], finding: dict[str, Any], complexity: str, risk: str) -> int:
+    base = _UPGRADE_PLAN_SECTION_ORDER.get(section, 9) * 100
+    complexity_penalty = UPGRADE_COMPLEXITY_LEVELS.index(complexity) * 10
+    risk_penalty = UPGRADE_RISK_LEVELS.index(risk) * 5
+    confidence_bonus = {"high": 0, "medium": 2, "low": 4}.get(gap.get("confidence"), 3)
+    signal_bonus = max(0, 5 - int(finding.get("signal_count", 0) or 0))
+    return base + complexity_penalty + risk_penalty + confidence_bonus + signal_bonus + 1
+
+
+def _upgrade_execution_complexity(gap: dict[str, Any], finding: dict[str, Any]) -> str:
+    signal_count = int(finding.get("signal_count", 0) or 0)
+    category = gap["target_category"]
+    gap_type = gap["gap_type"]
+    if gap_type == "onboarding_gap":
+        return "small"
+    if gap_type == "optional_cross_cluster_idea":
+        return "medium"
+    if gap_type == "maturity_gap":
+        return "small" if category in {"tests", "receipts", "workflow_ux"} else "medium"
+    if category in {"safety", "routing", "self_learning"} and signal_count >= 3:
+        return "large"
+    if category in {"research_mining", "repo_value_scan", "workflow_ux", "tests", "receipts"}:
+        return "small" if signal_count <= 2 else "medium"
+    return "medium"
+
+
+def _upgrade_execution_risk(gap: dict[str, Any], finding: dict[str, Any], complexity: str) -> str:
+    category = gap["target_category"]
+    gap_type = gap["gap_type"]
+    if gap_type == "optional_cross_cluster_idea":
+        return "medium"
+    if complexity in {"large", "major"} or category in {"safety", "routing", "self_learning"}:
+        return "high" if gap_type == "direct_gap" else "medium"
+    if category in {"tests", "receipts", "repo_value_scan", "workflow_ux"}:
+        return "low"
+    return "medium"
+
+
+def _upgrade_execution_target_subsystems(gap: dict[str, Any], finding: dict[str, Any]) -> list[str]:
+    subsystems = [_UPGRADE_TARGET_SUBSYSTEM_BY_CATEGORY.get(gap["target_category"], "link_modes/growth/link_growth_console.py")]
+    source_path = finding.get("source_path") or gap.get("source_path")
+    if source_path:
+        subsystems.append(f"research source reference: {source_path}")
+    return sorted(dict.fromkeys(subsystems))
+
+
+def _upgrade_execution_required_evidence(gap: dict[str, Any], risk: str) -> list[str]:
+    evidence = [
+        "git diff --stat",
+        "focused source diff review",
+        "rollback note in final summary",
+    ]
+    if risk in {"medium", "high"}:
+        evidence.append("explicit safety review notes")
+    if gap["gap_type"] in {"maturity_gap", "direct_gap"}:
+        evidence.append("targeted regression test output")
+    return sorted(dict.fromkeys(evidence))
+
+
+def _upgrade_execution_verification_requirements(gap: dict[str, Any], complexity: str) -> list[str]:
+    requirements = [
+        "python3 -m py_compile link.py link_modes/growth/link_growth_console.py tests/test_growth_pipeline.py",
+        "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_growth_pipeline.py",
+        "PYTHONDONTWRITEBYTECODE=1 python3 link_healthcheck.py",
+    ]
+    if complexity in {"large", "major"}:
+        requirements.append("manual dry-run smoke test for affected Growth command")
+    if gap["target_category"] == "safety":
+        requirements.append("confirm no approval/handoff/execute behavior was added")
+    return requirements
+
+
+IMPLEMENTATION_BRANCH_PLAN_VERSION = "link-implementation-branch-plan-v1"
+
+
+def make_implementation_branch_plan_id(source_plan_id: str, upgrade_item: dict[str, Any], branch_name: str) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "branch_name": branch_name,
+        "source_upgrade_id": upgrade_item["upgrade_plan_id"],
+        "source_upgrade_plan_id": source_plan_id,
+        "version": IMPLEMENTATION_BRANCH_PLAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"implementation-branch-plan-{digest}"
+
+
+def collect_implementation_branch_plan(
+    upgrade_plan_or_item: dict[str, Any],
+    upgrade_item: dict[str, Any] | None = None,
+    *,
+    evidence_refs: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a deterministic read-only implementation branch plan for one upgrade."""
+    source_plan_id, item = _implementation_branch_source_item(upgrade_plan_or_item, upgrade_item)
+    evidence = _normalize_implementation_branch_refs(evidence_refs or [])
+    branch_name = make_implementation_branch_name(item)
+    required_evidence = _normalize_implementation_branch_refs(item["required_evidence"])
+    missing_evidence = [ref for ref in required_evidence if ref not in evidence]
+    plan = {
+        "branch_plan_version": IMPLEMENTATION_BRANCH_PLAN_VERSION,
+        "branch_plan_id": make_implementation_branch_plan_id(source_plan_id, item, branch_name),
+        "source_upgrade_plan_id": source_plan_id,
+        "source_upgrade_id": item["upgrade_plan_id"],
+        "proposed_branch_name": branch_name,
+        "target_files": _implementation_branch_target_files(item),
+        "target_subsystems": list(item["target_link_subsystems"]),
+        "ordered_implementation_tasks": _implementation_branch_tasks(item),
+        "verification_commands": list(item["verification_requirements"]),
+        "rollback_notes": _implementation_branch_rollback_notes(item),
+        "risk_level": item["risk"],
+        "complexity": item["complexity"],
+        "required_evidence": required_evidence,
+        "provided_evidence": evidence,
+        "missing_evidence": missing_evidence,
+        "blocked": bool(missing_evidence),
+        "requires_review": item["risk"] != "low" or item["complexity"] in {"large", "major"} or bool(missing_evidence),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_implementation_branch_plan(plan)
+    return plan
+
+
+def validate_implementation_branch_plan(plan: dict[str, Any]) -> None:
+    required = (
+        "branch_plan_version", "branch_plan_id", "source_upgrade_plan_id", "source_upgrade_id",
+        "proposed_branch_name", "target_files", "target_subsystems", "ordered_implementation_tasks",
+        "verification_commands", "rollback_notes", "risk_level", "complexity", "required_evidence",
+        "provided_evidence", "missing_evidence", "blocked", "requires_review", "dry_run",
+        "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in plan]
+    if missing:
+        raise ValueError(f"implementation branch plan missing fields: {missing}")
+    if plan["branch_plan_version"] != IMPLEMENTATION_BRANCH_PLAN_VERSION:
+        raise ValueError("unsupported implementation branch plan version")
+    for field in ("branch_plan_id", "source_upgrade_plan_id", "source_upgrade_id", "proposed_branch_name", "risk_level", "complexity"):
+        if not isinstance(plan[field], str) or not plan[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if plan["risk_level"] not in UPGRADE_RISK_LEVELS:
+        raise ValueError(f"invalid implementation branch risk_level: {plan['risk_level']}")
+    if plan["complexity"] not in UPGRADE_COMPLEXITY_LEVELS:
+        raise ValueError(f"invalid implementation branch complexity: {plan['complexity']}")
+    if not _valid_implementation_branch_name(plan["proposed_branch_name"]):
+        raise ValueError(f"invalid proposed branch name: {plan['proposed_branch_name']}")
+    if plan["dry_run"] is not True or plan["write_allowed"] is not False or plan["automation_allowed"] is not False:
+        raise ValueError("implementation branch plan must remain read-only")
+    if plan["writes"] != []:
+        raise ValueError("implementation branch plan must not write files")
+    if not isinstance(plan["metadata"], dict):
+        raise TypeError("implementation branch plan metadata must be a dict")
+    for field in ("target_files", "target_subsystems", "verification_commands", "rollback_notes", "required_evidence", "provided_evidence", "missing_evidence"):
+        values = plan[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if field in {"target_subsystems", "verification_commands", "rollback_notes", "required_evidence"} and not values:
+            raise ValueError(f"{field} must be non-empty")
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            raise TypeError(f"{field} must contain non-empty strings")
+    if plan["target_files"] != _normalize_implementation_branch_refs(plan["target_files"]):
+        raise ValueError("target_files must be normalized and sorted")
+    for field in ("required_evidence", "provided_evidence", "missing_evidence"):
+        if plan[field] != _normalize_implementation_branch_refs(plan[field]):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if not isinstance(plan["blocked"], bool) or not isinstance(plan["requires_review"], bool):
+        raise TypeError("blocked and requires_review must be booleans")
+    expected_missing = [ref for ref in plan["required_evidence"] if ref not in plan["provided_evidence"]]
+    if plan["missing_evidence"] != expected_missing:
+        raise ValueError("missing_evidence must match required evidence not present in provided evidence")
+    if plan["blocked"] is not bool(plan["missing_evidence"]):
+        raise ValueError("blocked must reflect missing_evidence")
+    tasks = plan["ordered_implementation_tasks"]
+    if not isinstance(tasks, list) or not tasks:
+        raise TypeError("ordered_implementation_tasks must be a non-empty list")
+    orders: list[int] = []
+    for task in tasks:
+        _validate_implementation_branch_task(task)
+        orders.append(task["order"])
+    if orders != list(range(1, len(tasks) + 1)):
+        raise ValueError("implementation tasks must be ordered from 1 without gaps")
+
+
+def stable_implementation_branch_plan_json(plan: dict[str, Any]) -> str:
+    validate_implementation_branch_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def parse_implementation_branch_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    plan = _json.loads(text)
+    validate_implementation_branch_plan(plan)
+    return plan
+
+
+def make_implementation_branch_name(upgrade_item: dict[str, Any]) -> str:
+    import hashlib
+    import re
+
+    validate_upgrade_execution_entry(upgrade_item)
+    slug = re.sub(r"[^a-z0-9]+", "-", upgrade_item["title"].lower()).strip("-")
+    slug = slug[:52].strip("-") or "upgrade"
+    digest = hashlib.sha256(upgrade_item["upgrade_plan_id"].encode("utf-8")).hexdigest()[:8]
+    return f"link-upgrade/{slug}-{digest}"
+
+
+def _implementation_branch_source_item(
+    upgrade_plan_or_item: dict[str, Any],
+    upgrade_item: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    if not isinstance(upgrade_plan_or_item, dict):
+        raise TypeError("upgrade plan or item must be a dict")
+    if upgrade_item is None and "upgrade_plans" in upgrade_plan_or_item:
+        validate_upgrade_execution_plan(upgrade_plan_or_item)
+        if not upgrade_plan_or_item["upgrade_plans"]:
+            raise ValueError("upgrade execution plan has no upgrade_plans")
+        return upgrade_plan_or_item["plan_id"], dict(upgrade_plan_or_item["upgrade_plans"][0])
+    if upgrade_item is not None:
+        validate_upgrade_execution_plan(upgrade_plan_or_item)
+        validate_upgrade_execution_entry(upgrade_item)
+        ids = {entry["upgrade_plan_id"] for entry in upgrade_plan_or_item["upgrade_plans"]}
+        if upgrade_item["upgrade_plan_id"] not in ids:
+            raise ValueError("upgrade_item is not present in source upgrade plan")
+        return upgrade_plan_or_item["plan_id"], dict(upgrade_item)
+    validate_upgrade_execution_entry(upgrade_plan_or_item)
+    return "standalone-upgrade-plan", dict(upgrade_plan_or_item)
+
+
+def _implementation_branch_target_files(upgrade_item: dict[str, Any]) -> list[str]:
+    import re
+
+    paths: list[str] = []
+    for subsystem in upgrade_item["target_link_subsystems"]:
+        if subsystem.startswith("research source reference:"):
+            continue
+        for match in re.findall(r"[A-Za-z0-9_./-]+\.(?:py|md|json|yaml|yml|toml)", subsystem):
+            if not match.startswith("research/"):
+                paths.append(match)
+    if not paths:
+        paths.extend(["link_modes/growth/link_growth_console.py", "tests/test_growth_pipeline.py"])
+    elif "tests/test_growth_pipeline.py" not in paths:
+        paths.append("tests/test_growth_pipeline.py")
+    return _normalize_implementation_branch_refs(paths)
+
+
+def _implementation_branch_tasks(upgrade_item: dict[str, Any]) -> list[dict[str, Any]]:
+    phase_templates = {
+        "discovery": f"Review the source gap and target subsystem for '{upgrade_item['title']}'.",
+        "design": "Define the smallest Link-native read-only data shape and validation rules.",
+        "implementation": "Patch only the focused source and test files needed for this slice.",
+        "verification": "Run the required verification commands and capture pass/fail evidence.",
+        "rollout": "Prepare a review summary with rollback notes; do not merge without approval.",
+    }
+    tasks: list[dict[str, Any]] = []
+    for index, phase in enumerate(UPGRADE_PLAN_PHASES, start=1):
+        tasks.append({"order": index, "phase": phase, "task": phase_templates[phase]})
+    return tasks
+
+
+def _implementation_branch_rollback_notes(upgrade_item: dict[str, Any]) -> list[str]:
+    return [
+        "Do not create the branch until a human approves execution.",
+        "Keep the implementation limited to the planned target files unless review expands scope.",
+        "Rollback is git revert of the eventual implementation commit, not runtime state mutation.",
+        f"Risk level for review: {upgrade_item['risk']}.",
+    ]
+
+
+def _validate_implementation_branch_task(task: dict[str, Any]) -> None:
+    required = ("order", "phase", "task")
+    missing = [field for field in required if field not in task]
+    if missing:
+        raise ValueError(f"implementation branch task missing fields: {missing}")
+    if not isinstance(task["order"], int) or task["order"] < 1:
+        raise ValueError("implementation branch task order must be a positive integer")
+    if task["phase"] not in UPGRADE_PLAN_PHASES:
+        raise ValueError(f"invalid implementation branch task phase: {task['phase']}")
+    if not isinstance(task["task"], str) or not task["task"].strip():
+        raise ValueError("implementation branch task must be a non-empty string")
+
+
+def _normalize_implementation_branch_refs(values: Any) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        raw_values = [values]
+    elif isinstance(values, list):
+        raw_values = values
+    else:
+        raise TypeError("implementation branch refs must be a string or list")
+    normalized: list[str] = []
+    for raw in raw_values:
+        value = str(raw or "").strip()
+        if not value:
+            raise ValueError("implementation branch refs cannot contain empty strings")
+        if "\x00" in value or value.startswith("/") or ".." in value.split("/"):
+            raise ValueError(f"invalid implementation branch ref: {value}")
+        if value not in normalized:
+            normalized.append(value)
+    return sorted(normalized)
+
+
+def _valid_implementation_branch_name(name: str) -> bool:
+    import re
+
+    if not isinstance(name, str) or not name.startswith("link-upgrade/"):
+        return False
+    if name.endswith("/") or ".." in name or "//" in name:
+        return False
+    return bool(re.fullmatch(r"[a-z0-9][a-z0-9._/-]*[a-z0-9]", name))
+
+
+IMPLEMENTATION_WORK_PACKAGES_VERSION = "link-implementation-work-packages-v1"
+
+
+def make_implementation_work_packages_id(packages: list[dict[str, Any]]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "package_ids": [package["package_id"] for package in packages],
+        "version": IMPLEMENTATION_WORK_PACKAGES_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"implementation-work-packages-{digest}"
+
+
+def make_implementation_work_package_id(branch_plan: dict[str, Any], task_group: str) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "branch_plan_id": branch_plan["branch_plan_id"],
+        "source_upgrade_id": branch_plan["source_upgrade_id"],
+        "task_group": task_group,
+        "version": IMPLEMENTATION_WORK_PACKAGES_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"implementation-work-package-{digest}"
+
+
+def collect_implementation_work_packages(
+    branch_plans: dict[str, Any] | list[dict[str, Any]],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Convert implementation branch plans into deterministic read-only work packages."""
+    plans = _implementation_work_package_plans_from_input(branch_plans)
+    packages = [_implementation_work_package_from_branch_plan(plan) for plan in plans]
+    packages.sort(key=lambda item: (item["risk"], item["complexity"], item["package_id"]))
+    result = {
+        "work_packages_version": IMPLEMENTATION_WORK_PACKAGES_VERSION,
+        "work_packages_id": make_implementation_work_packages_id(packages),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "package_count": len(packages),
+        "packages": packages,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_implementation_work_packages(result)
+    return result
+
+
+def validate_implementation_work_packages(work_packages: dict[str, Any]) -> None:
+    required = (
+        "work_packages_version", "work_packages_id", "dry_run", "write_allowed",
+        "automation_allowed", "package_count", "packages", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in work_packages]
+    if missing:
+        raise ValueError(f"implementation work packages missing fields: {missing}")
+    if work_packages["work_packages_version"] != IMPLEMENTATION_WORK_PACKAGES_VERSION:
+        raise ValueError("unsupported implementation work packages version")
+    if not isinstance(work_packages["work_packages_id"], str) or not work_packages["work_packages_id"].strip():
+        raise ValueError("work_packages_id must be a non-empty string")
+    if work_packages["dry_run"] is not True or work_packages["write_allowed"] is not False or work_packages["automation_allowed"] is not False:
+        raise ValueError("implementation work packages must remain read-only")
+    if work_packages["writes"] != []:
+        raise ValueError("implementation work packages must not write files")
+    if not isinstance(work_packages["metadata"], dict):
+        raise TypeError("implementation work packages metadata must be a dict")
+    packages = work_packages["packages"]
+    if not isinstance(packages, list):
+        raise TypeError("packages must be a list")
+    if not isinstance(work_packages["package_count"], int) or work_packages["package_count"] != len(packages):
+        raise ValueError("package_count must match packages length")
+    package_ids: set[str] = set()
+    for package in packages:
+        validate_implementation_work_package(package)
+        if package["package_id"] in package_ids:
+            raise ValueError(f"duplicate implementation work package id: {package['package_id']}")
+        package_ids.add(package["package_id"])
+
+
+def stable_implementation_work_packages_json(work_packages: dict[str, Any]) -> str:
+    validate_implementation_work_packages(work_packages)
+    return _stable_ruflo_json(work_packages, indent=2) + "\n"
+
+
+def parse_implementation_work_packages_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    work_packages = _json.loads(text)
+    validate_implementation_work_packages(work_packages)
+    return work_packages
+
+
+def validate_implementation_work_package(package: dict[str, Any]) -> None:
+    required = (
+        "package_id", "branch_plan_id", "upgrade_id", "target_files", "target_subsystems",
+        "acceptance_criteria", "implementation_tasks", "verification_commands", "rollback_notes",
+        "risk", "complexity", "estimated_file_count", "estimated_test_count",
+    )
+    missing = [field for field in required if field not in package]
+    if missing:
+        raise ValueError(f"implementation work package missing fields: {missing}")
+    for field in ("package_id", "branch_plan_id", "upgrade_id", "risk", "complexity"):
+        if not isinstance(package[field], str) or not package[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if package["risk"] not in UPGRADE_RISK_LEVELS:
+        raise ValueError(f"invalid implementation work package risk: {package['risk']}")
+    if package["complexity"] not in UPGRADE_COMPLEXITY_LEVELS:
+        raise ValueError(f"invalid implementation work package complexity: {package['complexity']}")
+    for field in ("target_files", "target_subsystems", "acceptance_criteria", "implementation_tasks", "verification_commands", "rollback_notes"):
+        values = package[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            raise TypeError(f"{field} must contain non-empty strings")
+    if package["target_files"] != _normalize_implementation_branch_refs(package["target_files"]):
+        raise ValueError("target_files must be normalized and sorted")
+    for field in ("estimated_file_count", "estimated_test_count"):
+        if not isinstance(package[field], int) or package[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    if package["estimated_file_count"] != len(package["target_files"]):
+        raise ValueError("estimated_file_count must match target_files length")
+    expected_test_count = len([path for path in package["target_files"] if path.startswith("tests/") or "/test" in path or path.endswith("_test.py")])
+    if package["estimated_test_count"] != expected_test_count:
+        raise ValueError("estimated_test_count must match test target count")
+
+
+def _implementation_work_package_plans_from_input(branch_plans: dict[str, Any] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if isinstance(branch_plans, dict):
+        validate_implementation_branch_plan(branch_plans)
+        return [branch_plans]
+    if isinstance(branch_plans, list):
+        plans: list[dict[str, Any]] = []
+        for plan in branch_plans:
+            validate_implementation_branch_plan(plan)
+            plans.append(plan)
+        return plans
+    raise TypeError("branch_plans must be a branch plan dict or list of branch plans")
+
+
+def _implementation_work_package_from_branch_plan(branch_plan: dict[str, Any]) -> dict[str, Any]:
+    validate_implementation_branch_plan(branch_plan)
+    target_files = _normalize_implementation_branch_refs(branch_plan["target_files"])
+    tasks = [f"{task['order']}. {task['phase']}: {task['task']}" for task in branch_plan["ordered_implementation_tasks"]]
+    package = {
+        "package_id": make_implementation_work_package_id(branch_plan, "primary"),
+        "branch_plan_id": branch_plan["branch_plan_id"],
+        "upgrade_id": branch_plan["source_upgrade_id"],
+        "target_files": target_files,
+        "target_subsystems": list(branch_plan["target_subsystems"]),
+        "acceptance_criteria": _implementation_work_package_acceptance_criteria(branch_plan),
+        "implementation_tasks": tasks,
+        "verification_commands": list(branch_plan["verification_commands"]),
+        "rollback_notes": list(branch_plan["rollback_notes"]),
+        "risk": branch_plan["risk_level"],
+        "complexity": branch_plan["complexity"],
+        "estimated_file_count": len(target_files),
+        "estimated_test_count": len([path for path in target_files if path.startswith("tests/") or "/test" in path or path.endswith("_test.py")]),
+    }
+    validate_implementation_work_package(package)
+    return package
+
+
+def _implementation_work_package_acceptance_criteria(branch_plan: dict[str, Any]) -> list[str]:
+    criteria = [
+        "Implementation remains scoped to the planned target files unless human review expands scope.",
+        "No CLI, branch, worktree, approval, handoff, execute, finalize, network, npm, node, or bun behavior is added by the package generator.",
+        "All verification commands in the package pass before review.",
+        "Final summary includes changed files, verification results, rollback notes, and git status.",
+    ]
+    if branch_plan["blocked"]:
+        criteria.append("Missing required evidence is resolved before implementation begins.")
+    if branch_plan["requires_review"]:
+        criteria.append("Human review is required before any implementation branch or commit is created.")
+    return criteria
+
+
+VERIFICATION_PLAN_VERSION = "link-verification-plan-v1"
+VERIFICATION_COST_LEVELS = ("low", "medium", "high")
+VERIFICATION_RISK_LEVELS = ("low", "medium", "high")
+
+
+def make_verification_plan_id(package: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "package_id": package["package_id"],
+        "upgrade_id": package["upgrade_id"],
+        "verification_commands": package["verification_commands"],
+        "version": VERIFICATION_PLAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"verification-plan-{digest}"
+
+
+def collect_verification_plan(
+    work_package_or_packages: dict[str, Any],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Convert implementation work packages into deterministic read-only verification plans."""
+    packages = _verification_packages_from_input(work_package_or_packages)
+    plans = [_verification_plan_from_package(package) for package in packages]
+    plans.sort(key=lambda item: item["verification_plan_id"])
+    result = {
+        "verification_plan_version": VERIFICATION_PLAN_VERSION,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "plan_count": len(plans),
+        "plans": plans,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_verification_plan(result)
+    return result
+
+
+def validate_verification_plan(verification_plan: dict[str, Any]) -> None:
+    required = (
+        "verification_plan_version", "dry_run", "write_allowed", "automation_allowed",
+        "plan_count", "plans", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in verification_plan]
+    if missing:
+        raise ValueError(f"verification plan missing fields: {missing}")
+    if verification_plan["verification_plan_version"] != VERIFICATION_PLAN_VERSION:
+        raise ValueError("unsupported verification plan version")
+    if verification_plan["dry_run"] is not True or verification_plan["write_allowed"] is not False or verification_plan["automation_allowed"] is not False:
+        raise ValueError("verification plan must remain read-only")
+    if verification_plan["writes"] != []:
+        raise ValueError("verification plan must not write files")
+    if not isinstance(verification_plan["metadata"], dict):
+        raise TypeError("verification plan metadata must be a dict")
+    plans = verification_plan["plans"]
+    if not isinstance(plans, list):
+        raise TypeError("plans must be a list")
+    if not isinstance(verification_plan["plan_count"], int) or verification_plan["plan_count"] != len(plans):
+        raise ValueError("plan_count must match plans length")
+    plan_ids: set[str] = set()
+    for plan in plans:
+        validate_verification_plan_entry(plan)
+        if plan["verification_plan_id"] in plan_ids:
+            raise ValueError(f"duplicate verification plan id: {plan['verification_plan_id']}")
+        plan_ids.add(plan["verification_plan_id"])
+    if [plan["verification_plan_id"] for plan in plans] != sorted(plan["verification_plan_id"] for plan in plans):
+        raise ValueError("verification plans must be sorted by verification_plan_id")
+
+
+def stable_verification_plan_json(verification_plan: dict[str, Any]) -> str:
+    validate_verification_plan(verification_plan)
+    return _stable_ruflo_json(verification_plan, indent=2) + "\n"
+
+
+def parse_verification_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    verification_plan = _json.loads(text)
+    validate_verification_plan(verification_plan)
+    return verification_plan
+
+
+def validate_verification_plan_entry(plan: dict[str, Any]) -> None:
+    required = (
+        "verification_plan_id", "package_id", "branch_plan_id", "upgrade_id",
+        "compile_commands", "test_commands", "healthcheck_commands", "expected_files",
+        "expected_capabilities", "expected_behaviors", "failure_conditions", "rollback_triggers",
+        "estimated_verification_cost", "estimated_verification_risk", "required_evidence",
+    )
+    missing = [field for field in required if field not in plan]
+    if missing:
+        raise ValueError(f"verification plan entry missing fields: {missing}")
+    for field in ("verification_plan_id", "package_id", "branch_plan_id", "upgrade_id", "estimated_verification_cost", "estimated_verification_risk"):
+        if not isinstance(plan[field], str) or not plan[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if plan["estimated_verification_cost"] not in VERIFICATION_COST_LEVELS:
+        raise ValueError(f"invalid estimated_verification_cost: {plan['estimated_verification_cost']}")
+    if plan["estimated_verification_risk"] not in VERIFICATION_RISK_LEVELS:
+        raise ValueError(f"invalid estimated_verification_risk: {plan['estimated_verification_risk']}")
+    for field in (
+        "compile_commands", "test_commands", "healthcheck_commands", "expected_files",
+        "expected_capabilities", "expected_behaviors", "failure_conditions", "rollback_triggers",
+        "required_evidence",
+    ):
+        values = plan[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            raise TypeError(f"{field} must contain non-empty strings")
+    if plan["expected_files"] != _normalize_implementation_branch_refs(plan["expected_files"]):
+        raise ValueError("expected_files must be normalized and sorted")
+    if not plan["compile_commands"]:
+        raise ValueError("compile_commands must not be empty")
+    if not plan["test_commands"]:
+        raise ValueError("test_commands must not be empty")
+    if not plan["healthcheck_commands"]:
+        raise ValueError("healthcheck_commands must not be empty")
+
+
+def _verification_packages_from_input(work_package_or_packages: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(work_package_or_packages, dict):
+        raise TypeError("work_package_or_packages must be a dict")
+    if "packages" in work_package_or_packages:
+        validate_implementation_work_packages(work_package_or_packages)
+        return [dict(package) for package in work_package_or_packages["packages"]]
+    validate_implementation_work_package(work_package_or_packages)
+    return [dict(work_package_or_packages)]
+
+
+def _verification_plan_from_package(package: dict[str, Any]) -> dict[str, Any]:
+    validate_implementation_work_package(package)
+    command_groups = _verification_command_groups(package["verification_commands"])
+    plan = {
+        "verification_plan_id": make_verification_plan_id(package),
+        "package_id": package["package_id"],
+        "branch_plan_id": package["branch_plan_id"],
+        "upgrade_id": package["upgrade_id"],
+        "compile_commands": command_groups["compile_commands"],
+        "test_commands": command_groups["test_commands"],
+        "healthcheck_commands": command_groups["healthcheck_commands"],
+        "expected_files": _normalize_implementation_branch_refs(package["target_files"]),
+        "expected_capabilities": _verification_expected_capabilities(package),
+        "expected_behaviors": _verification_expected_behaviors(package),
+        "failure_conditions": _verification_failure_conditions(package),
+        "rollback_triggers": _verification_rollback_triggers(package),
+        "estimated_verification_cost": _verification_cost(package),
+        "estimated_verification_risk": _verification_risk(package),
+        "required_evidence": _verification_required_evidence(package),
+    }
+    validate_verification_plan_entry(plan)
+    return plan
+
+
+def _verification_command_groups(commands: list[str]) -> dict[str, list[str]]:
+    compile_commands: list[str] = []
+    test_commands: list[str] = []
+    healthcheck_commands: list[str] = []
+    for command in commands:
+        if "py_compile" in command:
+            compile_commands.append(command)
+        elif "link_healthcheck.py" in command:
+            healthcheck_commands.append(command)
+        else:
+            test_commands.append(command)
+    return {
+        "compile_commands": compile_commands or ["python3 -m py_compile link.py link_modes/growth/link_growth_console.py tests/test_growth_pipeline.py"],
+        "test_commands": test_commands or ["PYTHONDONTWRITEBYTECODE=1 python3 tests/test_growth_pipeline.py"],
+        "healthcheck_commands": healthcheck_commands or ["PYTHONDONTWRITEBYTECODE=1 python3 link_healthcheck.py"],
+    }
+
+
+def _verification_expected_capabilities(package: dict[str, Any]) -> list[str]:
+    capabilities = [
+        "work package remains read-only",
+        "planned target files are unchanged until implementation approval",
+        f"risk classification remains {package['risk']}",
+        f"complexity classification remains {package['complexity']}",
+    ]
+    return sorted(dict.fromkeys(capabilities))
+
+
+def _verification_expected_behaviors(package: dict[str, Any]) -> list[str]:
+    behaviors = [
+        "verification commands are represented as data only and are not executed by this helper",
+        "acceptance criteria remain attached to the work package",
+        "rollback notes remain available for reviewer use",
+    ]
+    for criterion in package["acceptance_criteria"]:
+        behaviors.append(f"acceptance criterion: {criterion}")
+    return sorted(dict.fromkeys(behaviors))
+
+
+def _verification_failure_conditions(package: dict[str, Any]) -> list[str]:
+    conditions = [
+        "compile command fails",
+        "Growth pipeline tests fail",
+        "link_healthcheck.py fails",
+        "unexpected files are modified outside the package target files",
+        "runtime state, research files, proposals, handoffs, or receipts are modified unexpectedly",
+    ]
+    if package["risk"] in {"medium", "high"}:
+        conditions.append("reviewer safety concern remains unresolved")
+    return sorted(dict.fromkeys(conditions))
+
+
+def _verification_rollback_triggers(package: dict[str, Any]) -> list[str]:
+    triggers = [
+        "verification command failure after implementation",
+        "scope expands beyond planned target files without approval",
+        "read-only safety metadata is removed or weakened",
+    ]
+    if package["risk"] == "high":
+        triggers.append("high-risk behavior changes without explicit approval")
+    return sorted(dict.fromkeys(triggers))
+
+
+def _verification_cost(package: dict[str, Any]) -> str:
+    command_count = len(package["verification_commands"])
+    file_count = int(package["estimated_file_count"])
+    if package["complexity"] in {"large", "major"} or command_count >= 5 or file_count >= 5:
+        return "high"
+    if package["complexity"] == "medium" or command_count >= 3 or file_count >= 3:
+        return "medium"
+    return "low"
+
+
+def _verification_risk(package: dict[str, Any]) -> str:
+    if package["risk"] == "high":
+        return "high"
+    if package["risk"] == "medium" or package["complexity"] in {"large", "major"}:
+        return "medium"
+    return "low"
+
+
+def _verification_required_evidence(package: dict[str, Any]) -> list[str]:
+    evidence = [
+        "compile output",
+        "Growth pipeline test output",
+        "link_healthcheck.py output",
+        "git diff --stat",
+        "git status --short --branch",
+    ]
+    evidence.extend(package["acceptance_criteria"])
+    return sorted(dict.fromkeys(evidence))
+
+
 def _normalize_feedback_status(status: str) -> str:
     raw = str(status or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {

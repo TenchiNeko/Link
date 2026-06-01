@@ -5073,7 +5073,726 @@ def check_capability_intelligence_payload_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 53. Growth archive-code-brief -- dry-run
+# 53. Upgrade execution planner
+# ---------------------------------------------------------------------------
+
+def check_upgrade_execution_plan_helper() -> None:
+    """Capability gaps convert into deterministic read-only upgrade execution plans."""
+    from link_modes.growth.link_growth_console import (
+        UPGRADE_EXECUTION_PLAN_VERSION,
+        collect_capability_gap_preview,
+        collect_link_capability_inventory,
+        collect_repo_value_scan,
+        collect_upgrade_execution_plan,
+        parse_upgrade_execution_plan_json,
+        stable_upgrade_execution_plan_json,
+        validate_upgrade_execution_plan,
+    )
+
+    inventory = collect_link_capability_inventory([
+        {
+            "name": "Safety policy gate",
+            "category": "safety",
+            "description": "Existing safety policy gate is present but still maturing.",
+            "source": "link_capability_gate.py",
+            "confidence": "high",
+            "tags": ["safety", "policy", "gate"],
+            "risk_level": "low",
+            "maturity_level": "partial",
+        },
+        {
+            "name": "Command dashboard UX",
+            "category": "workflow_ux",
+            "description": "Shows Growth commands and local workflow state.",
+            "source": "link_modes/growth/link_growth_console.py:collect_run_data",
+            "confidence": "high",
+            "tags": ["cli", "dashboard", "integration"],
+            "risk_level": "low",
+            "maturity_level": "verified",
+        },
+        {
+            "name": "Repo value scanner",
+            "category": "repo_value_scan",
+            "description": "Ranks repo files and concepts for Link relevance.",
+            "source": "link_modes/growth/link_growth_console.py:collect_repo_value_scan",
+            "confidence": "high",
+            "tags": ["repo", "scan", "value"],
+            "risk_level": "low",
+            "maturity_level": "verified",
+        },
+    ])
+    repo_scan = collect_repo_value_scan([
+        {
+            "path": "sota/memory.py",
+            "title": "Self-learning feedback loop",
+            "category": "self_learning",
+            "summary": "Scanner records feedback loops and improves future recommendations.",
+            "source_kind": "code",
+            "tags": ["self-learning", "feedback", "recommendation"],
+        },
+        {
+            "path": "sota/policy.md",
+            "title": "Verified approval policy gate",
+            "category": "safety_approval_gates",
+            "summary": "Scanner requires policy gates before risky work.",
+            "source_kind": "docs",
+            "tags": ["safety", "policy", "gate"],
+        },
+        {
+            "path": "sota/README.md",
+            "title": "Discoverable command onboarding",
+            "category": "cli_workflow_ux",
+            "summary": "Documents CLI integration, quickstart examples, and dashboard discoverability.",
+            "source_kind": "readme",
+            "tags": ["cli", "integration", "docs"],
+        },
+        {
+            "path": "sota/notes.txt",
+            "title": "Weak scanner note",
+            "category": "repo_scanning",
+            "source_kind": "text",
+        },
+    ], source_label="sota-scan")
+    findings = [dict(item) for item in repo_scan["findings"]]
+    for finding in findings:
+        if finding["title"] == "Verified approval policy gate":
+            finding["required_maturity_level"] = "verified"
+    gap_preview = collect_capability_gap_preview(inventory, findings)
+    plan = collect_upgrade_execution_plan(
+        gap_preview,
+        inventory,
+        findings,
+        metadata={"suite": "growth"},
+    )
+    same = collect_upgrade_execution_plan(
+        gap_preview,
+        inventory,
+        findings,
+        metadata={"suite": "growth"},
+    )
+
+    _require(plan["plan_version"] == UPGRADE_EXECUTION_PLAN_VERSION,
+             "upgrade execution plan version mismatch")
+    _require(plan["plan_id"] == same["plan_id"],
+             "upgrade execution plan_id must be deterministic")
+    _require(plan["source_gap_preview_id"] == gap_preview["preview_id"],
+             "upgrade execution plan must reference gap preview id")
+    _require(plan["source_inventory_id"] == inventory["inventory_id"],
+             "upgrade execution plan must reference inventory id")
+    _require(plan["dry_run"] is True and plan["write_allowed"] is False,
+             "upgrade execution plan must remain read-only")
+    _require(plan["automation_allowed"] is False,
+             "upgrade execution plan must not allow automation")
+    _require(plan["writes"] == [], "upgrade execution plan must not write files")
+    _require(plan["metadata"]["suite"] == "growth",
+             "upgrade execution plan must preserve metadata")
+    _require(plan["upgrade_plan_count"] == 4,
+             "upgrade execution plan must include all gap sections")
+
+    ranks = [entry["rank"] for entry in plan["upgrade_plans"]]
+    _require(ranks == sorted(ranks), "upgrade plans must rank deterministically")
+    by_title = {entry["title"]: entry for entry in plan["upgrade_plans"]}
+    direct = by_title["Self-learning feedback loop"]
+    maturity = by_title["Verified approval policy gate"]
+    onboarding = by_title["Discoverable command onboarding"]
+    optional = by_title["Weak scanner note"]
+    _require(direct["gap_type"] == "direct_gap", "self-learning finding must be direct gap")
+    _require(direct["complexity"] == "large", "self-learning direct gap should classify as large")
+    _require(direct["risk"] == "high", "self-learning direct gap should classify as high risk")
+    _require(maturity["gap_type"] == "maturity_gap", "safety finding must be maturity gap")
+    _require(maturity["complexity"] == "medium", "safety maturity gap should classify as medium")
+    _require(maturity["risk"] == "medium", "safety maturity gap should classify as medium risk")
+    _require(onboarding["gap_type"] == "onboarding_gap", "README finding must be onboarding gap")
+    _require(onboarding["complexity"] == "small", "onboarding gap should classify as small")
+    _require(onboarding["risk"] == "low", "workflow onboarding gap should classify as low risk")
+    _require(optional["gap_type"] == "optional_cross_cluster_idea", "weak scanner note should be optional idea")
+    _require(optional["complexity"] == "medium", "optional idea should classify as medium")
+    _require(optional["risk"] == "medium", "optional idea should classify as medium risk")
+
+    for entry in plan["upgrade_plans"]:
+        _require(entry["upgrade_plan_id"].startswith("upgrade-plan-"),
+                 "upgrade plan entry id must use stable prefix")
+        _require(entry["phases"] == ["discovery", "design", "implementation", "verification", "rollout"],
+                 "upgrade plan phases must be stable")
+        _require(entry["target_link_subsystems"], "upgrade plan must include target subsystems")
+        _require("python3 -m py_compile link.py link_modes/growth/link_growth_console.py tests/test_growth_pipeline.py" in entry["verification_requirements"],
+                 "upgrade plan must include compile verification")
+        _require("PYTHONDONTWRITEBYTECODE=1 python3 tests/test_growth_pipeline.py" in entry["verification_requirements"],
+                 "upgrade plan must include Growth tests")
+        _require("PYTHONDONTWRITEBYTECODE=1 python3 link_healthcheck.py" in entry["verification_requirements"],
+                 "upgrade plan must include healthcheck")
+        _require("git diff --stat" in entry["required_evidence"],
+                 "upgrade plan must require diff evidence")
+    _require("confirm no approval/handoff/execute behavior was added" in maturity["verification_requirements"],
+             "safety plan must include no-automation verification")
+    _require("manual dry-run smoke test for affected Growth command" in direct["verification_requirements"],
+             "large plan must require a manual dry-run smoke test")
+
+    encoded = stable_upgrade_execution_plan_json(plan)
+    _require(encoded == stable_upgrade_execution_plan_json(plan),
+             "upgrade execution plan JSON serialization must be stable")
+    decoded = parse_upgrade_execution_plan_json(encoded)
+    _require(decoded == plan, "upgrade execution plan JSON round-trip must preserve data")
+    validate_upgrade_execution_plan(plan)
+
+    bad_plan = dict(plan)
+    bad_plan.pop("plan_id")
+    try:
+        validate_upgrade_execution_plan(bad_plan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("upgrade execution plan must reject missing plan_id")
+
+    bad_writes = dict(plan)
+    bad_writes["writes"] = [".agents/runtime.json"]
+    try:
+        validate_upgrade_execution_plan(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("upgrade execution plan must reject writes")
+
+    bad_complexity = dict(plan)
+    bad_complexity["upgrade_plans"] = [dict(plan["upgrade_plans"][0], complexity="tiny")]
+    bad_complexity["upgrade_plan_count"] = 1
+    try:
+        validate_upgrade_execution_plan(bad_complexity)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("upgrade execution plan must reject invalid complexity")
+
+    bad_phases = dict(plan)
+    bad_phases["upgrade_plans"] = [dict(plan["upgrade_plans"][0], phases=["implementation"])]
+    bad_phases["upgrade_plan_count"] = 1
+    try:
+        validate_upgrade_execution_plan(bad_phases)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("upgrade execution plan must reject malformed phases")
+
+    try:
+        collect_upgrade_execution_plan({"bad": "gap"}, inventory, findings)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("upgrade execution plan must reject malformed gap preview")
+
+    print("upgrade execution plan helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 54. Implementation branch planner
+# ---------------------------------------------------------------------------
+
+def check_implementation_branch_plan_helper() -> None:
+    """One upgrade execution item converts into a deterministic read-only branch plan."""
+    from link_modes.growth.link_growth_console import (
+        IMPLEMENTATION_BRANCH_PLAN_VERSION,
+        collect_capability_gap_preview,
+        collect_implementation_branch_plan,
+        collect_link_capability_inventory,
+        collect_repo_value_scan,
+        collect_upgrade_execution_plan,
+        parse_implementation_branch_plan_json,
+        stable_implementation_branch_plan_json,
+        validate_implementation_branch_plan,
+    )
+
+    inventory = collect_link_capability_inventory([
+        {
+            "name": "Self-learning recommendations",
+            "category": "self_learning",
+            "description": "Existing self-learning helper is present but partial.",
+            "source": "link_modes/growth/link_growth_console.py",
+            "confidence": "high",
+            "tags": ["self-learning", "recommendation"],
+            "risk_level": "medium",
+            "maturity_level": "partial",
+        },
+    ])
+    repo_scan = collect_repo_value_scan([
+        {
+            "path": "sota/memory.py",
+            "title": "Self-learning feedback loop",
+            "category": "self_learning",
+            "summary": "Scanner records feedback loops and improves future recommendations.",
+            "source_kind": "code",
+            "tags": ["self-learning", "feedback", "recommendation"],
+        },
+    ], source_label="sota-scan")
+    findings = [dict(item) for item in repo_scan["findings"]]
+    for finding in findings:
+        finding["required_maturity_level"] = "verified"
+    gap_preview = collect_capability_gap_preview(inventory, findings)
+    upgrade_plan = collect_upgrade_execution_plan(gap_preview, inventory, findings)
+    upgrade_item = upgrade_plan["upgrade_plans"][0]
+
+    branch_plan = collect_implementation_branch_plan(
+        upgrade_plan,
+        upgrade_item,
+        evidence_refs=["git diff --stat"],
+        metadata={"suite": "growth"},
+    )
+    same = collect_implementation_branch_plan(
+        upgrade_plan,
+        upgrade_item,
+        evidence_refs=["git diff --stat"],
+        metadata={"suite": "growth"},
+    )
+
+    _require(branch_plan["branch_plan_version"] == IMPLEMENTATION_BRANCH_PLAN_VERSION,
+             "implementation branch plan version mismatch")
+    _require(branch_plan["branch_plan_id"] == same["branch_plan_id"],
+             "implementation branch_plan_id must be deterministic")
+    _require(branch_plan["proposed_branch_name"] == same["proposed_branch_name"],
+             "proposed branch name must be deterministic")
+    _require(branch_plan["proposed_branch_name"].startswith("link-upgrade/self-learning-feedback-loop-"),
+             "proposed branch name must use stable slug prefix")
+    _require(branch_plan["source_upgrade_plan_id"] == upgrade_plan["plan_id"],
+             "branch plan must preserve source upgrade plan id")
+    _require(branch_plan["source_upgrade_id"] == upgrade_item["upgrade_plan_id"],
+             "branch plan must preserve source upgrade id")
+    _require(branch_plan["risk_level"] == upgrade_item["risk"],
+             "branch plan must preserve risk")
+    _require(branch_plan["complexity"] == upgrade_item["complexity"],
+             "branch plan must preserve complexity")
+    _require(branch_plan["dry_run"] is True and branch_plan["write_allowed"] is False,
+             "branch plan must remain read-only")
+    _require(branch_plan["automation_allowed"] is False,
+             "branch plan must not allow automation")
+    _require(branch_plan["writes"] == [], "branch plan must not write files")
+    _require(branch_plan["metadata"]["suite"] == "growth",
+             "branch plan must preserve metadata")
+
+    _require(branch_plan["target_files"] == ["link_modes/growth/link_growth_console.py", "tests/test_growth_pipeline.py"],
+             "branch plan must derive normalized target files")
+    _require(branch_plan["target_subsystems"] == upgrade_item["target_link_subsystems"],
+             "branch plan must preserve target subsystems")
+    _require(branch_plan["verification_commands"] == upgrade_item["verification_requirements"],
+             "branch plan must preserve verification commands")
+    _require(branch_plan["required_evidence"] == sorted(upgrade_item["required_evidence"]),
+             "branch plan must preserve required evidence")
+    _require(branch_plan["provided_evidence"] == ["git diff --stat"],
+             "branch plan must normalize provided evidence")
+    _require(branch_plan["blocked"] is True,
+             "branch plan must block when required evidence is missing")
+    _require(branch_plan["missing_evidence"],
+             "blocked branch plan must list missing evidence")
+    _require(branch_plan["requires_review"] is True,
+             "non-low risk or blocked branch plan must require review")
+    _require(branch_plan["rollback_notes"], "branch plan must include rollback notes")
+
+    tasks = branch_plan["ordered_implementation_tasks"]
+    _require([task["order"] for task in tasks] == [1, 2, 3, 4, 5],
+             "implementation tasks must be ordered")
+    _require([task["phase"] for task in tasks] == ["discovery", "design", "implementation", "verification", "rollout"],
+             "implementation tasks must follow stable phases")
+    _require(all(task["task"] for task in tasks), "implementation tasks must be non-empty")
+
+    unblocked = collect_implementation_branch_plan(
+        upgrade_plan,
+        upgrade_item,
+        evidence_refs=upgrade_item["required_evidence"],
+    )
+    _require(unblocked["blocked"] is False,
+             "branch plan must unblock when all required evidence is present")
+    _require(unblocked["missing_evidence"] == [],
+             "unblocked branch plan must have no missing evidence")
+
+    from_item = collect_implementation_branch_plan(upgrade_item)
+    _require(from_item["source_upgrade_plan_id"] == "standalone-upgrade-plan",
+             "branch plan can be built from a standalone upgrade item")
+    _require(from_item["source_upgrade_id"] == upgrade_item["upgrade_plan_id"],
+             "standalone branch plan must preserve source upgrade id")
+
+    encoded = stable_implementation_branch_plan_json(branch_plan)
+    _require(encoded == stable_implementation_branch_plan_json(branch_plan),
+             "implementation branch plan JSON serialization must be stable")
+    decoded = parse_implementation_branch_plan_json(encoded)
+    _require(decoded == branch_plan, "implementation branch plan JSON round-trip must preserve data")
+    validate_implementation_branch_plan(branch_plan)
+
+    bad_missing = dict(branch_plan)
+    bad_missing.pop("branch_plan_id")
+    try:
+        validate_implementation_branch_plan(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("implementation branch plan must reject missing branch_plan_id")
+
+    bad_tasks = dict(branch_plan)
+    bad_tasks["ordered_implementation_tasks"] = [dict(tasks[0], order=2)]
+    try:
+        validate_implementation_branch_plan(bad_tasks)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("implementation branch plan must reject unordered tasks")
+
+    bad_writes = dict(branch_plan)
+    bad_writes["writes"] = [".link/state.json"]
+    try:
+        validate_implementation_branch_plan(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("implementation branch plan must reject writes")
+
+    bad_branch = dict(branch_plan)
+    bad_branch["proposed_branch_name"] = "../bad"
+    try:
+        validate_implementation_branch_plan(bad_branch)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("implementation branch plan must reject malformed branch names")
+
+    try:
+        collect_implementation_branch_plan({"bad": "upgrade"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("implementation branch plan must reject malformed upgrade item")
+
+    print("implementation branch plan helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 55. Implementation work packages
+# ---------------------------------------------------------------------------
+
+def check_implementation_work_packages_helper() -> None:
+    """Implementation branch plans become deterministic read-only work packages."""
+    from link_modes.growth.link_growth_console import (
+        IMPLEMENTATION_WORK_PACKAGES_VERSION,
+        collect_capability_gap_preview,
+        collect_implementation_branch_plan,
+        collect_implementation_work_packages,
+        collect_link_capability_inventory,
+        collect_repo_value_scan,
+        collect_upgrade_execution_plan,
+        parse_implementation_work_packages_json,
+        stable_implementation_work_packages_json,
+        validate_implementation_work_packages,
+    )
+
+    inventory = collect_link_capability_inventory([
+        {
+            "name": "Self-learning recommendations",
+            "category": "self_learning",
+            "description": "Existing self-learning helper is present but partial.",
+            "source": "link_modes/growth/link_growth_console.py",
+            "confidence": "high",
+            "tags": ["self-learning", "recommendation"],
+            "risk_level": "medium",
+            "maturity_level": "partial",
+        },
+    ])
+    repo_scan = collect_repo_value_scan([
+        {
+            "path": "sota/memory.py",
+            "title": "Self-learning feedback loop",
+            "category": "self_learning",
+            "summary": "Scanner records feedback loops and improves future recommendations.",
+            "source_kind": "code",
+            "tags": ["self-learning", "feedback", "recommendation"],
+        },
+    ], source_label="sota-scan")
+    findings = [dict(item) for item in repo_scan["findings"]]
+    for finding in findings:
+        finding["required_maturity_level"] = "verified"
+    gap_preview = collect_capability_gap_preview(inventory, findings)
+    upgrade_plan = collect_upgrade_execution_plan(gap_preview, inventory, findings)
+    branch_plan = collect_implementation_branch_plan(
+        upgrade_plan,
+        upgrade_plan["upgrade_plans"][0],
+        evidence_refs=["git diff --stat"],
+    )
+    work_packages = collect_implementation_work_packages(branch_plan, metadata={"suite": "growth"})
+    same = collect_implementation_work_packages(branch_plan, metadata={"suite": "growth"})
+
+    _require(work_packages["work_packages_version"] == IMPLEMENTATION_WORK_PACKAGES_VERSION,
+             "implementation work packages version mismatch")
+    _require(work_packages["work_packages_id"] == same["work_packages_id"],
+             "implementation work packages id must be deterministic")
+    _require(work_packages["dry_run"] is True and work_packages["write_allowed"] is False,
+             "implementation work packages must remain read-only")
+    _require(work_packages["automation_allowed"] is False,
+             "implementation work packages must not allow automation")
+    _require(work_packages["writes"] == [], "implementation work packages must not write files")
+    _require(work_packages["metadata"]["suite"] == "growth",
+             "implementation work packages must preserve metadata")
+    _require(work_packages["package_count"] == 1,
+             "single branch plan must produce one work package")
+
+    package = work_packages["packages"][0]
+    _require(package["package_id"] == same["packages"][0]["package_id"],
+             "implementation package id must be deterministic")
+    _require(package["package_id"].startswith("implementation-work-package-"),
+             "implementation package id must use stable prefix")
+    _require(package["branch_plan_id"] == branch_plan["branch_plan_id"],
+             "work package must preserve branch_plan_id")
+    _require(package["upgrade_id"] == branch_plan["source_upgrade_id"],
+             "work package must preserve upgrade id")
+    _require(package["target_files"] == branch_plan["target_files"],
+             "work package must preserve target files")
+    _require(package["target_subsystems"] == branch_plan["target_subsystems"],
+             "work package must preserve target subsystems")
+    _require(package["verification_commands"] == branch_plan["verification_commands"],
+             "work package must preserve verification commands")
+    _require(package["rollback_notes"] == branch_plan["rollback_notes"],
+             "work package must preserve rollback notes")
+    _require(package["risk"] == branch_plan["risk_level"],
+             "work package must preserve risk")
+    _require(package["complexity"] == branch_plan["complexity"],
+             "work package must preserve complexity")
+    _require(package["estimated_file_count"] == len(branch_plan["target_files"]),
+             "work package estimated_file_count must match target files")
+    _require(package["estimated_test_count"] == 1,
+             "work package must count planned test files")
+    _require(any("All verification commands" in criterion for criterion in package["acceptance_criteria"]),
+             "work package must include verification acceptance criteria")
+    _require(any("Missing required evidence" in criterion for criterion in package["acceptance_criteria"]),
+             "blocked branch plan must carry evidence acceptance criteria")
+    _require(any("Human review" in criterion for criterion in package["acceptance_criteria"]),
+             "review-required branch plan must carry review acceptance criteria")
+    _require([task.split(":", 1)[0] for task in package["implementation_tasks"]] == ["1. discovery", "2. design", "3. implementation", "4. verification", "5. rollout"],
+             "work package implementation tasks must preserve order")
+
+    standalone_branch_plan = collect_implementation_branch_plan(upgrade_plan["upgrade_plans"][0])
+    multi = collect_implementation_work_packages([branch_plan, standalone_branch_plan])
+    _require(multi["package_count"] == 2,
+             "list input should produce one package per distinct branch plan")
+    _require([pkg["package_id"] for pkg in multi["packages"]] == sorted(pkg["package_id"] for pkg in multi["packages"]),
+             "work packages must sort deterministically")
+
+    encoded = stable_implementation_work_packages_json(work_packages)
+    _require(encoded == stable_implementation_work_packages_json(work_packages),
+             "implementation work packages JSON serialization must be stable")
+    decoded = parse_implementation_work_packages_json(encoded)
+    _require(decoded == work_packages,
+             "implementation work packages JSON round-trip must preserve data")
+    validate_implementation_work_packages(work_packages)
+
+    bad_missing = dict(work_packages)
+    bad_missing.pop("work_packages_id")
+    try:
+        validate_implementation_work_packages(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("implementation work packages must reject missing id")
+
+    bad_writes = dict(work_packages)
+    bad_writes["writes"] = [".agents/runtime.json"]
+    try:
+        validate_implementation_work_packages(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("implementation work packages must reject writes")
+
+    bad_package = dict(work_packages)
+    bad_package["packages"] = [dict(package, estimated_file_count=99)]
+    try:
+        validate_implementation_work_packages(bad_package)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("implementation work packages must reject invalid estimated_file_count")
+
+    bad_verification = dict(work_packages)
+    bad_verification["packages"] = [dict(package, verification_commands=[])]
+    try:
+        validate_implementation_work_packages(bad_verification)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("implementation work packages must reject missing verification commands")
+
+    try:
+        collect_implementation_work_packages({"bad": "branch-plan"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("implementation work packages must reject malformed branch plan input")
+
+    print("implementation work packages helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 56. Verification plan generator
+# ---------------------------------------------------------------------------
+
+def check_verification_plan_helper() -> None:
+    """Implementation work packages convert into deterministic read-only verification plans."""
+    from link_modes.growth.link_growth_console import (
+        VERIFICATION_PLAN_VERSION,
+        collect_capability_gap_preview,
+        collect_implementation_branch_plan,
+        collect_implementation_work_packages,
+        collect_link_capability_inventory,
+        collect_repo_value_scan,
+        collect_upgrade_execution_plan,
+        collect_verification_plan,
+        parse_verification_plan_json,
+        stable_verification_plan_json,
+        validate_verification_plan,
+    )
+
+    inventory = collect_link_capability_inventory([
+        {
+            "name": "Self-learning recommendations",
+            "category": "self_learning",
+            "description": "Existing self-learning helper is present but partial.",
+            "source": "link_modes/growth/link_growth_console.py",
+            "confidence": "high",
+            "tags": ["self-learning", "recommendation"],
+            "risk_level": "medium",
+            "maturity_level": "partial",
+        },
+    ])
+    repo_scan = collect_repo_value_scan([
+        {
+            "path": "sota/memory.py",
+            "title": "Self-learning feedback loop",
+            "category": "self_learning",
+            "summary": "Scanner records feedback loops and improves future recommendations.",
+            "source_kind": "code",
+            "tags": ["self-learning", "feedback", "recommendation"],
+        },
+    ], source_label="sota-scan")
+    findings = [dict(item) for item in repo_scan["findings"]]
+    for finding in findings:
+        finding["required_maturity_level"] = "verified"
+    gap_preview = collect_capability_gap_preview(inventory, findings)
+    upgrade_plan = collect_upgrade_execution_plan(gap_preview, inventory, findings)
+    branch_plan = collect_implementation_branch_plan(upgrade_plan, upgrade_plan["upgrade_plans"][0])
+    work_packages = collect_implementation_work_packages(branch_plan)
+    verification = collect_verification_plan(work_packages, metadata={"suite": "growth"})
+    same = collect_verification_plan(work_packages, metadata={"suite": "growth"})
+
+    _require(verification["verification_plan_version"] == VERIFICATION_PLAN_VERSION,
+             "verification plan version mismatch")
+    _require(verification["plan_count"] == 1,
+             "single work package must produce one verification plan")
+    _require(verification["plans"][0]["verification_plan_id"] == same["plans"][0]["verification_plan_id"],
+             "verification plan id must be deterministic")
+    _require(verification["dry_run"] is True and verification["write_allowed"] is False,
+             "verification plan must remain read-only")
+    _require(verification["automation_allowed"] is False,
+             "verification plan must not allow automation")
+    _require(verification["writes"] == [], "verification plan must not write files")
+    _require(verification["metadata"]["suite"] == "growth",
+             "verification plan must preserve metadata")
+
+    package = work_packages["packages"][0]
+    plan = verification["plans"][0]
+    _require(plan["verification_plan_id"].startswith("verification-plan-"),
+             "verification plan id must use stable prefix")
+    _require(plan["package_id"] == package["package_id"],
+             "verification plan must preserve package_id")
+    _require(plan["branch_plan_id"] == package["branch_plan_id"],
+             "verification plan must preserve branch_plan_id")
+    _require(plan["upgrade_id"] == package["upgrade_id"],
+             "verification plan must preserve upgrade_id")
+    _require(plan["compile_commands"] == ["python3 -m py_compile link.py link_modes/growth/link_growth_console.py tests/test_growth_pipeline.py"],
+             "verification plan must preserve compile command")
+    _require("PYTHONDONTWRITEBYTECODE=1 python3 tests/test_growth_pipeline.py" in plan["test_commands"],
+             "verification plan must preserve Growth test command")
+    _require("PYTHONDONTWRITEBYTECODE=1 python3 link_healthcheck.py" in plan["healthcheck_commands"],
+             "verification plan must preserve healthcheck command")
+    _require(plan["expected_files"] == package["target_files"],
+             "verification plan must preserve expected files")
+    _require(any("work package remains read-only" in item for item in plan["expected_capabilities"]),
+             "verification plan must include expected capability")
+    _require(any("acceptance criterion:" in item for item in plan["expected_behaviors"]),
+             "verification plan must preserve acceptance criteria as expected behaviors")
+    _require("compile command fails" in plan["failure_conditions"],
+             "verification plan must include compile failure condition")
+    _require("read-only safety metadata is removed or weakened" in plan["rollback_triggers"],
+             "verification plan must include read-only rollback trigger")
+    _require(plan["estimated_verification_cost"] == "medium",
+             "medium package verification cost should classify as medium")
+    _require(plan["estimated_verification_risk"] == "medium",
+             "large medium-risk package verification risk should classify as medium")
+    _require("compile output" in plan["required_evidence"],
+             "verification plan must require compile evidence")
+    _require("git status --short --branch" in plan["required_evidence"],
+             "verification plan must require git status evidence")
+
+    single = collect_verification_plan(package)
+    _require(single["plans"][0]["verification_plan_id"] == plan["verification_plan_id"],
+             "single package input must produce same verification plan id")
+
+    encoded = stable_verification_plan_json(verification)
+    _require(encoded == stable_verification_plan_json(verification),
+             "verification plan JSON serialization must be stable")
+    decoded = parse_verification_plan_json(encoded)
+    _require(decoded == verification, "verification plan JSON round-trip must preserve data")
+    validate_verification_plan(verification)
+
+    bad_missing = dict(verification)
+    bad_missing.pop("verification_plan_version")
+    try:
+        validate_verification_plan(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification plan must reject missing version")
+
+    bad_writes = dict(verification)
+    bad_writes["writes"] = [".link/state.json"]
+    try:
+        validate_verification_plan(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification plan must reject writes")
+
+    bad_entry = dict(verification)
+    bad_entry["plans"] = [dict(plan, compile_commands=[])]
+    try:
+        validate_verification_plan(bad_entry)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("verification plan must reject missing compile commands")
+
+    bad_cost = dict(verification)
+    bad_cost["plans"] = [dict(plan, estimated_verification_cost="huge")]
+    try:
+        validate_verification_plan(bad_cost)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification plan must reject invalid verification cost")
+
+    bad_files = dict(verification)
+    bad_files["plans"] = [dict(plan, expected_files=["../outside.py"])]
+    try:
+        validate_verification_plan(bad_files)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification plan must reject unsafe expected files")
+
+    try:
+        collect_verification_plan({"bad": "package"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification plan must reject malformed package input")
+
+    print("verification plan helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 57. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
 
 def check_growth_archive_code_brief_dry_run() -> None:
@@ -5778,6 +6497,10 @@ def main() -> None:
     check_capability_evidence_graph_helper()
     check_capability_discovery_helper()
     check_capability_intelligence_payload_helper()
+    check_upgrade_execution_plan_helper()
+    check_implementation_branch_plan_helper()
+    check_implementation_work_packages_helper()
+    check_verification_plan_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()
