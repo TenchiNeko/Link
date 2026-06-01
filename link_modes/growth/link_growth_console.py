@@ -9717,6 +9717,34 @@ def collect_growth_planning_chain_preview(
         "writes": [],
     }
     chain["planning_chain_review_bundle"] = collect_planning_chain_review_bundle(chain)
+    runtime_chain = _growth_planning_chain_without_runtime_fields(chain)
+    execution_workspace_plan = collect_execution_workspace_plan(runtime_chain)
+    execution_event_timeline = collect_execution_event_timeline(execution_workspace_plan, chain=runtime_chain)
+    execution_retry_policy = collect_execution_retry_policy(execution_event_timeline, workspace_plan=execution_workspace_plan)
+    witness_manifest_plan = collect_witness_manifest_plan(runtime_chain)
+    human_approval_package = collect_human_approval_package(
+        runtime_chain,
+        workspace_plan=execution_workspace_plan,
+        witness_manifest_plan=witness_manifest_plan,
+    )
+    execution_readiness_bundle = collect_execution_readiness_bundle(
+        runtime_chain,
+        workspace_plan=execution_workspace_plan,
+        event_timeline=execution_event_timeline,
+        retry_policy=execution_retry_policy,
+        witness_manifest_plan=witness_manifest_plan,
+        human_approval_package=human_approval_package,
+    )
+    execution_journal_plan = collect_execution_journal_plan(execution_readiness_bundle)
+    execution_readiness_bundle["execution_journal_plan_id"] = execution_journal_plan["execution_journal_id"]
+    chain["execution_workspace_plan"] = execution_workspace_plan
+    chain["execution_event_timeline"] = execution_event_timeline
+    chain["execution_retry_policy"] = execution_retry_policy
+    chain["witness_manifest_plan"] = witness_manifest_plan
+    chain["human_approval_package"] = human_approval_package
+    chain["execution_readiness_bundle"] = execution_readiness_bundle
+    chain["execution_journal_plan"] = execution_journal_plan
+    chain["planning_chain_review_bundle"] = collect_planning_chain_review_bundle(chain)
     validate_growth_planning_chain_preview(chain)
     return chain
 
@@ -9816,6 +9844,62 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_rev
         raise ValueError("stage_summary must reference autonomous execution package")
     if stage_summary["execution_stage_count"] != execution_package["stage_count"]:
         raise ValueError("stage_summary execution_stage_count must match package stage count")
+    optional_runtime_fields = (
+        "execution_workspace_plan",
+        "execution_event_timeline",
+        "execution_retry_policy",
+        "witness_manifest_plan",
+        "human_approval_package",
+        "execution_readiness_bundle",
+        "execution_journal_plan",
+    )
+    present_runtime_fields = [field for field in optional_runtime_fields if field in chain]
+    if present_runtime_fields:
+        missing_runtime = [field for field in optional_runtime_fields if field not in chain]
+        if missing_runtime:
+            raise ValueError(f"planning chain missing execution runtime preview fields: {missing_runtime}")
+        workspace = chain["execution_workspace_plan"]
+        timeline = chain["execution_event_timeline"]
+        retry = chain["execution_retry_policy"]
+        witness = chain["witness_manifest_plan"]
+        approval = chain["human_approval_package"]
+        readiness = chain["execution_readiness_bundle"]
+        journal = chain["execution_journal_plan"]
+        validate_execution_workspace_plan(workspace)
+        validate_execution_event_timeline(timeline, workspace)
+        validate_execution_retry_policy(retry, timeline)
+        validate_witness_manifest_plan(witness)
+        validate_human_approval_package(approval)
+        validate_execution_readiness_bundle(readiness)
+        validate_execution_journal_plan(journal, readiness)
+        if workspace["planning_chain_id"] != chain["planning_chain_id"]:
+            raise ValueError("planning chain workspace must reference planning chain")
+        if workspace["execution_package_id"] != execution_package["execution_package_id"]:
+            raise ValueError("planning chain workspace must reference autonomous execution package")
+        if witness["expected_execution_package_id"] != execution_package["execution_package_id"]:
+            raise ValueError("planning chain witness manifest must reference autonomous execution package")
+        if approval["planning_chain_id"] != chain["planning_chain_id"]:
+            raise ValueError("planning chain approval package must reference planning chain")
+        if approval["workspace_id"] != workspace["workspace_id"]:
+            raise ValueError("planning chain approval package must reference workspace")
+        if approval["witness_manifest_id"] != witness["witness_manifest_id"]:
+            raise ValueError("planning chain approval package must reference witness manifest")
+        if readiness["execution_workspace_plan"]["workspace_id"] != workspace["workspace_id"]:
+            raise ValueError("planning chain readiness must reference workspace plan")
+        if readiness["execution_event_timeline"]["execution_event_timeline_id"] != timeline["execution_event_timeline_id"]:
+            raise ValueError("planning chain readiness must reference event timeline")
+        if readiness["retry_policy"]["retry_policy_id"] != retry["retry_policy_id"]:
+            raise ValueError("planning chain readiness must reference retry policy")
+        if readiness["witness_manifest_plan"]["witness_manifest_id"] != witness["witness_manifest_id"]:
+            raise ValueError("planning chain readiness must reference witness manifest")
+        if readiness["human_approval_package"]["approval_package_id"] != approval["approval_package_id"]:
+            raise ValueError("planning chain readiness must reference human approval package")
+        if readiness.get("execution_journal_plan_id") != journal["execution_journal_id"]:
+            raise ValueError("planning chain readiness must reference execution journal plan")
+        if journal["execution_package_id"] != execution_package["execution_package_id"]:
+            raise ValueError("planning chain journal must reference autonomous execution package")
+        if require_review_bundle and chain["planning_chain_review_bundle"]["execution_readiness_bundle_id"] != readiness["execution_readiness_bundle_id"]:
+            raise ValueError("planning chain review bundle must reference readiness bundle")
 
 
 def stable_growth_planning_chain_json(chain: dict[str, Any]) -> str:
@@ -9915,6 +9999,12 @@ def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     review_bundle = chain["planning_chain_review_bundle"]
     print(f"quality_gate: {stage_summary['quality_gate_status']}")
     print(f"execution_stages: {stage_summary['execution_stage_count']}")
+    readiness = chain.get("execution_readiness_bundle", {})
+    journal = chain.get("execution_journal_plan", {})
+    if readiness:
+        print(f"readiness_bundle: {readiness['execution_readiness_bundle_id']} ({readiness['readiness_status']})")
+    if journal:
+        print(f"execution_journal: {journal['execution_journal_id']} ({len(journal['journal_entries'])} planned entries)")
     print(f"review_bundle: {review_bundle['review_bundle_id']} ({review_bundle['patch_behavior_quality_gate']['pass_status']})")
     print(f"next_action: {review_bundle['recommended_next_action']}")
 
@@ -9961,6 +10051,10 @@ def collect_planning_chain_review_bundle(
     patch_plan = source_chain["verified_patch_plan"]
     quality_gate = source_chain["patch_behavior_quality_gate"]
     execution_package = source_chain["autonomous_execution_package"]
+    readiness_bundle = source_chain.get("execution_readiness_bundle")
+    readiness_bundle_id = ""
+    if isinstance(readiness_bundle, dict):
+        readiness_bundle_id = str(readiness_bundle.get("execution_readiness_bundle_id") or "")
     bundle = {
         "review_bundle_version": PLANNING_CHAIN_REVIEW_BUNDLE_VERSION,
         "review_bundle_id": make_planning_chain_review_bundle_id(source_chain),
@@ -9979,6 +10073,7 @@ def collect_planning_chain_review_bundle(
             "risk_score": quality_gate["risk_score"],
         },
         "autonomous_execution_package_id": action["execution_package_id"],
+        "execution_readiness_bundle_id": readiness_bundle_id,
         "execution_stage_count": execution_package["stage_count"],
         "required_evidence": _normalize_implementation_branch_refs(patch_plan["required_evidence"]),
         "missing_evidence": _normalize_implementation_branch_refs(patch_plan["missing_evidence"]),
@@ -10004,7 +10099,7 @@ def validate_planning_chain_review_bundle(
         "review_bundle_version", "review_bundle_id", "planning_chain_id", "top_upgrade_id",
         "top_upgrade_title", "branch_plan_id", "work_package_id", "verification_plan_id",
         "verified_patch_plan_id", "verified_patch_diff_id", "patch_behavior_quality_gate",
-        "autonomous_execution_package_id", "execution_stage_count", "required_evidence",
+        "autonomous_execution_package_id", "execution_readiness_bundle_id", "execution_stage_count", "required_evidence",
         "missing_evidence", "top_risks", "required_clarifications", "recommended_next_action",
         "dry_run", "write_allowed", "automation_allowed", "metadata", "writes",
     )
@@ -10020,6 +10115,8 @@ def validate_planning_chain_review_bundle(
     ):
         if not isinstance(bundle[field], str) or not bundle[field].strip():
             raise ValueError(f"{field} must be a non-empty string")
+    if not isinstance(bundle["execution_readiness_bundle_id"], str):
+        raise TypeError("execution_readiness_bundle_id must be a string")
     if bundle["dry_run"] is not True or bundle["write_allowed"] is not False or bundle["automation_allowed"] is not False:
         raise ValueError("planning-chain review bundle must remain read-only")
     if bundle["writes"] != []:
@@ -10082,6 +10179,13 @@ def validate_planning_chain_review_bundle(
             raise ValueError("quality gate summary must reference planning-chain quality gate")
         if bundle["patch_behavior_quality_gate"]["pass_status"] != quality_gate["pass_status"]:
             raise ValueError("quality gate summary must preserve pass_status")
+        readiness_bundle = chain.get("execution_readiness_bundle")
+        if isinstance(readiness_bundle, dict):
+            expected_readiness_id = readiness_bundle.get("execution_readiness_bundle_id")
+            if bundle["execution_readiness_bundle_id"] != expected_readiness_id:
+                raise ValueError("review bundle must reference execution readiness bundle")
+        elif bundle["execution_readiness_bundle_id"]:
+            raise ValueError("review bundle cannot reference missing execution readiness bundle")
 
 
 def stable_planning_chain_review_bundle_json(bundle: dict[str, Any]) -> str:
@@ -10110,6 +10214,1071 @@ def _planning_chain_review_top_risks(
     if not risks and quality_gate["pass_status"] == "pass":
         risks.append("no blocking or review-level patch behavior risks detected")
     return _normalize_patch_behavior_text_list(risks)
+
+
+
+EXECUTION_WORKSPACE_PLAN_VERSION = "link-execution-workspace-plan-v1"
+EXECUTION_EVENT_TIMELINE_VERSION = "link-execution-event-timeline-v1"
+EXECUTION_RETRY_POLICY_VERSION = "link-execution-retry-policy-v1"
+WITNESS_MANIFEST_PLAN_VERSION = "link-witness-manifest-plan-v1"
+HUMAN_APPROVAL_PACKAGE_VERSION = "link-human-approval-package-v1"
+EXECUTION_READINESS_BUNDLE_VERSION = "link-execution-readiness-bundle-v1"
+
+
+def _execution_readiness_id(prefix: str, payload: dict[str, Any]) -> str:
+    import hashlib
+
+    digest = hashlib.sha256(_stable_ruflo_json(payload).encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}-{digest}"
+
+
+def _validate_execution_read_only(payload: dict[str, Any], label: str) -> None:
+    if payload.get("dry_run") is not True or payload.get("write_allowed") is not False or payload.get("automation_allowed") is not False:
+        raise ValueError(f"{label} must remain read-only")
+    if payload.get("writes") != []:
+        raise ValueError(f"{label} must not write files")
+    if not isinstance(payload.get("metadata"), dict):
+        raise TypeError(f"{label} metadata must be a dict")
+
+
+def _validate_non_empty_string(value: Any, field: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty string")
+
+
+def make_execution_workspace_plan_id(review_bundle: dict[str, Any], execution_package: dict[str, Any]) -> str:
+    return _execution_readiness_id("execution-workspace-plan", {
+        "execution_package_id": execution_package["execution_package_id"],
+        "planning_chain_id": review_bundle["planning_chain_id"],
+        "review_bundle_id": review_bundle["review_bundle_id"],
+        "version": EXECUTION_WORKSPACE_PLAN_VERSION,
+    })
+
+
+def collect_execution_workspace_plan(
+    chain: dict[str, Any] | None = None,
+    *,
+    repo_path: str = "/home/user/link",
+    base_branch: str = "mine-hermes-upgrades-20260524",
+    base_ref: str = "safe-link-latest",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Plan isolated future execution workspace state without creating anything."""
+    source_chain = chain if chain is not None else collect_growth_planning_chain_preview()
+    source_chain = _growth_planning_chain_without_runtime_fields(source_chain)
+    validate_growth_planning_chain_preview(source_chain)
+    review_bundle = source_chain["planning_chain_review_bundle"]
+    execution_package = source_chain["autonomous_execution_package"]
+    branch_plan = source_chain["implementation_branch_plan"]
+    patch_plan = source_chain["verified_patch_plan"]
+    workspace_id = make_execution_workspace_plan_id(review_bundle, execution_package)
+    short_id = workspace_id.removeprefix("execution-workspace-plan-")
+    proposed_branch = f"link/exec-{review_bundle['top_upgrade_id'][-24:]}-{short_id[:8]}"
+    plan = {
+        "workspace_plan_version": EXECUTION_WORKSPACE_PLAN_VERSION,
+        "workspace_id": workspace_id,
+        "planning_chain_id": review_bundle["planning_chain_id"],
+        "review_bundle_id": review_bundle["review_bundle_id"],
+        "execution_package_id": execution_package["execution_package_id"],
+        "repo_path": str(repo_path).rstrip("/"),
+        "base_branch": base_branch,
+        "base_ref": base_ref,
+        "proposed_branch_name": proposed_branch,
+        "proposed_worktree_path": f"{str(repo_path).rstrip('/')}/.link/worktrees/{short_id}",
+        "target_files": _normalize_implementation_branch_refs(patch_plan["target_files"]),
+        "target_subsystems": _normalize_implementation_branch_refs(branch_plan["target_subsystems"]),
+        "isolation_strategy": "planned_worktree",
+        "cleanup_policy": "keep_on_unknown_or_failed_verification",
+        "rollback_policy": "keep workspace for review unless explicit human approval authorizes discard",
+        "preflight_checks": _normalize_patch_behavior_text_list([
+            "confirm working tree state is clean or explicitly snapshotted",
+            "confirm target files are inside the repository",
+            "confirm patch behavior quality gate is not block",
+            "confirm verification commands are allowlisted before execution",
+            "confirm no research or runtime state paths are targeted",
+        ]),
+        "approval_requirements": _normalize_patch_behavior_text_list([
+            "human approval required before branch creation",
+            "human approval required before worktree creation",
+            "human approval required before patch application",
+            "human approval required before cleanup discard",
+        ]),
+        "verification_requirements": _normalize_patch_behavior_text_list([
+            *source_chain["verification_plan"]["plans"][0]["compile_commands"],
+            *source_chain["verification_plan"]["plans"][0]["test_commands"],
+            *source_chain["verification_plan"]["plans"][0]["healthcheck_commands"],
+        ]),
+        "blocked": bool(review_bundle["missing_evidence"] or review_bundle["patch_behavior_quality_gate"]["pass_status"] == "block"),
+        "requires_approval": True,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_workspace_plan(plan, source_chain)
+    return plan
+
+
+def validate_execution_workspace_plan(plan: dict[str, Any], chain: dict[str, Any] | None = None) -> None:
+    required = (
+        "workspace_plan_version", "workspace_id", "planning_chain_id", "review_bundle_id",
+        "execution_package_id", "repo_path", "base_branch", "base_ref", "proposed_branch_name",
+        "proposed_worktree_path", "target_files", "target_subsystems", "isolation_strategy",
+        "cleanup_policy", "rollback_policy", "preflight_checks", "approval_requirements",
+        "verification_requirements", "blocked", "requires_approval", "dry_run", "write_allowed",
+        "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in plan]
+    if missing:
+        raise ValueError(f"execution workspace plan missing fields: {missing}")
+    if plan["workspace_plan_version"] != EXECUTION_WORKSPACE_PLAN_VERSION:
+        raise ValueError("unsupported execution workspace plan version")
+    _validate_execution_read_only(plan, "execution workspace plan")
+    for field in ("workspace_id", "planning_chain_id", "review_bundle_id", "execution_package_id", "repo_path", "base_branch", "base_ref", "proposed_branch_name", "proposed_worktree_path", "isolation_strategy", "cleanup_policy", "rollback_policy"):
+        _validate_non_empty_string(plan[field], field)
+    if plan["isolation_strategy"] != "planned_worktree":
+        raise ValueError("execution workspace plan must use planned_worktree isolation")
+    if plan["cleanup_policy"] != "keep_on_unknown_or_failed_verification":
+        raise ValueError("execution workspace plan cleanup policy must fail closed")
+    if not isinstance(plan["blocked"], bool) or not isinstance(plan["requires_approval"], bool):
+        raise TypeError("blocked and requires_approval must be booleans")
+    for field in ("target_files", "target_subsystems", "preflight_checks", "approval_requirements", "verification_requirements"):
+        values = plan[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if chain is not None:
+        validate_growth_planning_chain_preview(chain)
+        review_bundle = chain["planning_chain_review_bundle"]
+        execution_package = chain["autonomous_execution_package"]
+        if plan["workspace_id"] != make_execution_workspace_plan_id(review_bundle, execution_package):
+            raise ValueError("workspace_id does not match planning chain")
+        if plan["planning_chain_id"] != chain["planning_chain_id"]:
+            raise ValueError("workspace plan must reference planning chain")
+        if plan["review_bundle_id"] != review_bundle["review_bundle_id"]:
+            raise ValueError("workspace plan must reference review bundle")
+        if plan["execution_package_id"] != execution_package["execution_package_id"]:
+            raise ValueError("workspace plan must reference execution package")
+
+
+def stable_execution_workspace_plan_json(plan: dict[str, Any]) -> str:
+    validate_execution_workspace_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def parse_execution_workspace_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    plan = _json.loads(text)
+    validate_execution_workspace_plan(plan)
+    return plan
+
+
+_EXECUTION_TIMELINE_EVENT_TYPES = (
+    "workspace_planned", "branch_planned", "patch_application_planned", "compile_planned",
+    "tests_planned", "healthcheck_planned", "quality_gate_planned", "review_bundle_planned",
+    "cleanup_planned",
+)
+
+
+def make_execution_event_id(workspace_id: str, order: int, event_type: str) -> str:
+    return _execution_readiness_id("execution-event", {
+        "event_type": event_type,
+        "order": order,
+        "workspace_id": workspace_id,
+        "version": EXECUTION_EVENT_TIMELINE_VERSION,
+    })
+
+
+def make_execution_event_timeline_id(workspace_plan: dict[str, Any], events: list[dict[str, Any]]) -> str:
+    return _execution_readiness_id("execution-event-timeline", {
+        "event_ids": [event["event_id"] for event in events],
+        "workspace_id": workspace_plan["workspace_id"],
+        "version": EXECUTION_EVENT_TIMELINE_VERSION,
+    })
+
+
+def collect_execution_event_timeline(
+    workspace_plan: dict[str, Any] | None = None,
+    *,
+    chain: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    source_chain = chain if chain is not None else collect_growth_planning_chain_preview()
+    source_chain = _growth_planning_chain_without_runtime_fields(source_chain)
+    if workspace_plan is None:
+        workspace_plan = collect_execution_workspace_plan(source_chain)
+    validate_execution_workspace_plan(workspace_plan)
+    execution_package = source_chain["autonomous_execution_package"]
+    review_bundle = source_chain["planning_chain_review_bundle"]
+    specs = [
+        ("workspace_planned", [workspace_plan["workspace_id"]], [workspace_plan["proposed_worktree_path"]], ["workspace path is planned but not created"], ["workspace path cannot be reviewed"], workspace_plan["rollback_policy"]),
+        ("branch_planned", [workspace_plan["base_branch"], workspace_plan["base_ref"]], [workspace_plan["proposed_branch_name"]], ["branch name is deterministic and reviewable"], ["branch name is missing or unsafe"], "keep current branch unchanged"),
+        ("patch_application_planned", [review_bundle["verified_patch_plan_id"], review_bundle["verified_patch_diff_id"]], workspace_plan["target_files"], ["all patch operations map to target files"], ["patch operation lacks verified diff preview"], "do not apply patch operations"),
+        ("compile_planned", source_chain["verification_plan"]["plans"][0]["compile_commands"], ["compile result evidence"], ["compile commands are allowlisted before execution"], ["compile command fails or is not allowlisted"], "stop and keep workspace for review"),
+        ("tests_planned", source_chain["verification_plan"]["plans"][0]["test_commands"], ["test result evidence"], ["test commands are allowlisted before execution"], ["test command fails or is not allowlisted"], "stop and keep workspace for review"),
+        ("healthcheck_planned", source_chain["verification_plan"]["plans"][0]["healthcheck_commands"], ["healthcheck result evidence"], ["healthcheck command is allowlisted before execution"], ["healthcheck fails or is not allowlisted"], "stop and keep workspace for review"),
+        ("quality_gate_planned", [review_bundle["patch_behavior_quality_gate"]["quality_gate_id"]], [review_bundle["patch_behavior_quality_gate"]["pass_status"]], ["quality gate status is reviewed"], ["quality gate blocks implementation"], "do not proceed past review"),
+        ("review_bundle_planned", [review_bundle["review_bundle_id"]], ["human review bundle"], ["review bundle summarizes evidence, risks, rollback, and decision"], ["review bundle missing evidence summary"], "keep workspace for manual review"),
+        ("cleanup_planned", [execution_package["execution_package_id"]], [workspace_plan["cleanup_policy"]], ["cleanup policy keeps unknown or failed workspaces"], ["cleanup would discard unreviewed changes"], workspace_plan["rollback_policy"]),
+    ]
+    events = []
+    for order, (event_type, inputs, outputs, success, failure, rollback) in enumerate(specs, start=1):
+        event = {
+            "event_id": make_execution_event_id(workspace_plan["workspace_id"], order, event_type),
+            "event_type": event_type,
+            "order": order,
+            "inputs": _normalize_patch_behavior_text_list(inputs),
+            "expected_outputs": _normalize_patch_behavior_text_list(outputs),
+            "success_criteria": _normalize_patch_behavior_text_list(success),
+            "failure_criteria": _normalize_patch_behavior_text_list(failure),
+            "rollback_action": rollback,
+        }
+        validate_execution_timeline_event(event)
+        events.append(event)
+    timeline = {
+        "execution_event_timeline_version": EXECUTION_EVENT_TIMELINE_VERSION,
+        "execution_event_timeline_id": make_execution_event_timeline_id(workspace_plan, events),
+        "workspace_id": workspace_plan["workspace_id"],
+        "planning_chain_id": workspace_plan["planning_chain_id"],
+        "review_bundle_id": workspace_plan["review_bundle_id"],
+        "execution_package_id": workspace_plan["execution_package_id"],
+        "events": events,
+        "event_count": len(events),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_event_timeline(timeline, workspace_plan)
+    return timeline
+
+
+def validate_execution_timeline_event(event: dict[str, Any]) -> None:
+    required = ("event_id", "event_type", "order", "inputs", "expected_outputs", "success_criteria", "failure_criteria", "rollback_action")
+    missing = [field for field in required if field not in event]
+    if missing:
+        raise ValueError(f"execution timeline event missing fields: {missing}")
+    _validate_non_empty_string(event["event_id"], "event_id")
+    if event["event_type"] not in _EXECUTION_TIMELINE_EVENT_TYPES:
+        raise ValueError(f"invalid execution timeline event type: {event['event_type']}")
+    if not isinstance(event["order"], int) or event["order"] < 1:
+        raise ValueError("execution timeline event order must be positive")
+    for field in ("inputs", "expected_outputs", "success_criteria", "failure_criteria"):
+        values = event[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    _validate_non_empty_string(event["rollback_action"], "rollback_action")
+
+
+def validate_execution_event_timeline(timeline: dict[str, Any], workspace_plan: dict[str, Any] | None = None) -> None:
+    required = ("execution_event_timeline_version", "execution_event_timeline_id", "workspace_id", "planning_chain_id", "review_bundle_id", "execution_package_id", "events", "event_count", "dry_run", "write_allowed", "automation_allowed", "metadata", "writes")
+    missing = [field for field in required if field not in timeline]
+    if missing:
+        raise ValueError(f"execution event timeline missing fields: {missing}")
+    if timeline["execution_event_timeline_version"] != EXECUTION_EVENT_TIMELINE_VERSION:
+        raise ValueError("unsupported execution event timeline version")
+    _validate_execution_read_only(timeline, "execution event timeline")
+    for field in ("execution_event_timeline_id", "workspace_id", "planning_chain_id", "review_bundle_id", "execution_package_id"):
+        _validate_non_empty_string(timeline[field], field)
+    events = timeline["events"]
+    if not isinstance(events, list) or len(events) != len(_EXECUTION_TIMELINE_EVENT_TYPES):
+        raise ValueError("execution event timeline must contain all canonical events")
+    if timeline["event_count"] != len(events):
+        raise ValueError("event_count must match events length")
+    ids = set()
+    for index, event in enumerate(events, start=1):
+        validate_execution_timeline_event(event)
+        if event["event_id"] in ids:
+            raise ValueError("duplicate execution timeline event id")
+        ids.add(event["event_id"])
+        if event["order"] != index or event["event_type"] != _EXECUTION_TIMELINE_EVENT_TYPES[index - 1]:
+            raise ValueError("execution timeline events must use canonical order")
+    if workspace_plan is not None:
+        validate_execution_workspace_plan(workspace_plan)
+        if timeline["workspace_id"] != workspace_plan["workspace_id"]:
+            raise ValueError("timeline must reference workspace plan")
+        if timeline["execution_event_timeline_id"] != make_execution_event_timeline_id(workspace_plan, events):
+            raise ValueError("execution event timeline id does not match events")
+
+
+def stable_execution_event_timeline_json(timeline: dict[str, Any]) -> str:
+    validate_execution_event_timeline(timeline)
+    return _stable_ruflo_json(timeline, indent=2) + "\n"
+
+
+def parse_execution_event_timeline_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    timeline = _json.loads(text)
+    validate_execution_event_timeline(timeline)
+    return timeline
+
+
+def make_execution_retry_policy_id(timeline: dict[str, Any]) -> str:
+    return _execution_readiness_id("execution-retry-policy", {
+        "timeline_id": timeline["execution_event_timeline_id"],
+        "version": EXECUTION_RETRY_POLICY_VERSION,
+    })
+
+
+def collect_execution_retry_policy(
+    timeline: dict[str, Any] | None = None,
+    *,
+    workspace_plan: dict[str, Any] | None = None,
+    chain: dict[str, Any] | None = None,
+    max_attempts: int = 2,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if timeline is None:
+        timeline = collect_execution_event_timeline(workspace_plan, chain=chain)
+    validate_execution_event_timeline(timeline, workspace_plan)
+    policy = {
+        "retry_policy_version": EXECUTION_RETRY_POLICY_VERSION,
+        "retry_policy_id": make_execution_retry_policy_id(timeline),
+        "execution_event_timeline_id": timeline["execution_event_timeline_id"],
+        "workspace_id": timeline["workspace_id"],
+        "max_attempts": max_attempts,
+        "retryable_failures": _normalize_patch_behavior_text_list([
+            "transient filesystem lock before patch application",
+            "transient test harness timeout with no source changes after failure",
+            "healthcheck infrastructure timeout before assertions run",
+        ]),
+        "non_retryable_failures": _normalize_patch_behavior_text_list([
+            "patch behavior quality gate block",
+            "compile failure after patch application",
+            "test assertion failure",
+            "secret or destructive-operation gate block",
+            "target file outside repository boundary",
+        ]),
+        "stop_conditions": _normalize_patch_behavior_text_list([
+            "any non-retryable failure occurs",
+            "max_attempts is reached",
+            "working tree state becomes unknown",
+            "human approval is missing",
+        ]),
+        "escalation_conditions": _normalize_patch_behavior_text_list([
+            "same retryable failure repeats twice",
+            "verification output is ambiguous",
+            "rollback policy cannot be evaluated",
+        ]),
+        "required_human_review_conditions": _normalize_patch_behavior_text_list([
+            "before first write or branch creation",
+            "after any failed verification",
+            "before cleanup discard",
+            "before marking execution ready for merge",
+        ]),
+        "attempt_history_schema": {
+            "attempt": "positive integer",
+            "event_id": "execution timeline event id",
+            "failure_type": "normalized failure label",
+            "retryable": "boolean",
+            "decision": "retry | stop | escalate",
+            "evidence": "list of evidence references",
+        },
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_retry_policy(policy, timeline)
+    return policy
+
+
+def validate_execution_retry_policy(policy: dict[str, Any], timeline: dict[str, Any] | None = None) -> None:
+    required = ("retry_policy_version", "retry_policy_id", "execution_event_timeline_id", "workspace_id", "max_attempts", "retryable_failures", "non_retryable_failures", "stop_conditions", "escalation_conditions", "required_human_review_conditions", "attempt_history_schema", "dry_run", "write_allowed", "automation_allowed", "metadata", "writes")
+    missing = [field for field in required if field not in policy]
+    if missing:
+        raise ValueError(f"execution retry policy missing fields: {missing}")
+    if policy["retry_policy_version"] != EXECUTION_RETRY_POLICY_VERSION:
+        raise ValueError("unsupported execution retry policy version")
+    _validate_execution_read_only(policy, "execution retry policy")
+    for field in ("retry_policy_id", "execution_event_timeline_id", "workspace_id"):
+        _validate_non_empty_string(policy[field], field)
+    if not isinstance(policy["max_attempts"], int) or policy["max_attempts"] < 1 or policy["max_attempts"] > 5:
+        raise ValueError("max_attempts must be an integer from 1 to 5")
+    for field in ("retryable_failures", "non_retryable_failures", "stop_conditions", "escalation_conditions", "required_human_review_conditions"):
+        values = policy[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    schema = policy["attempt_history_schema"]
+    if not isinstance(schema, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in schema.items()):
+        raise TypeError("attempt_history_schema must be a string dictionary")
+    if timeline is not None:
+        validate_execution_event_timeline(timeline)
+        if policy["retry_policy_id"] != make_execution_retry_policy_id(timeline):
+            raise ValueError("retry_policy_id does not match timeline")
+
+
+def stable_execution_retry_policy_json(policy: dict[str, Any]) -> str:
+    validate_execution_retry_policy(policy)
+    return _stable_ruflo_json(policy, indent=2) + "\n"
+
+
+def parse_execution_retry_policy_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    policy = _json.loads(text)
+    validate_execution_retry_policy(policy)
+    return policy
+
+
+def make_witness_manifest_plan_id(review_bundle: dict[str, Any], execution_package: dict[str, Any]) -> str:
+    return _execution_readiness_id("witness-manifest-plan", {
+        "execution_package_id": execution_package["execution_package_id"],
+        "review_bundle_id": review_bundle["review_bundle_id"],
+        "verified_patch_diff_id": review_bundle["verified_patch_diff_id"],
+        "version": WITNESS_MANIFEST_PLAN_VERSION,
+    })
+
+
+def collect_witness_manifest_plan(
+    chain: dict[str, Any] | None = None,
+    *,
+    provided_evidence: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    source_chain = chain if chain is not None else collect_growth_planning_chain_preview()
+    source_chain = _growth_planning_chain_without_runtime_fields(source_chain)
+    validate_growth_planning_chain_preview(source_chain)
+    review_bundle = source_chain["planning_chain_review_bundle"]
+    execution_package = source_chain["autonomous_execution_package"]
+    patch_plan = source_chain["verified_patch_plan"]
+    verification = source_chain["verification_plan"]["plans"][0]
+    required = _normalize_implementation_branch_refs(review_bundle["required_evidence"])
+    provided = _normalize_implementation_branch_refs(provided_evidence or [])
+    missing = [item for item in required if item not in provided]
+    plan = {
+        "witness_manifest_version": WITNESS_MANIFEST_PLAN_VERSION,
+        "witness_manifest_id": make_witness_manifest_plan_id(review_bundle, execution_package),
+        "planning_chain_id": source_chain["planning_chain_id"],
+        "review_bundle_id": review_bundle["review_bundle_id"],
+        "expected_changed_files": _normalize_implementation_branch_refs(patch_plan["target_files"]),
+        "expected_test_commands": _normalize_patch_behavior_text_list(verification["test_commands"]),
+        "expected_healthcheck_commands": _normalize_patch_behavior_text_list(verification["healthcheck_commands"]),
+        "expected_quality_gate_result": review_bundle["patch_behavior_quality_gate"]["pass_status"],
+        "expected_patch_diff_id": review_bundle["verified_patch_diff_id"],
+        "expected_execution_package_id": execution_package["execution_package_id"],
+        "expected_review_bundle_id": review_bundle["review_bundle_id"],
+        "required_evidence": required,
+        "provided_evidence": provided,
+        "missing_evidence": missing,
+        "evidence_hash_inputs": _normalize_patch_behavior_text_list([
+            review_bundle["verified_patch_plan_id"],
+            review_bundle["verified_patch_diff_id"],
+            execution_package["execution_package_id"],
+            *patch_plan["target_files"],
+        ]),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_witness_manifest_plan(plan, source_chain)
+    return plan
+
+
+def validate_witness_manifest_plan(plan: dict[str, Any], chain: dict[str, Any] | None = None) -> None:
+    required = ("witness_manifest_version", "witness_manifest_id", "planning_chain_id", "review_bundle_id", "expected_changed_files", "expected_test_commands", "expected_healthcheck_commands", "expected_quality_gate_result", "expected_patch_diff_id", "expected_execution_package_id", "expected_review_bundle_id", "required_evidence", "provided_evidence", "missing_evidence", "evidence_hash_inputs", "dry_run", "write_allowed", "automation_allowed", "metadata", "writes")
+    missing = [field for field in required if field not in plan]
+    if missing:
+        raise ValueError(f"witness manifest plan missing fields: {missing}")
+    if plan["witness_manifest_version"] != WITNESS_MANIFEST_PLAN_VERSION:
+        raise ValueError("unsupported witness manifest plan version")
+    _validate_execution_read_only(plan, "witness manifest plan")
+    for field in ("witness_manifest_id", "planning_chain_id", "review_bundle_id", "expected_quality_gate_result", "expected_patch_diff_id", "expected_execution_package_id", "expected_review_bundle_id"):
+        _validate_non_empty_string(plan[field], field)
+    if plan["expected_quality_gate_result"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid expected quality gate result")
+    for field in ("expected_changed_files", "expected_test_commands", "expected_healthcheck_commands", "required_evidence", "provided_evidence", "missing_evidence", "evidence_hash_inputs"):
+        values = plan[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if field in {"expected_changed_files", "expected_test_commands", "expected_healthcheck_commands", "required_evidence", "evidence_hash_inputs"} and not values:
+            raise ValueError(f"{field} must not be empty")
+        if values and values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    expected_missing = [item for item in plan["required_evidence"] if item not in plan["provided_evidence"]]
+    if plan["missing_evidence"] != expected_missing:
+        raise ValueError("missing_evidence must match required evidence not provided")
+    if chain is not None:
+        validate_growth_planning_chain_preview(chain)
+        review_bundle = chain["planning_chain_review_bundle"]
+        execution_package = chain["autonomous_execution_package"]
+        if plan["witness_manifest_id"] != make_witness_manifest_plan_id(review_bundle, execution_package):
+            raise ValueError("witness manifest id does not match planning chain")
+        if plan["expected_patch_diff_id"] != review_bundle["verified_patch_diff_id"]:
+            raise ValueError("witness manifest must reference patch diff")
+
+
+def stable_witness_manifest_plan_json(plan: dict[str, Any]) -> str:
+    validate_witness_manifest_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def parse_witness_manifest_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    plan = _json.loads(text)
+    validate_witness_manifest_plan(plan)
+    return plan
+
+
+def make_human_approval_package_id(review_bundle: dict[str, Any], workspace_plan: dict[str, Any], witness_plan: dict[str, Any]) -> str:
+    return _execution_readiness_id("human-approval-package", {
+        "review_bundle_id": review_bundle["review_bundle_id"],
+        "witness_manifest_id": witness_plan["witness_manifest_id"],
+        "workspace_id": workspace_plan["workspace_id"],
+        "version": HUMAN_APPROVAL_PACKAGE_VERSION,
+    })
+
+
+def collect_human_approval_package(
+    chain: dict[str, Any] | None = None,
+    *,
+    workspace_plan: dict[str, Any] | None = None,
+    witness_manifest_plan: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    source_chain = chain if chain is not None else collect_growth_planning_chain_preview()
+    source_chain = _growth_planning_chain_without_runtime_fields(source_chain)
+    validate_growth_planning_chain_preview(source_chain)
+    if workspace_plan is None:
+        workspace_plan = collect_execution_workspace_plan(source_chain)
+    if witness_manifest_plan is None:
+        witness_manifest_plan = collect_witness_manifest_plan(source_chain)
+    validate_execution_workspace_plan(workspace_plan, source_chain)
+    validate_witness_manifest_plan(witness_manifest_plan, source_chain)
+    review_bundle = source_chain["planning_chain_review_bundle"]
+    quality_status = review_bundle["patch_behavior_quality_gate"]["pass_status"]
+    blocking = _normalize_patch_behavior_text_list([
+        *(["missing required evidence"] if witness_manifest_plan["missing_evidence"] else []),
+        *(["patch behavior quality gate blocks execution"] if quality_status == "block" else []),
+        *(["workspace plan is blocked"] if workspace_plan["blocked"] else []),
+    ]) if (witness_manifest_plan["missing_evidence"] or quality_status == "block" or workspace_plan["blocked"]) else []
+    decision = "approve"
+    if quality_status == "block" or blocking:
+        decision = "revise"
+    if quality_status == "block" and len(blocking) > 1:
+        decision = "reject"
+    package = {
+        "approval_package_version": HUMAN_APPROVAL_PACKAGE_VERSION,
+        "approval_package_id": make_human_approval_package_id(review_bundle, workspace_plan, witness_manifest_plan),
+        "planning_chain_id": source_chain["planning_chain_id"],
+        "review_bundle_id": review_bundle["review_bundle_id"],
+        "workspace_id": workspace_plan["workspace_id"],
+        "witness_manifest_id": witness_manifest_plan["witness_manifest_id"],
+        "quality_gate_status": quality_status,
+        "risk_summary": _normalize_patch_behavior_text_list(review_bundle["top_risks"]),
+        "evidence_summary": {
+            "required_count": len(witness_manifest_plan["required_evidence"]),
+            "provided_count": len(witness_manifest_plan["provided_evidence"]),
+            "missing_count": len(witness_manifest_plan["missing_evidence"]),
+        },
+        "rollback_summary": workspace_plan["rollback_policy"],
+        "required_approvals": _normalize_patch_behavior_text_list(workspace_plan["approval_requirements"]),
+        "blocking_concerns": blocking,
+        "recommended_human_decision": decision,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_human_approval_package(package, source_chain, workspace_plan, witness_manifest_plan)
+    return package
+
+
+def validate_human_approval_package(package: dict[str, Any], chain: dict[str, Any] | None = None, workspace_plan: dict[str, Any] | None = None, witness_manifest_plan: dict[str, Any] | None = None) -> None:
+    required = ("approval_package_version", "approval_package_id", "planning_chain_id", "review_bundle_id", "workspace_id", "witness_manifest_id", "quality_gate_status", "risk_summary", "evidence_summary", "rollback_summary", "required_approvals", "blocking_concerns", "recommended_human_decision", "dry_run", "write_allowed", "automation_allowed", "metadata", "writes")
+    missing = [field for field in required if field not in package]
+    if missing:
+        raise ValueError(f"human approval package missing fields: {missing}")
+    if package["approval_package_version"] != HUMAN_APPROVAL_PACKAGE_VERSION:
+        raise ValueError("unsupported human approval package version")
+    _validate_execution_read_only(package, "human approval package")
+    for field in ("approval_package_id", "planning_chain_id", "review_bundle_id", "workspace_id", "witness_manifest_id", "quality_gate_status", "rollback_summary", "recommended_human_decision"):
+        _validate_non_empty_string(package[field], field)
+    if package["quality_gate_status"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid quality gate status")
+    if package["recommended_human_decision"] not in {"approve", "revise", "reject"}:
+        raise ValueError("invalid recommended human decision")
+    summary = package["evidence_summary"]
+    if not isinstance(summary, dict):
+        raise TypeError("evidence_summary must be a dict")
+    for field in ("required_count", "provided_count", "missing_count"):
+        if not isinstance(summary.get(field), int) or summary[field] < 0:
+            raise ValueError(f"evidence_summary.{field} must be a non-negative integer")
+    for field in ("risk_summary", "required_approvals", "blocking_concerns"):
+        values = package[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if field != "blocking_concerns" and not values:
+            raise ValueError(f"{field} must not be empty")
+        if values and values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if witness_manifest_plan is not None:
+        validate_witness_manifest_plan(witness_manifest_plan)
+        if summary["required_count"] != len(witness_manifest_plan["required_evidence"]):
+            raise ValueError("approval evidence required_count mismatch")
+        if summary["missing_count"] != len(witness_manifest_plan["missing_evidence"]):
+            raise ValueError("approval evidence missing_count mismatch")
+    if chain is not None and workspace_plan is not None and witness_manifest_plan is not None:
+        validate_growth_planning_chain_preview(chain)
+        validate_execution_workspace_plan(workspace_plan, chain)
+        review_bundle = chain["planning_chain_review_bundle"]
+        if package["approval_package_id"] != make_human_approval_package_id(review_bundle, workspace_plan, witness_manifest_plan):
+            raise ValueError("approval package id does not match inputs")
+
+
+def stable_human_approval_package_json(package: dict[str, Any]) -> str:
+    validate_human_approval_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_human_approval_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_human_approval_package(package)
+    return package
+
+
+def make_execution_readiness_bundle_id(chain: dict[str, Any], workspace_plan: dict[str, Any], timeline: dict[str, Any], retry_policy: dict[str, Any], witness_plan: dict[str, Any], approval_package: dict[str, Any]) -> str:
+    return _execution_readiness_id("execution-readiness-bundle", {
+        "approval_package_id": approval_package["approval_package_id"],
+        "planning_chain_id": chain["planning_chain_id"],
+        "retry_policy_id": retry_policy["retry_policy_id"],
+        "timeline_id": timeline["execution_event_timeline_id"],
+        "witness_manifest_id": witness_plan["witness_manifest_id"],
+        "workspace_id": workspace_plan["workspace_id"],
+        "version": EXECUTION_READINESS_BUNDLE_VERSION,
+    })
+
+
+def collect_execution_readiness_bundle(
+    chain: dict[str, Any] | None = None,
+    *,
+    workspace_plan: dict[str, Any] | None = None,
+    event_timeline: dict[str, Any] | None = None,
+    retry_policy: dict[str, Any] | None = None,
+    witness_manifest_plan: dict[str, Any] | None = None,
+    human_approval_package: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    source_chain = chain if chain is not None else collect_growth_planning_chain_preview()
+    source_chain = _growth_planning_chain_without_runtime_fields(source_chain)
+    validate_growth_planning_chain_preview(source_chain)
+    workspace = workspace_plan or collect_execution_workspace_plan(source_chain)
+    timeline = event_timeline or collect_execution_event_timeline(workspace, chain=source_chain)
+    retry = retry_policy or collect_execution_retry_policy(timeline, workspace_plan=workspace)
+    witness = witness_manifest_plan or collect_witness_manifest_plan(source_chain)
+    approval = human_approval_package or collect_human_approval_package(source_chain, workspace_plan=workspace, witness_manifest_plan=witness)
+    validate_execution_workspace_plan(workspace, source_chain)
+    validate_execution_event_timeline(timeline, workspace)
+    validate_execution_retry_policy(retry, timeline)
+    validate_witness_manifest_plan(witness, source_chain)
+    validate_human_approval_package(approval, source_chain, workspace, witness)
+    blocking_reasons = _execution_readiness_blocking_reasons(workspace, witness, approval)
+    if blocking_reasons:
+        status = "blocked" if any("quality gate" in item or "workspace" in item for item in blocking_reasons) else "needs_evidence"
+    else:
+        status = "ready_for_review"
+    bundle = {
+        "execution_readiness_bundle_version": EXECUTION_READINESS_BUNDLE_VERSION,
+        "execution_readiness_bundle_id": make_execution_readiness_bundle_id(source_chain, workspace, timeline, retry, witness, approval),
+        "planning_chain": source_chain,
+        "review_bundle": source_chain["planning_chain_review_bundle"],
+        "execution_workspace_plan": workspace,
+        "execution_event_timeline": timeline,
+        "retry_policy": retry,
+        "witness_manifest_plan": witness,
+        "human_approval_package": approval,
+        "readiness_status": status,
+        "blocking_reasons": blocking_reasons,
+        "recommended_next_action": _execution_readiness_next_action(status),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_readiness_bundle(bundle)
+    return bundle
+
+
+def _execution_readiness_blocking_reasons(workspace: dict[str, Any], witness: dict[str, Any], approval: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    if workspace["blocked"]:
+        reasons.append("workspace plan is blocked")
+    if witness["missing_evidence"]:
+        reasons.append("witness manifest plan is missing required evidence")
+    if approval["quality_gate_status"] == "block":
+        reasons.append("quality gate blocks execution readiness")
+    if approval["recommended_human_decision"] != "approve":
+        reasons.append(f"human approval package recommends {approval['recommended_human_decision']}")
+    return _normalize_patch_behavior_text_list(reasons) if reasons else []
+
+
+def _execution_readiness_next_action(status: str) -> str:
+    if status == "ready_for_review":
+        return "Present the read-only execution readiness bundle to a human reviewer; do not execute without approval."
+    if status == "needs_evidence":
+        return "Collect or explicitly waive missing evidence before requesting execution approval."
+    return "Resolve blocking readiness concerns before any branch, worktree, patch, or verification execution."
+
+
+def validate_execution_readiness_bundle(bundle: dict[str, Any]) -> None:
+    required = ("execution_readiness_bundle_version", "execution_readiness_bundle_id", "planning_chain", "review_bundle", "execution_workspace_plan", "execution_event_timeline", "retry_policy", "witness_manifest_plan", "human_approval_package", "readiness_status", "blocking_reasons", "recommended_next_action", "dry_run", "write_allowed", "automation_allowed", "metadata", "writes")
+    missing = [field for field in required if field not in bundle]
+    if missing:
+        raise ValueError(f"execution readiness bundle missing fields: {missing}")
+    if bundle["execution_readiness_bundle_version"] != EXECUTION_READINESS_BUNDLE_VERSION:
+        raise ValueError("unsupported execution readiness bundle version")
+    _validate_execution_read_only(bundle, "execution readiness bundle")
+    _validate_non_empty_string(bundle["execution_readiness_bundle_id"], "execution_readiness_bundle_id")
+    if bundle["readiness_status"] not in {"ready_for_review", "blocked", "needs_evidence"}:
+        raise ValueError("invalid readiness status")
+    _validate_non_empty_string(bundle["recommended_next_action"], "recommended_next_action")
+    if not isinstance(bundle["blocking_reasons"], list):
+        raise TypeError("blocking_reasons must be a list")
+    if bundle["blocking_reasons"] and bundle["blocking_reasons"] != _normalize_patch_behavior_text_list(bundle["blocking_reasons"]):
+        raise ValueError("blocking_reasons must be normalized and sorted")
+    chain = bundle["planning_chain"]
+    workspace = bundle["execution_workspace_plan"]
+    timeline = bundle["execution_event_timeline"]
+    retry = bundle["retry_policy"]
+    witness = bundle["witness_manifest_plan"]
+    approval = bundle["human_approval_package"]
+    validate_growth_planning_chain_preview(chain)
+    validate_planning_chain_review_bundle(bundle["review_bundle"], chain)
+    validate_execution_workspace_plan(workspace, chain)
+    validate_execution_event_timeline(timeline, workspace)
+    validate_execution_retry_policy(retry, timeline)
+    validate_witness_manifest_plan(witness, chain)
+    validate_human_approval_package(approval, chain, workspace, witness)
+    expected_id = make_execution_readiness_bundle_id(chain, workspace, timeline, retry, witness, approval)
+    if bundle["execution_readiness_bundle_id"] != expected_id:
+        raise ValueError("execution readiness bundle id does not match components")
+    expected_reasons = _execution_readiness_blocking_reasons(workspace, witness, approval)
+    if bundle["blocking_reasons"] != expected_reasons:
+        raise ValueError("blocking_reasons do not match component state")
+    if expected_reasons and bundle["readiness_status"] == "ready_for_review":
+        raise ValueError("ready_for_review cannot have blocking reasons")
+    if not expected_reasons and bundle["readiness_status"] != "ready_for_review":
+        raise ValueError("readiness status should be ready_for_review when unblocked")
+
+
+def stable_execution_readiness_bundle_json(bundle: dict[str, Any]) -> str:
+    validate_execution_readiness_bundle(bundle)
+    return _stable_ruflo_json(bundle, indent=2) + "\n"
+
+
+def parse_execution_readiness_bundle_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    bundle = _json.loads(text)
+    validate_execution_readiness_bundle(bundle)
+    return bundle
+
+
+
+_GROWTH_PLANNING_CHAIN_RUNTIME_FIELDS = (
+    "execution_workspace_plan",
+    "execution_event_timeline",
+    "execution_retry_policy",
+    "witness_manifest_plan",
+    "human_approval_package",
+    "execution_readiness_bundle",
+    "execution_journal_plan",
+)
+
+
+def _growth_planning_chain_without_runtime_fields(chain: dict[str, Any]) -> dict[str, Any]:
+    """Return a non-recursive planning-chain view for nested runtime payloads."""
+    base = {
+        key: value
+        for key, value in chain.items()
+        if key not in _GROWTH_PLANNING_CHAIN_RUNTIME_FIELDS
+    }
+    review_bundle = base.get("planning_chain_review_bundle")
+    if isinstance(review_bundle, dict) and review_bundle.get("execution_readiness_bundle_id"):
+        review_copy = dict(review_bundle)
+        review_copy["execution_readiness_bundle_id"] = ""
+        base["planning_chain_review_bundle"] = review_copy
+    return base
+
+
+EXECUTION_JOURNAL_PLAN_VERSION = "link-execution-journal-plan-v1"
+_EXECUTION_JOURNAL_STAGES = (
+    "create_workspace",
+    "create_branch",
+    "apply_patch_operations",
+    "run_compile",
+    "run_tests",
+    "run_healthcheck",
+    "evaluate_quality_gate",
+    "produce_review_bundle",
+)
+_EXECUTION_JOURNAL_STATUSES = (
+    "planned",
+    "running",
+    "passed",
+    "failed",
+    "skipped",
+    "rolled_back",
+)
+_EXECUTION_STAGE_NAME_TO_JOURNAL_STAGE = {
+    "create workspace": "create_workspace",
+    "create branch": "create_branch",
+    "apply patch operations": "apply_patch_operations",
+    "run compile": "run_compile",
+    "run tests": "run_tests",
+    "run healthcheck": "run_healthcheck",
+    "evaluate quality gate": "evaluate_quality_gate",
+    "produce review bundle": "produce_review_bundle",
+}
+
+
+def make_execution_journal_entry_id(execution_package_id: str, sequence: int, stage: str, event_type: str) -> str:
+    return _execution_readiness_id("execution-journal-entry", {
+        "event_type": event_type,
+        "execution_package_id": execution_package_id,
+        "sequence": sequence,
+        "stage": stage,
+        "version": EXECUTION_JOURNAL_PLAN_VERSION,
+    })
+
+
+def make_execution_journal_plan_id(execution_package: dict[str, Any], entries: list[dict[str, Any]]) -> str:
+    return _execution_readiness_id("execution-journal", {
+        "entry_ids": [entry["entry_id"] for entry in entries],
+        "execution_package_id": execution_package["execution_package_id"],
+        "upgrade_id": execution_package["upgrade_id"],
+        "version": EXECUTION_JOURNAL_PLAN_VERSION,
+    })
+
+
+def collect_execution_journal_plan(
+    readiness_bundle: dict[str, Any] | None = None,
+    *,
+    evidence_refs_by_stage: dict[str, list[str]] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a read-only append-only execution journal plan for future execution."""
+    source_readiness = readiness_bundle if readiness_bundle is not None else collect_execution_readiness_bundle()
+    validate_execution_readiness_bundle(source_readiness)
+    chain = source_readiness["planning_chain"]
+    execution_package = chain["autonomous_execution_package"]
+    validate_autonomous_execution_package(execution_package)
+    if evidence_refs_by_stage is None:
+        evidence_refs_by_stage = {}
+    if not isinstance(evidence_refs_by_stage, dict):
+        raise TypeError("evidence_refs_by_stage must be a dict")
+
+    entries: list[dict[str, Any]] = []
+    for index, stage in enumerate(execution_package["execution_stages"], start=1):
+        journal_stage = _EXECUTION_STAGE_NAME_TO_JOURNAL_STAGE[stage["stage_name"]]
+        refs = evidence_refs_by_stage.get(journal_stage, [])
+        if not isinstance(refs, list):
+            raise TypeError("evidence refs by stage must map to lists")
+        evidence_refs = _normalize_implementation_branch_refs(refs)
+        event_type = f"{journal_stage}_planned"
+        entry = {
+            "entry_id": make_execution_journal_entry_id(
+                execution_package["execution_package_id"],
+                index,
+                journal_stage,
+                event_type,
+            ),
+            "sequence": index,
+            "stage": journal_stage,
+            "event_type": event_type,
+            "status": "planned",
+            "timestamp_policy": "assign_utc_timestamp_when_event_is_appended",
+            "actor": "link.execution_journal_planner",
+            "inputs": _normalize_patch_behavior_text_list(stage["inputs"]),
+            "outputs": _normalize_patch_behavior_text_list(stage["outputs"]),
+            "evidence_refs": evidence_refs,
+            "failure_reason": "",
+            "retryable": journal_stage in {"run_compile", "run_tests", "run_healthcheck"},
+            "rollback_required": journal_stage in {
+                "create_workspace",
+                "create_branch",
+                "apply_patch_operations",
+                "run_compile",
+                "run_tests",
+                "run_healthcheck",
+                "evaluate_quality_gate",
+            },
+        }
+        validate_execution_journal_entry(entry, execution_package)
+        entries.append(entry)
+
+    journal = {
+        "execution_journal_version": EXECUTION_JOURNAL_PLAN_VERSION,
+        "execution_journal_id": make_execution_journal_plan_id(execution_package, entries),
+        "execution_readiness_bundle_id": source_readiness["execution_readiness_bundle_id"],
+        "execution_package_id": execution_package["execution_package_id"],
+        "planning_chain_id": chain["planning_chain_id"],
+        "upgrade_id": execution_package["upgrade_id"],
+        "branch_plan_id": execution_package["branch_plan_id"],
+        "work_package_id": execution_package["work_package_id"],
+        "verification_plan_id": execution_package["verification_plan_id"],
+        "journal_entries": entries,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_journal_plan(journal, source_readiness)
+    return journal
+
+
+def validate_execution_journal_entry(entry: dict[str, Any], execution_package: dict[str, Any] | None = None) -> None:
+    required = (
+        "entry_id", "sequence", "stage", "event_type", "status", "timestamp_policy",
+        "actor", "inputs", "outputs", "evidence_refs", "failure_reason", "retryable",
+        "rollback_required",
+    )
+    missing = [field for field in required if field not in entry]
+    if missing:
+        raise ValueError(f"execution journal entry missing fields: {missing}")
+    for field in ("entry_id", "stage", "event_type", "status", "timestamp_policy", "actor"):
+        _validate_non_empty_string(entry[field], field)
+    if not isinstance(entry["sequence"], int) or entry["sequence"] < 1:
+        raise ValueError("journal entry sequence must be a positive integer")
+    if entry["stage"] not in _EXECUTION_JOURNAL_STAGES:
+        raise ValueError(f"invalid execution journal stage: {entry['stage']}")
+    if entry["status"] not in _EXECUTION_JOURNAL_STATUSES:
+        raise ValueError(f"invalid execution journal status: {entry['status']}")
+    expected_event_type = f"{entry['stage']}_{entry['status']}"
+    if entry["status"] == "planned":
+        expected_event_type = f"{entry['stage']}_planned"
+    if entry["event_type"] != expected_event_type:
+        raise ValueError("journal entry event_type must match stage and status")
+    for field in ("inputs", "outputs", "evidence_refs"):
+        values = entry[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if field in {"inputs", "outputs"} and not values:
+            raise ValueError(f"{field} must not be empty")
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            raise TypeError(f"{field} must contain non-empty strings")
+    if entry["inputs"] != _normalize_patch_behavior_text_list(entry["inputs"]):
+        raise ValueError("journal entry inputs must be normalized and sorted")
+    if entry["outputs"] != _normalize_patch_behavior_text_list(entry["outputs"]):
+        raise ValueError("journal entry outputs must be normalized and sorted")
+    if entry["evidence_refs"] != _normalize_implementation_branch_refs(entry["evidence_refs"]):
+        raise ValueError("journal entry evidence_refs must be normalized and sorted")
+    if not isinstance(entry["failure_reason"], str):
+        raise TypeError("failure_reason must be a string")
+    if entry["status"] == "failed" and not entry["failure_reason"].strip():
+        raise ValueError("failed journal entries require failure_reason")
+    if entry["status"] != "failed" and entry["failure_reason"]:
+        raise ValueError("non-failed journal entries must not include failure_reason")
+    for field in ("retryable", "rollback_required"):
+        if not isinstance(entry[field], bool):
+            raise TypeError(f"{field} must be a boolean")
+    if execution_package is not None:
+        validate_autonomous_execution_package(execution_package)
+        stage_names = [_EXECUTION_STAGE_NAME_TO_JOURNAL_STAGE[stage["stage_name"]] for stage in execution_package["execution_stages"]]
+        if entry["sequence"] <= len(stage_names) and entry["stage"] != stage_names[entry["sequence"] - 1]:
+            raise ValueError("journal entry stage does not match execution package stage order")
+        expected_id = make_execution_journal_entry_id(
+            execution_package["execution_package_id"],
+            entry["sequence"],
+            entry["stage"],
+            entry["event_type"],
+        )
+        if entry["entry_id"] != expected_id:
+            raise ValueError("journal entry id does not match execution package")
+
+
+def validate_execution_journal_plan(journal: dict[str, Any], readiness_bundle: dict[str, Any] | None = None) -> None:
+    required = (
+        "execution_journal_version", "execution_journal_id", "execution_readiness_bundle_id",
+        "execution_package_id", "planning_chain_id", "upgrade_id", "branch_plan_id",
+        "work_package_id", "verification_plan_id", "journal_entries", "dry_run",
+        "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in journal]
+    if missing:
+        raise ValueError(f"execution journal plan missing fields: {missing}")
+    if journal["execution_journal_version"] != EXECUTION_JOURNAL_PLAN_VERSION:
+        raise ValueError("unsupported execution journal plan version")
+    _validate_execution_read_only(journal, "execution journal plan")
+    for field in (
+        "execution_journal_id", "execution_readiness_bundle_id", "execution_package_id",
+        "planning_chain_id", "upgrade_id", "branch_plan_id", "work_package_id",
+        "verification_plan_id",
+    ):
+        _validate_non_empty_string(journal[field], field)
+    entries = journal["journal_entries"]
+    if not isinstance(entries, list) or not entries:
+        raise TypeError("journal_entries must be a non-empty list")
+    sequences: set[int] = set()
+    entry_ids: set[str] = set()
+    for index, entry in enumerate(entries, start=1):
+        validate_execution_journal_entry(entry)
+        if entry["sequence"] in sequences:
+            raise ValueError(f"duplicate journal entry sequence: {entry['sequence']}")
+        if entry["entry_id"] in entry_ids:
+            raise ValueError(f"duplicate journal entry id: {entry['entry_id']}")
+        sequences.add(entry["sequence"])
+        entry_ids.add(entry["entry_id"])
+        if entry["sequence"] != index:
+            raise ValueError("journal entries must be ordered by sequence without gaps")
+        if entry["stage"] != _EXECUTION_JOURNAL_STAGES[index - 1]:
+            raise ValueError("journal entries must use the canonical stage order")
+    if len(entries) != len(_EXECUTION_JOURNAL_STAGES):
+        raise ValueError("journal entry count must match supported execution stages")
+    if not isinstance(journal["metadata"], dict):
+        raise TypeError("execution journal metadata must be a dict")
+    if readiness_bundle is not None:
+        validate_execution_readiness_bundle(readiness_bundle)
+        chain = readiness_bundle["planning_chain"]
+        execution_package = chain["autonomous_execution_package"]
+        expected = {
+            "execution_readiness_bundle_id": readiness_bundle["execution_readiness_bundle_id"],
+            "execution_package_id": execution_package["execution_package_id"],
+            "planning_chain_id": chain["planning_chain_id"],
+            "upgrade_id": execution_package["upgrade_id"],
+            "branch_plan_id": execution_package["branch_plan_id"],
+            "work_package_id": execution_package["work_package_id"],
+            "verification_plan_id": execution_package["verification_plan_id"],
+        }
+        for field, value in expected.items():
+            if journal[field] != value:
+                raise ValueError(f"execution journal {field} does not match readiness bundle")
+        for entry in entries:
+            validate_execution_journal_entry(entry, execution_package)
+        if journal["execution_journal_id"] != make_execution_journal_plan_id(execution_package, entries):
+            raise ValueError("execution journal id does not match readiness bundle")
+
+
+def stable_execution_journal_plan_json(journal: dict[str, Any]) -> str:
+    validate_execution_journal_plan(journal)
+    return _stable_ruflo_json(journal, indent=2) + "\n"
+
+
+def parse_execution_journal_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    journal = _json.loads(text)
+    validate_execution_journal_plan(journal)
+    return journal
+
 
 
 

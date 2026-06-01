@@ -6619,6 +6619,7 @@ def check_growth_planning_chain_cli() -> None:
     """planning-chain exposes the full read-only planning chain via CLI."""
     from link import _cmd_growth
     from link_modes.growth.link_growth_console import (
+        collect_execution_journal_plan,
         collect_growth_planning_chain_preview,
         collect_planning_chain_review_bundle,
         parse_growth_planning_chain_json,
@@ -6653,6 +6654,13 @@ def check_growth_planning_chain_cli() -> None:
         "verified_patch_diff",
         "patch_behavior_quality_gate",
         "autonomous_execution_package",
+        "execution_workspace_plan",
+        "execution_retry_policy",
+        "execution_event_timeline",
+        "execution_journal_plan",
+        "witness_manifest_plan",
+        "human_approval_package",
+        "execution_readiness_bundle",
         "planning_chain_review_bundle",
         "stage_summary",
     ):
@@ -6666,6 +6674,13 @@ def check_growth_planning_chain_cli() -> None:
     patch_diff = parsed["verified_patch_diff"]
     quality_gate = parsed["patch_behavior_quality_gate"]
     execution_package = parsed["autonomous_execution_package"]
+    workspace = parsed["execution_workspace_plan"]
+    retry_policy = parsed["execution_retry_policy"]
+    event_timeline = parsed["execution_event_timeline"]
+    journal_plan = parsed["execution_journal_plan"]
+    witness_manifest = parsed["witness_manifest_plan"]
+    human_approval = parsed["human_approval_package"]
+    readiness_bundle = parsed["execution_readiness_bundle"]
     review_bundle = parsed["planning_chain_review_bundle"]
     stage_summary = parsed["stage_summary"]
     action = parsed["top_recommended_next_action"]
@@ -6699,6 +6714,35 @@ def check_growth_planning_chain_cli() -> None:
              "verified patch diff must flow into autonomous execution package")
     _require(execution_package["quality_gate_id"] == quality_gate["quality_gate_id"],
              "quality gate must flow into autonomous execution package")
+    _require(workspace["execution_package_id"] == execution_package["execution_package_id"],
+             "autonomous execution package must flow into workspace plan")
+    _require(event_timeline["workspace_id"] == workspace["workspace_id"],
+             "workspace plan must flow into event timeline")
+    _require(retry_policy["execution_event_timeline_id"] == event_timeline["execution_event_timeline_id"],
+             "event timeline must flow into retry policy")
+    _require(witness_manifest["expected_execution_package_id"] == execution_package["execution_package_id"],
+             "autonomous execution package must flow into witness manifest")
+    _require(human_approval["workspace_id"] == workspace["workspace_id"],
+             "workspace plan must flow into human approval package")
+    _require(readiness_bundle["execution_workspace_plan"]["workspace_id"] == workspace["workspace_id"],
+             "workspace plan must flow into readiness bundle")
+    _require(readiness_bundle["execution_event_timeline"]["execution_event_timeline_id"] == event_timeline["execution_event_timeline_id"],
+             "event timeline must flow into readiness bundle")
+    _require(readiness_bundle["retry_policy"]["retry_policy_id"] == retry_policy["retry_policy_id"],
+             "retry policy must flow into readiness bundle")
+    _require(readiness_bundle["witness_manifest_plan"]["witness_manifest_id"] == witness_manifest["witness_manifest_id"],
+             "witness manifest must flow into readiness bundle")
+    _require(readiness_bundle["human_approval_package"]["approval_package_id"] == human_approval["approval_package_id"],
+             "human approval package must flow into readiness bundle")
+    _require(journal_plan["execution_package_id"] == execution_package["execution_package_id"],
+             "autonomous execution package must flow into execution journal plan")
+    _require(journal_plan["execution_readiness_bundle_id"] == readiness_bundle["execution_readiness_bundle_id"],
+             "readiness bundle must flow into execution journal plan")
+    _require(readiness_bundle["execution_journal_plan_id"] == journal_plan["execution_journal_id"],
+             "readiness bundle must reference execution journal plan")
+    same_journal = collect_execution_journal_plan(readiness_bundle)
+    _require(journal_plan["execution_journal_id"] == same_journal["execution_journal_id"],
+             "execution journal id must be deterministic inside planning-chain JSON")
     _require(review_bundle["planning_chain_id"] == parsed["planning_chain_id"],
              "review bundle must reference planning_chain_id")
     _require(review_bundle["verification_plan_id"] == verification["verification_plan_id"],
@@ -6709,6 +6753,8 @@ def check_growth_planning_chain_cli() -> None:
              "review bundle must reference quality gate")
     _require(review_bundle["autonomous_execution_package_id"] == execution_package["execution_package_id"],
              "review bundle must reference autonomous execution package")
+    _require(review_bundle["execution_readiness_bundle_id"] == readiness_bundle["execution_readiness_bundle_id"],
+             "review bundle must reference readiness bundle")
     _require(review_bundle["dry_run"] is True and review_bundle["write_allowed"] is False,
              "review bundle must remain read-only inside planning-chain JSON")
     _require(review_bundle["automation_allowed"] is False and review_bundle["writes"] == [],
@@ -6768,13 +6814,17 @@ def check_growth_planning_chain_cli() -> None:
              "planning-chain human mode must include quality gate summary")
     _require("execution_stages:" in human,
              "planning-chain human mode must include execution stage summary")
+    _require("readiness_bundle:" in human,
+             "planning-chain human mode must include readiness bundle summary")
+    _require("execution_journal:" in human,
+             "planning-chain human mode must include execution journal summary")
     _require("review_bundle:" in human,
              "planning-chain human mode must include review bundle summary")
     _require(review_bundle["review_bundle_id"] in human,
              "planning-chain human mode must include review bundle id")
     _require(review_bundle["recommended_next_action"] in human,
              "planning-chain human mode must include review bundle recommended next action")
-    _require(len(human.splitlines()) <= 12,
+    _require(len(human.splitlines()) <= 14,
              "planning-chain human mode must stay concise")
 
     print("growth planning-chain CLI OK")
@@ -6873,7 +6923,370 @@ def check_planning_chain_review_bundle_helper() -> None:
     else:
         raise AssertionError("review bundle must reject planning-chain id mismatch")
 
+
     print("planning-chain review bundle helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 63. Execution readiness helper stack
+# ---------------------------------------------------------------------------
+
+def check_execution_readiness_stack_helper() -> None:
+    """execution-readiness helpers stay read-only and preserve ID flow."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_event_timeline,
+        collect_execution_readiness_bundle,
+        collect_execution_retry_policy,
+        collect_execution_workspace_plan,
+        collect_growth_planning_chain_preview,
+        collect_human_approval_package,
+        collect_witness_manifest_plan,
+        parse_execution_event_timeline_json,
+        parse_execution_readiness_bundle_json,
+        parse_execution_retry_policy_json,
+        parse_execution_workspace_plan_json,
+        parse_human_approval_package_json,
+        parse_witness_manifest_plan_json,
+        stable_execution_event_timeline_json,
+        stable_execution_readiness_bundle_json,
+        stable_execution_retry_policy_json,
+        stable_execution_workspace_plan_json,
+        stable_human_approval_package_json,
+        stable_witness_manifest_plan_json,
+        validate_execution_event_timeline,
+        validate_execution_readiness_bundle,
+        validate_execution_retry_policy,
+        validate_execution_workspace_plan,
+        validate_human_approval_package,
+        validate_witness_manifest_plan,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    review = chain["planning_chain_review_bundle"]
+    execution = chain["autonomous_execution_package"]
+
+    workspace = collect_execution_workspace_plan(chain)
+    same_workspace = collect_execution_workspace_plan(chain)
+    _require(workspace["workspace_id"] == same_workspace["workspace_id"],
+             "workspace plan id must be deterministic")
+    _require(parse_execution_workspace_plan_json(stable_execution_workspace_plan_json(workspace)) == workspace,
+             "workspace plan JSON must round trip")
+    validate_execution_workspace_plan(workspace, chain)
+    _require(workspace["planning_chain_id"] == chain["planning_chain_id"],
+             "workspace plan must reference planning chain")
+    _require(workspace["review_bundle_id"] == review["review_bundle_id"],
+             "workspace plan must reference review bundle")
+    _require(workspace["execution_package_id"] == execution["execution_package_id"],
+             "workspace plan must reference execution package")
+    _require(workspace["cleanup_policy"] == "keep_on_unknown_or_failed_verification",
+             "workspace cleanup policy must fail closed")
+    _require(workspace["dry_run"] is True and workspace["write_allowed"] is False,
+             "workspace plan must be read-only")
+    _require(workspace["automation_allowed"] is False and workspace["writes"] == [],
+             "workspace plan must not allow automation or writes")
+
+    timeline = collect_execution_event_timeline(workspace, chain=chain)
+    _require(parse_execution_event_timeline_json(stable_execution_event_timeline_json(timeline)) == timeline,
+             "execution event timeline JSON must round trip")
+    validate_execution_event_timeline(timeline, workspace)
+    _require(timeline["workspace_id"] == workspace["workspace_id"],
+             "timeline must reference workspace")
+    _require([event["event_type"] for event in timeline["events"]] == [
+        "workspace_planned",
+        "branch_planned",
+        "patch_application_planned",
+        "compile_planned",
+        "tests_planned",
+        "healthcheck_planned",
+        "quality_gate_planned",
+        "review_bundle_planned",
+        "cleanup_planned",
+    ], "timeline must preserve canonical execution lifecycle")
+
+    retry = collect_execution_retry_policy(timeline, workspace_plan=workspace)
+    _require(parse_execution_retry_policy_json(stable_execution_retry_policy_json(retry)) == retry,
+             "execution retry policy JSON must round trip")
+    validate_execution_retry_policy(retry, timeline)
+    _require(retry["execution_event_timeline_id"] == timeline["execution_event_timeline_id"],
+             "retry policy must reference timeline")
+    _require("any non-retryable failure occurs" in retry["stop_conditions"],
+             "retry policy must include stop conditions")
+    _require("compile failure after patch application" in retry["non_retryable_failures"],
+             "retry policy must not retry deterministic compile failures")
+
+    witness = collect_witness_manifest_plan(chain)
+    _require(parse_witness_manifest_plan_json(stable_witness_manifest_plan_json(witness)) == witness,
+             "witness manifest plan JSON must round trip")
+    validate_witness_manifest_plan(witness, chain)
+    _require(witness["expected_patch_diff_id"] == review["verified_patch_diff_id"],
+             "witness plan must reference patch diff")
+    _require(witness["expected_execution_package_id"] == execution["execution_package_id"],
+             "witness plan must reference execution package")
+    _require(witness["expected_review_bundle_id"] == review["review_bundle_id"],
+             "witness plan must reference review bundle")
+    _require(witness["missing_evidence"] == witness["required_evidence"],
+             "default witness plan must surface missing evidence")
+
+    approval = collect_human_approval_package(chain, workspace_plan=workspace, witness_manifest_plan=witness)
+    _require(parse_human_approval_package_json(stable_human_approval_package_json(approval)) == approval,
+             "human approval package JSON must round trip")
+    validate_human_approval_package(approval, chain, workspace, witness)
+    _require(approval["planning_chain_id"] == chain["planning_chain_id"],
+             "approval package must reference planning chain")
+    _require(approval["workspace_id"] == workspace["workspace_id"],
+             "approval package must reference workspace")
+    _require(approval["evidence_summary"]["missing_count"] == len(witness["missing_evidence"]),
+             "approval package must summarize evidence")
+    _require(approval["recommended_human_decision"] in {"approve", "revise", "reject"},
+             "approval package must produce a bounded decision")
+
+    readiness = collect_execution_readiness_bundle(
+        chain,
+        workspace_plan=workspace,
+        event_timeline=timeline,
+        retry_policy=retry,
+        witness_manifest_plan=witness,
+        human_approval_package=approval,
+    )
+    _require(parse_execution_readiness_bundle_json(stable_execution_readiness_bundle_json(readiness)) == readiness,
+             "execution readiness bundle JSON must round trip")
+    validate_execution_readiness_bundle(readiness)
+    _require(readiness["execution_workspace_plan"]["workspace_id"] == workspace["workspace_id"],
+             "readiness bundle must include workspace plan")
+    _require(readiness["execution_event_timeline"]["execution_event_timeline_id"] == timeline["execution_event_timeline_id"],
+             "readiness bundle must include timeline")
+    _require(readiness["retry_policy"]["retry_policy_id"] == retry["retry_policy_id"],
+             "readiness bundle must include retry policy")
+    _require(readiness["witness_manifest_plan"]["witness_manifest_id"] == witness["witness_manifest_id"],
+             "readiness bundle must include witness manifest plan")
+    _require(readiness["human_approval_package"]["approval_package_id"] == approval["approval_package_id"],
+             "readiness bundle must include human approval package")
+    _require(readiness["readiness_status"] in {"blocked", "needs_evidence"},
+             "default readiness should not claim ready while evidence is missing")
+    _require(readiness["blocking_reasons"], "blocked readiness must include reasons")
+    _require(readiness["dry_run"] is True and readiness["write_allowed"] is False,
+             "readiness bundle must remain read-only")
+    _require(readiness["automation_allowed"] is False and readiness["writes"] == [],
+             "readiness bundle must not allow automation or writes")
+
+    import copy as _copy
+
+    reviewed_chain = _copy.deepcopy(chain)
+    reviewed_chain["patch_behavior_quality_gate"]["pass_status"] = "pass"
+    reviewed_chain["patch_behavior_quality_gate"]["findings"] = []
+    reviewed_chain["patch_behavior_quality_gate"]["required_clarifications"] = []
+    reviewed_chain["planning_chain_review_bundle"]["patch_behavior_quality_gate"]["pass_status"] = "pass"
+    reviewed_chain["planning_chain_review_bundle"]["required_clarifications"] = []
+    reviewed_chain["stage_summary"]["quality_gate_status"] = "pass"
+    complete_witness = collect_witness_manifest_plan(
+        reviewed_chain,
+        provided_evidence=witness["required_evidence"],
+    )
+    ready_workspace = collect_execution_workspace_plan(reviewed_chain)
+    ready_workspace = dict(ready_workspace)
+    ready_workspace["blocked"] = False
+    ready_approval = collect_human_approval_package(
+        reviewed_chain,
+        workspace_plan=ready_workspace,
+        witness_manifest_plan=complete_witness,
+    )
+    _require(ready_approval["recommended_human_decision"] == "approve",
+             "approval package should recommend approve when unblocked")
+    ready_timeline = collect_execution_event_timeline(ready_workspace, chain=reviewed_chain)
+    ready_retry = collect_execution_retry_policy(ready_timeline, workspace_plan=ready_workspace)
+    ready_bundle = collect_execution_readiness_bundle(
+        reviewed_chain,
+        workspace_plan=ready_workspace,
+        event_timeline=ready_timeline,
+        retry_policy=ready_retry,
+        witness_manifest_plan=complete_witness,
+        human_approval_package=ready_approval,
+    )
+    _require(ready_bundle["readiness_status"] == "ready_for_review",
+             "readiness bundle should become ready_for_review when unblocked")
+    _require(ready_bundle["blocking_reasons"] == [],
+             "ready_for_review bundle must not include blocking reasons")
+
+    bad_workspace = dict(workspace)
+    bad_workspace["writes"] = [".link/runtime.json"]
+    try:
+        validate_execution_workspace_plan(bad_workspace)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace plan must reject writes")
+
+    bad_event = dict(timeline)
+    bad_event["events"] = [dict(event) for event in timeline["events"]]
+    bad_event["events"][0]["event_type"] = "branch_planned"
+    try:
+        validate_execution_event_timeline(bad_event)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("timeline must reject malformed event order")
+
+    bad_retry = dict(retry)
+    bad_retry["max_attempts"] = 0
+    try:
+        validate_execution_retry_policy(bad_retry)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("retry policy must reject invalid max_attempts")
+
+    bad_witness = dict(witness)
+    bad_witness["missing_evidence"] = []
+    try:
+        validate_witness_manifest_plan(bad_witness)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("witness manifest must reject inconsistent evidence accounting")
+
+    bad_approval = dict(approval)
+    bad_approval["recommended_human_decision"] = "ship"
+    try:
+        validate_human_approval_package(bad_approval)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("approval package must reject invalid decision")
+
+    bad_readiness = dict(readiness)
+    bad_readiness["readiness_status"] = "ready_for_review"
+    try:
+        validate_execution_readiness_bundle(bad_readiness)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("readiness bundle must reject ready status with blockers")
+
+    print("execution readiness stack helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 64. Execution journal schema helper
+# ---------------------------------------------------------------------------
+
+def check_execution_journal_schema_helper() -> None:
+    """execution journal plan models append-only future execution events."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_journal_plan,
+        collect_execution_readiness_bundle,
+        parse_execution_journal_plan_json,
+        stable_execution_journal_plan_json,
+        validate_execution_journal_plan,
+    )
+
+    readiness = collect_execution_readiness_bundle()
+    execution = readiness["planning_chain"]["autonomous_execution_package"]
+    journal = collect_execution_journal_plan(
+        readiness,
+        evidence_refs_by_stage={
+            "run_tests": ["evidence:test-log", "evidence:test-log", "evidence:coverage-summary"],
+            "produce_review_bundle": ["evidence:review-bundle"],
+        },
+        metadata={"suite": "growth"},
+    )
+    same = collect_execution_journal_plan(
+        readiness,
+        evidence_refs_by_stage={
+            "run_tests": ["evidence:test-log", "evidence:test-log", "evidence:coverage-summary"],
+            "produce_review_bundle": ["evidence:review-bundle"],
+        },
+        metadata={"suite": "growth"},
+    )
+    _require(journal["execution_journal_id"] == same["execution_journal_id"],
+             "execution journal id must be deterministic")
+    decoded = parse_execution_journal_plan_json(stable_execution_journal_plan_json(journal))
+    _require(decoded == journal, "execution journal JSON must round trip")
+    validate_execution_journal_plan(journal, readiness)
+    _require(journal["execution_package_id"] == execution["execution_package_id"],
+             "journal must reference autonomous execution package")
+    _require(journal["planning_chain_id"] == readiness["planning_chain"]["planning_chain_id"],
+             "journal must reference planning chain")
+    _require(journal["upgrade_id"] == execution["upgrade_id"],
+             "journal must preserve upgrade id")
+    _require(journal["branch_plan_id"] == execution["branch_plan_id"],
+             "journal must preserve branch plan id")
+    _require(journal["work_package_id"] == execution["work_package_id"],
+             "journal must preserve work package id")
+    _require(journal["verification_plan_id"] == execution["verification_plan_id"],
+             "journal must preserve verification plan id")
+    _require(journal["dry_run"] is True and journal["write_allowed"] is False,
+             "journal plan must remain read-only")
+    _require(journal["automation_allowed"] is False and journal["writes"] == [],
+             "journal plan must not allow automation or writes")
+
+    expected_stages = [
+        "create_workspace",
+        "create_branch",
+        "apply_patch_operations",
+        "run_compile",
+        "run_tests",
+        "run_healthcheck",
+        "evaluate_quality_gate",
+        "produce_review_bundle",
+    ]
+    entries = journal["journal_entries"]
+    _require([entry["sequence"] for entry in entries] == list(range(1, len(expected_stages) + 1)),
+             "journal entries must be ordered by sequence")
+    _require([entry["stage"] for entry in entries] == expected_stages,
+             "journal entries must use supported stage order")
+    _require(all(entry["status"] == "planned" for entry in entries),
+             "journal entries must default to planned status")
+    _require(entries[4]["evidence_refs"] == ["evidence:coverage-summary", "evidence:test-log"],
+             "journal evidence refs must be preserved and normalized")
+    _require(entries[2]["rollback_required"] is True,
+             "patch application journal entry must require rollback on failure")
+    _require(entries[-1]["rollback_required"] is False,
+             "review bundle production should not itself require rollback")
+    _require(entries[3]["retryable"] is True and entries[4]["retryable"] is True,
+             "compile and test journal entries should be retryable by policy")
+    _require(entries[0]["retryable"] is False,
+             "workspace creation journal entry should not be marked retryable")
+
+    bad_duplicate = dict(journal)
+    bad_duplicate["journal_entries"] = [dict(entry) for entry in entries]
+    bad_duplicate["journal_entries"][1]["sequence"] = 1
+    try:
+        validate_execution_journal_plan(bad_duplicate)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("journal plan must reject duplicate sequence")
+
+    bad_stage = dict(journal)
+    bad_stage["journal_entries"] = [dict(entry) for entry in entries]
+    bad_stage["journal_entries"][0]["stage"] = "run_everything"
+    try:
+        validate_execution_journal_plan(bad_stage)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("journal plan must reject invalid stage")
+
+    bad_status = dict(journal)
+    bad_status["journal_entries"] = [dict(entry) for entry in entries]
+    bad_status["journal_entries"][0]["status"] = "maybe"
+    try:
+        validate_execution_journal_plan(bad_status)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("journal plan must reject invalid status")
+
+    bad_writes = dict(journal)
+    bad_writes["writes"] = [".link/execution-journal.json"]
+    try:
+        validate_execution_journal_plan(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("journal plan must reject writes")
+
+    print("execution journal schema helper OK")
 
 
 # ---------------------------------------------------------------------------
@@ -7592,6 +8005,8 @@ def main() -> None:
     check_autonomous_execution_package_helper()
     check_growth_planning_chain_cli()
     check_planning_chain_review_bundle_helper()
+    check_execution_readiness_stack_helper()
+    check_execution_journal_schema_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()
