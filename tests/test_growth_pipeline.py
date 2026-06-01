@@ -6620,9 +6620,11 @@ def check_growth_planning_chain_cli() -> None:
     from link import _cmd_growth
     from link_modes.growth.link_growth_console import (
         collect_growth_planning_chain_preview,
+        collect_planning_chain_review_bundle,
         parse_growth_planning_chain_json,
         planning_chain_main,
         validate_growth_planning_chain_preview,
+        validate_planning_chain_review_bundle,
     )
 
     help_out = io.StringIO()
@@ -6651,6 +6653,7 @@ def check_growth_planning_chain_cli() -> None:
         "verified_patch_diff",
         "patch_behavior_quality_gate",
         "autonomous_execution_package",
+        "planning_chain_review_bundle",
         "stage_summary",
     ):
         _require(key in parsed, f"planning-chain JSON must include {key}")
@@ -6663,8 +6666,13 @@ def check_growth_planning_chain_cli() -> None:
     patch_diff = parsed["verified_patch_diff"]
     quality_gate = parsed["patch_behavior_quality_gate"]
     execution_package = parsed["autonomous_execution_package"]
+    review_bundle = parsed["planning_chain_review_bundle"]
     stage_summary = parsed["stage_summary"]
     action = parsed["top_recommended_next_action"]
+    validate_planning_chain_review_bundle(review_bundle, parsed)
+    same_bundle = collect_planning_chain_review_bundle(parsed)
+    _require(review_bundle["review_bundle_id"] == same_bundle["review_bundle_id"],
+             "planning-chain review bundle id must be deterministic inside JSON")
     _require(branch_plan["source_upgrade_id"] == top_upgrade["upgrade_plan_id"],
              "top upgrade must flow into branch plan")
     _require(work_package["branch_plan_id"] == branch_plan["branch_plan_id"],
@@ -6691,6 +6699,20 @@ def check_growth_planning_chain_cli() -> None:
              "verified patch diff must flow into autonomous execution package")
     _require(execution_package["quality_gate_id"] == quality_gate["quality_gate_id"],
              "quality gate must flow into autonomous execution package")
+    _require(review_bundle["planning_chain_id"] == parsed["planning_chain_id"],
+             "review bundle must reference planning_chain_id")
+    _require(review_bundle["verification_plan_id"] == verification["verification_plan_id"],
+             "review bundle must reference verification plan")
+    _require(review_bundle["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
+             "review bundle must reference verified patch plan")
+    _require(review_bundle["patch_behavior_quality_gate"]["quality_gate_id"] == quality_gate["quality_gate_id"],
+             "review bundle must reference quality gate")
+    _require(review_bundle["autonomous_execution_package_id"] == execution_package["execution_package_id"],
+             "review bundle must reference autonomous execution package")
+    _require(review_bundle["dry_run"] is True and review_bundle["write_allowed"] is False,
+             "review bundle must remain read-only inside planning-chain JSON")
+    _require(review_bundle["automation_allowed"] is False and review_bundle["writes"] == [],
+             "review bundle must not allow automation or writes inside planning-chain JSON")
     _require(stage_summary["verification_plan_id"] == verification["verification_plan_id"],
              "stage summary must reference verification plan")
     _require(stage_summary["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
@@ -6746,6 +6768,12 @@ def check_growth_planning_chain_cli() -> None:
              "planning-chain human mode must include quality gate summary")
     _require("execution_stages:" in human,
              "planning-chain human mode must include execution stage summary")
+    _require("review_bundle:" in human,
+             "planning-chain human mode must include review bundle summary")
+    _require(review_bundle["review_bundle_id"] in human,
+             "planning-chain human mode must include review bundle id")
+    _require(review_bundle["recommended_next_action"] in human,
+             "planning-chain human mode must include review bundle recommended next action")
     _require(len(human.splitlines()) <= 12,
              "planning-chain human mode must stay concise")
 

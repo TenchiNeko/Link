@@ -9716,11 +9716,12 @@ def collect_growth_planning_chain_preview(
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    chain["planning_chain_review_bundle"] = collect_planning_chain_review_bundle(chain)
     validate_growth_planning_chain_preview(chain)
     return chain
 
 
-def validate_growth_planning_chain_preview(chain: dict[str, Any]) -> None:
+def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_review_bundle: bool = True) -> None:
     required = (
         "planning_chain_version", "planning_chain_id", "dry_run", "write_allowed", "automation_allowed",
         "capability_gap_preview", "upgrade_execution_plan", "implementation_branch_plan",
@@ -9728,6 +9729,8 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any]) -> None:
         "patch_behavior_quality_gate", "autonomous_execution_package", "stage_summary",
         "top_recommended_next_action", "metadata", "writes",
     )
+    if require_review_bundle:
+        required = required + ("planning_chain_review_bundle",)
     missing = [field for field in required if field not in chain]
     if missing:
         raise ValueError(f"growth planning chain missing fields: {missing}")
@@ -9750,6 +9753,8 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any]) -> None:
     validate_verified_patch_diff(chain["verified_patch_diff"])
     validate_patch_behavior_quality_gate(chain["patch_behavior_quality_gate"])
     validate_autonomous_execution_package(chain["autonomous_execution_package"])
+    if require_review_bundle:
+        validate_planning_chain_review_bundle(chain["planning_chain_review_bundle"], chain)
     stage_summary = chain["stage_summary"]
     if not isinstance(stage_summary, dict):
         raise TypeError("stage_summary must be a dict")
@@ -9907,9 +9912,11 @@ def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     print(f"branch_plan: {branch_plan['proposed_branch_name']} ({branch_plan['risk_level']}/{branch_plan['complexity']})")
     print(f"work_packages: {work_packages['package_count']}")
     print(f"verification_plans: {verification['plan_count']}")
+    review_bundle = chain["planning_chain_review_bundle"]
     print(f"quality_gate: {stage_summary['quality_gate_status']}")
     print(f"execution_stages: {stage_summary['execution_stage_count']}")
-    print(f"next_action: {action['summary']}")
+    print(f"review_bundle: {review_bundle['review_bundle_id']} ({review_bundle['patch_behavior_quality_gate']['pass_status']})")
+    print(f"next_action: {review_bundle['recommended_next_action']}")
 
 
 VERIFIED_PATCH_PLAN_VERSION = "link-verified-patch-plan-v1"
@@ -9949,7 +9956,7 @@ def collect_planning_chain_review_bundle(
 ) -> dict[str, Any]:
     """Summarize a full read-only planning chain for human review."""
     source_chain = chain if chain is not None else collect_growth_planning_chain_preview()
-    validate_growth_planning_chain_preview(source_chain)
+    validate_growth_planning_chain_preview(source_chain, require_review_bundle=False)
     action = source_chain["top_recommended_next_action"]
     patch_plan = source_chain["verified_patch_plan"]
     quality_gate = source_chain["patch_behavior_quality_gate"]
@@ -10044,7 +10051,7 @@ def validate_planning_chain_review_bundle(
         if bundle[field] and bundle[field] != _normalize_patch_behavior_text_list(bundle[field]):
             raise ValueError(f"{field} must be normalized and sorted")
     if chain is not None:
-        validate_growth_planning_chain_preview(chain)
+        validate_growth_planning_chain_preview(chain, require_review_bundle=False)
         action = chain["top_recommended_next_action"]
         patch_plan = chain["verified_patch_plan"]
         quality_gate = chain["patch_behavior_quality_gate"]
