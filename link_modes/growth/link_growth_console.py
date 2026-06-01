@@ -11281,6 +11281,294 @@ def parse_execution_journal_plan_json(text: str) -> dict[str, Any]:
 
 
 
+EXECUTION_EVIDENCE_CONTRACT_VERSION = "link-execution-evidence-contract-v1"
+_EXECUTION_EVIDENCE_TYPES = (
+    "compile",
+    "tests",
+    "healthcheck",
+    "patch_application",
+    "quality_gate",
+    "rollback",
+)
+_EXECUTION_EVIDENCE_STAGE_BY_TYPE = {
+    "compile": "run_compile",
+    "tests": "run_tests",
+    "healthcheck": "run_healthcheck",
+    "patch_application": "apply_patch_operations",
+    "quality_gate": "evaluate_quality_gate",
+    "rollback": "produce_review_bundle",
+}
+_EXECUTION_EVIDENCE_COMMON_FIELDS = (
+    "attempt_id",
+    "completed_at_policy",
+    "journal_entry_id",
+    "reviewer_visible_summary",
+    "started_at_policy",
+)
+_EXECUTION_EVIDENCE_COMMAND_FIELDS = (
+    "command",
+    "exit_code",
+    "stdout_log_ref",
+    "stderr_log_ref",
+    "combined_log_ref",
+    "log_hash",
+)
+_EXECUTION_EVIDENCE_PATCH_FIELDS = (
+    "changed_file_refs",
+    "changed_file_hashes",
+    "diff_hash",
+)
+
+
+def make_execution_evidence_item_id(journal_id: str, evidence_type: str, stage: str) -> str:
+    return _execution_readiness_id("execution-evidence", {
+        "evidence_type": evidence_type,
+        "journal_id": journal_id,
+        "stage": stage,
+        "version": EXECUTION_EVIDENCE_CONTRACT_VERSION,
+    })
+
+
+def make_execution_evidence_contract_id(journal: dict[str, Any], evidence_items: list[dict[str, Any]]) -> str:
+    return _execution_readiness_id("execution-evidence-contract", {
+        "evidence_ids": [item["evidence_id"] for item in evidence_items],
+        "execution_journal_id": journal["execution_journal_id"],
+        "execution_package_id": journal["execution_package_id"],
+        "version": EXECUTION_EVIDENCE_CONTRACT_VERSION,
+    })
+
+
+def collect_execution_evidence_contract(
+    journal_plan: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Define required future execution evidence without collecting it."""
+    journal = journal_plan if journal_plan is not None else collect_execution_journal_plan()
+    validate_execution_journal_plan(journal)
+    entries_by_stage = {entry["stage"]: entry for entry in journal["journal_entries"]}
+    evidence_types = ["compile", "tests", "healthcheck", "patch_application", "quality_gate"]
+    if any(entry["rollback_required"] for entry in journal["journal_entries"]):
+        evidence_types.append("rollback")
+
+    evidence_items: list[dict[str, Any]] = []
+    for evidence_type in evidence_types:
+        stage = _EXECUTION_EVIDENCE_STAGE_BY_TYPE[evidence_type]
+        journal_entry = entries_by_stage[stage]
+        required_fields = _execution_evidence_required_fields(evidence_type)
+        item = {
+            "evidence_id": make_execution_evidence_item_id(
+                journal["execution_journal_id"],
+                evidence_type,
+                stage,
+            ),
+            "evidence_type": evidence_type,
+            "stage": stage,
+            "required_fields": required_fields,
+            "optional_fields": _execution_evidence_optional_fields(evidence_type),
+            "producing_stage": stage,
+            "consuming_stage": "produce_review_bundle",
+            "validation_rule": _execution_evidence_validation_rule(evidence_type),
+            "reviewer_summary_required": True,
+            "blocks_completion_if_missing": True,
+            "journal_entry_id": journal_entry["entry_id"],
+        }
+        validate_execution_evidence_item(item, journal)
+        evidence_items.append(item)
+
+    contract = {
+        "execution_evidence_contract_version": EXECUTION_EVIDENCE_CONTRACT_VERSION,
+        "execution_evidence_contract_id": make_execution_evidence_contract_id(journal, evidence_items),
+        "execution_journal_id": journal["execution_journal_id"],
+        "execution_package_id": journal["execution_package_id"],
+        "planning_chain_id": journal["planning_chain_id"],
+        "upgrade_id": journal["upgrade_id"],
+        "branch_plan_id": journal["branch_plan_id"],
+        "work_package_id": journal["work_package_id"],
+        "verification_plan_id": journal["verification_plan_id"],
+        "evidence_items": evidence_items,
+        "evidence_item_count": len(evidence_items),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_evidence_contract(contract, journal)
+    return contract
+
+
+def _execution_evidence_required_fields(evidence_type: str) -> list[str]:
+    fields = list(_EXECUTION_EVIDENCE_COMMON_FIELDS)
+    if evidence_type in {"compile", "tests", "healthcheck"}:
+        fields.extend(_EXECUTION_EVIDENCE_COMMAND_FIELDS)
+    if evidence_type == "patch_application":
+        fields.extend(_EXECUTION_EVIDENCE_PATCH_FIELDS)
+    if evidence_type == "quality_gate":
+        fields.extend(("diff_hash", "quality_gate_result"))
+    if evidence_type == "rollback":
+        fields.extend(("rollback_ref", "rollback_reason"))
+    return _normalize_implementation_branch_refs(fields)
+
+
+def _execution_evidence_optional_fields(evidence_type: str) -> list[str]:
+    fields = ["notes", "artifact_refs"]
+    if evidence_type in {"compile", "tests", "healthcheck"}:
+        fields.append("duration_ms")
+    if evidence_type == "rollback":
+        fields.extend(("restored_file_hashes", "cleanup_ref"))
+    return _normalize_implementation_branch_refs(fields)
+
+
+def _execution_evidence_validation_rule(evidence_type: str) -> str:
+    if evidence_type in {"compile", "tests", "healthcheck"}:
+        return "require command, exit_code, log references, log_hash, attempt_id, journal_entry_id, and reviewer_visible_summary before completion"
+    if evidence_type == "patch_application":
+        return "require diff_hash, changed_file_refs, changed_file_hashes, attempt_id, journal_entry_id, and reviewer_visible_summary before completion"
+    if evidence_type == "quality_gate":
+        return "require quality_gate_result, diff_hash, attempt_id, journal_entry_id, and reviewer_visible_summary before completion"
+    if evidence_type == "rollback":
+        return "require rollback_ref, rollback_reason, attempt_id, journal_entry_id, and reviewer_visible_summary when rollback is required"
+    raise ValueError(f"invalid execution evidence type: {evidence_type}")
+
+
+def validate_execution_evidence_item(item: dict[str, Any], journal: dict[str, Any] | None = None) -> None:
+    required = (
+        "evidence_id", "evidence_type", "stage", "required_fields", "optional_fields",
+        "producing_stage", "consuming_stage", "validation_rule", "reviewer_summary_required",
+        "blocks_completion_if_missing", "journal_entry_id",
+    )
+    missing = [field for field in required if field not in item]
+    if missing:
+        raise ValueError(f"execution evidence item missing fields: {missing}")
+    for field in ("evidence_id", "evidence_type", "stage", "producing_stage", "consuming_stage", "validation_rule", "journal_entry_id"):
+        _validate_non_empty_string(item[field], field)
+    if item["evidence_type"] not in _EXECUTION_EVIDENCE_TYPES:
+        raise ValueError(f"invalid execution evidence type: {item['evidence_type']}")
+    expected_stage = _EXECUTION_EVIDENCE_STAGE_BY_TYPE[item["evidence_type"]]
+    if item["stage"] != expected_stage or item["producing_stage"] != expected_stage:
+        raise ValueError("evidence stage must match evidence type")
+    if item["consuming_stage"] not in _EXECUTION_JOURNAL_STAGES:
+        raise ValueError("evidence consuming_stage must be a supported journal stage")
+    if not isinstance(item["reviewer_summary_required"], bool):
+        raise TypeError("reviewer_summary_required must be a boolean")
+    if not isinstance(item["blocks_completion_if_missing"], bool):
+        raise TypeError("blocks_completion_if_missing must be a boolean")
+    if item["reviewer_summary_required"] is not True:
+        raise ValueError("execution evidence must require reviewer-visible summaries")
+    if item["blocks_completion_if_missing"] is not True:
+        raise ValueError("execution evidence must block completion if missing")
+    for field in ("required_fields", "optional_fields"):
+        values = item[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if field == "required_fields" and not values:
+            raise ValueError("required_fields must not be empty")
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            raise TypeError(f"{field} must contain non-empty strings")
+        if values != _normalize_implementation_branch_refs(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    required_fields = set(item["required_fields"])
+    common_required = set(_EXECUTION_EVIDENCE_COMMON_FIELDS)
+    if not common_required.issubset(required_fields):
+        raise ValueError("execution evidence required_fields missing common fields")
+    if item["evidence_type"] in {"compile", "tests", "healthcheck"} and not set(_EXECUTION_EVIDENCE_COMMAND_FIELDS).issubset(required_fields):
+        raise ValueError("command evidence required_fields missing command/log fields")
+    if item["evidence_type"] == "patch_application" and not set(_EXECUTION_EVIDENCE_PATCH_FIELDS).issubset(required_fields):
+        raise ValueError("patch evidence required_fields missing diff/file hash fields")
+    if item["evidence_type"] == "rollback" and "rollback_ref" not in required_fields:
+        raise ValueError("rollback evidence required_fields missing rollback_ref")
+    if journal is not None:
+        validate_execution_journal_plan(journal)
+        entries = {entry["stage"]: entry for entry in journal["journal_entries"]}
+        expected_entry = entries[item["stage"]]
+        if item["journal_entry_id"] != expected_entry["entry_id"]:
+            raise ValueError("execution evidence item journal_entry_id does not match journal stage")
+        expected_id = make_execution_evidence_item_id(
+            journal["execution_journal_id"],
+            item["evidence_type"],
+            item["stage"],
+        )
+        if item["evidence_id"] != expected_id:
+            raise ValueError("execution evidence item id does not match journal")
+
+
+def validate_execution_evidence_contract(contract: dict[str, Any], journal: dict[str, Any] | None = None) -> None:
+    required = (
+        "execution_evidence_contract_version", "execution_evidence_contract_id", "execution_journal_id",
+        "execution_package_id", "planning_chain_id", "upgrade_id", "branch_plan_id",
+        "work_package_id", "verification_plan_id", "evidence_items", "evidence_item_count",
+        "dry_run", "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in contract]
+    if missing:
+        raise ValueError(f"execution evidence contract missing fields: {missing}")
+    if contract["execution_evidence_contract_version"] != EXECUTION_EVIDENCE_CONTRACT_VERSION:
+        raise ValueError("unsupported execution evidence contract version")
+    _validate_execution_read_only(contract, "execution evidence contract")
+    for field in (
+        "execution_evidence_contract_id", "execution_journal_id", "execution_package_id",
+        "planning_chain_id", "upgrade_id", "branch_plan_id", "work_package_id",
+        "verification_plan_id",
+    ):
+        _validate_non_empty_string(contract[field], field)
+    items = contract["evidence_items"]
+    if not isinstance(items, list) or not items:
+        raise TypeError("evidence_items must be a non-empty list")
+    if not isinstance(contract["evidence_item_count"], int) or contract["evidence_item_count"] != len(items):
+        raise ValueError("evidence_item_count must match evidence_items length")
+    seen_types: set[str] = set()
+    seen_ids: set[str] = set()
+    for item in items:
+        validate_execution_evidence_item(item)
+        if item["evidence_type"] in seen_types:
+            raise ValueError(f"duplicate evidence type: {item['evidence_type']}")
+        if item["evidence_id"] in seen_ids:
+            raise ValueError(f"duplicate evidence id: {item['evidence_id']}")
+        seen_types.add(item["evidence_type"])
+        seen_ids.add(item["evidence_id"])
+    required_types = {"compile", "tests", "healthcheck", "patch_application", "quality_gate"}
+    if not required_types.issubset(seen_types):
+        raise ValueError("execution evidence contract missing required evidence types")
+    if journal is not None:
+        validate_execution_journal_plan(journal)
+        expected = {
+            "execution_journal_id": journal["execution_journal_id"],
+            "execution_package_id": journal["execution_package_id"],
+            "planning_chain_id": journal["planning_chain_id"],
+            "upgrade_id": journal["upgrade_id"],
+            "branch_plan_id": journal["branch_plan_id"],
+            "work_package_id": journal["work_package_id"],
+            "verification_plan_id": journal["verification_plan_id"],
+        }
+        for field, value in expected.items():
+            if contract[field] != value:
+                raise ValueError(f"execution evidence contract {field} does not match journal")
+        rollback_applies = any(entry["rollback_required"] for entry in journal["journal_entries"])
+        if rollback_applies and "rollback" not in seen_types:
+            raise ValueError("rollback evidence is required when rollback applies")
+        if not rollback_applies and "rollback" in seen_types:
+            raise ValueError("rollback evidence must not be required when rollback does not apply")
+        for item in items:
+            validate_execution_evidence_item(item, journal)
+        if contract["execution_evidence_contract_id"] != make_execution_evidence_contract_id(journal, items):
+            raise ValueError("execution evidence contract id does not match journal")
+
+
+def stable_execution_evidence_contract_json(contract: dict[str, Any]) -> str:
+    validate_execution_evidence_contract(contract)
+    return _stable_ruflo_json(contract, indent=2) + "\n"
+
+
+def parse_execution_evidence_contract_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    contract = _json.loads(text)
+    validate_execution_evidence_contract(contract)
+    return contract
+
+
+
 
 def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:
     import hashlib

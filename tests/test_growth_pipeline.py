@@ -7290,6 +7290,126 @@ def check_execution_journal_schema_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 65. Execution evidence contract helper
+# ---------------------------------------------------------------------------
+
+def check_execution_evidence_contract_helper() -> None:
+    """execution evidence contract defines future evidence without collecting it."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_evidence_contract,
+        collect_execution_journal_plan,
+        collect_execution_readiness_bundle,
+        parse_execution_evidence_contract_json,
+        stable_execution_evidence_contract_json,
+        validate_execution_evidence_contract,
+    )
+
+    readiness = collect_execution_readiness_bundle()
+    journal = collect_execution_journal_plan(readiness)
+    contract = collect_execution_evidence_contract(journal, metadata={"suite": "growth"})
+    same = collect_execution_evidence_contract(journal, metadata={"suite": "growth"})
+    _require(contract["execution_evidence_contract_id"] == same["execution_evidence_contract_id"],
+             "execution evidence contract id must be deterministic")
+    decoded = parse_execution_evidence_contract_json(stable_execution_evidence_contract_json(contract))
+    _require(decoded == contract, "execution evidence contract JSON must round trip")
+    validate_execution_evidence_contract(contract, journal)
+    _require(contract["execution_journal_id"] == journal["execution_journal_id"],
+             "evidence contract must reference execution journal")
+    _require(contract["execution_package_id"] == journal["execution_package_id"],
+             "evidence contract must reference execution package")
+    _require(contract["dry_run"] is True and contract["write_allowed"] is False,
+             "evidence contract must remain read-only")
+    _require(contract["automation_allowed"] is False and contract["writes"] == [],
+             "evidence contract must not allow automation or writes")
+
+    items = {item["evidence_type"]: item for item in contract["evidence_items"]}
+    for evidence_type in ("compile", "tests", "healthcheck", "patch_application", "quality_gate"):
+        _require(evidence_type in items, f"{evidence_type} evidence must be required")
+    _require("rollback" in items, "rollback evidence must be required when rollback applies")
+
+    command_fields = {
+        "attempt_id",
+        "command",
+        "combined_log_ref",
+        "completed_at_policy",
+        "exit_code",
+        "journal_entry_id",
+        "log_hash",
+        "reviewer_visible_summary",
+        "started_at_policy",
+        "stderr_log_ref",
+        "stdout_log_ref",
+    }
+    for evidence_type in ("compile", "tests", "healthcheck"):
+        required = set(items[evidence_type]["required_fields"])
+        _require(command_fields.issubset(required),
+                 f"{evidence_type} evidence must require command, exit, log, journal, and attempt fields")
+        _require(items[evidence_type]["reviewer_summary_required"] is True,
+                 f"{evidence_type} evidence must require reviewer summary")
+        _require(items[evidence_type]["blocks_completion_if_missing"] is True,
+                 f"{evidence_type} evidence must block completion if missing")
+
+    patch_required = set(items["patch_application"]["required_fields"])
+    _require({"changed_file_refs", "changed_file_hashes", "diff_hash"}.issubset(patch_required),
+             "patch evidence must require diff and changed-file hashes")
+    rollback_required = set(items["rollback"]["required_fields"])
+    _require("rollback_ref" in rollback_required,
+             "rollback evidence must require rollback_ref")
+    _require(items["rollback"]["blocks_completion_if_missing"] is True,
+             "rollback evidence must block completion when rollback applies")
+    _require(items["compile"]["journal_entry_id"] == journal["journal_entries"][3]["entry_id"],
+             "compile evidence must reference compile journal entry")
+    _require(items["tests"]["journal_entry_id"] == journal["journal_entries"][4]["entry_id"],
+             "test evidence must reference test journal entry")
+    _require(items["healthcheck"]["journal_entry_id"] == journal["journal_entries"][5]["entry_id"],
+             "healthcheck evidence must reference healthcheck journal entry")
+
+    bad_missing = dict(contract)
+    bad_missing["evidence_items"] = [dict(item) for item in contract["evidence_items"]]
+    bad_missing["evidence_items"][0]["required_fields"] = [
+        field for field in bad_missing["evidence_items"][0]["required_fields"]
+        if field != "journal_entry_id"
+    ]
+    try:
+        validate_execution_evidence_contract(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("evidence contract must reject missing common required fields")
+
+    bad_type = dict(contract)
+    bad_type["evidence_items"] = [dict(item) for item in contract["evidence_items"]]
+    bad_type["evidence_items"][0]["evidence_type"] = "screenshots"
+    try:
+        validate_execution_evidence_contract(bad_type)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("evidence contract must reject invalid evidence_type")
+
+    bad_writes = dict(contract)
+    bad_writes["writes"] = [".link/execution-evidence.json"]
+    try:
+        validate_execution_evidence_contract(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("evidence contract must reject writes")
+
+    no_rollback_journal = dict(journal)
+    no_rollback_journal["journal_entries"] = [dict(entry) for entry in journal["journal_entries"]]
+    for entry in no_rollback_journal["journal_entries"]:
+        entry["rollback_required"] = False
+    no_rollback_contract = collect_execution_evidence_contract(no_rollback_journal)
+    no_rollback_types = {item["evidence_type"] for item in no_rollback_contract["evidence_items"]}
+    _require("rollback" not in no_rollback_types,
+             "rollback evidence must not be required when rollback does not apply")
+    validate_execution_evidence_contract(no_rollback_contract, no_rollback_journal)
+
+    print("execution evidence contract helper OK")
+
+
+# ---------------------------------------------------------------------------
 # 58. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
 
@@ -8007,6 +8127,7 @@ def main() -> None:
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
     check_execution_journal_schema_helper()
+    check_execution_evidence_contract_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()
