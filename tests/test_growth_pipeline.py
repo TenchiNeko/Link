@@ -27,6 +27,8 @@ No forbidden legacy tokens. No network. No subprocess calls.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -5792,7 +5794,675 @@ def check_verification_plan_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 57. Growth archive-code-brief -- dry-run
+# 57. Verified patch plan
+# ---------------------------------------------------------------------------
+
+def check_verified_patch_plan_helper() -> None:
+    """Implementation work packages produce deterministic read-only patch plans."""
+    from link_modes.growth.link_growth_console import (
+        VERIFIED_PATCH_PLAN_VERSION,
+        collect_capability_gap_preview,
+        collect_implementation_branch_plan,
+        collect_implementation_work_packages,
+        collect_link_capability_inventory,
+        collect_repo_value_scan,
+        collect_upgrade_execution_plan,
+        collect_verification_plan,
+        collect_verified_patch_plan,
+        parse_verified_patch_plan_json,
+        stable_verified_patch_plan_json,
+        validate_verified_patch_plan,
+    )
+
+    inventory = collect_link_capability_inventory([
+        {
+            "name": "Self-learning recommendations",
+            "category": "self_learning",
+            "description": "Existing self-learning helper is present but partial.",
+            "source": "link_modes/growth/link_growth_console.py",
+            "confidence": "high",
+            "tags": ["self-learning", "recommendation"],
+            "risk_level": "medium",
+            "maturity_level": "partial",
+        },
+    ])
+    repo_scan = collect_repo_value_scan([
+        {
+            "path": "sota/memory.py",
+            "title": "Self-learning feedback loop",
+            "category": "self_learning",
+            "summary": "Scanner records feedback loops and improves future recommendations.",
+            "source_kind": "code",
+            "tags": ["self-learning", "feedback", "recommendation"],
+        },
+    ], source_label="sota-scan")
+    findings = [dict(item) for item in repo_scan["findings"]]
+    for finding in findings:
+        finding["required_maturity_level"] = "verified"
+    gap_preview = collect_capability_gap_preview(inventory, findings)
+    upgrade_plan = collect_upgrade_execution_plan(gap_preview, inventory, findings)
+    branch_plan = collect_implementation_branch_plan(upgrade_plan, upgrade_plan["upgrade_plans"][0])
+    work_packages = collect_implementation_work_packages(branch_plan)
+    package = work_packages["packages"][0]
+    verification = collect_verification_plan(work_packages)
+    provided = ["git diff --stat", "verified patch plan JSON reviewed"]
+    patch_plan = collect_verified_patch_plan(
+        package,
+        verification_plan=verification,
+        provided_evidence=provided,
+        metadata={"suite": "growth"},
+    )
+    same = collect_verified_patch_plan(
+        package,
+        verification_plan=verification,
+        provided_evidence=provided,
+        metadata={"suite": "growth"},
+    )
+
+    _require(patch_plan["verified_patch_plan_version"] == VERIFIED_PATCH_PLAN_VERSION,
+             "verified patch plan version mismatch")
+    _require(patch_plan["verified_patch_plan_id"] == same["verified_patch_plan_id"],
+             "verified patch plan id must be deterministic")
+    _require(patch_plan["upgrade_id"] == package["upgrade_id"],
+             "verified patch plan must preserve upgrade id")
+    _require(patch_plan["branch_plan_id"] == package["branch_plan_id"],
+             "verified patch plan must preserve branch plan id")
+    _require(patch_plan["work_package_id"] == package["package_id"],
+             "verified patch plan must preserve work package id")
+    _require(patch_plan["dry_run"] is True and patch_plan["write_allowed"] is False,
+             "verified patch plan must remain read-only")
+    _require(patch_plan["automation_allowed"] is False,
+             "verified patch plan must not allow automation")
+    _require(patch_plan["writes"] == [], "verified patch plan must not write files")
+    _require(patch_plan["metadata"]["suite"] == "growth",
+             "verified patch plan must preserve metadata")
+
+    _require(patch_plan["target_files"] == package["target_files"],
+             "verified patch plan must preserve target files")
+    _require(patch_plan["estimated_files_changed"] == len(package["target_files"]),
+             "estimated_files_changed must match target files")
+    _require(patch_plan["estimated_tests_affected"] == package["estimated_test_count"],
+             "estimated_tests_affected must match package test count")
+    operations = patch_plan["patch_operations"]
+    _require(len(operations) == len(package["target_files"]),
+             "patch operations must cover each target file")
+    by_file = {operation["file_path"]: operation for operation in operations}
+    _require(by_file["link_modes/growth/link_growth_console.py"]["operation_type"] == "modify_file",
+             "source file operation should be modify_file")
+    _require(by_file["tests/test_growth_pipeline.py"]["operation_type"] == "update_test",
+             "test file operation should be update_test")
+    for operation in operations:
+        _require(operation["operation_id"].startswith("patch-operation-"),
+                 "patch operation id must use stable prefix")
+        _require(operation["rationale"], "patch operation must include rationale")
+        _require(operation["expected_result"], "patch operation must include expected_result")
+        _require(operation["risk_level"] == package["risk"],
+                 "patch operation must preserve package risk")
+
+    _require(patch_plan["compile_expectations"], "compile expectations must be present")
+    _require(patch_plan["test_expectations"], "test expectations must be present")
+    _require(patch_plan["healthcheck_expectations"], "healthcheck expectations must be present")
+    _require(any("py_compile" in item for item in patch_plan["compile_expectations"]),
+             "compile expectations must include py_compile command")
+    _require(any("tests/test_growth_pipeline.py" in item for item in patch_plan["test_expectations"]),
+             "test expectations must include Growth tests")
+    _require(any("link_healthcheck.py" in item for item in patch_plan["healthcheck_expectations"]),
+             "healthcheck expectations must include healthcheck")
+
+    _require("git diff --stat" in patch_plan["required_evidence"],
+             "required evidence must include git diff stat")
+    _require(patch_plan["provided_evidence"] == sorted(provided),
+             "provided evidence must normalize and sort")
+    _require("git diff --stat" not in patch_plan["missing_evidence"],
+             "provided evidence must not appear missing")
+    _require(patch_plan["missing_evidence"], "missing evidence must be accounted for")
+
+    generated_verification = collect_verified_patch_plan(package)
+    _require(generated_verification["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
+             "generated verification plan should preserve patch plan id")
+
+    encoded = stable_verified_patch_plan_json(patch_plan)
+    _require(encoded == stable_verified_patch_plan_json(patch_plan),
+             "verified patch plan JSON serialization must be stable")
+    decoded = parse_verified_patch_plan_json(encoded)
+    _require(decoded == patch_plan, "verified patch plan JSON round-trip must preserve data")
+    validate_verified_patch_plan(patch_plan)
+
+    bad_missing = dict(patch_plan)
+    bad_missing.pop("verified_patch_plan_id")
+    try:
+        validate_verified_patch_plan(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch plan must reject missing id")
+
+    bad_operation = dict(patch_plan)
+    bad_operation["patch_operations"] = [dict(operations[0], operation_type="execute_shell")]
+    try:
+        validate_verified_patch_plan(bad_operation)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch plan must reject invalid operation type")
+
+    bad_file = dict(patch_plan)
+    bad_file["patch_operations"] = [dict(operations[0], file_path="outside.py")]
+    try:
+        validate_verified_patch_plan(bad_file)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch plan must reject operation outside target files")
+
+    bad_count = dict(patch_plan)
+    bad_count["estimated_files_changed"] = 99
+    try:
+        validate_verified_patch_plan(bad_count)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch plan must reject invalid file accounting")
+
+    bad_writes = dict(patch_plan)
+    bad_writes["writes"] = [".agents/runtime.json"]
+    try:
+        validate_verified_patch_plan(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch plan must reject writes")
+
+    try:
+        collect_verified_patch_plan({"bad": "package"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch plan must reject malformed package")
+
+    print("verified patch plan helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 58. Verified patch diff preview helpers
+# ---------------------------------------------------------------------------
+
+def check_verified_patch_diff_helper() -> None:
+    """Verified patch plans produce deterministic read-only diff previews."""
+    from link_modes.growth.link_growth_console import (
+        VERIFIED_PATCH_DIFF_VERSION,
+        collect_capability_gap_preview,
+        collect_implementation_branch_plan,
+        collect_implementation_work_packages,
+        collect_link_capability_inventory,
+        collect_repo_value_scan,
+        collect_upgrade_execution_plan,
+        collect_verification_plan,
+        collect_verified_patch_diff,
+        collect_verified_patch_plan,
+        parse_verified_patch_diff_json,
+        stable_verified_patch_diff_json,
+        validate_verified_patch_diff,
+    )
+
+    inventory = collect_link_capability_inventory([
+        {
+            "name": "Growth planning previews",
+            "category": "workflow_ux",
+            "description": "Existing planning helpers are available but need patch previews.",
+            "source": "link_modes/growth/link_growth_console.py",
+            "confidence": "high",
+            "tags": ["planning", "patch-preview"],
+            "risk_level": "medium",
+            "maturity_level": "partial",
+        },
+    ])
+    repo_scan = collect_repo_value_scan([
+        {
+            "path": "sota/patch_preview.py",
+            "title": "Patch diff preview",
+            "category": "tests/verification",
+            "summary": "Scanner previews planned diffs before implementation.",
+            "source_kind": "code",
+            "tags": ["patch", "diff", "verification"],
+        },
+    ], source_label="sota-scan")
+    findings = [dict(item) for item in repo_scan["findings"]]
+    for finding in findings:
+        finding["required_maturity_level"] = "verified"
+    gap_preview = collect_capability_gap_preview(inventory, findings)
+    upgrade_plan = collect_upgrade_execution_plan(gap_preview, inventory, findings)
+    branch_plan = collect_implementation_branch_plan(upgrade_plan, upgrade_plan["upgrade_plans"][0])
+    work_packages = collect_implementation_work_packages(branch_plan)
+    package = work_packages["packages"][0]
+    verification = collect_verification_plan(work_packages)
+    patch_plan = collect_verified_patch_plan(package, verification_plan=verification)
+    diff = collect_verified_patch_diff(patch_plan, metadata={"suite": "growth"})
+    same = collect_verified_patch_diff(patch_plan, metadata={"suite": "growth"})
+
+    _require(diff["verified_patch_diff_version"] == VERIFIED_PATCH_DIFF_VERSION,
+             "verified patch diff version mismatch")
+    _require(diff["verified_patch_diff_id"] == same["verified_patch_diff_id"],
+             "verified patch diff id must be deterministic")
+    _require(diff["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
+             "verified patch diff must preserve patch plan id")
+    _require(diff["branch_plan_id"] == patch_plan["branch_plan_id"],
+             "verified patch diff must preserve branch plan id")
+    _require(diff["work_package_id"] == patch_plan["work_package_id"],
+             "verified patch diff must preserve work package id")
+    _require(diff["upgrade_id"] == patch_plan["upgrade_id"],
+             "verified patch diff must preserve upgrade id")
+    _require(diff["dry_run"] is True and diff["write_allowed"] is False,
+             "verified patch diff must remain read-only")
+    _require(diff["automation_allowed"] is False,
+             "verified patch diff must not allow automation")
+    _require(diff["writes"] == [], "verified patch diff must not write files")
+    _require(diff["metadata"]["suite"] == "growth",
+             "verified patch diff must preserve metadata")
+
+    entries = diff["diff_entries"]
+    _require(len(entries) == len(patch_plan["patch_operations"]),
+             "diff entries must cover patch operations")
+    _require([entry["diff_entry_id"] for entry in entries] == sorted(entry["diff_entry_id"] for entry in entries),
+             "diff entries must be deterministically sorted")
+    operation_ids = {operation["operation_id"] for operation in patch_plan["patch_operations"]}
+    _require({entry["operation_id"] for entry in entries} == operation_ids,
+             "diff entries must preserve patch operation ids")
+    by_file = {entry["file_path"]: entry for entry in entries}
+    _require(by_file["link_modes/growth/link_growth_console.py"]["operation_type"] == "modify_file",
+             "source file diff should be modify_file")
+    _require(by_file["tests/test_growth_pipeline.py"]["operation_type"] == "update_test",
+             "test file diff should be update_test")
+    for entry in entries:
+        _require(entry["diff_entry_id"].startswith("verified-patch-diff-entry-"),
+                 "diff entry id must use stable prefix")
+        _require(entry["diff_preview"].startswith("--- old\n+++ new\n@@"),
+                 "diff preview must use unified-diff-style headers")
+        _require("- " in entry["diff_preview"] and "+ " in entry["diff_preview"],
+                 "diff preview must include before and after lines")
+        _require(entry["before_summary"], "diff entry must include before_summary")
+        _require(entry["after_summary"], "diff entry must include after_summary")
+        _require(entry["change_description"], "diff entry must include change_description")
+        _require(entry["compile_impact"], "diff entry must include compile impact")
+        _require(entry["test_impact"], "diff entry must include test impact")
+        _require(entry["healthcheck_impact"], "diff entry must include healthcheck impact")
+        _require(0.0 <= entry["confidence_score"] <= 1.0,
+                 "diff entry confidence must be bounded")
+        _require(0.0 <= entry["risk_score"] <= 1.0,
+                 "diff entry risk must be bounded")
+
+    _require(diff["estimated_added_lines"] == sum(entry["estimated_added_lines"] for entry in entries),
+             "added line accounting must match entries")
+    _require(diff["estimated_removed_lines"] == sum(entry["estimated_removed_lines"] for entry in entries),
+             "removed line accounting must match entries")
+    _require(diff["estimated_modified_lines"] == sum(entry["estimated_modified_lines"] for entry in entries),
+             "modified line accounting must match entries")
+    _require(diff["estimated_added_lines"] > 0,
+             "diff preview must estimate added lines")
+    _require(diff["compile_impact"] == patch_plan["compile_expectations"],
+             "diff compile impact must come from patch plan")
+    _require(diff["test_impact"] == patch_plan["test_expectations"],
+             "diff test impact must come from patch plan")
+    _require(diff["healthcheck_impact"] == patch_plan["healthcheck_expectations"],
+             "diff healthcheck impact must come from patch plan")
+    _require(0.0 <= diff["confidence_score"] <= 1.0,
+             "diff confidence must be bounded")
+    _require(0.0 <= diff["risk_score"] <= 1.0,
+             "diff risk must be bounded")
+
+    encoded = stable_verified_patch_diff_json(diff)
+    _require(encoded == stable_verified_patch_diff_json(diff),
+             "verified patch diff JSON serialization must be stable")
+    decoded = parse_verified_patch_diff_json(encoded)
+    _require(decoded == diff, "verified patch diff JSON round-trip must preserve data")
+    validate_verified_patch_diff(diff)
+
+    bad_missing = dict(diff)
+    bad_missing.pop("verified_patch_diff_id")
+    try:
+        validate_verified_patch_diff(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch diff must reject missing id")
+
+    bad_operation = dict(diff)
+    bad_operation["diff_entries"] = [dict(entries[0], operation_type="execute_shell")]
+    try:
+        validate_verified_patch_diff(bad_operation)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch diff must reject invalid operation type")
+
+    bad_lines = dict(diff)
+    bad_lines["estimated_added_lines"] = 999
+    try:
+        validate_verified_patch_diff(bad_lines)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch diff must reject invalid line accounting")
+
+    bad_confidence = dict(diff)
+    bad_confidence["confidence_score"] = 1.5
+    try:
+        validate_verified_patch_diff(bad_confidence)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch diff must reject invalid confidence")
+
+    bad_risk = dict(diff)
+    bad_risk["risk_score"] = -0.1
+    try:
+        validate_verified_patch_diff(bad_risk)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch diff must reject invalid risk")
+
+    bad_writes = dict(diff)
+    bad_writes["writes"] = [".link/runtime.json"]
+    try:
+        validate_verified_patch_diff(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch diff must reject writes")
+
+    bad_patch_plan = dict(patch_plan)
+    bad_patch_plan["patch_operations"] = [dict(patch_plan["patch_operations"][0], operation_type="execute_shell")]
+    try:
+        collect_verified_patch_diff(bad_patch_plan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verified patch diff must reject malformed patch plan")
+
+    print("verified patch diff helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 59. Patch behavior quality gate helpers
+# ---------------------------------------------------------------------------
+
+def check_patch_behavior_quality_gate_helper() -> None:
+    """Patch behavior quality gates score plans/diffs without writes."""
+    from link_modes.growth.link_growth_console import (
+        PATCH_BEHAVIOR_QUALITY_GATE_VERSION,
+        collect_capability_gap_preview,
+        collect_implementation_branch_plan,
+        collect_implementation_work_packages,
+        collect_link_capability_inventory,
+        collect_patch_behavior_quality_gate,
+        collect_repo_value_scan,
+        collect_upgrade_execution_plan,
+        collect_verification_plan,
+        collect_verified_patch_diff,
+        collect_verified_patch_plan,
+        parse_patch_behavior_quality_gate_json,
+        stable_patch_behavior_quality_gate_json,
+        validate_patch_behavior_quality_gate,
+    )
+
+    inventory = collect_link_capability_inventory([
+        {
+            "name": "Verified patch planning",
+            "category": "workflow_ux",
+            "description": "Verified patch plans exist but need behavior quality gates.",
+            "source": "link_modes/growth/link_growth_console.py",
+            "confidence": "high",
+            "tags": ["patch", "quality-gate"],
+            "risk_level": "medium",
+            "maturity_level": "partial",
+        },
+    ])
+    repo_scan = collect_repo_value_scan([
+        {
+            "path": "karpathy/CLAUDE.md",
+            "title": "Surgical patch behavior",
+            "category": "CLI/workflow UX",
+            "summary": "Guidelines require assumptions, small diffs, and verification loops.",
+            "source_kind": "doc",
+            "tags": ["assumptions", "surgical", "verification"],
+        },
+    ], source_label="karpathy-skills")
+    findings = [dict(item) for item in repo_scan["findings"]]
+    for finding in findings:
+        finding["required_maturity_level"] = "verified"
+    gap_preview = collect_capability_gap_preview(inventory, findings)
+    upgrade_plan = collect_upgrade_execution_plan(gap_preview, inventory, findings)
+    branch_plan = collect_implementation_branch_plan(upgrade_plan, upgrade_plan["upgrade_plans"][0])
+    work_packages = collect_implementation_work_packages(branch_plan)
+    package = work_packages["packages"][0]
+    verification = collect_verification_plan(work_packages)
+    initial_plan = collect_verified_patch_plan(package, verification_plan=verification)
+    complete_evidence = list(initial_plan["required_evidence"])
+    patch_plan = collect_verified_patch_plan(
+        package,
+        verification_plan=verification,
+        provided_evidence=complete_evidence,
+    )
+    patch_diff = collect_verified_patch_diff(patch_plan)
+    assumptions = ["Scope is limited to Growth planning helpers and tests."]
+    gate = collect_patch_behavior_quality_gate(
+        patch_plan,
+        patch_diff=patch_diff,
+        assumptions=assumptions,
+        metadata={"suite": "growth"},
+    )
+    same = collect_patch_behavior_quality_gate(
+        patch_plan,
+        patch_diff=patch_diff,
+        assumptions=assumptions,
+        metadata={"suite": "growth"},
+    )
+
+    _require(gate["quality_gate_version"] == PATCH_BEHAVIOR_QUALITY_GATE_VERSION,
+             "patch behavior quality gate version mismatch")
+    _require(gate["quality_gate_id"] == same["quality_gate_id"],
+             "patch behavior quality gate id must be deterministic")
+    _require(gate["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
+             "quality gate must preserve patch plan id")
+    _require(gate["verified_patch_diff_id"] == patch_diff["verified_patch_diff_id"],
+             "quality gate must preserve patch diff id")
+    _require(gate["pass_status"] == "pass", "clean quality gate should pass")
+    _require(gate["findings"] == [], "passing quality gate should not have findings")
+    _require(gate["required_clarifications"] == [], "passing quality gate should not need clarification")
+    _require(0.0 <= gate["quality_score"] <= 1.0, "quality score must be bounded")
+    _require(0.0 <= gate["risk_score"] <= 1.0, "risk score must be bounded")
+    _require(gate["dry_run"] is True and gate["write_allowed"] is False,
+             "quality gate must remain read-only")
+    _require(gate["automation_allowed"] is False, "quality gate must not allow automation")
+    _require(gate["writes"] == [], "quality gate must not write files")
+    _require(gate["metadata"]["suite"] == "growth", "quality gate must preserve metadata")
+
+    encoded = stable_patch_behavior_quality_gate_json(gate)
+    _require(encoded == stable_patch_behavior_quality_gate_json(gate),
+             "patch behavior quality gate JSON serialization must be stable")
+    decoded = parse_patch_behavior_quality_gate_json(encoded)
+    _require(decoded == gate, "patch behavior quality gate JSON round-trip must preserve data")
+    validate_patch_behavior_quality_gate(gate)
+
+    missing_evidence_gate = collect_patch_behavior_quality_gate(
+        initial_plan,
+        assumptions=assumptions,
+    )
+    _require(missing_evidence_gate["pass_status"] in {"review", "block"},
+             "missing evidence must prevent pass status")
+    _require(missing_evidence_gate["quality_score"] < gate["quality_score"],
+             "missing evidence must lower quality score")
+    _require(any(item["category"] == "missing_evidence" for item in missing_evidence_gate["findings"]),
+             "missing evidence finding must be present")
+
+    no_assumptions_gate = collect_patch_behavior_quality_gate(patch_plan, patch_diff=patch_diff)
+    _require(no_assumptions_gate["pass_status"] == "review",
+             "missing assumptions should require review")
+    _require(any(item["category"] == "assumptions" for item in no_assumptions_gate["findings"]),
+             "assumption finding must be present")
+    _require(no_assumptions_gate["required_clarifications"],
+             "missing assumptions must require clarification")
+
+    risky_plan = dict(patch_plan)
+    risky_ops = [dict(operation) for operation in patch_plan["patch_operations"]]
+    risky_ops[0]["operation_type"] = "delete_file"
+    risky_ops[0]["expected_result"] = "The obsolete target is removed after approval and verification."
+    risky_plan["patch_operations"] = risky_ops
+    risky_gate = collect_patch_behavior_quality_gate(risky_plan, assumptions=assumptions)
+    _require(risky_gate["pass_status"] == "block",
+             "delete operations should block before explicit review")
+    _require(any(item["category"] == "risky_operations" for item in risky_gate["findings"]),
+             "risky operation finding must be present")
+
+    unclear_plan = dict(patch_plan)
+    unclear_ops = [dict(operation) for operation in patch_plan["patch_operations"]]
+    unclear_ops[0]["rationale"] = "todo"
+    unclear_ops[0]["expected_result"] = "tbd"
+    unclear_plan["patch_operations"] = unclear_ops
+    unclear_gate = collect_patch_behavior_quality_gate(unclear_plan, assumptions=assumptions)
+    _require(unclear_gate["pass_status"] == "review",
+             "unclear operation should require review")
+    _require(any(item["category"] == "clarity" for item in unclear_gate["findings"]),
+             "clarity finding must be present")
+    _require(unclear_gate["required_clarifications"],
+             "unclear operation must require clarification")
+
+    broad_plan = dict(patch_plan)
+    extra_files = [f"link_modes/growth/extra_{index}.py" for index in range(12)]
+    broad_plan["target_files"] = sorted(set(patch_plan["target_files"] + extra_files))
+    broad_plan["estimated_files_changed"] = len(broad_plan["target_files"])
+    broad_plan["estimated_tests_affected"] = len([path for path in broad_plan["target_files"] if path.startswith("tests/")])
+    base_operation = dict(patch_plan["patch_operations"][0])
+    broad_ops = [dict(operation) for operation in patch_plan["patch_operations"]]
+    for file_path in extra_files:
+        operation = dict(base_operation)
+        operation["operation_id"] = f"patch-operation-extra-{file_path.rsplit('_', 1)[-1].replace('.py', '')}"
+        operation["file_path"] = file_path
+        operation["operation_type"] = "modify_file"
+        operation["rationale"] = f"Update {file_path} only if this broader patch is explicitly approved."
+        operation["expected_result"] = f"{file_path} contains a reviewed implementation change."
+        broad_ops.append(operation)
+    broad_plan["patch_operations"] = broad_ops
+    broad_gate = collect_patch_behavior_quality_gate(broad_plan, assumptions=assumptions)
+    _require(broad_gate["pass_status"] == "block",
+             "overbroad file count should block")
+    _require(any(item["category"] == "surgicality" for item in broad_gate["findings"]),
+             "surgicality finding must be present")
+
+    bad_missing = dict(gate)
+    bad_missing.pop("quality_gate_id")
+    try:
+        validate_patch_behavior_quality_gate(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("quality gate must reject missing id")
+
+    bad_writes = dict(gate)
+    bad_writes["writes"] = [".agents/runtime.json"]
+    try:
+        validate_patch_behavior_quality_gate(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("quality gate must reject writes")
+
+    mismatched_diff = dict(patch_diff)
+    mismatched_diff["verified_patch_plan_id"] = "verified-patch-plan-other"
+    try:
+        collect_patch_behavior_quality_gate(patch_plan, patch_diff=mismatched_diff, assumptions=assumptions)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("quality gate must reject mismatched diff")
+
+    print("patch behavior quality gate helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 60. Growth planning-chain CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_planning_chain_cli() -> None:
+    """planning-chain exposes the full read-only planning chain via CLI."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_growth_planning_chain_preview,
+        parse_growth_planning_chain_json,
+        planning_chain_main,
+        validate_growth_planning_chain_preview,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("planning-chain" in help_out.getvalue(), "growth help must include planning-chain")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = planning_chain_main(["--json"])
+    _require(json_rc == 0, "planning-chain --json must return 0")
+    parsed = parse_growth_planning_chain_json(json_out.getvalue())
+    validate_growth_planning_chain_preview(parsed)
+    again = collect_growth_planning_chain_preview()
+    _require(parsed["planning_chain_id"] == again["planning_chain_id"],
+             "planning_chain_id must be deterministic")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "planning chain must remain read-only")
+    _require(parsed["automation_allowed"] is False,
+             "planning chain must not allow automation")
+    _require(parsed["writes"] == [], "planning chain must not write files")
+
+    top_upgrade = parsed["upgrade_execution_plan"]["upgrade_plans"][0]
+    branch_plan = parsed["implementation_branch_plan"]
+    work_package = parsed["implementation_work_packages"]["packages"][0]
+    verification = parsed["verification_plan"]["plans"][0]
+    action = parsed["top_recommended_next_action"]
+    _require(branch_plan["source_upgrade_id"] == top_upgrade["upgrade_plan_id"],
+             "top upgrade must flow into branch plan")
+    _require(work_package["branch_plan_id"] == branch_plan["branch_plan_id"],
+             "branch plan must flow into work package")
+    _require(verification["package_id"] == work_package["package_id"],
+             "work package must flow into verification plan")
+    _require(action["upgrade_id"] == top_upgrade["upgrade_plan_id"],
+             "next action must reference top upgrade")
+    _require(action["branch_plan_id"] == branch_plan["branch_plan_id"],
+             "next action must reference branch plan")
+    _require(action["package_id"] == work_package["package_id"],
+             "next action must reference work package")
+    _require(action["verification_plan_id"] == verification["verification_plan_id"],
+             "next action must reference verification plan")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = planning_chain_main(["--write"])
+    _require(write_rc != 0, "planning-chain --write must be rejected")
+    _require("--write is not supported" in write_err.getvalue(),
+             "planning-chain --write must print clear error")
+    _require(write_out.getvalue() == "", "planning-chain --write must not print normal output")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = planning_chain_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "planning-chain human mode must return 0")
+    _require("Growth planning-chain preview" in human,
+             "planning-chain human mode must print concise summary title")
+    _require("planning_chain_id:" in human,
+             "planning-chain human mode must include planning_chain_id")
+    _require("verification_plans:" in human,
+             "planning-chain human mode must include verification summary")
+    _require(len(human.splitlines()) <= 10,
+             "planning-chain human mode must stay concise")
+
+    print("growth planning-chain CLI OK")
+
+
+# ---------------------------------------------------------------------------
+# 58. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
 
 def check_growth_archive_code_brief_dry_run() -> None:
@@ -6501,6 +7171,10 @@ def main() -> None:
     check_implementation_branch_plan_helper()
     check_implementation_work_packages_helper()
     check_verification_plan_helper()
+    check_verified_patch_plan_helper()
+    check_verified_patch_diff_helper()
+    check_patch_behavior_quality_gate_helper()
+    check_growth_planning_chain_cli()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()

@@ -9544,6 +9544,1150 @@ def _verification_required_evidence(package: dict[str, Any]) -> list[str]:
     return sorted(dict.fromkeys(evidence))
 
 
+GROWTH_PLANNING_CHAIN_VERSION = "link-growth-planning-chain-v1"
+
+_DEFAULT_PLANNING_CHAIN_CAPABILITIES: tuple[dict[str, Any], ...] = (
+    {
+        "name": "Self-learning recommendations",
+        "category": "self_learning",
+        "description": "Existing self-learning helper is present but still needs verified upgrade execution planning.",
+        "source": "link_modes/growth/link_growth_console.py",
+        "confidence": "high",
+        "tags": ["self-learning", "recommendation", "planning"],
+        "risk_level": "medium",
+        "maturity_level": "partial",
+    },
+    {
+        "name": "Growth planning dashboard",
+        "category": "workflow_ux",
+        "description": "Growth exposes read-only planning data and CLI summaries for local operation.",
+        "source": "link_modes/growth/link_growth_console.py",
+        "confidence": "high",
+        "tags": ["growth", "dashboard", "planning"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+)
+
+_DEFAULT_PLANNING_CHAIN_REPO_ITEMS: tuple[dict[str, Any], ...] = (
+    {
+        "path": "research/sota-scan/planning.md",
+        "title": "Self-learning feedback loop",
+        "category": "self_learning",
+        "summary": "Repo scanner records feedback loops and turns them into verified implementation planning.",
+        "source_kind": "research-summary",
+        "tags": ["self-learning", "feedback", "verification", "planning"],
+        "required_maturity_level": "verified",
+    },
+    {
+        "path": "research/sota-scan/onboarding.md",
+        "title": "Discoverable planning command UX",
+        "category": "cli_workflow_ux",
+        "summary": "Repo scanner presents planning state through concise CLI and dashboard summaries.",
+        "source_kind": "research-summary",
+        "tags": ["cli", "dashboard", "planning", "docs"],
+    },
+)
+
+
+def make_growth_planning_chain_id(
+    gap_preview: dict[str, Any],
+    upgrade_plan: dict[str, Any],
+    branch_plan: dict[str, Any],
+    work_packages: dict[str, Any],
+    verification_plan: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "branch_plan_id": branch_plan["branch_plan_id"],
+        "gap_preview_id": gap_preview["preview_id"],
+        "upgrade_plan_id": upgrade_plan["plan_id"],
+        "verification_plan_ids": [plan["verification_plan_id"] for plan in verification_plan["plans"]],
+        "work_packages_id": work_packages["work_packages_id"],
+        "version": GROWTH_PLANNING_CHAIN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"growth-planning-chain-{digest}"
+
+
+def collect_growth_planning_chain_preview(
+    repo_items: list[dict[str, Any]] | None = None,
+    *,
+    capabilities: list[dict[str, Any]] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the read-only Growth planning chain from gaps to verification."""
+    capability_items = list(capabilities) if capabilities is not None else [dict(item) for item in _DEFAULT_PLANNING_CHAIN_CAPABILITIES]
+    source_items = list(repo_items) if repo_items is not None else [dict(item) for item in _DEFAULT_PLANNING_CHAIN_REPO_ITEMS]
+    inventory = collect_link_capability_inventory(capability_items)
+    repo_scan = collect_repo_value_scan(source_items, top=10, source_label="growth-planning-chain")
+    findings = [dict(item) for item in repo_scan["findings"]]
+    required_by_path = {
+        str(item.get("path") or item.get("source_path") or item.get("file") or ""): str(item.get("required_maturity_level") or "")
+        for item in source_items
+        if item.get("required_maturity_level")
+    }
+    for finding in findings:
+        required = required_by_path.get(finding["source_path"])
+        if required:
+            finding["required_maturity_level"] = required
+    gap_preview = collect_capability_gap_preview(inventory, findings, metadata={"source": "growth-planning-chain"})
+    upgrade_plan = collect_upgrade_execution_plan(gap_preview, inventory, findings, metadata={"source": "growth-planning-chain"})
+    if not upgrade_plan["upgrade_plans"]:
+        raise ValueError("planning chain requires at least one upgrade plan")
+    top_upgrade = upgrade_plan["upgrade_plans"][0]
+    branch_plan = collect_implementation_branch_plan(upgrade_plan, top_upgrade)
+    work_packages = collect_implementation_work_packages(branch_plan)
+    verification_plan = collect_verification_plan(work_packages)
+    chain = {
+        "planning_chain_version": GROWTH_PLANNING_CHAIN_VERSION,
+        "planning_chain_id": make_growth_planning_chain_id(
+            gap_preview,
+            upgrade_plan,
+            branch_plan,
+            work_packages,
+            verification_plan,
+        ),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "capability_gap_preview": gap_preview,
+        "upgrade_execution_plan": upgrade_plan,
+        "implementation_branch_plan": branch_plan,
+        "implementation_work_packages": work_packages,
+        "verification_plan": verification_plan,
+        "top_recommended_next_action": _growth_planning_chain_next_action(top_upgrade, branch_plan, verification_plan),
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_planning_chain_preview(chain)
+    return chain
+
+
+def validate_growth_planning_chain_preview(chain: dict[str, Any]) -> None:
+    required = (
+        "planning_chain_version", "planning_chain_id", "dry_run", "write_allowed", "automation_allowed",
+        "capability_gap_preview", "upgrade_execution_plan", "implementation_branch_plan",
+        "implementation_work_packages", "verification_plan", "top_recommended_next_action", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in chain]
+    if missing:
+        raise ValueError(f"growth planning chain missing fields: {missing}")
+    if chain["planning_chain_version"] != GROWTH_PLANNING_CHAIN_VERSION:
+        raise ValueError("unsupported growth planning chain version")
+    if not isinstance(chain["planning_chain_id"], str) or not chain["planning_chain_id"].strip():
+        raise ValueError("planning_chain_id must be a non-empty string")
+    if chain["dry_run"] is not True or chain["write_allowed"] is not False or chain["automation_allowed"] is not False:
+        raise ValueError("growth planning chain must remain read-only")
+    if chain["writes"] != []:
+        raise ValueError("growth planning chain must not write files")
+    if not isinstance(chain["metadata"], dict):
+        raise TypeError("growth planning chain metadata must be a dict")
+    validate_capability_gap_preview(chain["capability_gap_preview"])
+    validate_upgrade_execution_plan(chain["upgrade_execution_plan"])
+    validate_implementation_branch_plan(chain["implementation_branch_plan"])
+    validate_implementation_work_packages(chain["implementation_work_packages"])
+    validate_verification_plan(chain["verification_plan"])
+    action = chain["top_recommended_next_action"]
+    if not isinstance(action, dict):
+        raise TypeError("top_recommended_next_action must be a dict")
+    for field in ("upgrade_id", "title", "branch_plan_id", "package_id", "verification_plan_id", "summary"):
+        if not isinstance(action.get(field), str) or not action[field].strip():
+            raise ValueError(f"top_recommended_next_action.{field} must be a non-empty string")
+    top_upgrade = chain["upgrade_execution_plan"]["upgrade_plans"][0]
+    branch_plan = chain["implementation_branch_plan"]
+    work_package = chain["implementation_work_packages"]["packages"][0]
+    verification = chain["verification_plan"]["plans"][0]
+    if branch_plan["source_upgrade_id"] != top_upgrade["upgrade_plan_id"]:
+        raise ValueError("top upgrade must flow into implementation branch plan")
+    if work_package["branch_plan_id"] != branch_plan["branch_plan_id"]:
+        raise ValueError("implementation branch plan must flow into work package")
+    if verification["package_id"] != work_package["package_id"]:
+        raise ValueError("work package must flow into verification plan")
+
+
+def stable_growth_planning_chain_json(chain: dict[str, Any]) -> str:
+    validate_growth_planning_chain_preview(chain)
+    return _stable_ruflo_json(chain, indent=2) + "\n"
+
+
+def parse_growth_planning_chain_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    chain = _json.loads(text)
+    validate_growth_planning_chain_preview(chain)
+    return chain
+
+
+def _growth_planning_chain_next_action(
+    top_upgrade: dict[str, Any],
+    branch_plan: dict[str, Any],
+    verification_plan: dict[str, Any],
+) -> dict[str, str]:
+    return {
+        "upgrade_id": top_upgrade["upgrade_plan_id"],
+        "title": top_upgrade["title"],
+        "branch_plan_id": branch_plan["branch_plan_id"],
+        "package_id": verification_plan["plans"][0]["package_id"],
+        "verification_plan_id": verification_plan["plans"][0]["verification_plan_id"],
+        "summary": "Review the read-only branch, work package, and verification plan before approving any implementation.",
+    }
+
+
+def planning_chain_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth planning-chain`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth planning-chain: preview gaps to verification plan")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth planning-chain")
+        print("  python3 link.py growth planning-chain --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth planning-chain is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    if "--json" in args:
+        print(stable_growth_planning_chain_json(chain), end="")
+        return 0
+    render_planning_chain_plain(chain)
+    return 0
+
+
+def render_planning_chain_plain(chain: dict[str, Any]) -> None:
+    validate_growth_planning_chain_preview(chain)
+    gap_counts = chain["capability_gap_preview"]["counts"]
+    upgrade_plan = chain["upgrade_execution_plan"]
+    branch_plan = chain["implementation_branch_plan"]
+    work_packages = chain["implementation_work_packages"]
+    verification = chain["verification_plan"]
+    action = chain["top_recommended_next_action"]
+    print("Growth planning-chain preview")
+    print(f"planning_chain_id: {chain['planning_chain_id']}")
+    print(f"gaps: direct={gap_counts['direct_gap_count']} maturity={gap_counts['maturity_gap_count']} onboarding={gap_counts['onboarding_gap_count']} optional={gap_counts['optional_cross_cluster_idea_count']}")
+    print(f"upgrade_plans: {upgrade_plan['upgrade_plan_count']}")
+    print(f"branch_plan: {branch_plan['proposed_branch_name']} ({branch_plan['risk_level']}/{branch_plan['complexity']})")
+    print(f"work_packages: {work_packages['package_count']}")
+    print(f"verification_plans: {verification['plan_count']}")
+    print(f"next_action: {action['summary']}")
+
+
+VERIFIED_PATCH_PLAN_VERSION = "link-verified-patch-plan-v1"
+VERIFIED_PATCH_OPERATION_TYPES = (
+    "create_file",
+    "modify_file",
+    "delete_file",
+    "add_test",
+    "update_test",
+    "documentation_update",
+)
+VERIFIED_PATCH_DIFF_VERSION = "link-verified-patch-diff-v1"
+PATCH_BEHAVIOR_QUALITY_GATE_VERSION = "link-patch-behavior-quality-gate-v1"
+
+
+def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "operation_ids": [operation["operation_id"] for operation in operations],
+        "package_id": work_package["package_id"],
+        "upgrade_id": work_package["upgrade_id"],
+        "version": VERIFIED_PATCH_PLAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"verified-patch-plan-{digest}"
+
+
+def make_verified_patch_operation_id(operation_type: str, file_path: str, work_package_id: str) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "file_path": file_path,
+        "operation_type": operation_type,
+        "version": VERIFIED_PATCH_PLAN_VERSION,
+        "work_package_id": work_package_id,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"patch-operation-{digest}"
+
+
+def collect_verified_patch_plan(
+    work_package: dict[str, Any],
+    *,
+    verification_plan: dict[str, Any] | None = None,
+    provided_evidence: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Describe intended code changes for a work package without modifying files."""
+    validate_implementation_work_package(work_package)
+    verification_entry = _verified_patch_verification_entry(work_package, verification_plan)
+    target_files = _normalize_implementation_branch_refs(work_package["target_files"])
+    operations = [_verified_patch_operation_for_file(work_package, file_path) for file_path in target_files]
+    operations.sort(key=lambda item: (item["file_path"], item["operation_type"], item["operation_id"]))
+    required_evidence = _verified_patch_required_evidence(work_package, verification_entry)
+    provided = _normalize_implementation_branch_refs(provided_evidence or [])
+    missing = [item for item in required_evidence if item not in provided]
+    patch_plan = {
+        "verified_patch_plan_version": VERIFIED_PATCH_PLAN_VERSION,
+        "verified_patch_plan_id": make_verified_patch_plan_id(work_package, operations),
+        "upgrade_id": work_package["upgrade_id"],
+        "branch_plan_id": work_package["branch_plan_id"],
+        "work_package_id": work_package["package_id"],
+        "target_files": target_files,
+        "estimated_files_changed": len(target_files),
+        "estimated_tests_affected": len([path for path in target_files if _verified_patch_is_test_path(path)]),
+        "patch_operations": operations,
+        "compile_expectations": _verified_patch_compile_expectations(verification_entry),
+        "test_expectations": _verified_patch_test_expectations(verification_entry),
+        "healthcheck_expectations": _verified_patch_healthcheck_expectations(verification_entry),
+        "required_evidence": required_evidence,
+        "provided_evidence": provided,
+        "missing_evidence": missing,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_verified_patch_plan(patch_plan)
+    return patch_plan
+
+
+def validate_verified_patch_plan(patch_plan: dict[str, Any]) -> None:
+    required = (
+        "verified_patch_plan_version", "verified_patch_plan_id", "upgrade_id", "branch_plan_id",
+        "work_package_id", "target_files", "estimated_files_changed", "estimated_tests_affected",
+        "patch_operations", "compile_expectations", "test_expectations", "healthcheck_expectations",
+        "required_evidence", "provided_evidence", "missing_evidence", "dry_run", "write_allowed",
+        "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in patch_plan]
+    if missing:
+        raise ValueError(f"verified patch plan missing fields: {missing}")
+    if patch_plan["verified_patch_plan_version"] != VERIFIED_PATCH_PLAN_VERSION:
+        raise ValueError("unsupported verified patch plan version")
+    for field in ("verified_patch_plan_id", "upgrade_id", "branch_plan_id", "work_package_id"):
+        if not isinstance(patch_plan[field], str) or not patch_plan[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if patch_plan["dry_run"] is not True or patch_plan["write_allowed"] is not False or patch_plan["automation_allowed"] is not False:
+        raise ValueError("verified patch plan must remain read-only")
+    if patch_plan["writes"] != []:
+        raise ValueError("verified patch plan must not write files")
+    if not isinstance(patch_plan["metadata"], dict):
+        raise TypeError("verified patch plan metadata must be a dict")
+    target_files = patch_plan["target_files"]
+    if not isinstance(target_files, list) or not target_files:
+        raise TypeError("target_files must be a non-empty list")
+    if target_files != _normalize_implementation_branch_refs(target_files):
+        raise ValueError("target_files must be normalized and sorted")
+    if not isinstance(patch_plan["estimated_files_changed"], int) or patch_plan["estimated_files_changed"] != len(target_files):
+        raise ValueError("estimated_files_changed must match target_files length")
+    expected_tests = len([path for path in target_files if _verified_patch_is_test_path(path)])
+    if not isinstance(patch_plan["estimated_tests_affected"], int) or patch_plan["estimated_tests_affected"] != expected_tests:
+        raise ValueError("estimated_tests_affected must match test target count")
+    operations = patch_plan["patch_operations"]
+    if not isinstance(operations, list) or not operations:
+        raise TypeError("patch_operations must be a non-empty list")
+    operation_ids: set[str] = set()
+    operation_files: set[str] = set()
+    for operation in operations:
+        validate_verified_patch_operation(operation, set(target_files))
+        if operation["operation_id"] in operation_ids:
+            raise ValueError(f"duplicate verified patch operation id: {operation['operation_id']}")
+        operation_ids.add(operation["operation_id"])
+        operation_files.add(operation["file_path"])
+    if operation_files != set(target_files):
+        raise ValueError("patch_operations must cover every target file exactly at least once")
+    for field in ("compile_expectations", "test_expectations", "healthcheck_expectations", "required_evidence", "provided_evidence", "missing_evidence"):
+        values = patch_plan[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if field in {"compile_expectations", "test_expectations", "healthcheck_expectations", "required_evidence"} and not values:
+            raise ValueError(f"{field} must be non-empty")
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            raise TypeError(f"{field} must contain non-empty strings")
+    for field in ("required_evidence", "provided_evidence", "missing_evidence"):
+        if patch_plan[field] != _normalize_implementation_branch_refs(patch_plan[field]):
+            raise ValueError(f"{field} must be normalized and sorted")
+    expected_missing = [item for item in patch_plan["required_evidence"] if item not in patch_plan["provided_evidence"]]
+    if patch_plan["missing_evidence"] != expected_missing:
+        raise ValueError("missing_evidence must match required evidence not present in provided evidence")
+
+
+def stable_verified_patch_plan_json(patch_plan: dict[str, Any]) -> str:
+    validate_verified_patch_plan(patch_plan)
+    return _stable_ruflo_json(patch_plan, indent=2) + "\n"
+
+
+def parse_verified_patch_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    patch_plan = _json.loads(text)
+    validate_verified_patch_plan(patch_plan)
+    return patch_plan
+
+
+def validate_verified_patch_operation(operation: dict[str, Any], target_files: set[str]) -> None:
+    required = ("operation_id", "operation_type", "file_path", "rationale", "expected_result", "risk_level")
+    missing = [field for field in required if field not in operation]
+    if missing:
+        raise ValueError(f"verified patch operation missing fields: {missing}")
+    for field in required:
+        if not isinstance(operation[field], str) or not operation[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if operation["operation_type"] not in VERIFIED_PATCH_OPERATION_TYPES:
+        raise ValueError(f"invalid verified patch operation type: {operation['operation_type']}")
+    if operation["risk_level"] not in UPGRADE_RISK_LEVELS:
+        raise ValueError(f"invalid verified patch operation risk_level: {operation['risk_level']}")
+    if operation["file_path"] not in target_files:
+        raise ValueError(f"verified patch operation file_path is not a target file: {operation['file_path']}")
+    if _normalize_implementation_branch_refs([operation["file_path"]]) != [operation["file_path"]]:
+        raise ValueError("verified patch operation file_path must be normalized")
+
+
+def _verified_patch_verification_entry(work_package: dict[str, Any], verification_plan: dict[str, Any] | None) -> dict[str, Any]:
+    if verification_plan is None:
+        generated = collect_verification_plan(work_package)
+        return generated["plans"][0]
+    if "plans" in verification_plan:
+        validate_verification_plan(verification_plan)
+        for plan in verification_plan["plans"]:
+            if plan["package_id"] == work_package["package_id"]:
+                return dict(plan)
+        raise ValueError("verification_plan does not contain a plan for the work package")
+    validate_verification_plan_entry(verification_plan)
+    if verification_plan["package_id"] != work_package["package_id"]:
+        raise ValueError("verification plan package_id does not match work package")
+    return dict(verification_plan)
+
+
+def _verified_patch_operation_for_file(work_package: dict[str, Any], file_path: str) -> dict[str, Any]:
+    operation_type = _verified_patch_operation_type(file_path)
+    operation = {
+        "operation_id": make_verified_patch_operation_id(operation_type, file_path, work_package["package_id"]),
+        "operation_type": operation_type,
+        "file_path": file_path,
+        "rationale": _verified_patch_operation_rationale(operation_type, file_path),
+        "expected_result": _verified_patch_operation_expected_result(operation_type, file_path),
+        "risk_level": work_package["risk"],
+    }
+    validate_verified_patch_operation(operation, set(work_package["target_files"]))
+    return operation
+
+
+def _verified_patch_operation_type(file_path: str) -> str:
+    lower = file_path.lower()
+    if _verified_patch_is_test_path(lower):
+        return "update_test"
+    if lower.endswith((".md", ".rst", ".txt")):
+        return "documentation_update"
+    return "modify_file"
+
+
+def _verified_patch_is_test_path(file_path: str) -> bool:
+    lower = file_path.lower()
+    return lower.startswith("tests/") or "/test" in lower or lower.endswith("_test.py") or lower.endswith(".test.py")
+
+
+def _verified_patch_operation_rationale(operation_type: str, file_path: str) -> str:
+    return {
+        "modify_file": f"Update {file_path} to implement the planned Link-native behavior.",
+        "update_test": f"Update {file_path} to cover the planned behavior and guard regressions.",
+        "add_test": f"Add {file_path} to cover the planned behavior and guard regressions.",
+        "create_file": f"Create {file_path} only after review confirms no existing module is appropriate.",
+        "delete_file": f"Delete {file_path} only after review confirms the file is obsolete and safe to remove.",
+        "documentation_update": f"Update {file_path} to document the planned behavior and operation path.",
+    }[operation_type]
+
+
+def _verified_patch_operation_expected_result(operation_type: str, file_path: str) -> str:
+    return {
+        "modify_file": f"{file_path} contains the smallest implementation change needed for the work package.",
+        "update_test": f"{file_path} verifies the new behavior without adding runtime state writes.",
+        "add_test": f"{file_path} verifies the new behavior without adding runtime state writes.",
+        "create_file": f"{file_path} exists only if the reviewed implementation requires a new module boundary.",
+        "delete_file": f"{file_path} is removed only if tests prove no live behavior depends on it.",
+        "documentation_update": f"{file_path} explains the verified behavior, safety limits, and verification path.",
+    }[operation_type]
+
+
+def _verified_patch_compile_expectations(verification_entry: dict[str, Any]) -> list[str]:
+    return [f"compile command should pass: {command}" for command in verification_entry["compile_commands"]]
+
+
+def _verified_patch_test_expectations(verification_entry: dict[str, Any]) -> list[str]:
+    return [f"test command should pass: {command}" for command in verification_entry["test_commands"]]
+
+
+def _verified_patch_healthcheck_expectations(verification_entry: dict[str, Any]) -> list[str]:
+    return [f"healthcheck command should pass: {command}" for command in verification_entry["healthcheck_commands"]]
+
+
+def _verified_patch_required_evidence(work_package: dict[str, Any], verification_entry: dict[str, Any]) -> list[str]:
+    evidence = [
+        "verified patch plan JSON reviewed",
+        "patch operations reviewed before implementation",
+        "git diff --stat",
+        "git status --short --branch",
+    ]
+    evidence.extend(verification_entry["required_evidence"])
+    evidence.extend(work_package["acceptance_criteria"])
+    return _normalize_implementation_branch_refs(evidence)
+
+
+def make_verified_patch_diff_id(patch_plan: dict[str, Any], diff_entries: list[dict[str, Any]]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "diff_entry_ids": [entry["diff_entry_id"] for entry in diff_entries],
+        "verified_patch_plan_id": patch_plan["verified_patch_plan_id"],
+        "version": VERIFIED_PATCH_DIFF_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"verified-patch-diff-{digest}"
+
+
+def make_verified_patch_diff_entry_id(operation: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "file_path": operation["file_path"],
+        "operation_id": operation["operation_id"],
+        "operation_type": operation["operation_type"],
+        "version": VERIFIED_PATCH_DIFF_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"verified-patch-diff-entry-{digest}"
+
+
+def collect_verified_patch_diff(
+    patch_plan: dict[str, Any],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Convert a verified patch plan into a deterministic read-only diff preview."""
+    validate_verified_patch_plan(patch_plan)
+    diff_entries = [_verified_patch_diff_entry(operation) for operation in patch_plan["patch_operations"]]
+    diff_entries.sort(key=lambda item: item["diff_entry_id"])
+    added = sum(entry["estimated_added_lines"] for entry in diff_entries)
+    removed = sum(entry["estimated_removed_lines"] for entry in diff_entries)
+    modified = sum(entry["estimated_modified_lines"] for entry in diff_entries)
+    diff = {
+        "verified_patch_diff_version": VERIFIED_PATCH_DIFF_VERSION,
+        "verified_patch_diff_id": make_verified_patch_diff_id(patch_plan, diff_entries),
+        "verified_patch_plan_id": patch_plan["verified_patch_plan_id"],
+        "branch_plan_id": patch_plan["branch_plan_id"],
+        "work_package_id": patch_plan["work_package_id"],
+        "upgrade_id": patch_plan["upgrade_id"],
+        "diff_entries": diff_entries,
+        "estimated_added_lines": added,
+        "estimated_removed_lines": removed,
+        "estimated_modified_lines": modified,
+        "compile_impact": list(patch_plan["compile_expectations"]),
+        "test_impact": list(patch_plan["test_expectations"]),
+        "healthcheck_impact": list(patch_plan["healthcheck_expectations"]),
+        "confidence_score": _verified_patch_diff_confidence_score(patch_plan, diff_entries),
+        "risk_score": _verified_patch_diff_risk_score(diff_entries),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_verified_patch_diff(diff)
+    return diff
+
+
+def validate_verified_patch_diff(diff: dict[str, Any]) -> None:
+    required = (
+        "verified_patch_diff_version", "verified_patch_diff_id", "verified_patch_plan_id",
+        "branch_plan_id", "work_package_id", "upgrade_id", "diff_entries",
+        "estimated_added_lines", "estimated_removed_lines", "estimated_modified_lines",
+        "compile_impact", "test_impact", "healthcheck_impact", "confidence_score",
+        "risk_score", "dry_run", "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in diff]
+    if missing:
+        raise ValueError(f"verified patch diff missing fields: {missing}")
+    if diff["verified_patch_diff_version"] != VERIFIED_PATCH_DIFF_VERSION:
+        raise ValueError("unsupported verified patch diff version")
+    for field in ("verified_patch_diff_id", "verified_patch_plan_id", "branch_plan_id", "work_package_id", "upgrade_id"):
+        if not isinstance(diff[field], str) or not diff[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if diff["dry_run"] is not True or diff["write_allowed"] is not False or diff["automation_allowed"] is not False:
+        raise ValueError("verified patch diff must remain read-only")
+    if diff["writes"] != []:
+        raise ValueError("verified patch diff must not write files")
+    if not isinstance(diff["metadata"], dict):
+        raise TypeError("verified patch diff metadata must be a dict")
+    entries = diff["diff_entries"]
+    if not isinstance(entries, list) or not entries:
+        raise TypeError("diff_entries must be a non-empty list")
+    entry_ids: set[str] = set()
+    operation_ids: set[str] = set()
+    for entry in entries:
+        validate_verified_patch_diff_entry(entry)
+        if entry["diff_entry_id"] in entry_ids:
+            raise ValueError(f"duplicate verified patch diff entry id: {entry['diff_entry_id']}")
+        if entry["operation_id"] in operation_ids:
+            raise ValueError(f"duplicate verified patch diff operation id: {entry['operation_id']}")
+        entry_ids.add(entry["diff_entry_id"])
+        operation_ids.add(entry["operation_id"])
+    if [entry["diff_entry_id"] for entry in entries] != sorted(entry["diff_entry_id"] for entry in entries):
+        raise ValueError("diff_entries must be sorted by diff_entry_id")
+    for field in ("estimated_added_lines", "estimated_removed_lines", "estimated_modified_lines"):
+        if not isinstance(diff[field], int) or diff[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    if diff["estimated_added_lines"] != sum(entry["estimated_added_lines"] for entry in entries):
+        raise ValueError("estimated_added_lines must match diff entry sum")
+    if diff["estimated_removed_lines"] != sum(entry["estimated_removed_lines"] for entry in entries):
+        raise ValueError("estimated_removed_lines must match diff entry sum")
+    if diff["estimated_modified_lines"] != sum(entry["estimated_modified_lines"] for entry in entries):
+        raise ValueError("estimated_modified_lines must match diff entry sum")
+    for field in ("compile_impact", "test_impact", "healthcheck_impact"):
+        values = diff[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            raise TypeError(f"{field} must contain non-empty strings")
+    _validate_probability_score(diff["confidence_score"], "confidence_score")
+    _validate_probability_score(diff["risk_score"], "risk_score")
+
+
+def stable_verified_patch_diff_json(diff: dict[str, Any]) -> str:
+    validate_verified_patch_diff(diff)
+    return _stable_ruflo_json(diff, indent=2) + "\n"
+
+
+def parse_verified_patch_diff_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    diff = _json.loads(text)
+    validate_verified_patch_diff(diff)
+    return diff
+
+
+def validate_verified_patch_diff_entry(entry: dict[str, Any]) -> None:
+    required = (
+        "diff_entry_id", "operation_id", "file_path", "operation_type", "before_summary",
+        "after_summary", "change_description", "diff_preview", "estimated_added_lines",
+        "estimated_removed_lines", "estimated_modified_lines", "compile_impact", "test_impact",
+        "healthcheck_impact", "confidence_score", "risk_score",
+    )
+    missing = [field for field in required if field not in entry]
+    if missing:
+        raise ValueError(f"verified patch diff entry missing fields: {missing}")
+    for field in ("diff_entry_id", "operation_id", "file_path", "operation_type", "before_summary", "after_summary", "change_description", "diff_preview"):
+        if not isinstance(entry[field], str) or not entry[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if entry["operation_type"] not in VERIFIED_PATCH_OPERATION_TYPES:
+        raise ValueError(f"invalid verified patch diff operation type: {entry['operation_type']}")
+    if not entry["diff_preview"].startswith("--- old\n+++ new\n@@"):
+        raise ValueError("diff_preview must use unified-diff-style headers")
+    for field in ("estimated_added_lines", "estimated_removed_lines", "estimated_modified_lines"):
+        if not isinstance(entry[field], int) or entry[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    if entry["estimated_added_lines"] + entry["estimated_removed_lines"] + entry["estimated_modified_lines"] <= 0:
+        raise ValueError("diff entry must estimate at least one changed line")
+    for field in ("compile_impact", "test_impact", "healthcheck_impact"):
+        values = entry[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if not all(isinstance(value, str) and value.strip() for value in values):
+            raise TypeError(f"{field} must contain non-empty strings")
+    _validate_probability_score(entry["confidence_score"], "entry confidence_score")
+    _validate_probability_score(entry["risk_score"], "entry risk_score")
+
+
+def _verified_patch_diff_entry(operation: dict[str, Any]) -> dict[str, Any]:
+    validate_verified_patch_operation(operation, {operation["file_path"]})
+    line_counts = _verified_patch_diff_line_counts(operation["operation_type"])
+    entry = {
+        "diff_entry_id": make_verified_patch_diff_entry_id(operation),
+        "operation_id": operation["operation_id"],
+        "file_path": operation["file_path"],
+        "operation_type": operation["operation_type"],
+        "before_summary": _verified_patch_diff_before_summary(operation),
+        "after_summary": _verified_patch_diff_after_summary(operation),
+        "change_description": operation["rationale"],
+        "diff_preview": _verified_patch_diff_preview(operation),
+        "estimated_added_lines": line_counts["added"],
+        "estimated_removed_lines": line_counts["removed"],
+        "estimated_modified_lines": line_counts["modified"],
+        "compile_impact": _verified_patch_diff_compile_impact(operation),
+        "test_impact": _verified_patch_diff_test_impact(operation),
+        "healthcheck_impact": ["link_healthcheck.py should remain passing after the planned patch"],
+        "confidence_score": _verified_patch_diff_entry_confidence(operation),
+        "risk_score": _verified_patch_risk_score(operation["risk_level"]),
+    }
+    validate_verified_patch_diff_entry(entry)
+    return entry
+
+
+def _verified_patch_diff_line_counts(operation_type: str) -> dict[str, int]:
+    counts = {
+        "create_file": {"added": 24, "removed": 0, "modified": 0},
+        "modify_file": {"added": 18, "removed": 4, "modified": 8},
+        "delete_file": {"added": 0, "removed": 20, "modified": 0},
+        "add_test": {"added": 18, "removed": 0, "modified": 0},
+        "update_test": {"added": 16, "removed": 2, "modified": 6},
+        "documentation_update": {"added": 10, "removed": 1, "modified": 4},
+    }
+    if operation_type not in counts:
+        raise ValueError(f"invalid verified patch operation type: {operation_type}")
+    return counts[operation_type]
+
+
+def _verified_patch_diff_before_summary(operation: dict[str, Any]) -> str:
+    if operation["operation_type"] in {"create_file", "add_test"}:
+        return f"{operation['file_path']} is not yet represented in the planned implementation surface."
+    if operation["operation_type"] == "delete_file":
+        return f"{operation['file_path']} is present before the reviewed cleanup."
+    return f"{operation['file_path']} contains current behavior before the planned upgrade."
+
+
+def _verified_patch_diff_after_summary(operation: dict[str, Any]) -> str:
+    if operation["operation_type"] == "delete_file":
+        return f"{operation['file_path']} is removed only after review and verification confirm it is obsolete."
+    return operation["expected_result"]
+
+
+def _verified_patch_diff_preview(operation: dict[str, Any]) -> str:
+    old_behavior = _verified_patch_diff_before_summary(operation)
+    new_behavior = _verified_patch_diff_after_summary(operation)
+    return "\n".join([
+        "--- old",
+        "+++ new",
+        "@@",
+        f"- {old_behavior}",
+        f"+ {new_behavior}",
+    ])
+
+
+def _verified_patch_diff_compile_impact(operation: dict[str, Any]) -> list[str]:
+    if operation["file_path"].endswith(".py"):
+        return [f"py_compile should include {operation['file_path']} or the closest affected Python module"]
+    return ["compile impact is expected to remain unchanged for non-Python target"]
+
+
+def _verified_patch_diff_test_impact(operation: dict[str, Any]) -> list[str]:
+    if _verified_patch_is_test_path(operation["file_path"]):
+        return [f"{operation['file_path']} should include or update regression coverage"]
+    return ["tests/test_growth_pipeline.py should cover the planned behavior when this slice touches Growth helpers"]
+
+
+def _verified_patch_diff_entry_confidence(operation: dict[str, Any]) -> float:
+    base = 0.82
+    if operation["operation_type"] in {"create_file", "delete_file"}:
+        base -= 0.12
+    if operation["risk_level"] == "high":
+        base -= 0.18
+    elif operation["risk_level"] == "medium":
+        base -= 0.08
+    return round(max(0.0, min(1.0, base)), 4)
+
+
+def _verified_patch_diff_confidence_score(patch_plan: dict[str, Any], diff_entries: list[dict[str, Any]]) -> float:
+    if not diff_entries:
+        return 0.0
+    missing_penalty = min(0.3, len(patch_plan["missing_evidence"]) * 0.02)
+    average = sum(entry["confidence_score"] for entry in diff_entries) / len(diff_entries)
+    return round(max(0.0, min(1.0, average - missing_penalty)), 4)
+
+
+def _verified_patch_diff_risk_score(diff_entries: list[dict[str, Any]]) -> float:
+    if not diff_entries:
+        return 0.0
+    return round(max(entry["risk_score"] for entry in diff_entries), 4)
+
+
+def _verified_patch_risk_score(risk_level: str) -> float:
+    if risk_level not in UPGRADE_RISK_LEVELS:
+        raise ValueError(f"invalid verified patch risk level: {risk_level}")
+    return {"low": 0.2, "medium": 0.5, "high": 0.85}[risk_level]
+
+
+def _validate_probability_score(value: Any, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{field_name} must be numeric between 0.0 and 1.0")
+    number = float(value)
+    if not (0.0 <= number <= 1.0):
+        raise ValueError(f"{field_name} must be between 0.0 and 1.0")
+
+
+def make_patch_behavior_quality_gate_id(
+    patch_plan: dict[str, Any],
+    patch_diff: dict[str, Any] | None,
+    findings: list[dict[str, Any]],
+    assumptions: list[str],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "assumptions": assumptions,
+        "finding_ids": [finding["finding_id"] for finding in findings],
+        "verified_patch_diff_id": patch_diff["verified_patch_diff_id"] if patch_diff else "",
+        "verified_patch_plan_id": patch_plan["verified_patch_plan_id"],
+        "version": PATCH_BEHAVIOR_QUALITY_GATE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"patch-behavior-quality-gate-{digest}"
+
+
+def make_patch_behavior_quality_finding_id(category: str, severity: str, message: str) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "category": category,
+        "message": message,
+        "severity": severity,
+        "version": PATCH_BEHAVIOR_QUALITY_GATE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"patch-behavior-finding-{digest}"
+
+
+def collect_patch_behavior_quality_gate(
+    patch_plan: dict[str, Any],
+    *,
+    patch_diff: dict[str, Any] | None = None,
+    assumptions: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Score a verified patch plan/diff for Karpathy-style behavior risks without writing."""
+    validate_verified_patch_plan(patch_plan)
+    if patch_diff is not None:
+        validate_verified_patch_diff(patch_diff)
+        if patch_diff["verified_patch_plan_id"] != patch_plan["verified_patch_plan_id"]:
+            raise ValueError("patch_diff must reference the verified patch plan")
+    normalized_assumptions = _normalize_patch_behavior_text_list(assumptions or [])
+    findings = _collect_patch_behavior_findings(patch_plan, patch_diff, normalized_assumptions)
+    findings.sort(key=lambda item: (item["severity"], item["category"], item["finding_id"]))
+    risk_score = _patch_behavior_risk_score(patch_plan, patch_diff, findings)
+    quality_score = _patch_behavior_quality_score(findings, risk_score)
+    pass_status = _patch_behavior_pass_status(findings, quality_score, risk_score)
+    required_clarifications = _patch_behavior_required_clarifications(findings)
+    gate = {
+        "quality_gate_version": PATCH_BEHAVIOR_QUALITY_GATE_VERSION,
+        "quality_gate_id": make_patch_behavior_quality_gate_id(
+            patch_plan,
+            patch_diff,
+            findings,
+            normalized_assumptions,
+        ),
+        "verified_patch_plan_id": patch_plan["verified_patch_plan_id"],
+        "verified_patch_diff_id": patch_diff["verified_patch_diff_id"] if patch_diff else "",
+        "pass_status": pass_status,
+        "quality_score": quality_score,
+        "risk_score": risk_score,
+        "assumptions": normalized_assumptions,
+        "findings": findings,
+        "required_clarifications": required_clarifications,
+        "recommended_next_action": _patch_behavior_recommended_next_action(pass_status, required_clarifications),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_patch_behavior_quality_gate(gate)
+    return gate
+
+
+def validate_patch_behavior_quality_gate(gate: dict[str, Any]) -> None:
+    required = (
+        "quality_gate_version", "quality_gate_id", "verified_patch_plan_id", "verified_patch_diff_id",
+        "pass_status", "quality_score", "risk_score", "assumptions", "findings",
+        "required_clarifications", "recommended_next_action", "dry_run", "write_allowed",
+        "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in gate]
+    if missing:
+        raise ValueError(f"patch behavior quality gate missing fields: {missing}")
+    if gate["quality_gate_version"] != PATCH_BEHAVIOR_QUALITY_GATE_VERSION:
+        raise ValueError("unsupported patch behavior quality gate version")
+    for field in ("quality_gate_id", "verified_patch_plan_id", "pass_status", "recommended_next_action"):
+        if not isinstance(gate[field], str) or not gate[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if gate["pass_status"] not in {"pass", "review", "block"}:
+        raise ValueError(f"invalid patch behavior pass_status: {gate['pass_status']}")
+    if not isinstance(gate["verified_patch_diff_id"], str):
+        raise TypeError("verified_patch_diff_id must be a string")
+    _validate_probability_score(gate["quality_score"], "quality_score")
+    _validate_probability_score(gate["risk_score"], "risk_score")
+    if gate["dry_run"] is not True or gate["write_allowed"] is not False or gate["automation_allowed"] is not False:
+        raise ValueError("patch behavior quality gate must remain read-only")
+    if gate["writes"] != []:
+        raise ValueError("patch behavior quality gate must not write files")
+    if not isinstance(gate["metadata"], dict):
+        raise TypeError("patch behavior quality gate metadata must be a dict")
+    for field in ("assumptions", "required_clarifications"):
+        values = gate[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    findings = gate["findings"]
+    if not isinstance(findings, list):
+        raise TypeError("findings must be a list")
+    finding_ids: set[str] = set()
+    for finding in findings:
+        validate_patch_behavior_quality_finding(finding)
+        if finding["finding_id"] in finding_ids:
+            raise ValueError(f"duplicate patch behavior finding id: {finding['finding_id']}")
+        finding_ids.add(finding["finding_id"])
+    if findings and [item["finding_id"] for item in findings] != sorted(item["finding_id"] for item in findings):
+        raise ValueError("findings must be sorted by finding_id")
+    severities = {finding["severity"] for finding in findings}
+    if gate["pass_status"] == "pass" and severities:
+        raise ValueError("pass status cannot include findings")
+    if gate["pass_status"] == "block" and "block" not in severities:
+        raise ValueError("block status requires a block finding")
+    if gate["pass_status"] == "review" and "block" in severities:
+        raise ValueError("review status cannot include block findings")
+
+
+def stable_patch_behavior_quality_gate_json(gate: dict[str, Any]) -> str:
+    validate_patch_behavior_quality_gate(gate)
+    return _stable_ruflo_json(gate, indent=2) + "\n"
+
+
+def parse_patch_behavior_quality_gate_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    gate = _json.loads(text)
+    validate_patch_behavior_quality_gate(gate)
+    return gate
+
+
+def validate_patch_behavior_quality_finding(finding: dict[str, Any]) -> None:
+    required = ("finding_id", "category", "severity", "message", "evidence")
+    missing = [field for field in required if field not in finding]
+    if missing:
+        raise ValueError(f"patch behavior finding missing fields: {missing}")
+    for field in ("finding_id", "category", "severity", "message"):
+        if not isinstance(finding[field], str) or not finding[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if finding["severity"] not in {"info", "review", "block"}:
+        raise ValueError(f"invalid patch behavior finding severity: {finding['severity']}")
+    evidence = finding["evidence"]
+    if not isinstance(evidence, list) or not evidence:
+        raise TypeError("patch behavior finding evidence must be a non-empty list")
+    if evidence != _normalize_patch_behavior_text_list(evidence):
+        raise ValueError("patch behavior finding evidence must be normalized and sorted")
+
+
+def _collect_patch_behavior_findings(
+    patch_plan: dict[str, Any],
+    patch_diff: dict[str, Any] | None,
+    assumptions: list[str],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    if not assumptions:
+        findings.append(_patch_behavior_finding(
+            "assumptions",
+            "review",
+            "No assumptions were surfaced before implementation.",
+            [patch_plan["verified_patch_plan_id"]],
+        ))
+    if patch_plan["missing_evidence"]:
+        severity = "block" if len(patch_plan["missing_evidence"]) >= 8 else "review"
+        findings.append(_patch_behavior_finding(
+            "missing_evidence",
+            severity,
+            f"{len(patch_plan['missing_evidence'])} required evidence item(s) are missing.",
+            patch_plan["missing_evidence"],
+        ))
+    if patch_plan["estimated_files_changed"] > 10:
+        findings.append(_patch_behavior_finding(
+            "surgicality",
+            "block",
+            "Planned patch touches more than 10 files before implementation.",
+            patch_plan["target_files"],
+        ))
+    elif patch_plan["estimated_files_changed"] > 5:
+        findings.append(_patch_behavior_finding(
+            "surgicality",
+            "review",
+            "Planned patch touches more than 5 files and may be overbroad.",
+            patch_plan["target_files"],
+        ))
+    risky_operations = [operation for operation in patch_plan["patch_operations"] if operation["operation_type"] in {"create_file", "delete_file"}]
+    if risky_operations:
+        severity = "block" if any(operation["operation_type"] == "delete_file" for operation in risky_operations) else "review"
+        findings.append(_patch_behavior_finding(
+            "risky_operations",
+            severity,
+            "Patch plan contains create/delete operations that need explicit review.",
+            [f"{operation['operation_type']}:{operation['file_path']}" for operation in risky_operations],
+        ))
+    unclear = [operation for operation in patch_plan["patch_operations"] if _patch_behavior_operation_unclear(operation)]
+    if unclear:
+        findings.append(_patch_behavior_finding(
+            "clarity",
+            "review",
+            "One or more patch operations have unclear rationale or expected_result.",
+            [operation["operation_id"] for operation in unclear],
+        ))
+    if not _patch_behavior_has_verification_coverage(patch_plan, patch_diff):
+        findings.append(_patch_behavior_finding(
+            "verification_coverage",
+            "block",
+            "Patch operations are not covered by compile, test, and healthcheck expectations.",
+            [patch_plan["verified_patch_plan_id"]],
+        ))
+    if _patch_behavior_overengineering_risk(patch_plan, patch_diff):
+        findings.append(_patch_behavior_finding(
+            "overengineering",
+            "review",
+            "Patch preview suggests unnecessary breadth or abstraction risk for this slice.",
+            [patch_plan["verified_patch_plan_id"]],
+        ))
+    if patch_diff is not None and patch_diff["risk_score"] >= 0.8:
+        findings.append(_patch_behavior_finding(
+            "diff_risk",
+            "block",
+            "Verified patch diff risk score is high before implementation.",
+            [patch_diff["verified_patch_diff_id"]],
+        ))
+    return _dedupe_patch_behavior_findings(findings)
+
+
+def _patch_behavior_finding(category: str, severity: str, message: str, evidence: list[str]) -> dict[str, Any]:
+    normalized_evidence = _normalize_patch_behavior_text_list(evidence)
+    finding = {
+        "finding_id": make_patch_behavior_quality_finding_id(category, severity, message),
+        "category": category,
+        "severity": severity,
+        "message": message,
+        "evidence": normalized_evidence,
+    }
+    validate_patch_behavior_quality_finding(finding)
+    return finding
+
+
+def _dedupe_patch_behavior_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for finding in findings:
+        by_id[finding["finding_id"]] = finding
+    return sorted(by_id.values(), key=lambda item: item["finding_id"])
+
+
+def _patch_behavior_operation_unclear(operation: dict[str, Any]) -> bool:
+    vague_terms = {"todo", "tbd", "fix stuff", "update things", "change code", "implement"}
+    rationale = operation.get("rationale", "").strip().lower()
+    expected = operation.get("expected_result", "").strip().lower()
+    if len(rationale) < 24 or len(expected) < 24:
+        return True
+    return rationale in vague_terms or expected in vague_terms
+
+
+def _patch_behavior_has_verification_coverage(patch_plan: dict[str, Any], patch_diff: dict[str, Any] | None) -> bool:
+    if not patch_plan["compile_expectations"] or not patch_plan["test_expectations"] or not patch_plan["healthcheck_expectations"]:
+        return False
+    if patch_diff is None:
+        return True
+    return bool(patch_diff["compile_impact"] and patch_diff["test_impact"] and patch_diff["healthcheck_impact"])
+
+
+def _patch_behavior_overengineering_risk(patch_plan: dict[str, Any], patch_diff: dict[str, Any] | None) -> bool:
+    if len(patch_plan["patch_operations"]) > 6:
+        return True
+    if any(operation["operation_type"] == "create_file" for operation in patch_plan["patch_operations"]):
+        return True
+    if patch_diff is not None and patch_diff["estimated_added_lines"] > 180:
+        return True
+    return False
+
+
+def _patch_behavior_quality_score(findings: list[dict[str, Any]], risk_score: float) -> float:
+    score = 1.0 - min(0.35, risk_score * 0.25)
+    for finding in findings:
+        if finding["severity"] == "block":
+            score -= 0.28
+        elif finding["severity"] == "review":
+            score -= 0.12
+        else:
+            score -= 0.03
+    return round(max(0.0, min(1.0, score)), 4)
+
+
+def _patch_behavior_risk_score(
+    patch_plan: dict[str, Any],
+    patch_diff: dict[str, Any] | None,
+    findings: list[dict[str, Any]],
+) -> float:
+    operation_risk = max((_verified_patch_risk_score(operation["risk_level"]) for operation in patch_plan["patch_operations"]), default=0.0)
+    diff_risk = patch_diff["risk_score"] if patch_diff is not None else 0.0
+    finding_risk = 0.0
+    for finding in findings:
+        if finding["severity"] == "block":
+            finding_risk += 0.18
+        elif finding["severity"] == "review":
+            finding_risk += 0.08
+        else:
+            finding_risk += 0.02
+    return round(max(0.0, min(1.0, max(operation_risk, diff_risk) + finding_risk)), 4)
+
+
+def _patch_behavior_pass_status(findings: list[dict[str, Any]], quality_score: float, risk_score: float) -> str:
+    severities = {finding["severity"] for finding in findings}
+    if "block" in severities or quality_score < 0.55 or risk_score >= 0.85:
+        return "block"
+    if "review" in severities or quality_score < 0.82 or risk_score >= 0.55:
+        return "review"
+    return "pass"
+
+
+def _patch_behavior_required_clarifications(findings: list[dict[str, Any]]) -> list[str]:
+    prompts: list[str] = []
+    for finding in findings:
+        if finding["category"] == "assumptions":
+            prompts.append("State the assumptions that make this patch safe and scoped before implementation.")
+        elif finding["category"] == "clarity":
+            prompts.append("Clarify the rationale and expected result for each vague patch operation.")
+        elif finding["category"] == "surgicality":
+            prompts.append("Confirm why the planned file count is necessary for the smallest safe slice.")
+        elif finding["category"] == "risky_operations":
+            prompts.append("Confirm the create/delete operation is necessary and has rollback coverage.")
+        elif finding["category"] == "missing_evidence":
+            prompts.append("Provide or explicitly waive the missing evidence before implementation.")
+        elif finding["severity"] == "block":
+            prompts.append(f"Resolve blocking finding: {finding['message']}")
+    return _normalize_patch_behavior_text_list(prompts)
+
+
+def _patch_behavior_recommended_next_action(pass_status: str, required_clarifications: list[str]) -> str:
+    if pass_status == "pass":
+        return "Proceed to human review of the patch plan; do not execute without approval."
+    if pass_status == "review":
+        return "Review findings and answer required clarifications before implementation."
+    if required_clarifications:
+        return "Do not implement until blocking findings are resolved and clarifications are answered."
+    return "Do not implement until the patch behavior quality gate passes review."
+
+
+def _normalize_patch_behavior_text_list(values: list[str] | tuple[str, ...]) -> list[str]:
+    if not isinstance(values, (list, tuple)):
+        raise TypeError("patch behavior text values must be a list or tuple")
+    normalized: list[str] = []
+    for raw in values:
+        value = str(raw or "").strip()
+        if not value:
+            raise ValueError("patch behavior text values cannot be empty")
+        if "\x00" in value:
+            raise ValueError("patch behavior text values cannot contain null bytes")
+        if value not in normalized:
+            normalized.append(value)
+    return sorted(normalized)
+
+
+
+
 def _normalize_feedback_status(status: str) -> str:
     raw = str(status or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
