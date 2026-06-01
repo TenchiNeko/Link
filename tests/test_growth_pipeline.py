@@ -6381,7 +6381,238 @@ def check_patch_behavior_quality_gate_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 60. Growth planning-chain CLI preview
+# 60. Autonomous execution package helpers
+# ---------------------------------------------------------------------------
+
+def check_autonomous_execution_package_helper() -> None:
+    """Autonomous execution packages describe future execution without doing it."""
+    from link_modes.growth.link_growth_console import (
+        AUTONOMOUS_EXECUTION_PACKAGE_VERSION,
+        collect_autonomous_execution_package,
+        collect_capability_gap_preview,
+        collect_implementation_branch_plan,
+        collect_implementation_work_packages,
+        collect_link_capability_inventory,
+        collect_patch_behavior_quality_gate,
+        collect_repo_value_scan,
+        collect_upgrade_execution_plan,
+        collect_verification_plan,
+        collect_verified_patch_diff,
+        collect_verified_patch_plan,
+        parse_autonomous_execution_package_json,
+        stable_autonomous_execution_package_json,
+        validate_autonomous_execution_package,
+    )
+
+    inventory = collect_link_capability_inventory([
+        {
+            "name": "Autonomous execution planning",
+            "category": "workflow_ux",
+            "description": "Execution is not enabled, but Link can describe future execution safely.",
+            "source": "link_modes/growth/link_growth_console.py",
+            "confidence": "high",
+            "tags": ["execution", "planning", "safety"],
+            "risk_level": "medium",
+            "maturity_level": "partial",
+        },
+    ])
+    repo_scan = collect_repo_value_scan([
+        {
+            "path": "karpathy/execution-loop.md",
+            "title": "Verified execution loop",
+            "category": "CLI/workflow UX",
+            "summary": "Describe workspace, branch, patch, verify, and review steps before execution.",
+            "source_kind": "doc",
+            "tags": ["execution", "verification", "review"],
+        },
+    ], source_label="karpathy-skills")
+    findings = [dict(item) for item in repo_scan["findings"]]
+    for finding in findings:
+        finding["required_maturity_level"] = "verified"
+    gap_preview = collect_capability_gap_preview(inventory, findings)
+    upgrade_plan = collect_upgrade_execution_plan(gap_preview, inventory, findings)
+    branch_plan = collect_implementation_branch_plan(upgrade_plan, upgrade_plan["upgrade_plans"][0])
+    work_packages = collect_implementation_work_packages(branch_plan)
+    package = work_packages["packages"][0]
+    verification = collect_verification_plan(work_packages)
+    initial_plan = collect_verified_patch_plan(package, verification_plan=verification)
+    patch_plan = collect_verified_patch_plan(
+        package,
+        verification_plan=verification,
+        provided_evidence=list(initial_plan["required_evidence"]),
+    )
+    patch_diff = collect_verified_patch_diff(patch_plan)
+    quality_gate = collect_patch_behavior_quality_gate(
+        patch_plan,
+        patch_diff=patch_diff,
+        assumptions=["Execution remains disabled; this package is only a preview."],
+    )
+    execution = collect_autonomous_execution_package(
+        patch_plan,
+        verification_plan=verification,
+        patch_diff=patch_diff,
+        quality_gate=quality_gate,
+        metadata={"suite": "growth"},
+    )
+    same = collect_autonomous_execution_package(
+        patch_plan,
+        verification_plan=verification,
+        patch_diff=patch_diff,
+        quality_gate=quality_gate,
+        metadata={"suite": "growth"},
+    )
+
+    _require(execution["execution_package_version"] == AUTONOMOUS_EXECUTION_PACKAGE_VERSION,
+             "autonomous execution package version mismatch")
+    _require(execution["execution_package_id"] == same["execution_package_id"],
+             "autonomous execution package id must be deterministic")
+    _require(execution["upgrade_id"] == patch_plan["upgrade_id"],
+             "execution package must preserve upgrade id")
+    _require(execution["branch_plan_id"] == patch_plan["branch_plan_id"],
+             "execution package must preserve branch plan id")
+    _require(execution["work_package_id"] == patch_plan["work_package_id"],
+             "execution package must preserve work package id")
+    _require(execution["verification_plan_id"] == verification["plans"][0]["verification_plan_id"],
+             "execution package must preserve verification plan id")
+    _require(execution["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
+             "execution package must preserve patch plan id")
+    _require(execution["verified_patch_diff_id"] == patch_diff["verified_patch_diff_id"],
+             "execution package must preserve patch diff id")
+    _require(execution["quality_gate_id"] == quality_gate["quality_gate_id"],
+             "execution package must preserve quality gate id")
+    _require(execution["dry_run"] is True and execution["write_allowed"] is False,
+             "execution package must remain read-only")
+    _require(execution["automation_allowed"] is False,
+             "execution package must not allow automation")
+    _require(execution["writes"] == [], "execution package must not write files")
+    _require(execution["metadata"]["suite"] == "growth", "execution package must preserve metadata")
+
+    expected_stage_names = [
+        "create workspace",
+        "create branch",
+        "apply patch operations",
+        "run compile",
+        "run tests",
+        "run healthcheck",
+        "evaluate quality gate",
+        "produce review bundle",
+    ]
+    stages = execution["execution_stages"]
+    _require(execution["stage_count"] == len(expected_stage_names),
+             "execution package must contain canonical stages")
+    _require([stage["stage_name"] for stage in stages] == expected_stage_names,
+             "execution stages must be in canonical order")
+    _require([stage["order"] for stage in stages] == list(range(1, len(stages) + 1)),
+             "execution stages must be ordered from 1")
+    _require(len({stage["stage_id"] for stage in stages}) == len(stages),
+             "execution stage ids must be unique")
+    for stage in stages:
+        _require(stage["inputs"], "execution stage must include inputs")
+        _require(stage["outputs"], "execution stage must include outputs")
+        _require(stage["success_criteria"], "execution stage must include success criteria")
+        _require(stage["failure_criteria"], "execution stage must include failure criteria")
+        _require(stage["rollback_action"], "execution stage must include rollback action")
+    by_name = {stage["stage_name"]: stage for stage in stages}
+    _require(any("uncreated" in output for output in by_name["create workspace"]["outputs"]),
+             "workspace stage must explicitly avoid creating workspace")
+    _require(any("uncreated" in output for output in by_name["create branch"]["outputs"]),
+             "branch stage must explicitly avoid creating branch")
+    _require(any("no files modified" in output for output in by_name["apply patch operations"]["outputs"]),
+             "patch stage must explicitly avoid modifying files")
+    _require(any("unexecuted" in output for output in by_name["run compile"]["outputs"]),
+             "compile stage must remain unexecuted")
+    _require(any("unexecuted" in output for output in by_name["run tests"]["outputs"]),
+             "test stage must remain unexecuted")
+    _require(any("unexecuted" in output for output in by_name["run healthcheck"]["outputs"]),
+             "healthcheck stage must remain unexecuted")
+    _require(quality_gate["quality_gate_id"] in by_name["evaluate quality gate"]["inputs"],
+             "quality gate stage must reference quality gate")
+
+    encoded = stable_autonomous_execution_package_json(execution)
+    _require(encoded == stable_autonomous_execution_package_json(execution),
+             "autonomous execution package JSON serialization must be stable")
+    decoded = parse_autonomous_execution_package_json(encoded)
+    _require(decoded == execution, "autonomous execution package JSON round-trip must preserve data")
+    validate_autonomous_execution_package(execution)
+
+    generated = collect_autonomous_execution_package(
+        patch_plan,
+        verification_plan=verification,
+        assumptions=["Execution remains disabled; this package is only a preview."],
+    )
+    _require(generated["upgrade_id"] == execution["upgrade_id"],
+             "generated diff/gate package must preserve upgrade id")
+    _require(generated["stage_count"] == execution["stage_count"],
+             "generated diff/gate package must preserve stage count")
+
+    bad_missing = dict(execution)
+    bad_missing.pop("execution_package_id")
+    try:
+        validate_autonomous_execution_package(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("autonomous execution package must reject missing id")
+
+    bad_writes = dict(execution)
+    bad_writes["writes"] = [".link/runtime.json"]
+    try:
+        validate_autonomous_execution_package(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("autonomous execution package must reject writes")
+
+    bad_stage_order = dict(execution)
+    bad_stages = [dict(stage) for stage in stages]
+    bad_stages[0]["stage_name"] = "run tests"
+    bad_stage_order["execution_stages"] = bad_stages
+    try:
+        validate_autonomous_execution_package(bad_stage_order)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("autonomous execution package must reject invalid stage order")
+
+    bad_stage = dict(execution)
+    bad_stage_entries = [dict(stage) for stage in stages]
+    bad_stage_entries[0]["inputs"] = []
+    bad_stage["execution_stages"] = bad_stage_entries
+    try:
+        validate_autonomous_execution_package(bad_stage)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("autonomous execution package must reject malformed stage")
+
+    mismatched_diff = dict(patch_diff)
+    mismatched_diff["verified_patch_plan_id"] = "verified-patch-plan-other"
+    try:
+        collect_autonomous_execution_package(patch_plan, verification_plan=verification, patch_diff=mismatched_diff)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("autonomous execution package must reject mismatched diff")
+
+    mismatched_gate = dict(quality_gate)
+    mismatched_gate["verified_patch_plan_id"] = "verified-patch-plan-other"
+    try:
+        collect_autonomous_execution_package(
+            patch_plan,
+            verification_plan=verification,
+            patch_diff=patch_diff,
+            quality_gate=mismatched_gate,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("autonomous execution package must reject mismatched quality gate")
+
+    print("autonomous execution package helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 61. Growth planning-chain CLI preview
 # ---------------------------------------------------------------------------
 
 def check_growth_planning_chain_cli() -> None:
@@ -7174,6 +7405,7 @@ def main() -> None:
     check_verified_patch_plan_helper()
     check_verified_patch_diff_helper()
     check_patch_behavior_quality_gate_helper()
+    check_autonomous_execution_package_helper()
     check_growth_planning_chain_cli()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()

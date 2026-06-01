@@ -9787,6 +9787,7 @@ VERIFIED_PATCH_OPERATION_TYPES = (
 )
 VERIFIED_PATCH_DIFF_VERSION = "link-verified-patch-diff-v1"
 PATCH_BEHAVIOR_QUALITY_GATE_VERSION = "link-patch-behavior-quality-gate-v1"
+AUTONOMOUS_EXECUTION_PACKAGE_VERSION = "link-autonomous-execution-package-v1"
 
 
 def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:
@@ -10684,6 +10685,305 @@ def _normalize_patch_behavior_text_list(values: list[str] | tuple[str, ...]) -> 
         if value not in normalized:
             normalized.append(value)
     return sorted(normalized)
+
+
+
+
+def make_autonomous_execution_package_id(
+    patch_plan: dict[str, Any],
+    verification_entry: dict[str, Any],
+    quality_gate: dict[str, Any],
+    stages: list[dict[str, Any]],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "quality_gate_id": quality_gate["quality_gate_id"],
+        "stage_ids": [stage["stage_id"] for stage in stages],
+        "verification_plan_id": verification_entry["verification_plan_id"],
+        "verified_patch_plan_id": patch_plan["verified_patch_plan_id"],
+        "version": AUTONOMOUS_EXECUTION_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"autonomous-execution-package-{digest}"
+
+
+def make_autonomous_execution_stage_id(package_seed: str, order: int, stage_name: str) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "order": order,
+        "package_seed": package_seed,
+        "stage_name": stage_name,
+        "version": AUTONOMOUS_EXECUTION_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"autonomous-execution-stage-{digest}"
+
+
+def collect_autonomous_execution_package(
+    patch_plan: dict[str, Any],
+    *,
+    verification_plan: dict[str, Any] | None = None,
+    patch_diff: dict[str, Any] | None = None,
+    quality_gate: dict[str, Any] | None = None,
+    assumptions: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Describe how an upgrade would execute later, without executing anything."""
+    validate_verified_patch_plan(patch_plan)
+    verification_entry = _autonomous_execution_verification_entry(patch_plan, verification_plan)
+    if patch_diff is None:
+        patch_diff = collect_verified_patch_diff(patch_plan)
+    else:
+        validate_verified_patch_diff(patch_diff)
+        if patch_diff["verified_patch_plan_id"] != patch_plan["verified_patch_plan_id"]:
+            raise ValueError("patch_diff must reference the verified patch plan")
+    if quality_gate is None:
+        quality_gate = collect_patch_behavior_quality_gate(
+            patch_plan,
+            patch_diff=patch_diff,
+            assumptions=assumptions or [],
+        )
+    else:
+        validate_patch_behavior_quality_gate(quality_gate)
+        if quality_gate["verified_patch_plan_id"] != patch_plan["verified_patch_plan_id"]:
+            raise ValueError("quality_gate must reference the verified patch plan")
+        if quality_gate["verified_patch_diff_id"] and quality_gate["verified_patch_diff_id"] != patch_diff["verified_patch_diff_id"]:
+            raise ValueError("quality_gate must reference the verified patch diff")
+    stages = _autonomous_execution_stages(patch_plan, patch_diff, verification_entry, quality_gate)
+    package = {
+        "execution_package_version": AUTONOMOUS_EXECUTION_PACKAGE_VERSION,
+        "execution_package_id": make_autonomous_execution_package_id(
+            patch_plan,
+            verification_entry,
+            quality_gate,
+            stages,
+        ),
+        "upgrade_id": patch_plan["upgrade_id"],
+        "branch_plan_id": patch_plan["branch_plan_id"],
+        "work_package_id": patch_plan["work_package_id"],
+        "verification_plan_id": verification_entry["verification_plan_id"],
+        "verified_patch_plan_id": patch_plan["verified_patch_plan_id"],
+        "verified_patch_diff_id": patch_diff["verified_patch_diff_id"],
+        "quality_gate_id": quality_gate["quality_gate_id"],
+        "execution_stages": stages,
+        "stage_count": len(stages),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_autonomous_execution_package(package)
+    return package
+
+
+def validate_autonomous_execution_package(package: dict[str, Any]) -> None:
+    required = (
+        "execution_package_version", "execution_package_id", "upgrade_id", "branch_plan_id",
+        "work_package_id", "verification_plan_id", "verified_patch_plan_id", "verified_patch_diff_id",
+        "quality_gate_id", "execution_stages", "stage_count", "dry_run", "write_allowed",
+        "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in package]
+    if missing:
+        raise ValueError(f"autonomous execution package missing fields: {missing}")
+    if package["execution_package_version"] != AUTONOMOUS_EXECUTION_PACKAGE_VERSION:
+        raise ValueError("unsupported autonomous execution package version")
+    for field in (
+        "execution_package_id", "upgrade_id", "branch_plan_id", "work_package_id",
+        "verification_plan_id", "verified_patch_plan_id", "verified_patch_diff_id", "quality_gate_id",
+    ):
+        if not isinstance(package[field], str) or not package[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if package["dry_run"] is not True or package["write_allowed"] is not False or package["automation_allowed"] is not False:
+        raise ValueError("autonomous execution package must remain read-only")
+    if package["writes"] != []:
+        raise ValueError("autonomous execution package must not write files")
+    if not isinstance(package["metadata"], dict):
+        raise TypeError("autonomous execution package metadata must be a dict")
+    stages = package["execution_stages"]
+    if not isinstance(stages, list) or not stages:
+        raise TypeError("execution_stages must be a non-empty list")
+    if not isinstance(package["stage_count"], int) or package["stage_count"] != len(stages):
+        raise ValueError("stage_count must match execution_stages length")
+    expected_names = list(_AUTONOMOUS_EXECUTION_STAGE_NAMES)
+    stage_ids: set[str] = set()
+    for index, stage in enumerate(stages, start=1):
+        validate_autonomous_execution_stage(stage)
+        if stage["stage_id"] in stage_ids:
+            raise ValueError(f"duplicate autonomous execution stage id: {stage['stage_id']}")
+        stage_ids.add(stage["stage_id"])
+        if stage["order"] != index:
+            raise ValueError("execution stages must be ordered from 1 without gaps")
+        if stage["stage_name"] != expected_names[index - 1]:
+            raise ValueError("execution stages must use the canonical execution order")
+
+
+def stable_autonomous_execution_package_json(package: dict[str, Any]) -> str:
+    validate_autonomous_execution_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_autonomous_execution_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_autonomous_execution_package(package)
+    return package
+
+
+_AUTONOMOUS_EXECUTION_STAGE_NAMES = (
+    "create workspace",
+    "create branch",
+    "apply patch operations",
+    "run compile",
+    "run tests",
+    "run healthcheck",
+    "evaluate quality gate",
+    "produce review bundle",
+)
+
+
+def validate_autonomous_execution_stage(stage: dict[str, Any]) -> None:
+    required = (
+        "stage_id", "order", "stage_name", "inputs", "outputs", "success_criteria",
+        "failure_criteria", "rollback_action",
+    )
+    missing = [field for field in required if field not in stage]
+    if missing:
+        raise ValueError(f"autonomous execution stage missing fields: {missing}")
+    if not isinstance(stage["stage_id"], str) or not stage["stage_id"].strip():
+        raise ValueError("stage_id must be a non-empty string")
+    if not isinstance(stage["order"], int) or stage["order"] < 1:
+        raise ValueError("stage order must be a positive integer")
+    if stage["stage_name"] not in _AUTONOMOUS_EXECUTION_STAGE_NAMES:
+        raise ValueError(f"invalid autonomous execution stage name: {stage['stage_name']}")
+    for field in ("inputs", "outputs", "success_criteria", "failure_criteria"):
+        values = stage[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if not isinstance(stage["rollback_action"], str) or not stage["rollback_action"].strip():
+        raise ValueError("rollback_action must be a non-empty string")
+
+
+def _autonomous_execution_verification_entry(
+    patch_plan: dict[str, Any],
+    verification_plan: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if verification_plan is None:
+        return {
+            "verification_plan_id": "verification-plan-unresolved",
+            "package_id": patch_plan["work_package_id"],
+            "branch_plan_id": patch_plan["branch_plan_id"],
+            "upgrade_id": patch_plan["upgrade_id"],
+            "compile_commands": [item.replace("compile command should pass: ", "") for item in patch_plan["compile_expectations"]],
+            "test_commands": [item.replace("test command should pass: ", "") for item in patch_plan["test_expectations"]],
+            "healthcheck_commands": [item.replace("healthcheck command should pass: ", "") for item in patch_plan["healthcheck_expectations"]],
+        }
+    if "plans" in verification_plan:
+        validate_verification_plan(verification_plan)
+        for plan in verification_plan["plans"]:
+            if plan["package_id"] == patch_plan["work_package_id"]:
+                return dict(plan)
+        raise ValueError("verification_plan does not contain a plan for the patch plan work package")
+    validate_verification_plan_entry(verification_plan)
+    if verification_plan["package_id"] != patch_plan["work_package_id"]:
+        raise ValueError("verification plan package_id does not match patch plan work package")
+    return dict(verification_plan)
+
+
+def _autonomous_execution_stages(
+    patch_plan: dict[str, Any],
+    patch_diff: dict[str, Any],
+    verification_entry: dict[str, Any],
+    quality_gate: dict[str, Any],
+) -> list[dict[str, Any]]:
+    seed = f"{patch_plan['verified_patch_plan_id']}:{patch_diff['verified_patch_diff_id']}:{quality_gate['quality_gate_id']}"
+    stage_specs = [
+        (
+            "create workspace",
+            [patch_plan["verified_patch_plan_id"], "approved execution request"],
+            ["isolated workspace path planned", "workspace remains uncreated in this package"],
+            ["workspace location is inside the approved repository boundary"],
+            ["workspace path is outside repository boundary", "workspace cannot be isolated"],
+            "Do not create the workspace; discard the planned workspace path.",
+        ),
+        (
+            "create branch",
+            [patch_plan["branch_plan_id"], "approved branch request"],
+            ["implementation branch name planned", "branch remains uncreated in this package"],
+            ["branch name is reviewable and tied to branch_plan_id"],
+            ["branch name is missing", "branch request lacks approval"],
+            "Do not create the branch; keep HEAD unchanged.",
+        ),
+        (
+            "apply patch operations",
+            [patch_plan["verified_patch_plan_id"], patch_diff["verified_patch_diff_id"]],
+            ["patch operations planned as data", "no files modified by this package"],
+            ["every patch operation maps to a target file and diff preview"],
+            ["patch operation is outside target files", "patch behavior quality gate blocks implementation"],
+            "Discard planned patch operations; keep working tree unchanged.",
+        ),
+        (
+            "run compile",
+            list(verification_entry["compile_commands"]),
+            ["compile command list planned", "compile commands remain unexecuted"],
+            ["all compile commands would be expected to pass"],
+            ["compile command is missing", "compile command exits nonzero during later execution"],
+            "Stop execution and revert any applied patch before review.",
+        ),
+        (
+            "run tests",
+            list(verification_entry["test_commands"]),
+            ["test command list planned", "test commands remain unexecuted"],
+            ["all test commands would be expected to pass"],
+            ["test command is missing", "test command exits nonzero during later execution"],
+            "Stop execution and revert any applied patch before review.",
+        ),
+        (
+            "run healthcheck",
+            list(verification_entry["healthcheck_commands"]),
+            ["healthcheck command list planned", "healthcheck commands remain unexecuted"],
+            ["healthcheck would be expected to pass"],
+            ["healthcheck command is missing", "healthcheck exits nonzero during later execution"],
+            "Stop execution and revert any applied patch before review.",
+        ),
+        (
+            "evaluate quality gate",
+            [quality_gate["quality_gate_id"], quality_gate["pass_status"]],
+            ["quality gate decision planned", "quality gate remains read-only"],
+            ["quality gate pass_status is pass before execution approval"],
+            ["quality gate pass_status is review or block", "required clarifications remain unanswered"],
+            "Do not proceed to execution until quality gate findings are resolved.",
+        ),
+        (
+            "produce review bundle",
+            [patch_plan["verified_patch_plan_id"], patch_diff["verified_patch_diff_id"], quality_gate["quality_gate_id"]],
+            ["review bundle contents planned", "review bundle file remains unwritten"],
+            ["review bundle references plan, diff, gate, verification, and rollback data"],
+            ["review bundle omits required evidence", "review bundle would require runtime state writes"],
+            "Do not write review artifacts; keep package as JSON preview only.",
+        ),
+    ]
+    stages: list[dict[str, Any]] = []
+    for order, (stage_name, inputs, outputs, success, failure, rollback) in enumerate(stage_specs, start=1):
+        stage = {
+            "stage_id": make_autonomous_execution_stage_id(seed, order, stage_name),
+            "order": order,
+            "stage_name": stage_name,
+            "inputs": _normalize_patch_behavior_text_list(inputs),
+            "outputs": _normalize_patch_behavior_text_list(outputs),
+            "success_criteria": _normalize_patch_behavior_text_list(success),
+            "failure_criteria": _normalize_patch_behavior_text_list(failure),
+            "rollback_action": rollback,
+        }
+        validate_autonomous_execution_stage(stage)
+        stages.append(stage)
+    return stages
 
 
 
