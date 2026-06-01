@@ -3440,6 +3440,137 @@ def check_ruflo_upgrade_plan_helper() -> None:
     print("ruflo upgrade plan helper OK")
 
 
+def check_self_learning_feedback_receipt_helper() -> None:
+    """Self-learning feedback receipts are deterministic and aggregatable."""
+    from link_modes.growth.link_growth_console import (
+        SELF_LEARNING_FEEDBACK_STATUSES,
+        SELF_LEARNING_FEEDBACK_VERSION,
+        build_self_learning_feedback_receipt,
+        self_learning_feedback_from_json,
+        self_learning_feedback_to_json,
+        summarize_self_learning_feedback,
+        validate_self_learning_feedback_receipt,
+    )
+
+    candidate = {
+        "candidate_id": "ruflo-profile-dispatch-123",
+        "proposal_id": "profile-dispatch-proposal",
+        "title": "Profile-gated worker dispatch",
+        "category": "worker_routing",
+        "risk_level": "low",
+        "recommendation": "accept",
+        "source_path": "research/_extracted/ruflo-main/ruflo-main/ruflo/src/orchestrator.ts",
+    }
+    accepted = build_self_learning_feedback_receipt(
+        candidate,
+        status="accepted",
+        reason="High leverage and already matches Link profile gate direction.",
+        confidence=0.92,
+        tags=["Ruflo", "Worker Routing", "ruflo"],
+        metadata={"reviewer": "auditor", "slice": "feedback"},
+        reviewed_at="2026-05-31T00:00:00Z",
+    )
+    accepted_same = build_self_learning_feedback_receipt(
+        candidate,
+        status="accept",
+        reason="High leverage and already matches Link profile gate direction.",
+        confidence=0.92,
+        tags=["ruflo", "worker_routing"],
+        metadata={"reviewer": "different"},
+        reviewed_at="2026-05-31T00:00:01Z",
+    )
+
+    _require(accepted["feedback_version"] == SELF_LEARNING_FEEDBACK_VERSION,
+             "feedback version mismatch")
+    _require(accepted["feedback_id"] == accepted_same["feedback_id"],
+             "feedback_id must be deterministic from candidate/status/reason/confidence/tags")
+    _require(accepted["status"] == "accepted", "accepted status must be preserved")
+    _require(accepted["confidence"] == 0.92, "confidence must be normalized")
+    _require(accepted["candidate_id"] == candidate["candidate_id"],
+             "candidate_id must be preserved")
+    _require(accepted["proposal_id"] == candidate["proposal_id"],
+             "proposal_id must be preserved")
+    _require(accepted["tags"] == ["ruflo", "worker_routing"],
+             "tags must be normalized and deduplicated")
+    _require(accepted["metadata"]["reviewer"] == "auditor",
+             "metadata must be preserved")
+    validate_self_learning_feedback_receipt(accepted)
+
+    encoded = self_learning_feedback_to_json(accepted)
+    _require(encoded == self_learning_feedback_to_json(accepted),
+             "feedback JSON serialization must be stable")
+    decoded = self_learning_feedback_from_json(encoded)
+    _require(decoded == accepted, "feedback JSON round-trip must preserve data")
+
+    rejected = build_self_learning_feedback_receipt(
+        {
+            "candidate_id": "ruflo-swarm-999",
+            "title": "Large swarm executor",
+            "category": "swarm_orchestration",
+            "risk_level": "high",
+            "recommendation": "review",
+        },
+        status="rejected",
+        reason="Too broad for current safe slice.",
+        confidence=1.0,
+        tags=["too_large"],
+    )
+    deferred = build_self_learning_feedback_receipt(
+        {
+            "proposal_id": "metrics-dashboard-proposal",
+            "title": "Dashboard latency metrics",
+            "category": "performance",
+            "risk_level": "medium",
+            "recommendation": "review",
+        },
+        status="defer",
+        reason="Needs a smaller dashboard-only plan first.",
+        confidence=0.5,
+        tags=["observability"],
+    )
+    _require(rejected["status"] == "rejected", "rejected status must be supported")
+    _require(deferred["status"] == "deferred", "deferred status alias must normalize")
+    _require(set(SELF_LEARNING_FEEDBACK_STATUSES) == {"accepted", "rejected", "deferred"},
+             "feedback statuses must stay stable")
+
+    summary = summarize_self_learning_feedback([accepted, rejected, deferred])
+    _require(summary["feedback_count"] == 3, "feedback summary must count receipts")
+    _require(summary["by_status"]["accepted"] == 1, "summary must count accepted")
+    _require(summary["by_status"]["rejected"] == 1, "summary must count rejected")
+    _require(summary["by_status"]["deferred"] == 1, "summary must count deferred")
+    _require(summary["by_category"]["worker_routing"] == 1,
+             "summary must count category")
+    _require(summary["by_category"]["swarm_orchestration"] == 1,
+             "summary must count swarm category")
+    _require(summary["by_risk"]["low"] == 1, "summary must count low risk")
+    _require(summary["by_risk"]["medium"] == 1, "summary must count medium risk")
+    _require(summary["by_risk"]["high"] == 1, "summary must count high risk")
+    _require(summary["dry_run"] is True and summary["writes"] == [],
+             "feedback summary must remain read-only")
+
+    try:
+        build_self_learning_feedback_receipt(candidate, status="maybe", reason="bad", confidence=0.1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid feedback status must be rejected")
+
+    for bad_confidence in (-0.1, 1.1, "high"):
+        try:
+            build_self_learning_feedback_receipt(
+                candidate,
+                status="accepted",
+                reason="bad confidence",
+                confidence=bad_confidence,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"invalid confidence must be rejected: {bad_confidence!r}")
+
+    print("self-learning feedback receipt helper OK")
+
+
 # ---------------------------------------------------------------------------
 # 47. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
@@ -4136,6 +4267,7 @@ def main() -> None:
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()
+    check_self_learning_feedback_receipt_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()

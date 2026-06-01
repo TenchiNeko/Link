@@ -5865,6 +5865,200 @@ def _recommended_ruflo_next_slice(
 
 
 
+SELF_LEARNING_FEEDBACK_VERSION = "link-self-learning-feedback-v1"
+SELF_LEARNING_FEEDBACK_STATUSES = ("accepted", "rejected", "deferred")
+
+
+def make_self_learning_feedback_id(
+    candidate: dict[str, Any],
+    *,
+    status: str,
+    reason: str,
+    confidence: float,
+    tags: list[str] | None = None,
+) -> str:
+    """Build a deterministic feedback id for one recommendation review."""
+    import hashlib
+
+    candidate_key = _first_text(candidate, "candidate_id", "proposal_id", "title") or "recommendation"
+    payload = _stable_ruflo_json({
+        "candidate_key": candidate_key,
+        "confidence": _normalize_feedback_confidence(confidence),
+        "reason": str(reason or "").strip(),
+        "status": _normalize_feedback_status(status),
+        "tags": _normalize_feedback_tags(tags),
+        "version": SELF_LEARNING_FEEDBACK_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"feedback-{digest}"
+
+
+def build_self_learning_feedback_receipt(
+    candidate: dict[str, Any],
+    *,
+    status: str,
+    reason: str,
+    confidence: float,
+    tags: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+    reviewed_at: str | None = None,
+) -> dict[str, Any]:
+    """Create a pure self-learning feedback receipt without writing state."""
+    if not isinstance(candidate, dict):
+        raise TypeError("candidate must be a dict")
+    normalized_status = _normalize_feedback_status(status)
+    normalized_confidence = _normalize_feedback_confidence(confidence)
+    normalized_tags = _normalize_feedback_tags(tags)
+    feedback_reason = str(reason or "").strip()
+    if not feedback_reason:
+        raise ValueError("reason must be a non-empty string")
+
+    receipt = {
+        "feedback_version": SELF_LEARNING_FEEDBACK_VERSION,
+        "feedback_id": make_self_learning_feedback_id(
+            candidate,
+            status=normalized_status,
+            reason=feedback_reason,
+            confidence=normalized_confidence,
+            tags=normalized_tags,
+        ),
+        "status": normalized_status,
+        "reason": feedback_reason,
+        "confidence": normalized_confidence,
+        "tags": normalized_tags,
+        "metadata": dict(metadata or {}),
+        "candidate_id": _first_text(candidate, "candidate_id"),
+        "proposal_id": _first_text(candidate, "proposal_id"),
+        "title": _first_text(candidate, "title") or "recommendation",
+        "category": _normalize_feedback_category(_first_text(candidate, "category")),
+        "risk_level": _normalize_ruflo_risk(_first_text(candidate, "risk_level", "risk")),
+        "recommendation": _normalize_feedback_recommendation(_first_text(candidate, "recommendation")),
+        "source_path": _first_text(candidate, "source_path", "path", "file"),
+        "reviewed_at": reviewed_at or "",
+    }
+    validate_self_learning_feedback_receipt(receipt)
+    return receipt
+
+
+def validate_self_learning_feedback_receipt(receipt: dict[str, Any]) -> None:
+    required = (
+        "feedback_version", "feedback_id", "status", "reason", "confidence",
+        "tags", "metadata", "candidate_id", "proposal_id", "title", "category",
+        "risk_level", "recommendation", "source_path", "reviewed_at",
+    )
+    missing = [field for field in required if field not in receipt]
+    if missing:
+        raise ValueError(f"self-learning feedback missing fields: {missing}")
+    if receipt["feedback_version"] != SELF_LEARNING_FEEDBACK_VERSION:
+        raise ValueError("unsupported self-learning feedback version")
+    for field in ("feedback_id", "status", "reason", "title", "category", "risk_level", "recommendation"):
+        if not isinstance(receipt[field], str) or not receipt[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if receipt["status"] not in SELF_LEARNING_FEEDBACK_STATUSES:
+        raise ValueError(f"invalid self-learning feedback status: {receipt['status']}")
+    if receipt["category"] not in RUFLO_UPGRADE_CATEGORIES:
+        raise ValueError(f"invalid self-learning feedback category: {receipt['category']}")
+    if receipt["risk_level"] not in RUFLO_RISK_LABELS:
+        raise ValueError(f"invalid self-learning feedback risk_level: {receipt['risk_level']}")
+    if receipt["recommendation"] not in RUFLO_RECOMMENDATIONS:
+        raise ValueError(f"invalid self-learning feedback recommendation: {receipt['recommendation']}")
+    if not isinstance(receipt["confidence"], float) or not (0.0 <= receipt["confidence"] <= 1.0):
+        raise ValueError("confidence must be a float between 0.0 and 1.0")
+    if not isinstance(receipt["tags"], list) or not all(isinstance(tag, str) and tag for tag in receipt["tags"]):
+        raise TypeError("tags must be a list of non-empty strings")
+    if not isinstance(receipt["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+
+
+def self_learning_feedback_to_json(receipt: dict[str, Any]) -> str:
+    validate_self_learning_feedback_receipt(receipt)
+    return _stable_ruflo_json(receipt, indent=2) + "\n"
+
+
+def self_learning_feedback_from_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    receipt = _json.loads(text)
+    validate_self_learning_feedback_receipt(receipt)
+    return receipt
+
+
+def summarize_self_learning_feedback(receipts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate self-learning feedback counts without writing state."""
+    if not isinstance(receipts, list):
+        raise TypeError("feedback receipts must be a list")
+    by_status = {status: 0 for status in SELF_LEARNING_FEEDBACK_STATUSES}
+    by_category = {category: 0 for category in RUFLO_UPGRADE_CATEGORIES}
+    by_risk = {risk: 0 for risk in RUFLO_RISK_LABELS}
+    confidence_total = 0.0
+
+    for receipt in receipts:
+        validate_self_learning_feedback_receipt(receipt)
+        by_status[receipt["status"]] += 1
+        by_category[receipt["category"]] += 1
+        by_risk[receipt["risk_level"]] += 1
+        confidence_total += receipt["confidence"]
+
+    count = len(receipts)
+    return {
+        "summary_version": SELF_LEARNING_FEEDBACK_VERSION,
+        "feedback_count": count,
+        "by_status": by_status,
+        "by_category": by_category,
+        "by_risk": by_risk,
+        "average_confidence": round(confidence_total / count, 4) if count else 0.0,
+        "dry_run": True,
+        "writes": [],
+    }
+
+
+def _normalize_feedback_status(status: str) -> str:
+    raw = str(status or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "accept": "accepted",
+        "approved": "accepted",
+        "yes": "accepted",
+        "reject": "rejected",
+        "no": "rejected",
+        "declined": "rejected",
+        "defer": "deferred",
+        "later": "deferred",
+        "review": "deferred",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized not in SELF_LEARNING_FEEDBACK_STATUSES:
+        raise ValueError(f"invalid self-learning feedback status: {status}")
+    return normalized
+
+
+def _normalize_feedback_confidence(confidence: float) -> float:
+    if isinstance(confidence, bool) or not isinstance(confidence, int | float):
+        raise ValueError("confidence must be numeric between 0.0 and 1.0")
+    value = float(confidence)
+    if not (0.0 <= value <= 1.0):
+        raise ValueError("confidence must be between 0.0 and 1.0")
+    return round(value, 4)
+
+
+def _normalize_feedback_tags(tags: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for tag in tags or []:
+        text = str(tag or "").strip().lower().replace(" ", "_")
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _normalize_feedback_category(category: str) -> str:
+    raw = str(category or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return raw if raw in RUFLO_UPGRADE_CATEGORIES else "performance"
+
+
+def _normalize_feedback_recommendation(recommendation: str) -> str:
+    raw = str(recommendation or "").strip().lower()
+    return raw if raw in RUFLO_RECOMMENDATIONS else "review"
+
+
 # ── archive code queue entry point ──────────────────────────────────────
 _CODE_EXTS: set[str] = {
     ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
