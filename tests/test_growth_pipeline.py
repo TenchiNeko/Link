@@ -3904,6 +3904,310 @@ def check_repo_value_scan_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 47. Link capability inventory
+# ---------------------------------------------------------------------------
+
+def check_link_capability_inventory_helper() -> None:
+    """Link capabilities normalize into deterministic read-only inventory data."""
+    from link_modes.growth.link_growth_console import (
+        LINK_CAPABILITY_CATEGORIES,
+        LINK_CAPABILITY_INVENTORY_VERSION,
+        collect_link_capability_inventory,
+        link_capability_inventory_from_json,
+        link_capability_inventory_to_json,
+        make_link_capability_id,
+        normalize_link_capability_entry,
+        validate_link_capability_entry,
+        validate_link_capability_inventory,
+    )
+
+    inventory = collect_link_capability_inventory()
+    same = collect_link_capability_inventory()
+    _require(inventory["inventory_version"] == LINK_CAPABILITY_INVENTORY_VERSION,
+             "Link capability inventory version mismatch")
+    _require(inventory["inventory_id"] == same["inventory_id"],
+             "Link capability inventory_id must be deterministic")
+    _require(inventory["dry_run"] is True and inventory["write_allowed"] is False,
+             "Link capability inventory must remain read-only")
+    _require(inventory["automation_allowed"] is False,
+             "Link capability inventory must not allow automation")
+    _require(inventory["writes"] == [], "Link capability inventory must not write files")
+    _require(set(inventory["categories"]) == set(LINK_CAPABILITY_CATEGORIES),
+             "Link capability inventory must expose stable categories")
+    _require(inventory["capability_count"] >= 12,
+             "Link capability inventory must include current core capabilities")
+    _require(inventory["capability_count"] == len(inventory["capabilities"]),
+             "capability_count must match capabilities length")
+
+    capabilities = inventory["capabilities"]
+    by_name = {capability["name"]: capability for capability in capabilities}
+    for expected in (
+        "Growth archive inventory",
+        "Repo value scan helper",
+        "Self-learning next-step recommendations",
+        "Receipt helpers",
+        "Link healthcheck",
+    ):
+        _require(expected in by_name, f"missing expected Link capability: {expected}")
+    categories = {capability["category"] for capability in capabilities}
+    for expected_category in ("research_mining", "repo_value_scan", "self_learning", "receipts", "tests"):
+        _require(expected_category in categories,
+                 f"missing expected Link capability category: {expected_category}")
+    for capability in capabilities:
+        validate_link_capability_entry(capability)
+        _require(capability["capability_id"].startswith("link-capability-"),
+                 "capability_id must use stable prefix")
+        _require(capability["confidence"] in {"low", "medium", "high"},
+                 "confidence must be normalized")
+        _require(isinstance(capability["tags"], list),
+                 "tags must be a list")
+
+    encoded = link_capability_inventory_to_json(inventory)
+    _require(encoded == link_capability_inventory_to_json(inventory),
+             "Link capability inventory JSON serialization must be stable")
+    decoded = link_capability_inventory_from_json(encoded)
+    _require(decoded == inventory,
+             "Link capability inventory JSON round-trip must preserve data")
+    validate_link_capability_inventory(inventory)
+
+    custom = {
+        "name": "Custom Safety Gate",
+        "category": "safety",
+        "description": "A synthetic capability for normalization tests.",
+        "source": "tests/test_growth_pipeline.py",
+        "confidence": "HIGH",
+        "tags": ["Safety", "safety", "Policy Check"],
+        "risk_level": "LOW",
+        "maturity_level": "VERIFIED",
+    }
+    normalized = normalize_link_capability_entry(custom)
+    _require(normalized["confidence"] == "high", "confidence must normalize casing")
+    _require(normalized["risk_level"] == "low", "risk_level must normalize casing")
+    _require(normalized["maturity_level"] == "verified", "maturity_level must normalize casing")
+    _require(normalized["tags"] == ["safety", "policy_check"],
+             "tags must normalize and dedupe")
+    expected_id = make_link_capability_id(
+        normalized["name"], normalized["category"], normalized["source"]
+    )
+    _require(normalized["capability_id"] == expected_id,
+             "capability_id must be deterministic from name/category/source")
+
+    duplicate_inventory = collect_link_capability_inventory([
+        custom,
+        dict(custom),
+        {
+            "name": "Custom Repo Scanner",
+            "category": "repo_value_scan",
+            "description": "A second synthetic capability.",
+            "source": "tests/test_growth_pipeline.py:scanner",
+            "confidence": "medium",
+            "tags": "scanner",
+            "risk_level": "low",
+            "maturity_level": "partial",
+        },
+    ])
+    _require(duplicate_inventory["input_count"] == 3,
+             "custom inventory must report input_count")
+    _require(duplicate_inventory["capability_count"] == 2,
+             "duplicate capabilities must collapse by capability_id")
+    _require(duplicate_inventory["duplicate_count"] == 1,
+             "duplicate capabilities must be counted")
+    _require(duplicate_inventory["writes"] == [],
+             "custom inventory must remain read-only")
+
+    for bad_entry in (
+        {"name": "Missing category"},
+        dict(custom, category="not-a-category"),
+        dict(custom, confidence="certain"),
+        dict(custom, tags={"bad": "tags"}),
+    ):
+        try:
+            normalize_link_capability_entry(bad_entry)
+        except (TypeError, ValueError):
+            pass
+        else:
+            raise AssertionError(f"malformed capability entry must be rejected: {bad_entry!r}")
+
+    bad_inventory = dict(inventory)
+    bad_inventory["automation_allowed"] = True
+    try:
+        validate_link_capability_inventory(bad_inventory)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Link capability inventory must reject automation_allowed=True")
+
+    print("link capability inventory helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 47. Capability gap preview
+# ---------------------------------------------------------------------------
+
+def check_capability_gap_preview_helper() -> None:
+    """Link capability inventory and repo-value findings produce read-only gap previews."""
+    from link_modes.growth.link_growth_console import (
+        CAPABILITY_GAP_PREVIEW_VERSION,
+        capability_gap_preview_from_json,
+        capability_gap_preview_to_json,
+        collect_capability_gap_preview,
+        collect_link_capability_inventory,
+        collect_repo_value_scan,
+        validate_capability_gap_preview,
+    )
+
+    link_inventory = collect_link_capability_inventory([
+        {
+            "name": "Safety policy gate",
+            "category": "safety",
+            "description": "Existing safety policy gate is present but still maturing.",
+            "source": "link_capability_gate.py",
+            "confidence": "high",
+            "tags": ["safety", "policy", "gate"],
+            "risk_level": "low",
+            "maturity_level": "partial",
+        },
+        {
+            "name": "Repo value scanner",
+            "category": "repo_value_scan",
+            "description": "Ranks repo files and concepts for Link relevance.",
+            "source": "link_modes/growth/link_growth_console.py:collect_repo_value_scan",
+            "confidence": "high",
+            "tags": ["repo", "scan", "value"],
+            "risk_level": "low",
+            "maturity_level": "verified",
+        },
+        {
+            "name": "Command dashboard UX",
+            "category": "workflow_ux",
+            "description": "Shows Growth commands and local workflow state.",
+            "source": "link_modes/growth/link_growth_console.py:collect_run_data",
+            "confidence": "high",
+            "tags": ["cli", "dashboard", "integration"],
+            "risk_level": "low",
+            "maturity_level": "verified",
+        },
+    ])
+    repo_scan = collect_repo_value_scan([
+        {
+            "path": "sota/SKILL.md",
+            "title": "Self-learning feedback loop",
+            "category": "self_learning",
+            "summary": "Scanner records feedback loops and improves future recommendations.",
+            "source_kind": "skill",
+            "tags": ["self-learning", "feedback", "recommendation"],
+        },
+        {
+            "path": "sota/policy.md",
+            "title": "Verified approval policy gate",
+            "category": "safety_approval_gates",
+            "summary": "Scanner requires policy gates before risky work.",
+            "source_kind": "docs",
+            "tags": ["safety", "policy", "gate"],
+        },
+        {
+            "path": "sota/README.md",
+            "title": "Discoverable command onboarding",
+            "category": "cli_workflow_ux",
+            "summary": "Documents CLI integration, quickstart examples, and dashboard discoverability.",
+            "source_kind": "readme",
+            "tags": ["cli", "integration", "docs"],
+        },
+        {
+            "path": "sota/notes.txt",
+            "title": "Weak scanner note",
+            "category": "repo_scanning",
+            "source_kind": "text",
+        },
+    ], source_label="sota-scan")
+    findings = [dict(item) for item in repo_scan["findings"]]
+    for finding in findings:
+        if finding["title"] == "Verified approval policy gate":
+            finding["required_maturity_level"] = "verified"
+
+    preview = collect_capability_gap_preview(
+        link_inventory,
+        findings,
+        metadata={"source": "unit-test"},
+    )
+    same = collect_capability_gap_preview(link_inventory, findings, metadata={"source": "unit-test"})
+
+    _require(preview["preview_version"] == CAPABILITY_GAP_PREVIEW_VERSION,
+             "capability gap preview version mismatch")
+    _require(preview["preview_id"] == same["preview_id"],
+             "capability gap preview_id must be deterministic")
+    _require(preview["dry_run"] is True and preview["write_allowed"] is False,
+             "capability gap preview must remain read-only")
+    _require(preview["automation_allowed"] is False,
+             "capability gap preview must not allow automation")
+    _require(preview["writes"] == [], "capability gap preview must not write files")
+    _require(preview["metadata"]["source"] == "unit-test",
+             "capability gap preview must preserve metadata")
+
+    counts = preview["counts"]
+    _require(counts["direct_gap_count"] == 1,
+             f"expected 1 direct gap, got {counts['direct_gap_count']}")
+    _require(counts["maturity_gap_count"] == 1,
+             f"expected 1 maturity gap, got {counts['maturity_gap_count']}")
+    _require(counts["onboarding_gap_count"] == 1,
+             f"expected 1 onboarding gap, got {counts['onboarding_gap_count']}")
+    _require(counts["optional_cross_cluster_idea_count"] == 1,
+             "weak related finding should become optional cross-cluster idea")
+    _require(counts["matched_capability_count"] == 3,
+             "three findings should match existing Link capabilities")
+    _require(counts["unmatched_finding_count"] == 1,
+             "one finding should remain unmatched")
+
+    _require(preview["direct_gaps"][0]["target_category"] == "self_learning",
+             "self-learning finding without Link capability must be direct gap")
+    _require(preview["maturity_gaps"][0]["target_category"] == "safety",
+             "safety finding with partial Link maturity must be maturity gap")
+    _require(preview["onboarding_gaps"][0]["target_category"] == "workflow_ux",
+             "CLI/docs finding should classify as onboarding gap")
+    _require(preview["optional_cross_cluster_ideas"][0]["target_category"] == "repo_value_scan",
+             "weak repo scanner finding should classify as optional idea")
+    for section in ("direct_gaps", "maturity_gaps", "onboarding_gaps", "optional_cross_cluster_ideas"):
+        _require(preview[section][0]["gap_id"].startswith("capability-gap-"),
+                 f"{section} gap_id must use stable prefix")
+        _require(preview[section][0]["recommended_action"],
+                 f"{section} must include recommended_action")
+
+    encoded = capability_gap_preview_to_json(preview)
+    _require(encoded == capability_gap_preview_to_json(preview),
+             "capability gap preview JSON serialization must be stable")
+    decoded = capability_gap_preview_from_json(encoded)
+    _require(decoded == preview, "capability gap preview JSON round-trip must preserve data")
+    validate_capability_gap_preview(preview)
+
+    try:
+        collect_capability_gap_preview({"bad": "inventory"}, findings)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("malformed Link inventory must be rejected")
+
+    bad_finding = dict(findings[0])
+    bad_finding["category"] = "not-a-repo-value-category"
+    try:
+        collect_capability_gap_preview(link_inventory, [bad_finding])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("malformed repo finding must be rejected")
+
+    bad_preview = dict(preview)
+    bad_preview["write_allowed"] = True
+    try:
+        validate_capability_gap_preview(bad_preview)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability gap preview must reject write_allowed=True")
+
+    print("capability gap preview helper OK")
+
+
+# ---------------------------------------------------------------------------
 # 47. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
 
@@ -4602,6 +4906,8 @@ def main() -> None:
     check_self_learning_feedback_receipt_helper()
     check_self_learning_next_step_recommendations_helper()
     check_repo_value_scan_helper()
+    check_link_capability_inventory_helper()
+    check_capability_gap_preview_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()

@@ -6710,6 +6710,805 @@ def _repo_value_rank_key(finding: dict[str, Any]) -> tuple[int, int, str]:
     return (weak_rank, -int(finding.get("score", 0)), finding.get("finding_id", ""))
 
 
+LINK_CAPABILITY_INVENTORY_VERSION = "link-capability-inventory-v1"
+LINK_CAPABILITY_CATEGORIES = (
+    "safety",
+    "receipts",
+    "routing",
+    "research_mining",
+    "repo_value_scan",
+    "self_learning",
+    "tests",
+    "workflow_ux",
+)
+LINK_CAPABILITY_CONFIDENCE_LEVELS = ("low", "medium", "high")
+LINK_CAPABILITY_RISK_LEVELS = ("low", "medium", "high")
+LINK_CAPABILITY_MATURITY_LEVELS = ("planned", "partial", "available", "verified")
+
+_DEFAULT_LINK_CAPABILITIES: tuple[dict[str, Any], ...] = (
+    {
+        "name": "Growth archive inventory",
+        "category": "research_mining",
+        "description": "Discovers local research archives before extraction or cataloging.",
+        "source": "link_modes/growth/link_growth_console.py:collect_archive_inventory",
+        "confidence": "high",
+        "tags": ["archive", "inventory", "research"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Growth archive catalog",
+        "category": "research_mining",
+        "description": "Builds local metadata catalogs for extracted research repositories.",
+        "source": "link_modes/growth/link_growth_console.py:collect_archive_catalog",
+        "confidence": "high",
+        "tags": ["archive", "catalog", "metadata"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Archive code queue ranking",
+        "category": "research_mining",
+        "description": "Ranks cataloged code files for code brief generation with wrapper-file handling.",
+        "source": "link_modes/growth/link_growth_console.py:collect_archive_code_queue",
+        "confidence": "high",
+        "tags": ["queue", "ranking", "code_brief"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Code brief proposal preview",
+        "category": "workflow_ux",
+        "description": "Previews proposal generation from code briefs and batch queue entries in dry-run mode.",
+        "source": "link_modes/growth/link_growth_console.py:collect_code_brief_propose_batch",
+        "confidence": "high",
+        "tags": ["proposal", "preview", "dry_run"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Repo value scan helper",
+        "category": "repo_value_scan",
+        "description": "Scores repository inventory items by Link relevance without writing state.",
+        "source": "link_modes/growth/link_growth_console.py:collect_repo_value_scan",
+        "confidence": "high",
+        "tags": ["repo_value", "scan", "ranking"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Ruflo upgrade intake",
+        "category": "research_mining",
+        "description": "Normalizes Ruflo-derived findings into deterministic upgrade candidates.",
+        "source": "link_modes/growth/link_growth_console.py:build_ruflo_upgrade_intake",
+        "confidence": "high",
+        "tags": ["ruflo", "intake", "upgrade_candidates"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Ruflo upgrade plan",
+        "category": "workflow_ux",
+        "description": "Groups ranked Ruflo candidates into auditor-gated implementation plan sections.",
+        "source": "link_modes/growth/link_growth_console.py:collect_ruflo_upgrade_plan",
+        "confidence": "high",
+        "tags": ["ruflo", "planning", "auditor_gate"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Self-learning feedback receipts",
+        "category": "self_learning",
+        "description": "Creates deterministic read-only feedback receipt objects for upgrade recommendations.",
+        "source": "link_modes/growth/link_growth_console.py:build_self_learning_feedback_receipt",
+        "confidence": "high",
+        "tags": ["feedback", "receipt", "recommendation"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Self-learning next-step recommendations",
+        "category": "self_learning",
+        "description": "Adjusts next upgrade recommendations using accepted, rejected, or deferred feedback.",
+        "source": "link_modes/growth/link_growth_console.py:collect_self_learning_next_step_recommendations",
+        "confidence": "high",
+        "tags": ["feedback", "ranking", "next_step"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Control plane proposal registry",
+        "category": "workflow_ux",
+        "description": "Stores and lists pending, accepted, and rejected Growth proposals through the control plane.",
+        "source": "link_core/control_plane/link_control_plane_proposals.py",
+        "confidence": "high",
+        "tags": ["proposal", "control_plane", "registry"],
+        "risk_level": "medium",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Receipt helpers",
+        "category": "receipts",
+        "description": "Builds stable fork lineage, transcript snapshot, and content replacement receipt objects.",
+        "source": "link_core/receipts/__init__.py",
+        "confidence": "high",
+        "tags": ["receipt", "traceability", "provenance"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Capability gate and command guard",
+        "category": "safety",
+        "description": "Classifies risky commands, paths, and git operations before execution surfaces use them.",
+        "source": "link_capability_gate.py and modern_command_guard.py",
+        "confidence": "high",
+        "tags": ["safety", "command_guard", "policy"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Profile tool gate",
+        "category": "routing",
+        "description": "Restricts worker profiles to narrower tool access decisions.",
+        "source": "link_profile_gate.py",
+        "confidence": "high",
+        "tags": ["profile", "routing", "tool_gate"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Model routing profiles",
+        "category": "routing",
+        "description": "Defines deterministic local and cloud model routing profiles without calling providers.",
+        "source": "link_model_routing_profiles.py",
+        "confidence": "high",
+        "tags": ["model", "routing", "profiles"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Growth coverage dashboard data",
+        "category": "workflow_ux",
+        "description": "Summarizes archive, code, proposal, handoff, and receipt counts for Growth run JSON.",
+        "source": "link_modes/growth/link_growth_console.py:_collect_growth_coverage_data",
+        "confidence": "high",
+        "tags": ["coverage", "dashboard", "growth_run"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Link healthcheck",
+        "category": "tests",
+        "description": "Runs compile, import, safety, control-plane, and Growth smoke coverage checks.",
+        "source": "link_healthcheck.py",
+        "confidence": "high",
+        "tags": ["healthcheck", "verification", "tests"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+    {
+        "name": "Growth pipeline smoke tests",
+        "category": "tests",
+        "description": "Exercises Growth helpers, commands, receipts, proposal flow, and research mining behavior.",
+        "source": "tests/test_growth_pipeline.py",
+        "confidence": "high",
+        "tags": ["growth", "smoke", "tests"],
+        "risk_level": "low",
+        "maturity_level": "verified",
+    },
+)
+
+
+def make_link_capability_id(name: str, category: str, source: str) -> str:
+    """Build a deterministic id for one Link capability entry."""
+    import hashlib
+    import re
+
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name or "link-capability").lower()).strip("-")
+    slug = slug[:72].strip("-") or "link-capability"
+    payload = _stable_ruflo_json({
+        "category": category,
+        "name": name,
+        "source": source,
+        "version": LINK_CAPABILITY_INVENTORY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"link-capability-{slug}-{digest}"
+
+
+def collect_link_capability_inventory(
+    capabilities: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Return Link's current known capabilities as read-only normalized data."""
+    source_items = list(capabilities) if capabilities is not None else [dict(item) for item in _DEFAULT_LINK_CAPABILITIES]
+    if not isinstance(source_items, list):
+        raise TypeError("capabilities must be a list when provided")
+    normalized = [normalize_link_capability_entry(item) for item in source_items]
+    unique_capabilities, duplicate_count = _dedupe_link_capabilities(normalized)
+    unique_capabilities.sort(key=lambda item: (item["category"], item["capability_id"]))
+    inventory = {
+        "inventory_version": LINK_CAPABILITY_INVENTORY_VERSION,
+        "inventory_id": make_link_capability_inventory_id(unique_capabilities),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "capability_count": len(unique_capabilities),
+        "input_count": len(source_items),
+        "duplicate_count": duplicate_count,
+        "categories": list(LINK_CAPABILITY_CATEGORIES),
+        "capabilities": unique_capabilities,
+        "writes": [],
+    }
+    validate_link_capability_inventory(inventory)
+    return inventory
+
+
+def make_link_capability_inventory_id(capabilities: list[dict[str, Any]]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "capability_ids": [item["capability_id"] for item in capabilities],
+        "version": LINK_CAPABILITY_INVENTORY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"link-capability-inventory-{digest}"
+
+
+def normalize_link_capability_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise TypeError("Link capability entry must be a dict")
+    name = _first_text(entry, "name", "title")
+    category = _normalize_link_capability_category(_first_text(entry, "category"))
+    description = _first_text(entry, "description", "summary")
+    source = _first_text(entry, "source", "source_path", "file")
+    confidence = _normalize_link_capability_choice(
+        _first_text(entry, "confidence"),
+        LINK_CAPABILITY_CONFIDENCE_LEVELS,
+        "confidence",
+        default="medium",
+    )
+    risk_level = _normalize_link_capability_choice(
+        _first_text(entry, "risk_level", "risk"),
+        LINK_CAPABILITY_RISK_LEVELS,
+        "risk_level",
+        default="medium",
+    )
+    maturity_level = _normalize_link_capability_choice(
+        _first_text(entry, "maturity_level", "maturity"),
+        LINK_CAPABILITY_MATURITY_LEVELS,
+        "maturity_level",
+        default="partial",
+    )
+    tags = _normalize_link_capability_tags(entry.get("tags"))
+    capability = {
+        "capability_id": _first_text(entry, "capability_id") or make_link_capability_id(name, category, source),
+        "name": name,
+        "category": category,
+        "description": description,
+        "source": source,
+        "confidence": confidence,
+        "tags": tags,
+        "risk_level": risk_level,
+        "maturity_level": maturity_level,
+    }
+    validate_link_capability_entry(capability)
+    return capability
+
+
+def validate_link_capability_entry(entry: dict[str, Any]) -> None:
+    required = (
+        "capability_id", "name", "category", "description", "source",
+        "confidence", "tags", "risk_level", "maturity_level",
+    )
+    missing = [field for field in required if field not in entry]
+    if missing:
+        raise ValueError(f"Link capability entry missing fields: {missing}")
+    for field in ("capability_id", "name", "category", "description", "source", "confidence", "risk_level", "maturity_level"):
+        if not isinstance(entry[field], str) or not entry[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if entry["category"] not in LINK_CAPABILITY_CATEGORIES:
+        raise ValueError(f"invalid Link capability category: {entry['category']}")
+    if entry["confidence"] not in LINK_CAPABILITY_CONFIDENCE_LEVELS:
+        raise ValueError(f"invalid Link capability confidence: {entry['confidence']}")
+    if entry["risk_level"] not in LINK_CAPABILITY_RISK_LEVELS:
+        raise ValueError(f"invalid Link capability risk_level: {entry['risk_level']}")
+    if entry["maturity_level"] not in LINK_CAPABILITY_MATURITY_LEVELS:
+        raise ValueError(f"invalid Link capability maturity_level: {entry['maturity_level']}")
+    if not isinstance(entry["tags"], list) or not all(isinstance(tag, str) and tag for tag in entry["tags"]):
+        raise TypeError("tags must be a list of non-empty strings")
+
+
+def validate_link_capability_inventory(inventory: dict[str, Any]) -> None:
+    required = (
+        "inventory_version", "inventory_id", "dry_run", "write_allowed",
+        "automation_allowed", "capability_count", "input_count", "duplicate_count",
+        "categories", "capabilities", "writes",
+    )
+    missing = [field for field in required if field not in inventory]
+    if missing:
+        raise ValueError(f"Link capability inventory missing fields: {missing}")
+    if inventory["inventory_version"] != LINK_CAPABILITY_INVENTORY_VERSION:
+        raise ValueError("unsupported Link capability inventory version")
+    if not isinstance(inventory["inventory_id"], str) or not inventory["inventory_id"].strip():
+        raise ValueError("inventory_id must be a non-empty string")
+    if inventory["dry_run"] is not True or inventory["write_allowed"] is not False or inventory["automation_allowed"] is not False:
+        raise ValueError("Link capability inventory must remain read-only")
+    if inventory["writes"] != []:
+        raise ValueError("Link capability inventory must not write files")
+    for field in ("capability_count", "input_count", "duplicate_count"):
+        if not isinstance(inventory[field], int) or inventory[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    if not isinstance(inventory["categories"], list) or set(inventory["categories"]) != set(LINK_CAPABILITY_CATEGORIES):
+        raise ValueError("inventory categories must match stable category set")
+    capabilities = inventory["capabilities"]
+    if not isinstance(capabilities, list):
+        raise TypeError("capabilities must be a list")
+    if inventory["capability_count"] != len(capabilities):
+        raise ValueError("capability_count must match capabilities length")
+    for capability in capabilities:
+        validate_link_capability_entry(capability)
+
+
+def link_capability_inventory_to_json(inventory: dict[str, Any]) -> str:
+    validate_link_capability_inventory(inventory)
+    return _stable_ruflo_json(inventory, indent=2) + "\n"
+
+
+def link_capability_inventory_from_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    inventory = _json.loads(text)
+    validate_link_capability_inventory(inventory)
+    return inventory
+
+
+def _normalize_link_capability_category(category: str) -> str:
+    raw = str(category or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw not in LINK_CAPABILITY_CATEGORIES:
+        raise ValueError(f"invalid Link capability category: {category}")
+    return raw
+
+
+def _normalize_link_capability_choice(
+    value: str,
+    allowed: tuple[str, ...],
+    field_name: str,
+    *,
+    default: str,
+) -> str:
+    raw = str(value or default).strip().lower().replace("-", "_").replace(" ", "_")
+    if raw not in allowed:
+        raise ValueError(f"invalid Link capability {field_name}: {value}")
+    return raw
+
+
+def _normalize_link_capability_tags(tags: Any) -> list[str]:
+    if tags is None:
+        return []
+    if isinstance(tags, str):
+        raw_items = [tags]
+    elif isinstance(tags, list):
+        raw_items = tags
+    else:
+        raise TypeError("Link capability tags must be a string or list")
+    normalized: list[str] = []
+    for tag in raw_items:
+        text = str(tag or "").strip().lower().replace(" ", "_")
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _dedupe_link_capabilities(capabilities: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    chosen: dict[str, dict[str, Any]] = {}
+    duplicate_count = 0
+    for capability in capabilities:
+        key = capability["capability_id"]
+        if key in chosen:
+            duplicate_count += 1
+            continue
+        chosen[key] = capability
+    return list(chosen.values()), duplicate_count
+
+
+CAPABILITY_GAP_PREVIEW_VERSION = "link-capability-gap-preview-v1"
+_CAPABILITY_GAP_SECTIONS = (
+    "direct_gaps",
+    "maturity_gaps",
+    "onboarding_gaps",
+    "optional_cross_cluster_ideas",
+)
+_CAPABILITY_GAP_CATEGORY_MAP: dict[str, str] = {
+    "orchestration": "workflow_ux",
+    "agent_memory": "self_learning",
+    "self_learning": "self_learning",
+    "repo_scanning": "repo_value_scan",
+    "task_routing": "routing",
+    "safety_approval_gates": "safety",
+    "receipts_auditability": "receipts",
+    "cli_workflow_ux": "workflow_ux",
+    "tests_verification": "tests",
+}
+_CAPABILITY_MATURITY_RANK = {
+    "planned": 0,
+    "partial": 1,
+    "available": 2,
+    "verified": 3,
+}
+
+
+def make_capability_gap_preview_id(
+    link_capabilities: list[dict[str, Any]],
+    repo_findings: list[dict[str, Any]],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "capability_ids": [item["capability_id"] for item in link_capabilities],
+        "finding_ids": [item["finding_id"] for item in repo_findings],
+        "version": CAPABILITY_GAP_PREVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"capability-gap-preview-{digest}"
+
+
+def collect_capability_gap_preview(
+    link_inventory: dict[str, Any],
+    repo_value_scan: dict[str, Any] | list[dict[str, Any]],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compare Link capability inventory with repo-value findings without writing state."""
+    validate_link_capability_inventory(link_inventory)
+    link_capabilities = [dict(item) for item in link_inventory["capabilities"]]
+    repo_findings = _capability_gap_findings_from_input(repo_value_scan)
+
+    direct_gaps: list[dict[str, Any]] = []
+    maturity_gaps: list[dict[str, Any]] = []
+    onboarding_gaps: list[dict[str, Any]] = []
+    optional_cross_cluster_ideas: list[dict[str, Any]] = []
+    matched_capabilities: list[dict[str, Any]] = []
+    unmatched_findings: list[dict[str, Any]] = []
+
+    for finding in repo_findings:
+        target_category = _capability_gap_target_category(finding)
+        matches = _capability_gap_matches(finding, target_category, link_capabilities)
+        if not matches:
+            gap = _build_capability_gap_entry(
+                "direct_gap",
+                finding,
+                target_category,
+                None,
+                "missing capability category or no close Link capability match",
+            )
+            direct_gaps.append(gap)
+            unmatched_findings.append(_capability_gap_unmatched_finding(finding, target_category, "direct_gap"))
+            continue
+
+        best = matches[0]
+        matched_capabilities.append(_capability_gap_match_entry(finding, best, target_category))
+        if finding.get("weak_finding") is True or int(finding.get("signal_count", 0) or 0) <= 1:
+            optional_cross_cluster_ideas.append(_build_capability_gap_entry(
+                "optional_cross_cluster_idea",
+                finding,
+                target_category,
+                best,
+                "weak or distant repo finding; treat as optional strategic inspiration",
+            ))
+            continue
+
+        required_maturity = _capability_gap_required_maturity(finding)
+        current_maturity = best["maturity_level"]
+        if _CAPABILITY_MATURITY_RANK[current_maturity] < _CAPABILITY_MATURITY_RANK[required_maturity]:
+            maturity_gaps.append(_build_capability_gap_entry(
+                "maturity_gap",
+                finding,
+                target_category,
+                best,
+                f"matched capability maturity is {current_maturity}, below requested {required_maturity}",
+            ))
+            continue
+
+        if _capability_gap_is_onboarding_signal(finding):
+            onboarding_gaps.append(_build_capability_gap_entry(
+                "onboarding_gap",
+                finding,
+                target_category,
+                best,
+                "matched capability exists, but finding points to discoverability or integration UX",
+            ))
+
+    matched_capabilities.sort(key=lambda item: (item["capability_id"], item["finding_id"]))
+    for section in (direct_gaps, maturity_gaps, onboarding_gaps, optional_cross_cluster_ideas, unmatched_findings):
+        section.sort(key=lambda item: item.get("gap_id") or item.get("finding_id", ""))
+
+    preview = {
+        "preview_version": CAPABILITY_GAP_PREVIEW_VERSION,
+        "preview_id": make_capability_gap_preview_id(link_capabilities, repo_findings),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "direct_gaps": direct_gaps,
+        "maturity_gaps": maturity_gaps,
+        "onboarding_gaps": onboarding_gaps,
+        "optional_cross_cluster_ideas": optional_cross_cluster_ideas,
+        "matched_capabilities": matched_capabilities,
+        "unmatched_findings": unmatched_findings,
+        "confidence": _capability_gap_preview_confidence(
+            repo_findings,
+            direct_gaps,
+            maturity_gaps,
+            onboarding_gaps,
+            optional_cross_cluster_ideas,
+        ),
+        "metadata": dict(metadata or {}),
+        "counts": {
+            "link_capability_count": len(link_capabilities),
+            "repo_finding_count": len(repo_findings),
+            "direct_gap_count": len(direct_gaps),
+            "maturity_gap_count": len(maturity_gaps),
+            "onboarding_gap_count": len(onboarding_gaps),
+            "optional_cross_cluster_idea_count": len(optional_cross_cluster_ideas),
+            "matched_capability_count": len(matched_capabilities),
+            "unmatched_finding_count": len(unmatched_findings),
+        },
+        "writes": [],
+    }
+    validate_capability_gap_preview(preview)
+    return preview
+
+
+def validate_capability_gap_preview(preview: dict[str, Any]) -> None:
+    required = (
+        "preview_version", "preview_id", "dry_run", "write_allowed", "automation_allowed",
+        "direct_gaps", "maturity_gaps", "onboarding_gaps", "optional_cross_cluster_ideas",
+        "matched_capabilities", "unmatched_findings", "confidence", "metadata", "counts", "writes",
+    )
+    missing = [field for field in required if field not in preview]
+    if missing:
+        raise ValueError(f"capability gap preview missing fields: {missing}")
+    if preview["preview_version"] != CAPABILITY_GAP_PREVIEW_VERSION:
+        raise ValueError("unsupported capability gap preview version")
+    if not isinstance(preview["preview_id"], str) or not preview["preview_id"].strip():
+        raise ValueError("preview_id must be a non-empty string")
+    if preview["dry_run"] is not True or preview["write_allowed"] is not False or preview["automation_allowed"] is not False:
+        raise ValueError("capability gap preview must remain read-only")
+    if preview["writes"] != []:
+        raise ValueError("capability gap preview must not write files")
+    if preview["confidence"] not in LINK_CAPABILITY_CONFIDENCE_LEVELS:
+        raise ValueError("invalid capability gap preview confidence")
+    if not isinstance(preview["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    counts = preview["counts"]
+    if not isinstance(counts, dict):
+        raise TypeError("counts must be a dict")
+    for section in _CAPABILITY_GAP_SECTIONS:
+        if not isinstance(preview[section], list):
+            raise TypeError(f"{section} must be a list")
+        for gap in preview[section]:
+            _validate_capability_gap_entry(gap)
+    if not isinstance(preview["matched_capabilities"], list):
+        raise TypeError("matched_capabilities must be a list")
+    if not isinstance(preview["unmatched_findings"], list):
+        raise TypeError("unmatched_findings must be a list")
+    for field, section in (
+        ("direct_gap_count", "direct_gaps"),
+        ("maturity_gap_count", "maturity_gaps"),
+        ("onboarding_gap_count", "onboarding_gaps"),
+        ("optional_cross_cluster_idea_count", "optional_cross_cluster_ideas"),
+        ("matched_capability_count", "matched_capabilities"),
+        ("unmatched_finding_count", "unmatched_findings"),
+    ):
+        if not isinstance(counts.get(field), int) or counts[field] != len(preview[section]):
+            raise ValueError(f"counts.{field} must match {section} length")
+
+
+def capability_gap_preview_to_json(preview: dict[str, Any]) -> str:
+    validate_capability_gap_preview(preview)
+    return _stable_ruflo_json(preview, indent=2) + "\n"
+
+
+def capability_gap_preview_from_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    preview = _json.loads(text)
+    validate_capability_gap_preview(preview)
+    return preview
+
+
+def _capability_gap_findings_from_input(repo_value_scan: dict[str, Any] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if isinstance(repo_value_scan, dict):
+        validate_repo_value_scan(repo_value_scan)
+        findings = repo_value_scan["findings"]
+    elif isinstance(repo_value_scan, list):
+        findings = repo_value_scan
+    else:
+        raise TypeError("repo_value_scan must be a scan dict or findings list")
+    normalized: list[dict[str, Any]] = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise TypeError("repo value finding entries must be dicts")
+        validate_repo_value_finding(finding)
+        normalized.append(dict(finding))
+    return normalized
+
+
+def _capability_gap_target_category(finding: dict[str, Any]) -> str:
+    category = finding["category"]
+    return _CAPABILITY_GAP_CATEGORY_MAP.get(category, "workflow_ux")
+
+
+def _capability_gap_matches(
+    finding: dict[str, Any],
+    target_category: str,
+    capabilities: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    finding_tokens = _capability_gap_tokens(finding)
+    matches: list[tuple[int, dict[str, Any]]] = []
+    for capability in capabilities:
+        if capability["category"] != target_category:
+            continue
+        cap_tokens = _capability_gap_tokens(capability)
+        overlap = len(finding_tokens & cap_tokens)
+        if overlap > 0 or finding["category"] in {"repo_scanning", "tests_verification", "receipts_auditability", "safety_approval_gates"}:
+            matches.append((overlap, capability))
+    matches.sort(key=lambda item: (-item[0], item[1]["capability_id"]))
+    return [item[1] for item in matches]
+
+
+def _build_capability_gap_entry(
+    gap_type: str,
+    finding: dict[str, Any],
+    target_category: str,
+    capability: dict[str, Any] | None,
+    reason: str,
+) -> dict[str, Any]:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "capability_id": capability.get("capability_id") if capability else "",
+        "finding_id": finding["finding_id"],
+        "gap_type": gap_type,
+        "target_category": target_category,
+        "version": CAPABILITY_GAP_PREVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    gap = {
+        "gap_id": f"capability-gap-{digest}",
+        "gap_type": gap_type,
+        "finding_id": finding["finding_id"],
+        "finding_title": finding["title"],
+        "target_category": target_category,
+        "matched_capability_id": capability.get("capability_id", "") if capability else "",
+        "matched_capability_name": capability.get("name", "") if capability else "",
+        "reason": reason,
+        "confidence": _capability_gap_entry_confidence(finding, capability),
+        "source_path": finding["source_path"],
+        "recommended_action": _capability_gap_action(gap_type),
+    }
+    _validate_capability_gap_entry(gap)
+    return gap
+
+
+def _validate_capability_gap_entry(gap: dict[str, Any]) -> None:
+    required = (
+        "gap_id", "gap_type", "finding_id", "finding_title", "target_category",
+        "matched_capability_id", "matched_capability_name", "reason", "confidence",
+        "source_path", "recommended_action",
+    )
+    missing = [field for field in required if field not in gap]
+    if missing:
+        raise ValueError(f"capability gap entry missing fields: {missing}")
+    if gap["gap_type"] not in {"direct_gap", "maturity_gap", "onboarding_gap", "optional_cross_cluster_idea"}:
+        raise ValueError(f"invalid capability gap type: {gap['gap_type']}")
+    if gap["target_category"] not in LINK_CAPABILITY_CATEGORIES:
+        raise ValueError(f"invalid capability gap target_category: {gap['target_category']}")
+    if gap["confidence"] not in LINK_CAPABILITY_CONFIDENCE_LEVELS:
+        raise ValueError(f"invalid capability gap confidence: {gap['confidence']}")
+    for field in ("gap_id", "finding_id", "finding_title", "reason", "source_path", "recommended_action"):
+        if not isinstance(gap[field], str) or not gap[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+
+
+def _capability_gap_match_entry(
+    finding: dict[str, Any],
+    capability: dict[str, Any],
+    target_category: str,
+) -> dict[str, Any]:
+    return {
+        "finding_id": finding["finding_id"],
+        "finding_title": finding["title"],
+        "capability_id": capability["capability_id"],
+        "capability_name": capability["name"],
+        "target_category": target_category,
+        "maturity_level": capability["maturity_level"],
+        "confidence": _capability_gap_entry_confidence(finding, capability),
+    }
+
+
+def _capability_gap_unmatched_finding(finding: dict[str, Any], target_category: str, section: str) -> dict[str, Any]:
+    return {
+        "finding_id": finding["finding_id"],
+        "title": finding["title"],
+        "target_category": target_category,
+        "section": section,
+        "source_path": finding["source_path"],
+    }
+
+
+def _capability_gap_required_maturity(finding: dict[str, Any]) -> str:
+    raw = str(finding.get("required_maturity_level") or finding.get("required_maturity") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw:
+        if raw not in LINK_CAPABILITY_MATURITY_LEVELS:
+            raise ValueError(f"invalid required maturity level: {raw}")
+        return raw
+    if finding["category"] in {"tests_verification", "receipts_auditability", "safety_approval_gates"}:
+        return "verified"
+    return "available"
+
+
+def _capability_gap_is_onboarding_signal(finding: dict[str, Any]) -> bool:
+    text = " ".join([
+        finding.get("title", ""),
+        finding.get("summary", ""),
+        finding.get("value_reason", ""),
+        " ".join(finding.get("signals", [])),
+    ]).lower()
+    return any(token in text for token in ("onboarding", "quickstart", "docs", "documentation", "example", "integration", "discoverability", "ux"))
+
+
+def _capability_gap_tokens(item: dict[str, Any]) -> set[str]:
+    import re
+
+    raw_parts = [
+        item.get("name", ""),
+        item.get("title", ""),
+        item.get("description", ""),
+        item.get("summary", ""),
+        item.get("category", ""),
+        item.get("source", ""),
+        item.get("source_path", ""),
+        " ".join(item.get("tags", [])),
+        " ".join(item.get("signals", [])),
+    ]
+    text = " ".join(str(part) for part in raw_parts).lower()
+    return {token for token in re.split(r"[^a-z0-9]+", text) if len(token) > 2}
+
+
+def _capability_gap_entry_confidence(finding: dict[str, Any], capability: dict[str, Any] | None) -> str:
+    if finding.get("weak_finding") is True:
+        return "low"
+    if capability and capability.get("confidence") == "high" and int(finding.get("signal_count", 0) or 0) >= 2:
+        return "high"
+    return "medium"
+
+
+def _capability_gap_preview_confidence(
+    findings: list[dict[str, Any]],
+    direct_gaps: list[dict[str, Any]],
+    maturity_gaps: list[dict[str, Any]],
+    onboarding_gaps: list[dict[str, Any]],
+    optional_cross_cluster_ideas: list[dict[str, Any]],
+) -> str:
+    if not findings:
+        return "low"
+    strong_sections = len(direct_gaps) + len(maturity_gaps) + len(onboarding_gaps)
+    if strong_sections and len(optional_cross_cluster_ideas) <= strong_sections:
+        return "high"
+    if strong_sections:
+        return "medium"
+    return "low"
+
+
+def _capability_gap_action(gap_type: str) -> str:
+    return {
+        "direct_gap": "Consider a small Link-native capability slice before implementation approval.",
+        "maturity_gap": "Improve tests, receipts, or verification maturity before expanding scope.",
+        "onboarding_gap": "Improve discoverability, command ergonomics, or integration documentation.",
+        "optional_cross_cluster_idea": "Keep as optional strategic inspiration; do not treat as mandatory work.",
+    }[gap_type]
+
+
 def _normalize_feedback_status(status: str) -> str:
     raw = str(status or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
