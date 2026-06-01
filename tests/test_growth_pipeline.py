@@ -3572,6 +3572,338 @@ def check_self_learning_feedback_receipt_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 47. Self-learning next-step recommendations
+# ---------------------------------------------------------------------------
+
+def check_self_learning_next_step_recommendations_helper() -> None:
+    """Feedback-adjusted next steps are deterministic, safe, and JSON-stable."""
+    from link_modes.growth.link_growth_console import (
+        SELF_LEARNING_NEXT_STEP_MAX_TOP,
+        SELF_LEARNING_NEXT_STEP_VERSION,
+        build_ruflo_upgrade_intake,
+        build_self_learning_feedback_receipt,
+        collect_ruflo_upgrade_plan,
+        collect_self_learning_next_step_recommendations,
+        self_learning_next_step_from_json,
+        self_learning_next_step_to_json,
+        validate_self_learning_next_step_recommendations,
+    )
+
+    findings = [
+        {
+            "title": "Profile-gated worker dispatch",
+            "category": "worker_routing",
+            "risk_level": "low",
+            "summary": "Route worker dispatch through profile gates.",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/ruflo/src/orchestrator.ts",
+            "source_kind": "code_brief",
+            "evidence": ["profile gate"],
+        },
+        {
+            "title": "Large swarm executor",
+            "category": "swarm_orchestration",
+            "risk": "high",
+            "summary": "Broad swarm execution is too large for the next safe slice.",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/v3/swarm.ts",
+            "source_kind": "research",
+        },
+        {
+            "title": "Dashboard latency metrics",
+            "category": "performance",
+            "risk": "medium",
+            "summary": "Expose slow Growth queue stages in a dashboard card.",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/ruflo/src/metrics.ts",
+            "source_kind": "research",
+        },
+        {
+            "title": "Profile-gated worker dispatch",
+            "category": "worker_routing",
+            "risk_level": "low",
+            "summary": "Duplicate should collapse before next-step ranking.",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/ruflo/src/orchestrator.ts",
+            "source_kind": "code_brief",
+        },
+    ]
+    intake = build_ruflo_upgrade_intake(findings, source_label="ruflo")
+    plan = collect_ruflo_upgrade_plan(intake, top=10, source_label="ruflo")
+    candidates = {candidate["title"]: candidate for candidate in plan["ranked_candidates"]}
+
+    accepted = build_self_learning_feedback_receipt(
+        candidates["Profile-gated worker dispatch"],
+        status="accepted",
+        reason="This is a small safety improvement with clear tests.",
+        confidence=0.95,
+        tags=["routing", "safe"],
+    )
+    rejected = build_self_learning_feedback_receipt(
+        candidates["Large swarm executor"],
+        status="rejected",
+        reason="Too much automation surface for this stage.",
+        confidence=0.9,
+        tags=["too_large"],
+    )
+    deferred = build_self_learning_feedback_receipt(
+        candidates["Dashboard latency metrics"],
+        status="deferred",
+        reason="Needs a narrower dashboard-only design first.",
+        confidence=0.6,
+        tags=["observability"],
+    )
+    unmatched = build_self_learning_feedback_receipt(
+        {
+            "candidate_id": "ruflo-unmatched-feedback",
+            "title": "Unmatched feedback",
+            "category": "memory_retrieval",
+            "risk_level": "low",
+            "recommendation": "review",
+            "source_path": "research/_extracted/ruflo-main/unknown.ts",
+        },
+        status="accepted",
+        reason="Should be reported as unmatched, not written anywhere.",
+        confidence=0.8,
+    )
+
+    data = collect_self_learning_next_step_recommendations(
+        plan,
+        [accepted, rejected, deferred, unmatched],
+        top=5,
+        source_label="ruflo",
+    )
+    same = collect_self_learning_next_step_recommendations(
+        plan,
+        [accepted, rejected, deferred, unmatched],
+        top=5,
+        source_label="ruflo",
+    )
+
+    _require(data["next_step_version"] == SELF_LEARNING_NEXT_STEP_VERSION,
+             "next-step version mismatch")
+    _require(data["recommendation_id"] == same["recommendation_id"],
+             "next-step recommendation_id must be deterministic")
+    _require(data["dry_run"] is True and data["write_allowed"] is False,
+             "next-step recommendations must remain read-only")
+    _require(data["automation_allowed"] is False,
+             "next-step recommendations must not allow automation")
+    _require(data["writes"] == [], "next-step recommendations must not write files")
+    _require(data["duplicate_count"] == 1,
+             "next-step recommendations must preserve candidate dedupe count")
+    _require(data["feedback_count"] == 4,
+             "next-step recommendations must count feedback receipts")
+    _require(data["unmatched_feedback_count"] == 1,
+             "unmatched feedback must be reported")
+    _require(data["warnings"], "unmatched feedback must emit a warning")
+    _require(data["feedback_summary"]["by_status"]["accepted"] == 2,
+             "feedback summary must count accepted receipts")
+
+    ranked = data["recommendations"]
+    _require(ranked[0]["title"] == "Profile-gated worker dispatch",
+             "accepted low-risk candidate should rank first")
+    _require(ranked[0]["safe_recommendation"] == "accept",
+             "accepted low-risk candidate should remain acceptable")
+    _require(ranked[0]["feedback_adjustment"] > 0,
+             "accepted feedback should boost adjusted score")
+
+    by_title = {item["title"]: item for item in ranked}
+    _require(by_title["Large swarm executor"]["safe_recommendation"] == "reject",
+             "rejected high-risk candidate should be safely rejected")
+    _require(by_title["Large swarm executor"]["feedback_adjustment"] < 0,
+             "rejected feedback should lower adjusted score")
+    _require(by_title["Dashboard latency metrics"]["safe_recommendation"] == "review",
+             "deferred candidate should stay in review")
+    _require("deferred" in by_title["Dashboard latency metrics"]["reason"].lower(),
+             "deferred feedback reason must be visible")
+
+    encoded = self_learning_next_step_to_json(data)
+    _require(encoded == self_learning_next_step_to_json(data),
+             "next-step JSON serialization must be stable")
+    decoded = self_learning_next_step_from_json(encoded)
+    _require(decoded == data, "next-step JSON round-trip must preserve data")
+    validate_self_learning_next_step_recommendations(data)
+
+    clamped = collect_self_learning_next_step_recommendations(
+        plan,
+        [accepted],
+        top=99,
+        source_label="ruflo",
+    )
+    _require(clamped["top_used"] == SELF_LEARNING_NEXT_STEP_MAX_TOP,
+             "next-step top must clamp to max")
+    _require(clamped["warnings"], "next-step top clamp must warn")
+
+    raised = collect_self_learning_next_step_recommendations(plan, [], top=0)
+    _require(raised["top_used"] == 1, "next-step top below 1 must raise to 1")
+    _require(raised["warnings"], "empty feedback and low top must warn")
+
+    try:
+        collect_self_learning_next_step_recommendations({"bad": []}, [])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid next-step candidate source must be rejected")
+
+    bad_payload = dict(data)
+    bad_payload["automation_allowed"] = True
+    try:
+        validate_self_learning_next_step_recommendations(bad_payload)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("next-step recommendations must reject automation_allowed=True")
+
+    print("self-learning next-step recommendations helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 47. Repo value scanner planning layer
+# ---------------------------------------------------------------------------
+
+def check_repo_value_scan_helper() -> None:
+    """Repo inventory items rank into deterministic Link-value findings."""
+    from link_modes.growth.link_growth_console import (
+        REPO_VALUE_CATEGORIES,
+        REPO_VALUE_SCAN_MAX_TOP,
+        REPO_VALUE_SCAN_VERSION,
+        collect_repo_value_scan,
+        repo_value_scan_from_json,
+        repo_value_scan_to_json,
+        score_repo_value_inventory_item,
+        validate_repo_value_finding,
+        validate_repo_value_scan,
+    )
+
+    inventory = [
+        {
+            "path": "sota-scan-master/SKILL.md",
+            "title": "Grounded repo benchmark workflow",
+            "summary": "Skill inventories a repo, compares grounded capabilities, and ranks the next gaps.",
+            "source_kind": "skill",
+            "tags": ["repo scanning", "benchmark", "workflow"],
+        },
+        {
+            "path": "sota-scan-master/lib/cluster.mjs",
+            "title": "Deterministic peer clustering",
+            "summary": "Dependency-free orchestration clustering groups peer approaches before ranking gaps.",
+            "source_kind": "code",
+            "signals": ["orchestration", "coordinator"],
+        },
+        {
+            "path": "sota-scan-master/workflows/sota-scan-fanout.js",
+            "title": "Fanout workflow routing",
+            "summary": "Workflow dispatches comparator analysis while keeping synthesis separate.",
+            "source_kind": "workflow",
+            "keywords": ["task routing", "worker", "dispatch"],
+        },
+        {
+            "path": "sota-scan-master/test/cluster.test.mjs",
+            "title": "Cluster regression tests",
+            "summary": "Tests verify deterministic clustering, maturity scoring, and gap partitioning.",
+            "source_kind": "test",
+            "tags": ["verification", "fixture"],
+        },
+        {
+            "path": "sota-scan-master/.sota/last-scan.json",
+            "title": "Scan receipt snapshot",
+            "summary": "Stored scan output acts as progress evidence and audit trail.",
+            "source_kind": "receipt",
+            "tags": ["receipt", "audit"],
+        },
+        {
+            "path": "sota-scan-master/SKILL.md",
+            "title": "Grounded repo benchmark workflow duplicate",
+            "summary": "Duplicate path/category should collapse.",
+            "source_kind": "skill",
+            "tags": ["repo scanning"],
+        },
+        {
+            "path": "misc/unknown.txt",
+            "title": "Unknown notes",
+            "source_kind": "text",
+        },
+    ]
+
+    scan = collect_repo_value_scan(inventory, top=10, source_label="sota-scan")
+    same = collect_repo_value_scan(inventory, top=10, source_label="sota-scan")
+    _require(scan["scan_version"] == REPO_VALUE_SCAN_VERSION,
+             "repo value scan version mismatch")
+    _require(scan["scan_id"] == same["scan_id"],
+             "repo value scan_id must be deterministic")
+    _require(scan["dry_run"] is True and scan["write_allowed"] is False,
+             "repo value scan must remain read-only")
+    _require(scan["automation_allowed"] is False,
+             "repo value scan must not allow automation")
+    _require(scan["writes"] == [], "repo value scan must not write runtime state")
+    _require(set(scan["categories"]) == set(REPO_VALUE_CATEGORIES),
+             "repo value scan must expose stable categories")
+    _require(scan["item_count"] == len(inventory),
+             "repo value scan must count inventory items")
+    _require(scan["duplicate_count"] == 1,
+             "repo value scan must collapse duplicate path/category findings")
+    _require(scan["weak_finding_count"] >= 1,
+             "repo value scan must count weak findings")
+    _require(scan["warnings"], "duplicates/weak findings must emit warnings")
+
+    findings = scan["findings"]
+    _require(findings[0]["weak_finding"] is False,
+             "strong findings must rank ahead of weak findings")
+    categories = {finding["category"] for finding in findings}
+    _require("repo_scanning" in categories,
+             "repo scanning category must be inferred")
+    _require("orchestration" in categories,
+             "orchestration category must be inferred")
+    _require("task_routing" in categories,
+             "task routing category must be inferred")
+    _require("tests_verification" in categories,
+             "tests/verification category must be inferred")
+    _require("receipts_auditability" in categories,
+             "receipts/auditability category must be inferred")
+    for finding in findings:
+        validate_repo_value_finding(finding)
+        _require(finding["finding_id"].startswith("repo-value-"),
+                 "repo value finding_id must use stable prefix")
+        _require(finding["value_reason"], "repo value finding must explain value")
+
+    direct = score_repo_value_inventory_item(inventory[0], source_label="sota-scan")
+    again = score_repo_value_inventory_item(inventory[0], source_label="sota-scan")
+    _require(direct["finding_id"] == again["finding_id"],
+             "repo value finding_id must be deterministic")
+
+    encoded = repo_value_scan_to_json(scan)
+    _require(encoded == repo_value_scan_to_json(scan),
+             "repo value scan JSON serialization must be stable")
+    decoded = repo_value_scan_from_json(encoded)
+    _require(decoded == scan, "repo value scan JSON round-trip must preserve data")
+    validate_repo_value_scan(scan)
+
+    clamped = collect_repo_value_scan(inventory, top=99, source_label="sota-scan")
+    _require(clamped["top_used"] == REPO_VALUE_SCAN_MAX_TOP,
+             "repo value scan top must clamp to max")
+    _require(clamped["warnings"], "repo value scan top clamp must warn")
+
+    raised = collect_repo_value_scan(inventory, top=0, source_label="sota-scan")
+    _require(raised["top_used"] == 1, "repo value scan top below 1 must raise to 1")
+    _require(raised["warnings"], "repo value scan low top must warn")
+
+    for bad_inventory in ({"path": "x"}, ["not-a-dict"], [{"title": "missing path"}]):
+        try:
+            collect_repo_value_scan(bad_inventory)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            pass
+        else:
+            raise AssertionError(f"invalid repo value input must be rejected: {bad_inventory!r}")
+
+    bad_scan = dict(scan)
+    bad_scan["write_allowed"] = True
+    try:
+        validate_repo_value_scan(bad_scan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("repo value scan must reject write_allowed=True")
+
+    print("repo value scan helper OK")
+
+
+# ---------------------------------------------------------------------------
 # 47. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
 
@@ -4268,6 +4600,8 @@ def main() -> None:
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()
     check_self_learning_feedback_receipt_helper()
+    check_self_learning_next_step_recommendations_helper()
+    check_repo_value_scan_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()

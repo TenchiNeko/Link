@@ -6012,6 +6012,704 @@ def summarize_self_learning_feedback(receipts: list[dict[str, Any]]) -> dict[str
     }
 
 
+SELF_LEARNING_NEXT_STEP_VERSION = "link-self-learning-next-step-v1"
+SELF_LEARNING_NEXT_STEP_MAX_TOP = 10
+
+
+def make_self_learning_next_step_id(
+    candidates: list[dict[str, Any]],
+    feedback_receipts: list[dict[str, Any]],
+    *,
+    top: int,
+) -> str:
+    """Build a deterministic id for a feedback-adjusted recommendation preview."""
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "candidate_ids": [candidate["candidate_id"] for candidate in candidates],
+        "feedback_ids": [receipt["feedback_id"] for receipt in feedback_receipts],
+        "top": top,
+        "version": SELF_LEARNING_NEXT_STEP_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"self-learning-next-step-{digest}"
+
+
+def collect_self_learning_next_step_recommendations(
+    candidate_source: dict[str, Any] | list[dict[str, Any]],
+    feedback_receipts: list[dict[str, Any]],
+    *,
+    top: int = 5,
+    source_label: str = "ruflo",
+) -> dict[str, Any]:
+    """Rank safe next upgrade steps from Ruflo candidates and reviewer feedback.
+
+    Pure helper only: no proposals, approvals, handoffs, execution, or disk writes.
+    """
+    if not isinstance(top, int):
+        raise TypeError("top must be an integer")
+    requested_top = top
+    effective_top = min(max(top, 1), SELF_LEARNING_NEXT_STEP_MAX_TOP)
+    warnings: list[str] = []
+    if requested_top > SELF_LEARNING_NEXT_STEP_MAX_TOP:
+        warnings.append(f"top {requested_top} capped at {SELF_LEARNING_NEXT_STEP_MAX_TOP} (hard limit)")
+    if requested_top < 1:
+        warnings.append("top below 1 raised to 1")
+
+    source_duplicate_count = 0
+    if isinstance(candidate_source, dict) and isinstance(candidate_source.get("duplicate_count"), int):
+        source_duplicate_count = max(candidate_source["duplicate_count"], 0)
+    candidates = _self_learning_candidates_from_source(candidate_source, source_label=source_label)
+    unique_candidates, duplicate_count = _dedupe_ruflo_candidates(candidates)
+    duplicate_count += source_duplicate_count
+    if not isinstance(feedback_receipts, list):
+        raise TypeError("feedback_receipts must be a list")
+    validated_feedback: list[dict[str, Any]] = []
+    for receipt in feedback_receipts:
+        validate_self_learning_feedback_receipt(receipt)
+        validated_feedback.append(dict(receipt))
+
+    feedback_by_key = _self_learning_feedback_by_key(validated_feedback)
+    recommendations: list[dict[str, Any]] = []
+    matched_feedback_ids: set[str] = set()
+    for candidate in unique_candidates:
+        matches = _matching_self_learning_feedback(candidate, feedback_by_key)
+        matched_feedback_ids.update(receipt["feedback_id"] for receipt in matches)
+        recommendations.append(_build_self_learning_next_step(candidate, matches))
+
+    recommendations.sort(key=_self_learning_next_step_rank_key)
+    ranked = recommendations[:effective_top]
+    unmatched_feedback_count = len([
+        receipt for receipt in validated_feedback
+        if receipt["feedback_id"] not in matched_feedback_ids
+    ])
+    if unmatched_feedback_count:
+        warnings.append(f"{unmatched_feedback_count} feedback receipt(s) did not match an intake candidate")
+    if not validated_feedback:
+        warnings.append("no self-learning feedback receipts supplied; ranking uses candidate scores only")
+
+    payload = {
+        "next_step_version": SELF_LEARNING_NEXT_STEP_VERSION,
+        "recommendation_id": make_self_learning_next_step_id(
+            unique_candidates,
+            validated_feedback,
+            top=effective_top,
+        ),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "top_requested": requested_top,
+        "top_used": effective_top,
+        "candidate_count": len(candidates),
+        "unique_candidate_count": len(unique_candidates),
+        "duplicate_count": duplicate_count,
+        "feedback_count": len(validated_feedback),
+        "unmatched_feedback_count": unmatched_feedback_count,
+        "feedback_summary": summarize_self_learning_feedback(validated_feedback),
+        "recommendations": ranked,
+        "warnings": warnings,
+        "writes": [],
+    }
+    validate_self_learning_next_step_recommendations(payload)
+    return payload
+
+
+def validate_self_learning_next_step_recommendations(payload: dict[str, Any]) -> None:
+    required = (
+        "next_step_version", "recommendation_id", "dry_run", "write_allowed",
+        "automation_allowed", "top_requested", "top_used", "candidate_count",
+        "unique_candidate_count", "duplicate_count", "feedback_count",
+        "unmatched_feedback_count", "feedback_summary", "recommendations",
+        "warnings", "writes",
+    )
+    missing = [field for field in required if field not in payload]
+    if missing:
+        raise ValueError(f"self-learning next-step payload missing fields: {missing}")
+    if payload["next_step_version"] != SELF_LEARNING_NEXT_STEP_VERSION:
+        raise ValueError("unsupported self-learning next-step version")
+    if not isinstance(payload["recommendation_id"], str) or not payload["recommendation_id"].strip():
+        raise ValueError("recommendation_id must be a non-empty string")
+    if payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False:
+        raise ValueError("self-learning next-step recommendations must remain read-only")
+    if payload["writes"] != []:
+        raise ValueError("self-learning next-step recommendations must not write files")
+    if not isinstance(payload["recommendations"], list):
+        raise TypeError("recommendations must be a list")
+    if not isinstance(payload["warnings"], list):
+        raise TypeError("warnings must be a list")
+    if not isinstance(payload["feedback_summary"], dict):
+        raise TypeError("feedback_summary must be a dict")
+    for field in (
+        "top_requested", "top_used", "candidate_count", "unique_candidate_count",
+        "duplicate_count", "feedback_count", "unmatched_feedback_count",
+    ):
+        if not isinstance(payload[field], int) or payload[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    for recommendation in payload["recommendations"]:
+        _validate_self_learning_next_step(recommendation)
+
+
+def self_learning_next_step_to_json(payload: dict[str, Any]) -> str:
+    validate_self_learning_next_step_recommendations(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def self_learning_next_step_from_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    payload = _json.loads(text)
+    validate_self_learning_next_step_recommendations(payload)
+    return payload
+
+
+def _self_learning_candidates_from_source(
+    candidate_source: dict[str, Any] | list[dict[str, Any]],
+    *,
+    source_label: str,
+) -> list[dict[str, Any]]:
+    if isinstance(candidate_source, dict):
+        if "ranked_candidates" in candidate_source:
+            candidates = candidate_source.get("ranked_candidates")
+        elif "candidates" in candidate_source:
+            candidates = candidate_source.get("candidates")
+        else:
+            raise ValueError("candidate source dict must include ranked_candidates or candidates")
+        if not isinstance(candidates, list):
+            raise TypeError("candidate source candidates must be a list")
+        source_list = candidates
+    elif isinstance(candidate_source, list):
+        source_list = candidate_source
+    else:
+        raise TypeError("candidate source must be a plan/intake dict or findings list")
+
+    normalized: list[dict[str, Any]] = []
+    for item in source_list:
+        if not isinstance(item, dict):
+            raise TypeError("candidate source entries must be dicts")
+        if "candidate_id" in item:
+            validate_ruflo_upgrade_candidate(item)
+            normalized.append(dict(item))
+        else:
+            normalized.append(score_ruflo_upgrade_candidate(item, source_label=source_label))
+    return normalized
+
+
+def _self_learning_feedback_by_key(receipts: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    by_key: dict[str, list[dict[str, Any]]] = {}
+    for receipt in receipts:
+        for key in _self_learning_feedback_keys(receipt):
+            by_key.setdefault(key, []).append(receipt)
+    return by_key
+
+
+def _matching_self_learning_feedback(
+    candidate: dict[str, Any],
+    feedback_by_key: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    chosen: dict[str, dict[str, Any]] = {}
+    for key in _self_learning_candidate_keys(candidate):
+        for receipt in feedback_by_key.get(key, []):
+            chosen[receipt["feedback_id"]] = receipt
+    return sorted(chosen.values(), key=lambda item: item["feedback_id"])
+
+
+def _self_learning_candidate_keys(candidate: dict[str, Any]) -> list[str]:
+    return _normalized_non_empty_keys(
+        candidate.get("candidate_id"),
+        candidate.get("proposal_id"),
+        candidate.get("title"),
+    )
+
+
+def _self_learning_feedback_keys(receipt: dict[str, Any]) -> list[str]:
+    return _normalized_non_empty_keys(
+        receipt.get("candidate_id"),
+        receipt.get("proposal_id"),
+        receipt.get("title"),
+    )
+
+
+def _normalized_non_empty_keys(*values: Any) -> list[str]:
+    keys: list[str] = []
+    for value in values:
+        text = str(value or "").strip().lower()
+        if text and text not in keys:
+            keys.append(text)
+    return keys
+
+
+def _build_self_learning_next_step(
+    candidate: dict[str, Any],
+    feedback_matches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    accepted = [item for item in feedback_matches if item["status"] == "accepted"]
+    rejected = [item for item in feedback_matches if item["status"] == "rejected"]
+    deferred = [item for item in feedback_matches if item["status"] == "deferred"]
+    adjustment = 0
+    adjustment += round(sum(item["confidence"] for item in accepted) * 12)
+    adjustment -= round(sum(item["confidence"] for item in rejected) * 18)
+    adjustment -= round(sum(item["confidence"] for item in deferred) * 5)
+    adjusted_score = max(int(candidate["score"]) + adjustment, 0)
+    safe_recommendation = _self_learning_safe_recommendation(candidate, accepted, rejected, deferred)
+
+    return {
+        "candidate_id": candidate["candidate_id"],
+        "title": candidate["title"],
+        "category": candidate["category"],
+        "risk_level": candidate["risk_level"],
+        "source_path": candidate["source_path"],
+        "base_recommendation": candidate["recommendation"],
+        "safe_recommendation": safe_recommendation,
+        "base_score": candidate["score"],
+        "feedback_adjustment": adjustment,
+        "feedback_adjusted_score": adjusted_score,
+        "feedback_count": len(feedback_matches),
+        "feedback_statuses": {
+            "accepted": len(accepted),
+            "rejected": len(rejected),
+            "deferred": len(deferred),
+        },
+        "feedback_ids": [item["feedback_id"] for item in feedback_matches],
+        "next_step": _self_learning_next_step_text(candidate, safe_recommendation, accepted, rejected, deferred),
+        "reason": _self_learning_next_step_reason(candidate, accepted, rejected, deferred),
+    }
+
+
+def _validate_self_learning_next_step(recommendation: dict[str, Any]) -> None:
+    required = (
+        "candidate_id", "title", "category", "risk_level", "source_path",
+        "base_recommendation", "safe_recommendation", "base_score",
+        "feedback_adjustment", "feedback_adjusted_score", "feedback_count",
+        "feedback_statuses", "feedback_ids", "next_step", "reason",
+    )
+    missing = [field for field in required if field not in recommendation]
+    if missing:
+        raise ValueError(f"self-learning next-step missing fields: {missing}")
+    if recommendation["category"] not in RUFLO_UPGRADE_CATEGORIES:
+        raise ValueError("invalid next-step category")
+    if recommendation["risk_level"] not in RUFLO_RISK_LABELS:
+        raise ValueError("invalid next-step risk_level")
+    if recommendation["base_recommendation"] not in RUFLO_RECOMMENDATIONS:
+        raise ValueError("invalid next-step base_recommendation")
+    if recommendation["safe_recommendation"] not in RUFLO_RECOMMENDATIONS:
+        raise ValueError("invalid next-step safe_recommendation")
+    for field in ("candidate_id", "title", "source_path", "next_step", "reason"):
+        if not isinstance(recommendation[field], str) or not recommendation[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    for field in ("base_score", "feedback_adjusted_score", "feedback_count"):
+        if not isinstance(recommendation[field], int) or recommendation[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    if not isinstance(recommendation["feedback_adjustment"], int):
+        raise TypeError("feedback_adjustment must be an integer")
+    statuses = recommendation["feedback_statuses"]
+    if not isinstance(statuses, dict):
+        raise TypeError("feedback_statuses must be a dict")
+    for status in SELF_LEARNING_FEEDBACK_STATUSES:
+        if not isinstance(statuses.get(status), int) or statuses[status] < 0:
+            raise ValueError(f"feedback_statuses.{status} must be a non-negative integer")
+    if sum(statuses[status] for status in SELF_LEARNING_FEEDBACK_STATUSES) != recommendation["feedback_count"]:
+        raise ValueError("feedback_count must match feedback_statuses")
+    if not isinstance(recommendation["feedback_ids"], list):
+        raise TypeError("feedback_ids must be a list")
+
+
+def _self_learning_safe_recommendation(
+    candidate: dict[str, Any],
+    accepted: list[dict[str, Any]],
+    rejected: list[dict[str, Any]],
+    deferred: list[dict[str, Any]],
+) -> str:
+    rejected_confidence = sum(item["confidence"] for item in rejected)
+    accepted_confidence = sum(item["confidence"] for item in accepted)
+    if rejected_confidence >= 0.7:
+        return "reject"
+    if deferred and accepted_confidence < 0.7:
+        return "review"
+    if candidate["risk_level"] == "high":
+        return "review"
+    if accepted_confidence >= 0.7:
+        return candidate["recommendation"] if candidate["recommendation"] == "accept" else "review"
+    return candidate["recommendation"]
+
+
+def _self_learning_next_step_text(
+    candidate: dict[str, Any],
+    safe_recommendation: str,
+    accepted: list[dict[str, Any]],
+    rejected: list[dict[str, Any]],
+    deferred: list[dict[str, Any]],
+) -> str:
+    if safe_recommendation == "reject":
+        return "Do not implement this slice now; keep it as rejected feedback unless new evidence appears."
+    if deferred and not accepted:
+        return "Write a smaller auditor-reviewed plan before any implementation patch."
+    if safe_recommendation == "accept":
+        return "Implement one small Link-native patch with tests; do not auto-approve or execute."
+    if candidate["risk_level"] == "high":
+        return "Keep this as design review only until a lower-risk sub-slice is identified."
+    return "Review this candidate and narrow it to one safe patch before implementation."
+
+
+def _self_learning_next_step_reason(
+    candidate: dict[str, Any],
+    accepted: list[dict[str, Any]],
+    rejected: list[dict[str, Any]],
+    deferred: list[dict[str, Any]],
+) -> str:
+    if rejected:
+        strongest = max(rejected, key=lambda item: item["confidence"])
+        return f"Reviewer rejected this candidate: {strongest['reason']}"
+    if deferred:
+        strongest = max(deferred, key=lambda item: item["confidence"])
+        return f"Reviewer deferred this candidate: {strongest['reason']}"
+    if accepted:
+        strongest = max(accepted, key=lambda item: item["confidence"])
+        return f"Reviewer accepted this candidate: {strongest['reason']}"
+    return candidate["reason"]
+
+
+def _self_learning_next_step_rank_key(recommendation: dict[str, Any]) -> tuple[int, int, int, str]:
+    recommendation_rank = {"accept": 0, "review": 1, "reject": 2}.get(recommendation["safe_recommendation"], 3)
+    risk_rank = {"low": 0, "medium": 1, "high": 2}.get(recommendation["risk_level"], 3)
+    return (
+        recommendation_rank,
+        risk_rank,
+        -int(recommendation["feedback_adjusted_score"]),
+        recommendation["candidate_id"],
+    )
+
+
+REPO_VALUE_SCAN_VERSION = "link-repo-value-scan-v1"
+REPO_VALUE_SCAN_MAX_TOP = 25
+REPO_VALUE_CATEGORIES = (
+    "orchestration",
+    "agent_memory",
+    "self_learning",
+    "repo_scanning",
+    "task_routing",
+    "safety_approval_gates",
+    "receipts_auditability",
+    "cli_workflow_ux",
+    "tests_verification",
+)
+
+_REPO_VALUE_CATEGORY_WEIGHTS: dict[str, int] = {
+    "safety_approval_gates": 34,
+    "orchestration": 31,
+    "task_routing": 29,
+    "agent_memory": 28,
+    "self_learning": 27,
+    "repo_scanning": 26,
+    "receipts_auditability": 25,
+    "tests_verification": 23,
+    "cli_workflow_ux": 21,
+}
+
+_REPO_VALUE_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "orchestration": ("orchestr", "swarm", "workflow", "coordinator", "multi-agent", "planner"),
+    "agent_memory": ("memory", "context", "recall", "transcript", "session", "embedding"),
+    "self_learning": ("learn", "feedback", "reflection", "improve", "training", "recommendation"),
+    "repo_scanning": ("scan", "inventory", "benchmark", "sota", "catalog", "compare", "valuable"),
+    "task_routing": ("route", "router", "dispatch", "queue", "worker", "profile"),
+    "safety_approval_gates": ("safety", "approval", "permission", "gate", "policy", "sandbox", "guard"),
+    "receipts_auditability": ("receipt", "audit", "evidence", "trace", "provenance", "finalizer"),
+    "cli_workflow_ux": ("cli", "command", "dashboard", "ux", "workflow", "status"),
+    "tests_verification": ("test", "verify", "healthcheck", "fixture", "regression", "coverage"),
+}
+
+_REPO_VALUE_CATEGORY_REASONS: dict[str, str] = {
+    "orchestration": "Link needs stronger planning and coordination surfaces before expanding multi-agent work.",
+    "agent_memory": "Link needs durable context and memory signals so long-running sessions avoid re-mining the same evidence.",
+    "self_learning": "Link needs reviewer feedback loops that improve future Growth recommendations without autonomous approval.",
+    "repo_scanning": "Link needs better repository value scanning so research archives turn into ranked, actionable upgrade candidates.",
+    "task_routing": "Link needs deterministic routing so tasks reach the narrowest safe worker/profile path.",
+    "safety_approval_gates": "Link needs approval and policy gates around any future automation or worker handoff expansion.",
+    "receipts_auditability": "Link needs clear evidence, provenance, and receipt trails for every self-upgrade slice.",
+    "cli_workflow_ux": "Link needs compact commands and dashboards that make Growth state easier to operate locally.",
+    "tests_verification": "Link needs fast verification surfaces so upgrades stay small, reversible, and evidence-backed.",
+}
+
+
+def make_repo_value_finding_id(path: str, category: str, title: str) -> str:
+    """Build a deterministic id for one repo value finding."""
+    import hashlib
+    import re
+
+    slug = re.sub(r"[^a-z0-9]+", "-", str(title or path or "repo-value").lower()).strip("-")
+    slug = slug[:72].strip("-") or "repo-value"
+    payload = _stable_ruflo_json({
+        "category": category,
+        "path": path,
+        "title": title,
+        "version": REPO_VALUE_SCAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"repo-value-{slug}-{digest}"
+
+
+def collect_repo_value_scan(
+    inventory_items: list[dict[str, Any]],
+    *,
+    top: int = 10,
+    source_label: str = "research",
+) -> dict[str, Any]:
+    """Rank repository inventory items by Link project value without writing state."""
+    if not isinstance(top, int):
+        raise TypeError("top must be an integer")
+    requested_top = top
+    effective_top = min(max(top, 1), REPO_VALUE_SCAN_MAX_TOP)
+    warnings: list[str] = []
+    if requested_top > REPO_VALUE_SCAN_MAX_TOP:
+        warnings.append(f"top {requested_top} capped at {REPO_VALUE_SCAN_MAX_TOP} (hard limit)")
+    if requested_top < 1:
+        warnings.append("top below 1 raised to 1")
+    if not isinstance(inventory_items, list):
+        raise TypeError("inventory_items must be a list")
+
+    findings = [score_repo_value_inventory_item(item, source_label=source_label) for item in inventory_items]
+    unique_findings, duplicate_count = _dedupe_repo_value_findings(findings)
+    weak_count = len([finding for finding in unique_findings if finding["weak_finding"]])
+    if weak_count:
+        warnings.append(f"{weak_count} weak repo value finding(s) have limited Link-specific signals")
+    if duplicate_count:
+        warnings.append(f"{duplicate_count} duplicate repo inventory item(s) collapsed by path/category")
+
+    ranked = sorted(unique_findings, key=_repo_value_rank_key)[:effective_top]
+    scan = {
+        "scan_version": REPO_VALUE_SCAN_VERSION,
+        "scan_id": make_repo_value_scan_id(ranked, top=effective_top, source_label=source_label),
+        "source_label": str(source_label or "research"),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "top_requested": requested_top,
+        "top_used": effective_top,
+        "item_count": len(inventory_items),
+        "finding_count": len(findings),
+        "unique_finding_count": len(unique_findings),
+        "duplicate_count": duplicate_count,
+        "weak_finding_count": weak_count,
+        "categories": list(REPO_VALUE_CATEGORIES),
+        "findings": ranked,
+        "warnings": warnings,
+        "writes": [],
+    }
+    validate_repo_value_scan(scan)
+    return scan
+
+
+def make_repo_value_scan_id(
+    findings: list[dict[str, Any]],
+    *,
+    top: int,
+    source_label: str = "research",
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "finding_ids": [finding["finding_id"] for finding in findings],
+        "source_label": source_label,
+        "top": top,
+        "version": REPO_VALUE_SCAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"repo-value-scan-{digest}"
+
+
+def score_repo_value_inventory_item(
+    item: dict[str, Any],
+    *,
+    source_label: str = "research",
+) -> dict[str, Any]:
+    """Normalize one repo/file inventory item into a Link-value finding."""
+    if not isinstance(item, dict):
+        raise TypeError("repo value inventory item must be a dict")
+    path = _first_text(item, "path", "source_path", "file")
+    if not path:
+        raise ValueError("repo value inventory item requires a path/source_path/file")
+    title = _first_text(item, "title", "name") or _repo_value_title_from_path(path)
+    summary = _first_text(item, "summary", "description", "notes", "content_preview")
+    source_kind = _first_text(item, "source_kind", "kind", "type") or "file"
+    tags = _normalize_repo_value_tags(item.get("tags") or item.get("signals") or item.get("keywords"))
+    haystack = " ".join([
+        path,
+        title,
+        summary,
+        source_kind,
+        " ".join(tags),
+        str(item.get("category") or ""),
+    ])
+    category, signal_count = _infer_repo_value_category(_first_text(item, "category"), haystack)
+    weak_finding = signal_count == 0 or not summary
+
+    score = _REPO_VALUE_CATEGORY_WEIGHTS[category]
+    score += signal_count * 4
+    if summary:
+        score += 5
+    if tags:
+        score += min(len(tags), 4) * 2
+    path_lower = path.lower()
+    if any(part in path_lower for part in ("test", "spec", "fixture")):
+        score += 3 if category == "tests_verification" else 1
+    if any(part in path_lower for part in ("readme", "skill", "workflow", "lib/")):
+        score += 2
+    if weak_finding:
+        score = max(score - 10, 1)
+
+    finding = {
+        "finding_id": make_repo_value_finding_id(path, category, title),
+        "title": str(title).strip(),
+        "category": category,
+        "score": int(score),
+        "value_reason": _repo_value_reason(category, summary, signal_count),
+        "source_path": str(path).strip(),
+        "source_kind": str(source_kind).strip() or "file",
+        "summary": str(summary).strip(),
+        "signals": tags,
+        "signal_count": signal_count,
+        "weak_finding": weak_finding,
+        "source_label": str(source_label or "research"),
+    }
+    validate_repo_value_finding(finding)
+    return finding
+
+
+def validate_repo_value_finding(finding: dict[str, Any]) -> None:
+    required = (
+        "finding_id", "title", "category", "score", "value_reason",
+        "source_path", "source_kind", "summary", "signals", "signal_count",
+        "weak_finding", "source_label",
+    )
+    missing = [field for field in required if field not in finding]
+    if missing:
+        raise ValueError(f"repo value finding missing fields: {missing}")
+    for field in ("finding_id", "title", "category", "value_reason", "source_path", "source_kind", "source_label"):
+        if not isinstance(finding[field], str) or not finding[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if finding["category"] not in REPO_VALUE_CATEGORIES:
+        raise ValueError(f"invalid repo value category: {finding['category']}")
+    if not isinstance(finding["score"], int) or finding["score"] < 0:
+        raise ValueError("score must be a non-negative integer")
+    if not isinstance(finding["signal_count"], int) or finding["signal_count"] < 0:
+        raise ValueError("signal_count must be a non-negative integer")
+    if not isinstance(finding["signals"], list) or not all(isinstance(signal, str) and signal for signal in finding["signals"]):
+        raise TypeError("signals must be a list of non-empty strings")
+    if not isinstance(finding["weak_finding"], bool):
+        raise TypeError("weak_finding must be a boolean")
+
+
+def validate_repo_value_scan(scan: dict[str, Any]) -> None:
+    required = (
+        "scan_version", "scan_id", "source_label", "dry_run", "write_allowed",
+        "automation_allowed", "top_requested", "top_used", "item_count",
+        "finding_count", "unique_finding_count", "duplicate_count",
+        "weak_finding_count", "categories", "findings", "warnings", "writes",
+    )
+    missing = [field for field in required if field not in scan]
+    if missing:
+        raise ValueError(f"repo value scan missing fields: {missing}")
+    if scan["scan_version"] != REPO_VALUE_SCAN_VERSION:
+        raise ValueError("unsupported repo value scan version")
+    if not isinstance(scan["scan_id"], str) or not scan["scan_id"].strip():
+        raise ValueError("scan_id must be a non-empty string")
+    if scan["dry_run"] is not True or scan["write_allowed"] is not False or scan["automation_allowed"] is not False:
+        raise ValueError("repo value scan must remain read-only")
+    if scan["writes"] != []:
+        raise ValueError("repo value scan must not write files")
+    for field in (
+        "top_requested", "top_used", "item_count", "finding_count",
+        "unique_finding_count", "duplicate_count", "weak_finding_count",
+    ):
+        if not isinstance(scan[field], int) or scan[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    if not isinstance(scan["categories"], list) or set(scan["categories"]) != set(REPO_VALUE_CATEGORIES):
+        raise ValueError("repo value scan categories must match stable category set")
+    if not isinstance(scan["findings"], list):
+        raise TypeError("repo value scan findings must be a list")
+    if not isinstance(scan["warnings"], list):
+        raise TypeError("repo value scan warnings must be a list")
+    for finding in scan["findings"]:
+        validate_repo_value_finding(finding)
+
+
+def repo_value_scan_to_json(scan: dict[str, Any]) -> str:
+    validate_repo_value_scan(scan)
+    return _stable_ruflo_json(scan, indent=2) + "\n"
+
+
+def repo_value_scan_from_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    scan = _json.loads(text)
+    validate_repo_value_scan(scan)
+    return scan
+
+
+def _infer_repo_value_category(value: str, haystack: str) -> tuple[str, int]:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    text = f"{raw} {haystack}".lower()
+    if raw in REPO_VALUE_CATEGORIES:
+        explicit_hits = sum(1 for keyword in _REPO_VALUE_CATEGORY_KEYWORDS[raw] if keyword in text)
+        return raw, max(explicit_hits, 1)
+    best_category = "repo_scanning"
+    best_hits = 0
+    for category, keywords in _REPO_VALUE_CATEGORY_KEYWORDS.items():
+        hits = sum(1 for keyword in keywords if keyword in text)
+        if hits > best_hits or (hits == best_hits and _REPO_VALUE_CATEGORY_WEIGHTS[category] > _REPO_VALUE_CATEGORY_WEIGHTS[best_category]):
+            best_category = category
+            best_hits = hits
+    return best_category, best_hits
+
+
+def _repo_value_reason(category: str, summary: str, signal_count: int) -> str:
+    base = _REPO_VALUE_CATEGORY_REASONS[category]
+    if summary and signal_count:
+        return f"{base} Source summary and {signal_count} matching signal(s) support this ranking."
+    if summary:
+        return f"{base} Source summary is present, but Link-specific signals are limited."
+    return f"{base} Treat this as weak until a source summary or stronger signals are added."
+
+
+def _repo_value_title_from_path(path: str) -> str:
+    name = str(path).rstrip("/").split("/")[-1] or "repo item"
+    return name.replace("_", " ").replace("-", " ")
+
+
+def _normalize_repo_value_tags(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items = [value]
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        raise TypeError("repo value tags/signals/keywords must be a string or list")
+    tags: list[str] = []
+    for item in raw_items:
+        text = str(item or "").strip().lower().replace(" ", "_")
+        if text and text not in tags:
+            tags.append(text)
+    return tags
+
+
+def _dedupe_repo_value_findings(findings: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    chosen: dict[tuple[str, str], dict[str, Any]] = {}
+    duplicate_count = 0
+    for finding in findings:
+        key = (finding["source_path"].strip().lower(), finding["category"])
+        existing = chosen.get(key)
+        if existing is None or _repo_value_rank_key(finding) < _repo_value_rank_key(existing):
+            chosen[key] = finding
+        if existing is not None:
+            duplicate_count += 1
+    return list(chosen.values()), duplicate_count
+
+
+def _repo_value_rank_key(finding: dict[str, Any]) -> tuple[int, int, str]:
+    weak_rank = 1 if finding.get("weak_finding") else 0
+    return (weak_rank, -int(finding.get("score", 0)), finding.get("finding_id", ""))
+
+
 def _normalize_feedback_status(status: str) -> str:
     raw = str(status or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
