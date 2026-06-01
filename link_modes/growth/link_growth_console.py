@@ -5386,6 +5386,485 @@ def render_archive_batch_mine_view(data: dict[str, Any]) -> None:
     render_archive_batch_mine_with_rich(data)
 
 
+# ── Ruflo upgrade intake helpers ───────────────────────────────────────
+RUFLO_UPGRADE_INTAKE_VERSION = "link-ruflo-upgrade-intake-v1"
+RUFLO_UPGRADE_CATEGORIES = (
+    "self_learning",
+    "swarm_orchestration",
+    "memory_retrieval",
+    "worker_routing",
+    "hook_pipeline",
+    "security_gate",
+    "performance",
+)
+RUFLO_RISK_LABELS = ("low", "medium", "high")
+RUFLO_RECOMMENDATIONS = ("accept", "review", "reject")
+
+_RUFLO_CATEGORY_WEIGHTS: dict[str, int] = {
+    "security_gate": 32,
+    "worker_routing": 30,
+    "memory_retrieval": 28,
+    "self_learning": 27,
+    "swarm_orchestration": 25,
+    "hook_pipeline": 23,
+    "performance": 21,
+}
+
+_RUFLO_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "self_learning": ("self-learning", "self learning", "reflection", "learn", "feedback"),
+    "swarm_orchestration": ("swarm", "orchestration", "multi-agent", "coordinator", "collective"),
+    "memory_retrieval": ("memory", "retrieval", "vector", "recall", "context store"),
+    "worker_routing": ("worker", "routing", "dispatcher", "dispatch", "profile", "route"),
+    "hook_pipeline": ("hook", "pipeline", "lifecycle", "preflight", "postflight"),
+    "security_gate": ("security", "permission", "gate", "sandbox", "approval", "policy"),
+    "performance": ("performance", "latency", "cache", "fast", "speed", "throughput"),
+}
+
+_RUFLO_CATEGORY_REASONS: dict[str, str] = {
+    "self_learning": "Link needs tighter feedback loops so research and run outcomes improve future upgrade selection.",
+    "swarm_orchestration": "Link needs safer coordination patterns before expanding multi-worker task execution.",
+    "memory_retrieval": "Link needs durable context retrieval so long-running Growth work can reuse prior evidence without re-mining.",
+    "worker_routing": "Link needs deterministic worker routing so tasks reach the narrowest capable profile with clear gates.",
+    "hook_pipeline": "Link needs explicit lifecycle hooks so preflight, receipts, and verification stay consistent.",
+    "security_gate": "Link needs stronger gates around tools, files, and worker handoffs before adding automation power.",
+    "performance": "Link needs faster mining and queue ranking so Growth stays usable on large research archives.",
+}
+
+
+def make_ruflo_upgrade_candidate_id(
+    title: str,
+    source_path: str,
+    category: str,
+) -> str:
+    """Build a deterministic id for a Ruflo-inspired upgrade candidate."""
+    import hashlib
+    import re
+
+    slug = re.sub(r"[^a-z0-9]+", "-", str(title or "ruflo-upgrade").lower()).strip("-")
+    slug = slug[:72].strip("-") or "ruflo-upgrade"
+    payload = _stable_ruflo_json({
+        "category": category,
+        "source_path": source_path,
+        "title": title,
+        "version": RUFLO_UPGRADE_INTAKE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"ruflo-{slug}-{digest}"
+
+
+def build_ruflo_upgrade_intake(
+    findings: list[dict[str, Any]],
+    *,
+    source_label: str = "ruflo",
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Normalize and rank Ruflo-derived findings without writing state."""
+    candidates = [
+        score_ruflo_upgrade_candidate(finding, source_label=source_label)
+        for finding in findings
+    ]
+    candidates.sort(key=lambda item: (-item["score"], item["candidate_id"]))
+    if limit is not None:
+        candidates = candidates[:max(int(limit), 0)]
+
+    intake = {
+        "intake_version": RUFLO_UPGRADE_INTAKE_VERSION,
+        "source_label": str(source_label or "ruflo"),
+        "candidate_count": len(candidates),
+        "categories": list(RUFLO_UPGRADE_CATEGORIES),
+        "candidates": candidates,
+    }
+    validate_ruflo_upgrade_intake(intake)
+    return intake
+
+
+def score_ruflo_upgrade_candidate(
+    finding: dict[str, Any],
+    *,
+    source_label: str = "ruflo",
+) -> dict[str, Any]:
+    """Turn one raw Ruflo finding/code-brief item into a ranked candidate."""
+    if not isinstance(finding, dict):
+        raise TypeError("Ruflo finding must be a dict")
+
+    title = _first_text(finding, "title", "name", "candidate_title") or "Ruflo upgrade candidate"
+    summary = _first_text(finding, "summary", "description", "problem", "source_summary")
+    source_path = _first_text(finding, "source_path", "path", "file") or str(source_label or "ruflo")
+    source_kind = _first_text(finding, "source_kind", "kind", "source_type") or "research"
+    category = _normalize_ruflo_category(
+        _first_text(finding, "category", "capability", "cluster"),
+        " ".join(str(value) for value in finding.values()),
+    )
+    risk = _normalize_ruflo_risk(_first_text(finding, "risk", "risk_level"))
+    reason = _first_text(finding, "reason", "why", "link_need") or _RUFLO_CATEGORY_REASONS[category]
+
+    evidence_items = finding.get("evidence") or finding.get("evidence_paths") or finding.get("signals") or []
+    if isinstance(evidence_items, str):
+        evidence = [evidence_items]
+    elif isinstance(evidence_items, list):
+        evidence = [str(item) for item in evidence_items if str(item).strip()]
+    else:
+        evidence = []
+
+    score = _RUFLO_CATEGORY_WEIGHTS[category]
+    score += {"low": 6, "medium": 0, "high": -9}[risk]
+    if summary:
+        score += 4
+    if evidence:
+        score += min(len(evidence), 3) * 2
+    if source_path and source_path != str(source_label or "ruflo"):
+        score += 2
+    score = max(score, 0)
+
+    recommendation = _ruflo_recommendation(score, risk)
+    candidate = {
+        "candidate_id": make_ruflo_upgrade_candidate_id(title, source_path, category),
+        "title": str(title).strip(),
+        "category": category,
+        "risk_level": risk,
+        "recommendation": recommendation,
+        "score": score,
+        "reason": str(reason).strip(),
+        "source_path": str(source_path).strip(),
+        "source_kind": str(source_kind).strip() or "research",
+        "summary": str(summary).strip(),
+        "evidence": evidence,
+    }
+    validate_ruflo_upgrade_candidate(candidate)
+    return candidate
+
+
+def validate_ruflo_upgrade_candidate(candidate: dict[str, Any]) -> None:
+    required = (
+        "candidate_id", "title", "category", "risk_level", "recommendation",
+        "score", "reason", "source_path", "source_kind", "summary", "evidence",
+    )
+    missing = [field for field in required if field not in candidate]
+    if missing:
+        raise ValueError(f"Ruflo candidate missing fields: {missing}")
+    for field in ("candidate_id", "title", "reason", "source_path", "source_kind"):
+        if not isinstance(candidate[field], str) or not candidate[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if candidate["category"] not in RUFLO_UPGRADE_CATEGORIES:
+        raise ValueError(f"invalid Ruflo category: {candidate['category']}")
+    if candidate["risk_level"] not in RUFLO_RISK_LABELS:
+        raise ValueError(f"invalid Ruflo risk label: {candidate['risk_level']}")
+    if candidate["recommendation"] not in RUFLO_RECOMMENDATIONS:
+        raise ValueError(f"invalid Ruflo recommendation: {candidate['recommendation']}")
+    if not isinstance(candidate["score"], int) or candidate["score"] < 0:
+        raise ValueError("score must be a non-negative integer")
+    if not isinstance(candidate["evidence"], list):
+        raise TypeError("evidence must be a list")
+
+
+def validate_ruflo_upgrade_intake(intake: dict[str, Any]) -> None:
+    if intake.get("intake_version") != RUFLO_UPGRADE_INTAKE_VERSION:
+        raise ValueError("unsupported Ruflo upgrade intake version")
+    candidates = intake.get("candidates")
+    if not isinstance(candidates, list):
+        raise TypeError("Ruflo intake candidates must be a list")
+    if intake.get("candidate_count") != len(candidates):
+        raise ValueError("Ruflo intake candidate_count must match candidates length")
+    for candidate in candidates:
+        validate_ruflo_upgrade_candidate(candidate)
+
+
+def ruflo_upgrade_intake_to_json(intake: dict[str, Any]) -> str:
+    validate_ruflo_upgrade_intake(intake)
+    return _stable_ruflo_json(intake, indent=2) + "\n"
+
+
+def ruflo_upgrade_intake_from_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    intake = _json.loads(text)
+    validate_ruflo_upgrade_intake(intake)
+    return intake
+
+
+def _stable_ruflo_json(value: Any, indent: int | None = None) -> str:
+    import json as _json
+
+    kwargs: dict[str, Any] = {"sort_keys": True, "default": str}
+    if indent is None:
+        kwargs["separators"] = (",", ":")
+    else:
+        kwargs["indent"] = indent
+    return _json.dumps(value, **kwargs)
+
+
+def _first_text(data: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = data.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _normalize_ruflo_category(value: str, haystack: str) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw in RUFLO_UPGRADE_CATEGORIES:
+        return raw
+    text = f"{raw} {haystack}".lower()
+    for category, keywords in _RUFLO_CATEGORY_KEYWORDS.items():
+        if any(keyword in text for keyword in keywords):
+            return category
+    return "performance"
+
+
+def _normalize_ruflo_risk(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in RUFLO_RISK_LABELS:
+        return raw
+    if raw in {"safe", "small", "minor"}:
+        return "low"
+    if raw in {"danger", "risky", "large"}:
+        return "high"
+    return "medium"
+
+
+def _ruflo_recommendation(score: int, risk: str) -> str:
+    if score >= 34 and risk != "high":
+        return "accept"
+    if score >= 20:
+        return "review"
+    return "reject"
+
+
+RUFLO_UPGRADE_PLAN_VERSION = "link-ruflo-upgrade-plan-v1"
+RUFLO_UPGRADE_PLAN_MAX_TOP = 25
+_RUFLO_PLAN_SECTIONS = (
+    "fast_wins",
+    "safety_control_plane_upgrades",
+    "self_learning_upgrades",
+    "workflow_parallelism_upgrades",
+    "observability_dashboard_upgrades",
+)
+_RUFLO_SECTION_CATEGORY_MAP: dict[str, tuple[str, ...]] = {
+    "safety_control_plane_upgrades": ("security_gate", "worker_routing"),
+    "self_learning_upgrades": ("self_learning", "memory_retrieval"),
+    "workflow_parallelism_upgrades": ("swarm_orchestration", "hook_pipeline"),
+    "observability_dashboard_upgrades": ("performance",),
+}
+
+
+def make_ruflo_upgrade_plan_id(
+    candidates: list[dict[str, Any]],
+    *,
+    top: int,
+    source_label: str = "ruflo",
+) -> str:
+    """Build a deterministic id for a Ruflo upgrade plan preview."""
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "candidate_ids": [candidate["candidate_id"] for candidate in candidates],
+        "source_label": source_label,
+        "top": top,
+        "version": RUFLO_UPGRADE_PLAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"ruflo-upgrade-plan-{digest}"
+
+
+def collect_ruflo_upgrade_plan(
+    intake_or_findings: dict[str, Any] | list[dict[str, Any]],
+    *,
+    top: int = 10,
+    source_label: str = "ruflo",
+) -> dict[str, Any]:
+    """Create an auditor-gated implementation plan from Ruflo intake data.
+
+    This is a pure read-only planner. It does not create proposals, approvals,
+    handoffs, tasks, receipts on disk, or automation runs.
+    """
+    if not isinstance(top, int):
+        raise TypeError("top must be an integer")
+    requested_top = top
+    effective_top = min(max(top, 1), RUFLO_UPGRADE_PLAN_MAX_TOP)
+    warnings: list[str] = []
+    if requested_top > RUFLO_UPGRADE_PLAN_MAX_TOP:
+        warnings.append(f"top {requested_top} capped at {RUFLO_UPGRADE_PLAN_MAX_TOP} (hard limit)")
+    if requested_top < 1:
+        warnings.append("top below 1 raised to 1")
+
+    candidates = _ruflo_candidates_from_input(intake_or_findings, source_label=source_label)
+    unique_candidates, duplicate_count = _dedupe_ruflo_candidates(candidates)
+    ranked = sorted(unique_candidates, key=_ruflo_plan_rank_key)[:effective_top]
+
+    sections = _build_ruflo_plan_sections(ranked)
+    plan = {
+        "plan_version": RUFLO_UPGRADE_PLAN_VERSION,
+        "plan_id": make_ruflo_upgrade_plan_id(ranked, top=effective_top, source_label=source_label),
+        "source_label": str(source_label or "ruflo"),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "auditor_gate": {
+            "required": True,
+            "auditor_profile": "read_only_auditor",
+            "approval_required_before_implementation": True,
+            "reason": "Ruflo patterns are research inputs; Link must review and implement one small native slice at a time.",
+        },
+        "top_requested": requested_top,
+        "top_used": effective_top,
+        "candidate_count": len(candidates),
+        "unique_candidate_count": len(unique_candidates),
+        "duplicate_count": duplicate_count,
+        "ranked_candidates": ranked,
+        "sections": sections,
+        "rollback_guidance": [
+            "Do not mutate research archives or generated catalogs.",
+            "Implement one plan item per patch branch or review slice.",
+            "Revert only the touched Link source/test files if a slice fails verification.",
+        ],
+        "verification_commands": [
+            "python3 -m py_compile link.py link_modes/growth/link_growth_console.py tests/test_growth_pipeline.py",
+            "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_growth_pipeline.py",
+            "PYTHONDONTWRITEBYTECODE=1 python3 link_healthcheck.py",
+        ],
+        "recommended_next_slice": _recommended_ruflo_next_slice(sections, ranked),
+        "warnings": warnings,
+    }
+    validate_ruflo_upgrade_plan(plan)
+    return plan
+
+
+def validate_ruflo_upgrade_plan(plan: dict[str, Any]) -> None:
+    required = (
+        "plan_version", "plan_id", "source_label", "dry_run", "write_allowed",
+        "automation_allowed", "auditor_gate", "top_requested", "top_used",
+        "candidate_count", "unique_candidate_count", "duplicate_count",
+        "ranked_candidates", "sections", "rollback_guidance",
+        "verification_commands", "recommended_next_slice", "warnings",
+    )
+    missing = [field for field in required if field not in plan]
+    if missing:
+        raise ValueError(f"Ruflo upgrade plan missing fields: {missing}")
+    if plan["plan_version"] != RUFLO_UPGRADE_PLAN_VERSION:
+        raise ValueError("unsupported Ruflo upgrade plan version")
+    if not isinstance(plan["plan_id"], str) or not plan["plan_id"].strip():
+        raise ValueError("plan_id must be a non-empty string")
+    if plan["dry_run"] is not True or plan["write_allowed"] is not False or plan["automation_allowed"] is not False:
+        raise ValueError("Ruflo upgrade plan must remain auditor-gated and read-only")
+    if not isinstance(plan["auditor_gate"], dict) or plan["auditor_gate"].get("required") is not True:
+        raise ValueError("Ruflo upgrade plan requires an auditor gate")
+    if not isinstance(plan["ranked_candidates"], list):
+        raise TypeError("ranked_candidates must be a list")
+    if not isinstance(plan["sections"], dict):
+        raise TypeError("sections must be a dict")
+    for section in _RUFLO_PLAN_SECTIONS:
+        if section not in plan["sections"]:
+            raise ValueError(f"Ruflo upgrade plan missing section: {section}")
+    for candidate in plan["ranked_candidates"]:
+        validate_ruflo_upgrade_candidate(candidate)
+
+
+def ruflo_upgrade_plan_to_json(plan: dict[str, Any]) -> str:
+    validate_ruflo_upgrade_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def ruflo_upgrade_plan_from_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    plan = _json.loads(text)
+    validate_ruflo_upgrade_plan(plan)
+    return plan
+
+
+def _ruflo_candidates_from_input(
+    intake_or_findings: dict[str, Any] | list[dict[str, Any]],
+    *,
+    source_label: str,
+) -> list[dict[str, Any]]:
+    if isinstance(intake_or_findings, dict):
+        if "candidates" not in intake_or_findings:
+            raise ValueError("Ruflo plan input dict must include candidates")
+        candidates = intake_or_findings.get("candidates")
+        if not isinstance(candidates, list):
+            raise TypeError("Ruflo plan candidates must be a list")
+        normalized: list[dict[str, Any]] = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise TypeError("Ruflo plan candidate entries must be dicts")
+            if "candidate_id" in candidate:
+                validate_ruflo_upgrade_candidate(candidate)
+                normalized.append(dict(candidate))
+            else:
+                normalized.append(score_ruflo_upgrade_candidate(candidate, source_label=source_label))
+        return normalized
+
+    if not isinstance(intake_or_findings, list):
+        raise TypeError("Ruflo plan input must be an intake dict or findings list")
+    return [score_ruflo_upgrade_candidate(finding, source_label=source_label) for finding in intake_or_findings]
+
+
+def _dedupe_ruflo_candidates(candidates: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    chosen: dict[tuple[str, str, str], dict[str, Any]] = {}
+    duplicate_count = 0
+    for candidate in candidates:
+        key = (
+            candidate["title"].strip().lower(),
+            candidate["category"],
+            candidate["source_path"].strip().lower(),
+        )
+        existing = chosen.get(key)
+        if existing is None or _ruflo_plan_rank_key(candidate) < _ruflo_plan_rank_key(existing):
+            chosen[key] = candidate
+        if existing is not None:
+            duplicate_count += 1
+    return list(chosen.values()), duplicate_count
+
+
+def _ruflo_plan_rank_key(candidate: dict[str, Any]) -> tuple[int, int, int, str]:
+    recommendation_rank = {"accept": 0, "review": 1, "reject": 2}.get(candidate.get("recommendation"), 3)
+    risk_rank = {"low": 0, "medium": 1, "high": 2}.get(candidate.get("risk_level"), 3)
+    return (recommendation_rank, risk_rank, -int(candidate.get("score", 0)), candidate.get("candidate_id", ""))
+
+
+def _build_ruflo_plan_sections(candidates: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    sections: dict[str, list[dict[str, Any]]] = {section: [] for section in _RUFLO_PLAN_SECTIONS}
+    sections["fast_wins"] = [
+        candidate for candidate in candidates
+        if candidate["risk_level"] == "low" and candidate["recommendation"] == "accept"
+    ][:5]
+
+    for candidate in candidates:
+        for section, categories in _RUFLO_SECTION_CATEGORY_MAP.items():
+            if candidate["category"] in categories:
+                sections[section].append(candidate)
+                break
+    return sections
+
+
+def _recommended_ruflo_next_slice(
+    sections: dict[str, list[dict[str, Any]]],
+    ranked: list[dict[str, Any]],
+) -> dict[str, Any]:
+    candidate = (sections.get("fast_wins") or ranked or [None])[0]
+    if not candidate:
+        return {
+            "title": "No Ruflo upgrade candidate selected",
+            "category": "",
+            "risk_level": "",
+            "command": "python3 link.py growth code-brief-propose-batch --top 10 --json",
+            "reason": "Generate or provide Ruflo intake candidates before planning implementation slices.",
+        }
+    return {
+        "title": candidate["title"],
+        "category": candidate["category"],
+        "risk_level": candidate["risk_level"],
+        "candidate_id": candidate["candidate_id"],
+        "command": "Implement one small audited Link-native slice for this candidate; do not auto-approve or execute.",
+        "reason": candidate["reason"],
+    }
+
+
+
 # ── archive code queue entry point ──────────────────────────────────────
 _CODE_EXTS: set[str] = {
     ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",

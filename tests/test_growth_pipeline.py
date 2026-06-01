@@ -3196,6 +3196,250 @@ def check_growth_code_brief_propose_batch() -> None:
     print("growth code-brief-propose-batch OK")
 
 
+
+# ---------------------------------------------------------------------------
+# 47. Ruflo upgrade intake -- pure ranking foundation
+# ---------------------------------------------------------------------------
+
+def check_ruflo_upgrade_intake_helper() -> None:
+    """Ruflo-derived findings normalize into deterministic ranked candidates."""
+    from link_modes.growth.link_growth_console import (
+        RUFLO_RECOMMENDATIONS,
+        RUFLO_RISK_LABELS,
+        RUFLO_UPGRADE_CATEGORIES,
+        RUFLO_UPGRADE_INTAKE_VERSION,
+        build_ruflo_upgrade_intake,
+        ruflo_upgrade_intake_from_json,
+        ruflo_upgrade_intake_to_json,
+        score_ruflo_upgrade_candidate,
+        validate_ruflo_upgrade_candidate,
+        validate_ruflo_upgrade_intake,
+    )
+
+    findings = [
+        {
+            "title": "Profile-gated worker dispatch",
+            "category": "worker_routing",
+            "risk_level": "low",
+            "summary": "Ruflo routes work through dispatch profiles before tool use.",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/ruflo/src/orchestrator.ts",
+            "source_kind": "code_brief",
+            "evidence": ["worker dispatcher", "profile gate"],
+        },
+        {
+            "title": "Lifecycle hook pipeline receipts",
+            "description": "Hook pipeline records preflight and postflight decisions.",
+            "risk": "medium",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/ruflo/src/hooks/index.ts",
+            "source_kind": "code_brief",
+            "signals": ["hook", "pipeline"],
+        },
+        {
+            "title": "Large autonomous swarm executor",
+            "category": "swarm_orchestration",
+            "risk": "high",
+            "summary": "A broad swarm executor pattern needs review before Link adoption.",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/v3/swarm.ts",
+            "source_kind": "research",
+        },
+    ]
+
+    intake = build_ruflo_upgrade_intake(findings, source_label="ruflo")
+    _require(intake["intake_version"] == RUFLO_UPGRADE_INTAKE_VERSION,
+             "Ruflo intake version mismatch")
+    _require(intake["candidate_count"] == 3,
+             "Ruflo intake candidate_count must match findings")
+    _require(set(intake["categories"]) == set(RUFLO_UPGRADE_CATEGORIES),
+             "Ruflo intake must expose stable categories")
+    validate_ruflo_upgrade_intake(intake)
+
+    candidates = intake["candidates"]
+    scores = [candidate["score"] for candidate in candidates]
+    _require(scores == sorted(scores, reverse=True),
+             "Ruflo candidates must be sorted by descending score")
+    top = candidates[0]
+    _require(top["category"] == "worker_routing",
+             "low-risk worker routing candidate should rank first")
+    _require(top["recommendation"] == "accept",
+             "strong low-risk Ruflo candidate should recommend accept")
+    _require(top["risk_level"] in RUFLO_RISK_LABELS,
+             "Ruflo risk label must be stable")
+    _require(top["recommendation"] in RUFLO_RECOMMENDATIONS,
+             "Ruflo recommendation must be stable")
+    _require(top["reason"], "Ruflo candidate must include a Link need reason")
+    _require(top["source_path"].endswith("orchestrator.ts"),
+             "Ruflo candidate must preserve source_path")
+    _require(top["source_kind"] == "code_brief",
+             "Ruflo candidate must preserve source_kind")
+
+    same = score_ruflo_upgrade_candidate(findings[0], source_label="ruflo")
+    _require(same["candidate_id"] == top["candidate_id"],
+             "Ruflo candidate id must be deterministic")
+
+    encoded = ruflo_upgrade_intake_to_json(intake)
+    _require(encoded == ruflo_upgrade_intake_to_json(intake),
+             "Ruflo intake JSON serialization must be stable")
+    decoded = ruflo_upgrade_intake_from_json(encoded)
+    _require(decoded == intake, "Ruflo intake JSON round-trip must preserve data")
+
+    inferred = score_ruflo_upgrade_candidate({
+        "title": "Security approval sandbox",
+        "summary": "Approval policy gate for sandboxed tool use.",
+        "source_path": "research/_extracted/ruflo-main/security.ts",
+        "risk": "safe",
+    })
+    _require(inferred["category"] == "security_gate",
+             "Ruflo category inference must detect security gate patterns")
+    _require(inferred["risk_level"] == "low",
+             "Ruflo risk normalization must map safe to low")
+    validate_ruflo_upgrade_candidate(inferred)
+
+    limited = build_ruflo_upgrade_intake(findings, limit=2)
+    _require(limited["candidate_count"] == 2,
+             "Ruflo intake limit must clamp result count")
+
+    bad = dict(top)
+    bad["category"] = "not_a_category"
+    try:
+        validate_ruflo_upgrade_candidate(bad)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid Ruflo category must be rejected")
+
+    print("ruflo upgrade intake helper OK")
+
+
+def check_ruflo_upgrade_plan_helper() -> None:
+    """Ruflo intake candidates group into an auditor-gated implementation plan."""
+    from link_modes.growth.link_growth_console import (
+        RUFLO_UPGRADE_PLAN_MAX_TOP,
+        RUFLO_UPGRADE_PLAN_VERSION,
+        build_ruflo_upgrade_intake,
+        collect_ruflo_upgrade_plan,
+        ruflo_upgrade_plan_from_json,
+        ruflo_upgrade_plan_to_json,
+        validate_ruflo_upgrade_plan,
+    )
+
+    findings = [
+        {
+            "title": "Self-learning feedback receipts",
+            "summary": "Reflection hooks can turn run results into future Growth ranking signals.",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/ruflo/src/reflection.ts",
+            "source_kind": "code_brief",
+            "risk": "low",
+            "signals": ["self-learning", "feedback", "reflection"],
+        },
+        {
+            "title": "Self-learning feedback receipts",
+            "summary": "Duplicate with the same title/category/source should collapse.",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/ruflo/src/reflection.ts",
+            "source_kind": "code_brief",
+            "risk": "low",
+            "signals": ["self-learning"],
+        },
+        {
+            "title": "Profile gate before dispatch",
+            "category": "security_gate",
+            "risk_level": "low",
+            "summary": "Route every worker dispatch through profile and permission gates.",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/ruflo/src/security/gate.ts",
+            "source_kind": "code_brief",
+            "evidence": ["approval gate", "sandbox policy"],
+        },
+        {
+            "title": "Swarm coordinator review",
+            "category": "swarm_orchestration",
+            "risk": "high",
+            "summary": "Broad swarm orchestration requires design review before implementation.",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/v3/swarm.ts",
+            "source_kind": "research",
+        },
+        {
+            "title": "Dashboard latency metrics",
+            "category": "performance",
+            "risk": "medium",
+            "summary": "Metrics can reveal slow Growth queue and mining stages.",
+            "source_path": "research/_extracted/ruflo-main/ruflo-main/ruflo/src/metrics.ts",
+            "source_kind": "research",
+        },
+    ]
+    intake = build_ruflo_upgrade_intake(findings, source_label="ruflo")
+    plan = collect_ruflo_upgrade_plan(intake, top=10, source_label="ruflo")
+    same_plan = collect_ruflo_upgrade_plan(intake, top=10, source_label="ruflo")
+
+    _require(plan["plan_version"] == RUFLO_UPGRADE_PLAN_VERSION,
+             "Ruflo plan version mismatch")
+    _require(plan["plan_id"] == same_plan["plan_id"],
+             "Ruflo plan_id must be deterministic")
+    _require(plan["dry_run"] is True and plan["write_allowed"] is False,
+             "Ruflo plan must remain read-only")
+    _require(plan["automation_allowed"] is False,
+             "Ruflo plan must not allow automation")
+    _require(plan["auditor_gate"]["required"] is True,
+             "Ruflo plan must require auditor gate")
+    _require(plan["candidate_count"] == 5,
+             "Ruflo plan candidate_count must include input candidates")
+    _require(plan["duplicate_count"] == 1,
+             "Ruflo plan must report duplicate candidates")
+    _require(plan["unique_candidate_count"] == 4,
+             "Ruflo plan must dedupe title/category/source duplicates")
+    _require(len(plan["ranked_candidates"]) == 4,
+             "Ruflo plan must rank unique candidates")
+
+    sections = plan["sections"]
+    _require(sections["self_learning_upgrades"],
+             "Ruflo plan must group self-learning candidates")
+    _require(sections["safety_control_plane_upgrades"],
+             "Ruflo plan must group safety/control-plane candidates")
+    _require(sections["workflow_parallelism_upgrades"],
+             "Ruflo plan must group workflow/parallelism candidates")
+    _require(sections["observability_dashboard_upgrades"],
+             "Ruflo plan must group observability/performance candidates")
+    _require(sections["fast_wins"],
+             "Ruflo plan must identify fast wins")
+    _require(plan["recommended_next_slice"].get("candidate_id"),
+             "Ruflo plan must recommend a next audited slice")
+    _require(plan["rollback_guidance"], "Ruflo plan must include rollback guidance")
+    _require(plan["verification_commands"],
+             "Ruflo plan must include verification commands")
+
+    encoded = ruflo_upgrade_plan_to_json(plan)
+    _require(encoded == ruflo_upgrade_plan_to_json(plan),
+             "Ruflo plan JSON serialization must be stable")
+    decoded = ruflo_upgrade_plan_from_json(encoded)
+    _require(decoded == plan, "Ruflo plan JSON round-trip must preserve data")
+    validate_ruflo_upgrade_plan(plan)
+
+    clamped = collect_ruflo_upgrade_plan(findings, top=99, source_label="ruflo")
+    _require(clamped["top_used"] == RUFLO_UPGRADE_PLAN_MAX_TOP,
+             "Ruflo plan top must clamp to max")
+    _require(clamped["warnings"], "Ruflo plan top clamp must emit warning")
+
+    raised = collect_ruflo_upgrade_plan(findings, top=0, source_label="ruflo")
+    _require(raised["top_used"] == 1, "Ruflo plan top below 1 must raise to 1")
+    _require(raised["warnings"], "Ruflo plan low top must emit warning")
+
+    try:
+        collect_ruflo_upgrade_plan({"not_candidates": []})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Ruflo plan invalid input must be rejected")
+
+    bad_plan = dict(plan)
+    bad_plan["automation_allowed"] = True
+    try:
+        validate_ruflo_upgrade_plan(bad_plan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Ruflo plan must reject automation_allowed=True")
+
+    print("ruflo upgrade plan helper OK")
+
+
 # ---------------------------------------------------------------------------
 # 47. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
@@ -3890,6 +4134,8 @@ def main() -> None:
     check_growth_archive_code_queue_populated()
     check_growth_archive_code_queue_top_clamp()
     check_growth_code_brief_propose_batch()
+    check_ruflo_upgrade_intake_helper()
+    check_ruflo_upgrade_plan_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()
