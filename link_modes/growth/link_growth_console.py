@@ -7509,6 +7509,1096 @@ def _capability_gap_action(gap_type: str) -> str:
     }[gap_type]
 
 
+GROWTH_PLANNING_PREVIEW_VERSION = "link-growth-planning-preview-v1"
+
+
+def make_growth_planning_preview_id(
+    capability_inventory: dict[str, Any],
+    repo_value_scan: dict[str, Any],
+    capability_gap_preview: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "capability_inventory_id": capability_inventory["inventory_id"],
+        "capability_gap_preview_id": capability_gap_preview["preview_id"],
+        "repo_value_scan_id": repo_value_scan["scan_id"],
+        "version": GROWTH_PLANNING_PREVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"growth-planning-preview-{digest}"
+
+
+def collect_growth_planning_preview(
+    repo_inventory_items: list[dict[str, Any]],
+    *,
+    link_capabilities: list[dict[str, Any]] | None = None,
+    top: int = 10,
+    source_label: str = "research",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a read-only aggregate planning preview for Growth dashboards/JSON."""
+    capability_inventory = collect_link_capability_inventory(link_capabilities)
+    repo_value_scan = collect_repo_value_scan(
+        repo_inventory_items,
+        top=top,
+        source_label=source_label,
+    )
+    gap_preview = collect_capability_gap_preview(
+        capability_inventory,
+        repo_value_scan,
+        metadata={"source_label": source_label, **dict(metadata or {})},
+    )
+    preview = {
+        "planning_version": GROWTH_PLANNING_PREVIEW_VERSION,
+        "preview_id": make_growth_planning_preview_id(capability_inventory, repo_value_scan, gap_preview),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "capability_inventory_summary": _growth_planning_capability_summary(capability_inventory),
+        "repo_value_scan_summary": _growth_planning_repo_value_summary(repo_value_scan),
+        "capability_gap_summary": _growth_planning_gap_summary(gap_preview),
+        "top_recommended_next_steps": _growth_planning_next_steps(gap_preview),
+        "metadata": dict(metadata or {}),
+        "source_label": str(source_label or "research"),
+        "writes": [],
+    }
+    validate_growth_planning_preview(preview)
+    return preview
+
+
+def validate_growth_planning_preview(preview: dict[str, Any]) -> None:
+    required = (
+        "planning_version", "preview_id", "dry_run", "write_allowed", "automation_allowed",
+        "capability_inventory_summary", "repo_value_scan_summary", "capability_gap_summary",
+        "top_recommended_next_steps", "metadata", "source_label", "writes",
+    )
+    missing = [field for field in required if field not in preview]
+    if missing:
+        raise ValueError(f"Growth planning preview missing fields: {missing}")
+    if preview["planning_version"] != GROWTH_PLANNING_PREVIEW_VERSION:
+        raise ValueError("unsupported Growth planning preview version")
+    if not isinstance(preview["preview_id"], str) or not preview["preview_id"].strip():
+        raise ValueError("preview_id must be a non-empty string")
+    if preview["dry_run"] is not True or preview["write_allowed"] is not False or preview["automation_allowed"] is not False:
+        raise ValueError("Growth planning preview must remain read-only")
+    if preview["writes"] != []:
+        raise ValueError("Growth planning preview must not write files")
+    for field in ("capability_inventory_summary", "repo_value_scan_summary", "capability_gap_summary"):
+        if not isinstance(preview[field], dict):
+            raise TypeError(f"{field} must be a dict")
+    if not isinstance(preview["top_recommended_next_steps"], list):
+        raise TypeError("top_recommended_next_steps must be a list")
+    if not isinstance(preview["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    if not isinstance(preview["source_label"], str) or not preview["source_label"].strip():
+        raise ValueError("source_label must be a non-empty string")
+    for step in preview["top_recommended_next_steps"]:
+        _validate_growth_planning_next_step(step)
+
+
+def growth_planning_preview_to_json(preview: dict[str, Any]) -> str:
+    validate_growth_planning_preview(preview)
+    return _stable_ruflo_json(preview, indent=2) + "\n"
+
+
+def growth_planning_preview_from_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    preview = _json.loads(text)
+    validate_growth_planning_preview(preview)
+    return preview
+
+
+def _growth_planning_capability_summary(inventory: dict[str, Any]) -> dict[str, Any]:
+    validate_link_capability_inventory(inventory)
+    by_category = {category: 0 for category in LINK_CAPABILITY_CATEGORIES}
+    by_maturity = {level: 0 for level in LINK_CAPABILITY_MATURITY_LEVELS}
+    for capability in inventory["capabilities"]:
+        by_category[capability["category"]] += 1
+        by_maturity[capability["maturity_level"]] += 1
+    return {
+        "inventory_id": inventory["inventory_id"],
+        "capability_count": inventory["capability_count"],
+        "duplicate_count": inventory["duplicate_count"],
+        "by_category": by_category,
+        "by_maturity": by_maturity,
+    }
+
+
+def _growth_planning_repo_value_summary(scan: dict[str, Any]) -> dict[str, Any]:
+    validate_repo_value_scan(scan)
+    by_category = {category: 0 for category in REPO_VALUE_CATEGORIES}
+    for finding in scan["findings"]:
+        by_category[finding["category"]] += 1
+    return {
+        "scan_id": scan["scan_id"],
+        "source_label": scan["source_label"],
+        "item_count": scan["item_count"],
+        "finding_count": scan["finding_count"],
+        "unique_finding_count": scan["unique_finding_count"],
+        "duplicate_count": scan["duplicate_count"],
+        "weak_finding_count": scan["weak_finding_count"],
+        "by_category": by_category,
+    }
+
+
+def _growth_planning_gap_summary(gap_preview: dict[str, Any]) -> dict[str, Any]:
+    validate_capability_gap_preview(gap_preview)
+    counts = dict(gap_preview["counts"])
+    return {
+        "gap_preview_id": gap_preview["preview_id"],
+        "confidence": gap_preview["confidence"],
+        "counts": counts,
+    }
+
+
+def _growth_planning_next_steps(gap_preview: dict[str, Any]) -> list[dict[str, Any]]:
+    validate_capability_gap_preview(gap_preview)
+    ranked: list[dict[str, Any]] = []
+    priorities = (
+        ("direct_gaps", 0),
+        ("maturity_gaps", 1),
+        ("onboarding_gaps", 2),
+        ("optional_cross_cluster_ideas", 3),
+    )
+    for section, priority in priorities:
+        for gap in gap_preview[section]:
+            ranked.append({
+                "step_id": f"growth-next-step-{gap['gap_id'].removeprefix('capability-gap-')}",
+                "section": section,
+                "priority": priority,
+                "title": gap["finding_title"],
+                "target_category": gap["target_category"],
+                "confidence": gap["confidence"],
+                "reason": gap["reason"],
+                "recommended_action": gap["recommended_action"],
+                "source_path": gap["source_path"],
+            })
+    ranked.sort(key=lambda item: (item["priority"], item["step_id"]))
+    return ranked[:5]
+
+
+def _validate_growth_planning_next_step(step: dict[str, Any]) -> None:
+    required = (
+        "step_id", "section", "priority", "title", "target_category",
+        "confidence", "reason", "recommended_action", "source_path",
+    )
+    missing = [field for field in required if field not in step]
+    if missing:
+        raise ValueError(f"Growth planning next step missing fields: {missing}")
+    if step["section"] not in _CAPABILITY_GAP_SECTIONS:
+        raise ValueError(f"invalid next step section: {step['section']}")
+    if step["target_category"] not in LINK_CAPABILITY_CATEGORIES:
+        raise ValueError(f"invalid next step target_category: {step['target_category']}")
+    if step["confidence"] not in LINK_CAPABILITY_CONFIDENCE_LEVELS:
+        raise ValueError(f"invalid next step confidence: {step['confidence']}")
+    if not isinstance(step["priority"], int) or step["priority"] < 0:
+        raise ValueError("next step priority must be a non-negative integer")
+    for field in ("step_id", "title", "reason", "recommended_action", "source_path"):
+        if not isinstance(step[field], str) or not step[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+
+
+CAPABILITY_GRAPH_VERSION = "link-capability-graph-v1"
+CAPABILITY_GRAPH_RELATIONSHIPS = (
+    "depends_on",
+    "improves",
+    "overlaps",
+    "feeds_into",
+    "derived_from_repo_finding",
+)
+_CAPABILITY_GRAPH_STATUS_BY_MATURITY = {
+    "planned": "planned",
+    "partial": "in_progress",
+    "available": "available",
+    "verified": "verified",
+}
+_CAPABILITY_GRAPH_MATURITY_SCORE = {
+    "planned": 0.25,
+    "partial": 0.5,
+    "available": 0.75,
+    "verified": 1.0,
+}
+
+
+def make_capability_graph_id(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "edge_ids": [edge["edge_id"] for edge in edges],
+        "node_ids": [node["capability_id"] for node in nodes],
+        "version": CAPABILITY_GRAPH_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"link-capability-graph-{digest}"
+
+
+def collect_capability_graph(
+    capability_inventory: dict[str, Any] | None = None,
+    *,
+    repo_value_scan: dict[str, Any] | list[dict[str, Any]] | None = None,
+    gap_preview: dict[str, Any] | None = None,
+    relationships: list[dict[str, Any]] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a read-only graph of Link capabilities and planning relationships."""
+    inventory = capability_inventory or collect_link_capability_inventory()
+    validate_link_capability_inventory(inventory)
+    nodes = _capability_graph_nodes_from_inventory(inventory)
+    node_ids = {node["capability_id"] for node in nodes}
+
+    edges: list[dict[str, Any]] = []
+    for relationship in relationships or []:
+        edges.append(normalize_capability_graph_edge(relationship, node_ids))
+
+    effective_gap_preview = gap_preview
+    if effective_gap_preview is None and repo_value_scan is not None:
+        effective_gap_preview = collect_capability_gap_preview(inventory, repo_value_scan)
+    if effective_gap_preview is not None:
+        validate_capability_gap_preview(effective_gap_preview)
+        edges.extend(_capability_graph_edges_from_gap_preview(effective_gap_preview, node_ids))
+
+    edges = _dedupe_capability_graph_edges(edges)
+    graph = {
+        "graph_version": CAPABILITY_GRAPH_VERSION,
+        "graph_id": make_capability_graph_id(nodes, edges),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "nodes": nodes,
+        "edges": edges,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_capability_graph(graph)
+    return graph
+
+
+def stable_capability_graph_json(graph: dict[str, Any]) -> str:
+    validate_capability_graph(graph)
+    return _stable_ruflo_json(graph, indent=2) + "\n"
+
+
+def parse_capability_graph_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    graph = _json.loads(text)
+    validate_capability_graph(graph)
+    return graph
+
+
+def validate_capability_graph(graph: dict[str, Any]) -> None:
+    required = (
+        "graph_version", "graph_id", "dry_run", "write_allowed", "automation_allowed",
+        "node_count", "edge_count", "nodes", "edges", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in graph]
+    if missing:
+        raise ValueError(f"capability graph missing fields: {missing}")
+    if graph["graph_version"] != CAPABILITY_GRAPH_VERSION:
+        raise ValueError("unsupported capability graph version")
+    if not isinstance(graph["graph_id"], str) or not graph["graph_id"].strip():
+        raise ValueError("graph_id must be a non-empty string")
+    if graph["dry_run"] is not True or graph["write_allowed"] is not False or graph["automation_allowed"] is not False:
+        raise ValueError("capability graph must remain read-only")
+    if graph["writes"] != []:
+        raise ValueError("capability graph must not write files")
+    if not isinstance(graph["metadata"], dict):
+        raise TypeError("capability graph metadata must be a dict")
+    if not isinstance(graph["nodes"], list):
+        raise TypeError("capability graph nodes must be a list")
+    if not isinstance(graph["edges"], list):
+        raise TypeError("capability graph edges must be a list")
+    if not isinstance(graph["node_count"], int) or graph["node_count"] != len(graph["nodes"]):
+        raise ValueError("node_count must match nodes length")
+    if not isinstance(graph["edge_count"], int) or graph["edge_count"] != len(graph["edges"]):
+        raise ValueError("edge_count must match edges length")
+    node_ids: set[str] = set()
+    for node in graph["nodes"]:
+        validate_capability_graph_node(node)
+        if node["capability_id"] in node_ids:
+            raise ValueError(f"duplicate capability graph node: {node['capability_id']}")
+        node_ids.add(node["capability_id"])
+    edge_ids: set[str] = set()
+    for edge in graph["edges"]:
+        validate_capability_graph_edge(edge, node_ids)
+        if edge["edge_id"] in edge_ids:
+            raise ValueError(f"duplicate capability graph edge: {edge['edge_id']}")
+        edge_ids.add(edge["edge_id"])
+
+
+def validate_capability_graph_node(node: dict[str, Any]) -> None:
+    required = (
+        "capability_id", "name", "category", "maturity_score",
+        "evidence_sources", "risk_label", "status",
+    )
+    missing = [field for field in required if field not in node]
+    if missing:
+        raise ValueError(f"capability graph node missing fields: {missing}")
+    for field in ("capability_id", "name", "category", "risk_label", "status"):
+        if not isinstance(node[field], str) or not node[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if node["category"] not in LINK_CAPABILITY_CATEGORIES:
+        raise ValueError(f"invalid capability graph node category: {node['category']}")
+    if node["risk_label"] not in LINK_CAPABILITY_RISK_LEVELS:
+        raise ValueError(f"invalid capability graph node risk_label: {node['risk_label']}")
+    if node["status"] not in {"planned", "in_progress", "available", "verified"}:
+        raise ValueError(f"invalid capability graph node status: {node['status']}")
+    _validate_capability_graph_confidence(node["maturity_score"], "maturity_score")
+    if not isinstance(node["evidence_sources"], list) or not node["evidence_sources"]:
+        raise TypeError("capability graph node evidence_sources must be a non-empty list")
+    if not all(isinstance(source, str) and source.strip() for source in node["evidence_sources"]):
+        raise TypeError("capability graph evidence_sources must contain non-empty strings")
+
+
+def validate_capability_graph_edge(edge: dict[str, Any], node_ids: set[str]) -> None:
+    required = (
+        "edge_id", "source_id", "target_id", "relationship", "confidence", "reason",
+    )
+    missing = [field for field in required if field not in edge]
+    if missing:
+        raise ValueError(f"capability graph edge missing fields: {missing}")
+    for field in ("edge_id", "source_id", "target_id", "relationship", "reason"):
+        if not isinstance(edge[field], str) or not edge[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if edge["source_id"] not in node_ids:
+        raise ValueError(f"edge source_id does not reference a graph node: {edge['source_id']}")
+    if edge["target_id"] not in node_ids:
+        raise ValueError(f"edge target_id does not reference a graph node: {edge['target_id']}")
+    if edge["relationship"] not in CAPABILITY_GRAPH_RELATIONSHIPS:
+        raise ValueError(f"invalid capability graph relationship: {edge['relationship']}")
+    _validate_capability_graph_confidence(edge["confidence"], "confidence")
+
+
+def normalize_capability_graph_edge(edge: dict[str, Any], node_ids: set[str]) -> dict[str, Any]:
+    if not isinstance(edge, dict):
+        raise TypeError("capability graph edge must be a dict")
+    normalized = {
+        "source_id": _first_text(edge, "source_id", "source"),
+        "target_id": _first_text(edge, "target_id", "target"),
+        "relationship": str(edge.get("relationship") or "").strip().lower().replace("-", "_").replace(" ", "_"),
+        "confidence": round(float(edge.get("confidence", 0.75)), 4),
+        "reason": _first_text(edge, "reason", "description"),
+    }
+    normalized["edge_id"] = _first_text(edge, "edge_id") or make_capability_graph_edge_id(
+        normalized["source_id"],
+        normalized["target_id"],
+        normalized["relationship"],
+        normalized["reason"],
+    )
+    validate_capability_graph_edge(normalized, node_ids)
+    return normalized
+
+
+def make_capability_graph_edge_id(source_id: str, target_id: str, relationship: str, reason: str) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "reason": reason,
+        "relationship": relationship,
+        "source_id": source_id,
+        "target_id": target_id,
+        "version": CAPABILITY_GRAPH_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"capability-edge-{digest}"
+
+
+def _capability_graph_nodes_from_inventory(inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    validate_link_capability_inventory(inventory)
+    chosen: dict[str, dict[str, Any]] = {}
+    for capability in inventory["capabilities"]:
+        node = _capability_graph_node_from_capability(capability)
+        chosen.setdefault(node["capability_id"], node)
+    return sorted(chosen.values(), key=lambda item: item["capability_id"])
+
+
+def _capability_graph_node_from_capability(capability: dict[str, Any]) -> dict[str, Any]:
+    validate_link_capability_entry(capability)
+    maturity = capability["maturity_level"]
+    node = {
+        "capability_id": capability["capability_id"],
+        "name": capability["name"],
+        "category": capability["category"],
+        "maturity_score": _CAPABILITY_GRAPH_MATURITY_SCORE[maturity],
+        "evidence_sources": [capability["source"]],
+        "risk_label": capability["risk_level"],
+        "status": _CAPABILITY_GRAPH_STATUS_BY_MATURITY[maturity],
+    }
+    validate_capability_graph_node(node)
+    return node
+
+
+def _capability_graph_edges_from_gap_preview(gap_preview: dict[str, Any], node_ids: set[str]) -> list[dict[str, Any]]:
+    validate_capability_gap_preview(gap_preview)
+    edges: list[dict[str, Any]] = []
+    for match in gap_preview["matched_capabilities"]:
+        capability_id = match["capability_id"]
+        if capability_id not in node_ids:
+            continue
+        reason = f"Repo finding '{match['finding_title']}' maps to this Link capability."
+        edges.append(normalize_capability_graph_edge({
+            "source_id": capability_id,
+            "target_id": capability_id,
+            "relationship": "derived_from_repo_finding",
+            "confidence": _capability_graph_confidence_score(match["confidence"]),
+            "reason": reason,
+        }, node_ids))
+    return edges
+
+
+def _dedupe_capability_graph_edges(edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    chosen: dict[str, dict[str, Any]] = {}
+    for edge in edges:
+        chosen.setdefault(edge["edge_id"], edge)
+    return sorted(chosen.values(), key=lambda item: item["edge_id"])
+
+
+def _capability_graph_confidence_score(confidence: str) -> float:
+    return {"low": 0.35, "medium": 0.65, "high": 0.9}.get(confidence, 0.5)
+
+
+def _validate_capability_graph_confidence(value: Any, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"capability graph {field_name} must be numeric between 0.0 and 1.0")
+    if not (0.0 <= float(value) <= 1.0):
+        raise ValueError(f"capability graph {field_name} must be between 0.0 and 1.0")
+
+
+CAPABILITY_EVIDENCE_GRAPH_VERSION = "link-capability-evidence-graph-v1"
+_CAPABILITY_EVIDENCE_REF_FIELDS = (
+    "commit_refs",
+    "file_refs",
+    "test_refs",
+    "healthcheck_refs",
+    "proposal_refs",
+    "source_repo_refs",
+)
+
+
+def make_capability_evidence_graph_id(evidence_nodes: list[dict[str, Any]]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "evidence_ids": [node["evidence_id"] for node in evidence_nodes],
+        "version": CAPABILITY_EVIDENCE_GRAPH_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"link-capability-evidence-graph-{digest}"
+
+
+def make_capability_evidence_node_id(capability_id: str, refs: dict[str, list[str]]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "capability_id": capability_id,
+        "refs": refs,
+        "version": CAPABILITY_EVIDENCE_GRAPH_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"capability-evidence-{digest}"
+
+
+def collect_capability_evidence_graph(
+    capability_graph: dict[str, Any] | None = None,
+    *,
+    capability_inventory: dict[str, Any] | None = None,
+    evidence_refs: list[dict[str, Any]] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach normalized proof references and confidence to capability graph nodes."""
+    graph = capability_graph or collect_capability_graph(capability_inventory)
+    validate_capability_graph(graph)
+    refs_by_capability = _capability_evidence_refs_by_capability(evidence_refs or [])
+    evidence_nodes: list[dict[str, Any]] = []
+    for node in graph["nodes"]:
+        refs = _empty_capability_evidence_refs()
+        refs["file_refs"] = _normalize_capability_evidence_refs(
+            node.get("evidence_sources", []),
+            "file_refs",
+        )
+        override = refs_by_capability.get(node["capability_id"], {})
+        for field in _CAPABILITY_EVIDENCE_REF_FIELDS:
+            refs[field] = _normalize_capability_evidence_refs(refs[field] + override.get(field, []), field)
+        evidence_node = {
+            "evidence_id": make_capability_evidence_node_id(node["capability_id"], refs),
+            "capability_id": node["capability_id"],
+            "capability_name": node["name"],
+            "commit_refs": refs["commit_refs"],
+            "file_refs": refs["file_refs"],
+            "test_refs": refs["test_refs"],
+            "healthcheck_refs": refs["healthcheck_refs"],
+            "proposal_refs": refs["proposal_refs"],
+            "source_repo_refs": refs["source_repo_refs"],
+            "confidence_score": _capability_evidence_confidence_score(node, refs),
+        }
+        validate_capability_evidence_node(evidence_node)
+        evidence_nodes.append(evidence_node)
+    evidence_nodes.sort(key=lambda item: item["capability_id"])
+    evidence_graph = {
+        "evidence_graph_version": CAPABILITY_EVIDENCE_GRAPH_VERSION,
+        "evidence_graph_id": make_capability_evidence_graph_id(evidence_nodes),
+        "source_graph_id": graph["graph_id"],
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "node_count": len(evidence_nodes),
+        "evidence_nodes": evidence_nodes,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_capability_evidence_graph(evidence_graph)
+    return evidence_graph
+
+
+def validate_capability_evidence_graph(evidence_graph: dict[str, Any]) -> None:
+    required = (
+        "evidence_graph_version", "evidence_graph_id", "source_graph_id", "dry_run",
+        "write_allowed", "automation_allowed", "node_count", "evidence_nodes", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in evidence_graph]
+    if missing:
+        raise ValueError(f"capability evidence graph missing fields: {missing}")
+    if evidence_graph["evidence_graph_version"] != CAPABILITY_EVIDENCE_GRAPH_VERSION:
+        raise ValueError("unsupported capability evidence graph version")
+    for field in ("evidence_graph_id", "source_graph_id"):
+        if not isinstance(evidence_graph[field], str) or not evidence_graph[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if evidence_graph["dry_run"] is not True or evidence_graph["write_allowed"] is not False or evidence_graph["automation_allowed"] is not False:
+        raise ValueError("capability evidence graph must remain read-only")
+    if evidence_graph["writes"] != []:
+        raise ValueError("capability evidence graph must not write files")
+    if not isinstance(evidence_graph["metadata"], dict):
+        raise TypeError("capability evidence graph metadata must be a dict")
+    nodes = evidence_graph["evidence_nodes"]
+    if not isinstance(nodes, list):
+        raise TypeError("capability evidence graph evidence_nodes must be a list")
+    if not isinstance(evidence_graph["node_count"], int) or evidence_graph["node_count"] != len(nodes):
+        raise ValueError("node_count must match evidence_nodes length")
+    capability_ids: set[str] = set()
+    evidence_ids: set[str] = set()
+    for node in nodes:
+        validate_capability_evidence_node(node)
+        if node["capability_id"] in capability_ids:
+            raise ValueError(f"duplicate capability evidence node: {node['capability_id']}")
+        if node["evidence_id"] in evidence_ids:
+            raise ValueError(f"duplicate capability evidence id: {node['evidence_id']}")
+        capability_ids.add(node["capability_id"])
+        evidence_ids.add(node["evidence_id"])
+
+
+def stable_capability_evidence_graph_json(evidence_graph: dict[str, Any]) -> str:
+    validate_capability_evidence_graph(evidence_graph)
+    return _stable_ruflo_json(evidence_graph, indent=2) + "\n"
+
+
+def parse_capability_evidence_graph_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    evidence_graph = _json.loads(text)
+    validate_capability_evidence_graph(evidence_graph)
+    return evidence_graph
+
+
+def validate_capability_evidence_node(node: dict[str, Any]) -> None:
+    required = ("evidence_id", "capability_id", "capability_name", "confidence_score", *_CAPABILITY_EVIDENCE_REF_FIELDS)
+    missing = [field for field in required if field not in node]
+    if missing:
+        raise ValueError(f"capability evidence node missing fields: {missing}")
+    for field in ("evidence_id", "capability_id", "capability_name"):
+        if not isinstance(node[field], str) or not node[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    _validate_capability_graph_confidence(node["confidence_score"], "confidence_score")
+    for field in _CAPABILITY_EVIDENCE_REF_FIELDS:
+        refs = node[field]
+        if not isinstance(refs, list):
+            raise TypeError(f"{field} must be a list")
+        normalized = _normalize_capability_evidence_refs(refs, field)
+        if refs != normalized:
+            raise ValueError(f"{field} must be normalized and sorted")
+
+
+def _capability_evidence_refs_by_capability(evidence_refs: list[dict[str, Any]]) -> dict[str, dict[str, list[str]]]:
+    if not isinstance(evidence_refs, list):
+        raise TypeError("evidence_refs must be a list")
+    refs_by_capability: dict[str, dict[str, list[str]]] = {}
+    for item in evidence_refs:
+        if not isinstance(item, dict):
+            raise TypeError("capability evidence refs must be dicts")
+        capability_id = _first_text(item, "capability_id")
+        refs = refs_by_capability.setdefault(capability_id, _empty_capability_evidence_refs())
+        for field in _CAPABILITY_EVIDENCE_REF_FIELDS:
+            refs[field] = _normalize_capability_evidence_refs(refs[field] + list(item.get(field) or []), field)
+    return refs_by_capability
+
+
+def _empty_capability_evidence_refs() -> dict[str, list[str]]:
+    return {field: [] for field in _CAPABILITY_EVIDENCE_REF_FIELDS}
+
+
+def _normalize_capability_evidence_refs(refs: Any, field: str) -> list[str]:
+    import re
+
+    if refs is None:
+        return []
+    if isinstance(refs, str):
+        raw_refs = [refs]
+    elif isinstance(refs, list):
+        raw_refs = refs
+    else:
+        raise TypeError(f"{field} must be a string or list")
+    normalized: list[str] = []
+    for ref in raw_refs:
+        value = str(ref or "").strip()
+        if not value:
+            raise ValueError(f"{field} cannot contain empty references")
+        if "\x00" in value or value.startswith("/") or ".." in value.split("/"):
+            raise ValueError(f"invalid {field} reference: {value}")
+        if field == "commit_refs" and not re.fullmatch(r"[a-fA-F0-9]{7,40}", value):
+            raise ValueError(f"invalid commit reference: {value}")
+        if field == "proposal_refs" and not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.:-]*", value):
+            raise ValueError(f"invalid proposal reference: {value}")
+        if value not in normalized:
+            normalized.append(value)
+    return sorted(normalized)
+
+
+def _capability_evidence_confidence_score(node: dict[str, Any], refs: dict[str, list[str]]) -> float:
+    maturity = float(node.get("maturity_score", 0.0) or 0.0)
+    score = maturity * 0.35
+    weights = {
+        "commit_refs": 0.15,
+        "file_refs": 0.2,
+        "test_refs": 0.15,
+        "healthcheck_refs": 0.15,
+        "proposal_refs": 0.1,
+        "source_repo_refs": 0.1,
+    }
+    for field, weight in weights.items():
+        if refs.get(field):
+            score += weight
+    return round(min(score, 1.0), 4)
+
+
+CAPABILITY_DISCOVERY_VERSION = "link-capability-discovery-v1"
+_CAPABILITY_DISCOVERY_PATH_FIELDS = (
+    "file_paths",
+    "module_paths",
+    "test_paths",
+    "evidence_refs",
+)
+
+
+def make_capability_discovery_id(discoveries: list[dict[str, Any]]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "discovery_ids": [item["discovery_id"] for item in discoveries],
+        "version": CAPABILITY_DISCOVERY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"link-capability-discovery-{digest}"
+
+
+def make_capability_discovery_entry_id(capability_id: str, paths: dict[str, list[str]]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "capability_id": capability_id,
+        "paths": paths,
+        "version": CAPABILITY_DISCOVERY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"capability-discovery-{digest}"
+
+
+def collect_capability_discovery(
+    capability_inventory: dict[str, Any] | None = None,
+    *,
+    capability_graph: dict[str, Any] | None = None,
+    evidence_graph: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Map known capabilities to implementation locations without writing state."""
+    inventory = capability_inventory or collect_link_capability_inventory()
+    validate_link_capability_inventory(inventory)
+    graph = capability_graph or collect_capability_graph(inventory)
+    validate_capability_graph(graph)
+    evidence = evidence_graph or collect_capability_evidence_graph(graph)
+    validate_capability_evidence_graph(evidence)
+
+    graph_nodes = {node["capability_id"]: node for node in graph["nodes"]}
+    evidence_nodes = {node["capability_id"]: node for node in evidence["evidence_nodes"]}
+    discoveries: list[dict[str, Any]] = []
+    for capability in inventory["capabilities"]:
+        capability_id = capability["capability_id"]
+        graph_node = graph_nodes.get(capability_id, {})
+        evidence_node = evidence_nodes.get(capability_id, {})
+        file_paths = _normalize_capability_discovery_paths(
+            list(graph_node.get("evidence_sources", [])) + list(evidence_node.get("file_refs", [])),
+            "file_paths",
+        )
+        test_paths = _normalize_capability_discovery_paths(evidence_node.get("test_refs", []), "test_paths")
+        evidence_refs = _normalize_capability_discovery_paths(
+            list(evidence_node.get("commit_refs", []))
+            + list(evidence_node.get("healthcheck_refs", []))
+            + list(evidence_node.get("proposal_refs", []))
+            + list(evidence_node.get("source_repo_refs", [])),
+            "evidence_refs",
+        )
+        module_paths = _normalize_capability_discovery_paths(
+            _capability_discovery_modules_from_files(file_paths),
+            "module_paths",
+        )
+        entry_paths = {
+            "file_paths": file_paths,
+            "module_paths": module_paths,
+            "test_paths": test_paths,
+            "evidence_refs": evidence_refs,
+        }
+        discovery = {
+            "discovery_id": make_capability_discovery_entry_id(capability_id, entry_paths),
+            "capability_id": capability_id,
+            "capability_name": capability["name"],
+            "file_paths": file_paths,
+            "module_paths": module_paths,
+            "test_paths": test_paths,
+            "evidence_refs": evidence_refs,
+            "confidence_score": _capability_discovery_confidence_score(entry_paths, evidence_node),
+        }
+        validate_capability_discovery_entry(discovery)
+        discoveries.append(discovery)
+    discoveries.sort(key=lambda item: item["capability_id"])
+    discovery = {
+        "discovery_version": CAPABILITY_DISCOVERY_VERSION,
+        "discovery_id": make_capability_discovery_id(discoveries),
+        "source_inventory_id": inventory["inventory_id"],
+        "source_graph_id": graph["graph_id"],
+        "source_evidence_graph_id": evidence["evidence_graph_id"],
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "capability_count": len(discoveries),
+        "discoveries": discoveries,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_capability_discovery(discovery)
+    return discovery
+
+
+def validate_capability_discovery(discovery: dict[str, Any]) -> None:
+    required = (
+        "discovery_version", "discovery_id", "source_inventory_id", "source_graph_id",
+        "source_evidence_graph_id", "dry_run", "write_allowed", "automation_allowed",
+        "capability_count", "discoveries", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in discovery]
+    if missing:
+        raise ValueError(f"capability discovery missing fields: {missing}")
+    if discovery["discovery_version"] != CAPABILITY_DISCOVERY_VERSION:
+        raise ValueError("unsupported capability discovery version")
+    for field in ("discovery_id", "source_inventory_id", "source_graph_id", "source_evidence_graph_id"):
+        if not isinstance(discovery[field], str) or not discovery[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    if discovery["dry_run"] is not True or discovery["write_allowed"] is not False or discovery["automation_allowed"] is not False:
+        raise ValueError("capability discovery must remain read-only")
+    if discovery["writes"] != []:
+        raise ValueError("capability discovery must not write files")
+    if not isinstance(discovery["metadata"], dict):
+        raise TypeError("capability discovery metadata must be a dict")
+    entries = discovery["discoveries"]
+    if not isinstance(entries, list):
+        raise TypeError("capability discovery discoveries must be a list")
+    if not isinstance(discovery["capability_count"], int) or discovery["capability_count"] != len(entries):
+        raise ValueError("capability_count must match discoveries length")
+    capability_ids: set[str] = set()
+    discovery_ids: set[str] = set()
+    for entry in entries:
+        validate_capability_discovery_entry(entry)
+        if entry["capability_id"] in capability_ids:
+            raise ValueError(f"duplicate capability discovery entry: {entry['capability_id']}")
+        if entry["discovery_id"] in discovery_ids:
+            raise ValueError(f"duplicate capability discovery id: {entry['discovery_id']}")
+        capability_ids.add(entry["capability_id"])
+        discovery_ids.add(entry["discovery_id"])
+
+
+def stable_capability_discovery_json(discovery: dict[str, Any]) -> str:
+    validate_capability_discovery(discovery)
+    return _stable_ruflo_json(discovery, indent=2) + "\n"
+
+
+def parse_capability_discovery_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    discovery = _json.loads(text)
+    validate_capability_discovery(discovery)
+    return discovery
+
+
+def validate_capability_discovery_entry(entry: dict[str, Any]) -> None:
+    required = ("discovery_id", "capability_id", "capability_name", "confidence_score", *_CAPABILITY_DISCOVERY_PATH_FIELDS)
+    missing = [field for field in required if field not in entry]
+    if missing:
+        raise ValueError(f"capability discovery entry missing fields: {missing}")
+    for field in ("discovery_id", "capability_id", "capability_name"):
+        if not isinstance(entry[field], str) or not entry[field].strip():
+            raise ValueError(f"{field} must be a non-empty string")
+    _validate_capability_graph_confidence(entry["confidence_score"], "confidence_score")
+    for field in _CAPABILITY_DISCOVERY_PATH_FIELDS:
+        refs = entry[field]
+        if not isinstance(refs, list):
+            raise TypeError(f"{field} must be a list")
+        normalized = _normalize_capability_discovery_paths(refs, field)
+        if refs != normalized:
+            raise ValueError(f"{field} must be normalized and sorted")
+
+
+def _normalize_capability_discovery_paths(paths: Any, field: str) -> list[str]:
+    if paths is None:
+        return []
+    if isinstance(paths, str):
+        raw_paths = [paths]
+    elif isinstance(paths, list):
+        raw_paths = paths
+    else:
+        raise TypeError(f"{field} must be a string or list")
+    normalized: list[str] = []
+    for path in raw_paths:
+        value = str(path or "").strip()
+        if not value:
+            raise ValueError(f"{field} cannot contain empty paths")
+        if "\x00" in value or value.startswith("/") or ".." in value.split("/"):
+            raise ValueError(f"invalid {field} path: {value}")
+        if field == "module_paths" and ("/" in value or value.endswith(".") or value.startswith(".") or ".." in value.split(".")):
+            raise ValueError(f"invalid module path: {value}")
+        if value not in normalized:
+            normalized.append(value)
+    return sorted(normalized)
+
+
+def _capability_discovery_modules_from_files(file_paths: list[str]) -> list[str]:
+    modules: list[str] = []
+    for file_path in file_paths:
+        if not file_path.endswith(".py"):
+            continue
+        module = file_path[:-3].replace("/", ".")
+        if module.endswith(".__init__"):
+            module = module[: -len(".__init__")]
+        if module and module not in modules:
+            modules.append(module)
+    return modules
+
+
+def _capability_discovery_confidence_score(paths: dict[str, list[str]], evidence_node: dict[str, Any]) -> float:
+    score = 0.0
+    if paths["file_paths"]:
+        score += 0.35
+    if paths["module_paths"]:
+        score += 0.15
+    if paths["test_paths"]:
+        score += 0.2
+    if paths["evidence_refs"]:
+        score += 0.15
+    if evidence_node:
+        score += float(evidence_node.get("confidence_score", 0.0) or 0.0) * 0.15
+    return round(min(score, 1.0), 4)
+
+
+CAPABILITY_INTELLIGENCE_PAYLOAD_VERSION = "link-capability-intelligence-payload-v1"
+
+
+def make_capability_intelligence_payload_id(
+    inventory: dict[str, Any],
+    gap_preview: dict[str, Any],
+    planning_preview: dict[str, Any],
+    graph: dict[str, Any],
+    evidence_graph: dict[str, Any],
+    discovery: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "discovery_id": discovery["discovery_id"],
+        "evidence_graph_id": evidence_graph["evidence_graph_id"],
+        "gap_preview_id": gap_preview["preview_id"],
+        "graph_id": graph["graph_id"],
+        "inventory_id": inventory["inventory_id"],
+        "planning_preview_id": planning_preview["preview_id"],
+        "version": CAPABILITY_INTELLIGENCE_PAYLOAD_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"link-capability-intelligence-{digest}"
+
+
+def collect_capability_intelligence_payload(
+    repo_inventory_items: list[dict[str, Any]] | None = None,
+    *,
+    link_capabilities: list[dict[str, Any]] | None = None,
+    top: int = 10,
+    source_label: str = "research",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aggregate read-only capability intelligence for dashboards/JSON."""
+    repo_items = list(repo_inventory_items or [])
+    inventory = collect_link_capability_inventory(link_capabilities)
+    repo_scan = collect_repo_value_scan(repo_items, top=top, source_label=source_label)
+    gap_preview = collect_capability_gap_preview(inventory, repo_scan, metadata={"source_label": source_label})
+    planning_preview = collect_growth_planning_preview(
+        repo_items,
+        link_capabilities=link_capabilities,
+        top=top,
+        source_label=source_label,
+        metadata=metadata,
+    )
+    graph = collect_capability_graph(inventory, gap_preview=gap_preview)
+    evidence_graph = collect_capability_evidence_graph(graph)
+    discovery = collect_capability_discovery(
+        inventory,
+        capability_graph=graph,
+        evidence_graph=evidence_graph,
+    )
+    payload = {
+        "payload_version": CAPABILITY_INTELLIGENCE_PAYLOAD_VERSION,
+        "payload_id": make_capability_intelligence_payload_id(
+            inventory,
+            gap_preview,
+            planning_preview,
+            graph,
+            evidence_graph,
+            discovery,
+        ),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "inventory_summary": _capability_intelligence_inventory_summary(inventory),
+        "gap_summary": _capability_intelligence_gap_summary(gap_preview),
+        "planning_preview_summary": _capability_intelligence_planning_summary(planning_preview),
+        "capability_graph_summary": _capability_intelligence_graph_summary(graph),
+        "evidence_graph_summary": _capability_intelligence_evidence_summary(evidence_graph),
+        "discovery_summary": _capability_intelligence_discovery_summary(discovery),
+        "top_recommended_next_steps": list(planning_preview["top_recommended_next_steps"]),
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_capability_intelligence_payload(payload)
+    return payload
+
+
+def validate_capability_intelligence_payload(payload: dict[str, Any]) -> None:
+    required = (
+        "payload_version", "payload_id", "dry_run", "write_allowed", "automation_allowed",
+        "inventory_summary", "gap_summary", "planning_preview_summary", "capability_graph_summary",
+        "evidence_graph_summary", "discovery_summary", "top_recommended_next_steps", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in payload]
+    if missing:
+        raise ValueError(f"capability intelligence payload missing fields: {missing}")
+    if payload["payload_version"] != CAPABILITY_INTELLIGENCE_PAYLOAD_VERSION:
+        raise ValueError("unsupported capability intelligence payload version")
+    if not isinstance(payload["payload_id"], str) or not payload["payload_id"].strip():
+        raise ValueError("payload_id must be a non-empty string")
+    if payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False:
+        raise ValueError("capability intelligence payload must remain read-only")
+    if payload["writes"] != []:
+        raise ValueError("capability intelligence payload must not write files")
+    if not isinstance(payload["metadata"], dict):
+        raise TypeError("capability intelligence payload metadata must be a dict")
+    for field, required_keys in (
+        ("inventory_summary", ("inventory_id", "capability_count", "duplicate_count")),
+        ("gap_summary", ("gap_preview_id", "counts", "confidence")),
+        ("planning_preview_summary", ("planning_preview_id", "next_step_count")),
+        ("capability_graph_summary", ("graph_id", "node_count", "edge_count")),
+        ("evidence_graph_summary", ("evidence_graph_id", "node_count", "average_confidence_score")),
+        ("discovery_summary", ("discovery_id", "capability_count", "average_confidence_score")),
+    ):
+        summary = payload[field]
+        if not isinstance(summary, dict):
+            raise TypeError(f"{field} must be a dict")
+        missing_keys = [key for key in required_keys if key not in summary]
+        if missing_keys:
+            raise ValueError(f"{field} missing keys: {missing_keys}")
+    if not isinstance(payload["top_recommended_next_steps"], list):
+        raise TypeError("top_recommended_next_steps must be a list")
+    for step in payload["top_recommended_next_steps"]:
+        _validate_growth_planning_next_step(step)
+
+
+def stable_capability_intelligence_payload_json(payload: dict[str, Any]) -> str:
+    validate_capability_intelligence_payload(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_capability_intelligence_payload_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    payload = _json.loads(text)
+    validate_capability_intelligence_payload(payload)
+    return payload
+
+
+def _capability_intelligence_inventory_summary(inventory: dict[str, Any]) -> dict[str, Any]:
+    validate_link_capability_inventory(inventory)
+    return {
+        "inventory_id": inventory["inventory_id"],
+        "capability_count": inventory["capability_count"],
+        "duplicate_count": inventory["duplicate_count"],
+        "categories": list(inventory["categories"]),
+    }
+
+
+def _capability_intelligence_gap_summary(gap_preview: dict[str, Any]) -> dict[str, Any]:
+    validate_capability_gap_preview(gap_preview)
+    return {
+        "gap_preview_id": gap_preview["preview_id"],
+        "confidence": gap_preview["confidence"],
+        "counts": dict(gap_preview["counts"]),
+    }
+
+
+def _capability_intelligence_planning_summary(planning_preview: dict[str, Any]) -> dict[str, Any]:
+    validate_growth_planning_preview(planning_preview)
+    return {
+        "planning_preview_id": planning_preview["preview_id"],
+        "next_step_count": len(planning_preview["top_recommended_next_steps"]),
+        "capability_count": planning_preview["capability_inventory_summary"]["capability_count"],
+        "repo_finding_count": planning_preview["repo_value_scan_summary"]["finding_count"],
+    }
+
+
+def _capability_intelligence_graph_summary(graph: dict[str, Any]) -> dict[str, Any]:
+    validate_capability_graph(graph)
+    return {
+        "graph_id": graph["graph_id"],
+        "node_count": graph["node_count"],
+        "edge_count": graph["edge_count"],
+    }
+
+
+def _capability_intelligence_evidence_summary(evidence_graph: dict[str, Any]) -> dict[str, Any]:
+    validate_capability_evidence_graph(evidence_graph)
+    scores = [float(node["confidence_score"]) for node in evidence_graph["evidence_nodes"]]
+    return {
+        "evidence_graph_id": evidence_graph["evidence_graph_id"],
+        "node_count": evidence_graph["node_count"],
+        "average_confidence_score": round(sum(scores) / len(scores), 4) if scores else 0.0,
+    }
+
+
+def _capability_intelligence_discovery_summary(discovery: dict[str, Any]) -> dict[str, Any]:
+    validate_capability_discovery(discovery)
+    scores = [float(entry["confidence_score"]) for entry in discovery["discoveries"]]
+    return {
+        "discovery_id": discovery["discovery_id"],
+        "capability_count": discovery["capability_count"],
+        "average_confidence_score": round(sum(scores) / len(scores), 4) if scores else 0.0,
+    }
+
+
 def _normalize_feedback_status(status: str) -> str:
     raw = str(status or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {

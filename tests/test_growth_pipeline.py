@@ -4208,7 +4208,872 @@ def check_capability_gap_preview_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 47. Growth archive-code-brief -- dry-run
+# 48. Growth planning preview aggregate
+# ---------------------------------------------------------------------------
+
+def check_growth_planning_preview_helper() -> None:
+    """Aggregate planning preview combines inventory, repo scan, and gap summaries."""
+    from link_modes.growth.link_growth_console import (
+        GROWTH_PLANNING_PREVIEW_VERSION,
+        collect_growth_planning_preview,
+        growth_planning_preview_from_json,
+        growth_planning_preview_to_json,
+        validate_growth_planning_preview,
+    )
+
+    repo_items = [
+        {
+            "path": "sota/SKILL.md",
+            "title": "Self-learning feedback loop",
+            "category": "self_learning",
+            "summary": "Scanner records feedback loops and improves future recommendations.",
+            "source_kind": "skill",
+            "tags": ["self-learning", "feedback", "recommendation"],
+        },
+        {
+            "path": "sota/policy.md",
+            "title": "Verified approval policy gate",
+            "category": "safety_approval_gates",
+            "summary": "Scanner requires policy gates before risky work.",
+            "source_kind": "docs",
+            "tags": ["safety", "policy", "gate"],
+        },
+        {
+            "path": "sota/README.md",
+            "title": "Discoverable command onboarding",
+            "category": "cli_workflow_ux",
+            "summary": "Documents CLI integration, quickstart examples, and dashboard discoverability.",
+            "source_kind": "readme",
+            "tags": ["cli", "integration", "docs"],
+        },
+        {
+            "path": "sota/notes.txt",
+            "title": "Weak scanner note",
+            "category": "repo_scanning",
+            "source_kind": "text",
+        },
+    ]
+    link_capabilities = [
+        {
+            "name": "Safety policy gate",
+            "category": "safety",
+            "description": "Existing safety policy gate is present but still maturing.",
+            "source": "link_capability_gate.py",
+            "confidence": "high",
+            "tags": ["safety", "policy", "gate"],
+            "risk_level": "low",
+            "maturity_level": "partial",
+        },
+        {
+            "name": "Repo value scanner",
+            "category": "repo_value_scan",
+            "description": "Ranks repo files and concepts for Link relevance.",
+            "source": "link_modes/growth/link_growth_console.py:collect_repo_value_scan",
+            "confidence": "high",
+            "tags": ["repo", "scan", "value"],
+            "risk_level": "low",
+            "maturity_level": "verified",
+        },
+        {
+            "name": "Command dashboard UX",
+            "category": "workflow_ux",
+            "description": "Shows Growth commands and local workflow state.",
+            "source": "link_modes/growth/link_growth_console.py:collect_run_data",
+            "confidence": "high",
+            "tags": ["cli", "dashboard", "integration"],
+            "risk_level": "low",
+            "maturity_level": "verified",
+        },
+    ]
+
+    preview = collect_growth_planning_preview(
+        repo_items,
+        link_capabilities=link_capabilities,
+        top=10,
+        source_label="sota-scan",
+        metadata={"suite": "growth"},
+    )
+    same = collect_growth_planning_preview(
+        repo_items,
+        link_capabilities=link_capabilities,
+        top=10,
+        source_label="sota-scan",
+        metadata={"suite": "growth"},
+    )
+
+    _require(preview["planning_version"] == GROWTH_PLANNING_PREVIEW_VERSION,
+             "Growth planning preview version mismatch")
+    _require(preview["preview_id"] == same["preview_id"],
+             "Growth planning preview_id must be deterministic")
+    _require(preview["dry_run"] is True and preview["write_allowed"] is False,
+             "Growth planning preview must remain read-only")
+    _require(preview["automation_allowed"] is False,
+             "Growth planning preview must not allow automation")
+    _require(preview["writes"] == [], "Growth planning preview must not write files")
+    _require(preview["metadata"]["suite"] == "growth",
+             "Growth planning preview must preserve metadata")
+    _require(preview["source_label"] == "sota-scan",
+             "Growth planning preview must preserve source_label")
+
+    cap_summary = preview["capability_inventory_summary"]
+    repo_summary = preview["repo_value_scan_summary"]
+    gap_summary = preview["capability_gap_summary"]
+    _require(cap_summary["capability_count"] == 3,
+             "capability summary must count capabilities")
+    _require(cap_summary["by_category"]["safety"] == 1,
+             "capability summary must count categories")
+    _require(repo_summary["item_count"] == 4,
+             "repo value summary must count input items")
+    _require(repo_summary["weak_finding_count"] == 1,
+             "repo value summary must count weak findings")
+    counts = gap_summary["counts"]
+    _require(counts["direct_gap_count"] == 1,
+             "gap summary must count direct gaps")
+    _require(counts["maturity_gap_count"] == 1,
+             "gap summary must count maturity gaps")
+    _require(counts["onboarding_gap_count"] == 1,
+             "gap summary must count onboarding gaps")
+    _require(counts["optional_cross_cluster_idea_count"] == 1,
+             "gap summary must count optional cross-cluster ideas")
+
+    steps = preview["top_recommended_next_steps"]
+    _require(len(steps) == 4, "planning preview must include top recommended next steps")
+    _require(steps[0]["section"] == "direct_gaps",
+             "direct gaps must be highest-priority next steps")
+    _require(steps[-1]["section"] == "optional_cross_cluster_ideas",
+             "optional ideas must rank after direct/maturity/onboarding gaps")
+    for step in steps:
+        _require(step["step_id"].startswith("growth-next-step-"),
+                 "next step id must use stable prefix")
+        _require(step["recommended_action"],
+                 "next step must include recommended_action")
+
+    encoded = growth_planning_preview_to_json(preview)
+    _require(encoded == growth_planning_preview_to_json(preview),
+             "Growth planning preview JSON serialization must be stable")
+    decoded = growth_planning_preview_from_json(encoded)
+    _require(decoded == preview, "Growth planning preview JSON round-trip must preserve data")
+    validate_growth_planning_preview(preview)
+
+    try:
+        collect_growth_planning_preview({"bad": "repo-items"})  # type: ignore[arg-type]
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("malformed repo inventory input must be rejected")
+
+    bad_preview = dict(preview)
+    bad_preview["automation_allowed"] = True
+    try:
+        validate_growth_planning_preview(bad_preview)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Growth planning preview must reject automation_allowed=True")
+
+    print("growth planning preview helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 49. Link capability graph
+# ---------------------------------------------------------------------------
+
+def check_capability_graph_helper() -> None:
+    """Capability inventory and gap preview normalize into a read-only graph."""
+    from link_modes.growth.link_growth_console import (
+        CAPABILITY_GRAPH_VERSION,
+        collect_capability_gap_preview,
+        collect_capability_graph,
+        collect_link_capability_inventory,
+        collect_repo_value_scan,
+        parse_capability_graph_json,
+        stable_capability_graph_json,
+        validate_capability_graph,
+    )
+
+    capabilities = [
+        {
+            "name": "Safety policy gate",
+            "category": "safety",
+            "description": "Existing safety policy gate is present but still maturing.",
+            "source": "link_capability_gate.py",
+            "confidence": "high",
+            "tags": ["safety", "policy", "gate"],
+            "risk_level": "low",
+            "maturity_level": "partial",
+        },
+        {
+            "name": "Safety policy gate",
+            "category": "safety",
+            "description": "Existing safety policy gate is present but still maturing.",
+            "source": "link_capability_gate.py",
+            "confidence": "high",
+            "tags": ["safety", "policy", "gate"],
+            "risk_level": "low",
+            "maturity_level": "partial",
+        },
+        {
+            "name": "Repo value scanner",
+            "category": "repo_value_scan",
+            "description": "Ranks repo files and concepts for Link relevance.",
+            "source": "link_modes/growth/link_growth_console.py:collect_repo_value_scan",
+            "confidence": "high",
+            "tags": ["repo", "scan", "value"],
+            "risk_level": "low",
+            "maturity_level": "verified",
+        },
+    ]
+    inventory = collect_link_capability_inventory(capabilities)
+    _require(inventory["capability_count"] == 2,
+             "duplicate capabilities must normalize before graph construction")
+
+    repo_scan = collect_repo_value_scan([
+        {
+            "path": "sota/policy.md",
+            "title": "Verified approval policy gate",
+            "category": "safety_approval_gates",
+            "summary": "Scanner requires policy gates before risky work.",
+            "source_kind": "docs",
+            "tags": ["safety", "policy", "gate"],
+        },
+        {
+            "path": "sota/scanner.py",
+            "title": "Repo scanner ranking",
+            "category": "repo_scanning",
+            "summary": "Ranks files and identifies project-relevant modules.",
+            "source_kind": "code",
+            "tags": ["repo", "scan", "value"],
+        },
+    ], source_label="sota-scan")
+    gap_preview = collect_capability_gap_preview(inventory, repo_scan)
+    graph = collect_capability_graph(
+        inventory,
+        gap_preview=gap_preview,
+        relationships=[{
+            "source_id": inventory["capabilities"][0]["capability_id"],
+            "target_id": inventory["capabilities"][1]["capability_id"],
+            "relationship": "feeds_into",
+            "confidence": 0.8,
+            "reason": "Safety review feeds repo-value mining decisions.",
+        }],
+        metadata={"suite": "growth"},
+    )
+    same = collect_capability_graph(
+        inventory,
+        gap_preview=gap_preview,
+        relationships=[{
+            "source_id": inventory["capabilities"][0]["capability_id"],
+            "target_id": inventory["capabilities"][1]["capability_id"],
+            "relationship": "feeds_into",
+            "confidence": 0.8,
+            "reason": "Safety review feeds repo-value mining decisions.",
+        }],
+        metadata={"suite": "growth"},
+    )
+
+    _require(graph["graph_version"] == CAPABILITY_GRAPH_VERSION,
+             "capability graph version mismatch")
+    _require(graph["graph_id"] == same["graph_id"],
+             "capability graph_id must be deterministic")
+    _require(graph["dry_run"] is True and graph["write_allowed"] is False,
+             "capability graph must remain read-only")
+    _require(graph["automation_allowed"] is False,
+             "capability graph must not allow automation")
+    _require(graph["writes"] == [], "capability graph must not write files")
+    _require(graph["metadata"]["suite"] == "growth",
+             "capability graph must preserve metadata")
+    _require(graph["node_count"] == 2, "graph must create nodes from capability inventory")
+    _require(graph["node_count"] == len(graph["nodes"]),
+             "node_count must match nodes length")
+    _require(graph["edge_count"] == len(graph["edges"]),
+             "edge_count must match edges length")
+
+    node_ids = {node["capability_id"] for node in graph["nodes"]}
+    _require(node_ids == {item["capability_id"] for item in inventory["capabilities"]},
+             "graph nodes must preserve capability ids")
+    by_name = {node["name"]: node for node in graph["nodes"]}
+    _require(by_name["Safety policy gate"]["maturity_score"] == 0.5,
+             "partial maturity must map to score 0.5")
+    _require(by_name["Repo value scanner"]["maturity_score"] == 1.0,
+             "verified maturity must map to score 1.0")
+    for node in graph["nodes"]:
+        _require(node["evidence_sources"], "node must include evidence_sources")
+        _require(node["risk_label"] in {"low", "medium", "high"},
+                 "node risk label must be normalized")
+        _require(node["status"] in {"planned", "in_progress", "available", "verified"},
+                 "node status must be normalized")
+
+    edge_ids = [edge["edge_id"] for edge in graph["edges"]]
+    _require(edge_ids == sorted(edge_ids), "edges must sort deterministically by id")
+    _require(all(edge_id.startswith("capability-edge-") for edge_id in edge_ids),
+             "edge ids must use stable prefix")
+    relationships = {edge["relationship"] for edge in graph["edges"]}
+    _require("feeds_into" in relationships,
+             "manual graph relationships must be preserved")
+    _require("derived_from_repo_finding" in relationships,
+             "gap preview matches must create derived_from_repo_finding edges")
+    for edge in graph["edges"]:
+        _require(edge["source_id"] in node_ids and edge["target_id"] in node_ids,
+                 "edge endpoints must reference graph nodes")
+        _require(0.0 <= edge["confidence"] <= 1.0,
+                 "edge confidence must be bounded")
+        _require(edge["reason"], "edge must include reason")
+
+    encoded = stable_capability_graph_json(graph)
+    _require(encoded == stable_capability_graph_json(graph),
+             "capability graph JSON serialization must be stable")
+    decoded = parse_capability_graph_json(encoded)
+    _require(decoded == graph, "capability graph JSON round-trip must preserve data")
+    validate_capability_graph(graph)
+
+    bad_source = dict(graph)
+    bad_source["edges"] = [dict(graph["edges"][0], source_id="missing-node")]
+    try:
+        validate_capability_graph(bad_source)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability graph must reject invalid edge source_id")
+
+    bad_relationship = dict(graph)
+    bad_relationship["edges"] = [dict(graph["edges"][0], relationship="executes")]
+    try:
+        validate_capability_graph(bad_relationship)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability graph must reject invalid relationship")
+
+    bad_confidence = dict(graph)
+    bad_confidence["edges"] = [dict(graph["edges"][0], confidence=1.5)]
+    try:
+        validate_capability_graph(bad_confidence)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability graph must reject confidence outside 0..1")
+
+    bad_writes = dict(graph)
+    bad_writes["writes"] = [".agents/runtime.json"]
+    try:
+        validate_capability_graph(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability graph must reject writes")
+
+    print("capability graph helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 50. Capability evidence graph
+# ---------------------------------------------------------------------------
+
+def check_capability_evidence_graph_helper() -> None:
+    """Capability graph nodes can carry normalized evidence and confidence."""
+    from link_modes.growth.link_growth_console import (
+        CAPABILITY_EVIDENCE_GRAPH_VERSION,
+        collect_capability_evidence_graph,
+        collect_capability_graph,
+        collect_link_capability_inventory,
+        parse_capability_evidence_graph_json,
+        stable_capability_evidence_graph_json,
+        validate_capability_evidence_graph,
+    )
+
+    inventory = collect_link_capability_inventory([
+        {
+            "name": "Safety policy gate",
+            "category": "safety",
+            "description": "Existing safety policy gate is present but still maturing.",
+            "source": "link_capability_gate.py",
+            "confidence": "high",
+            "tags": ["safety", "policy", "gate"],
+            "risk_level": "low",
+            "maturity_level": "partial",
+        },
+        {
+            "name": "Repo value scanner",
+            "category": "repo_value_scan",
+            "description": "Ranks repo files and concepts for Link relevance.",
+            "source": "link_modes/growth/link_growth_console.py:collect_repo_value_scan",
+            "confidence": "high",
+            "tags": ["repo", "scan", "value"],
+            "risk_level": "low",
+            "maturity_level": "verified",
+        },
+    ])
+    graph = collect_capability_graph(inventory)
+    safety_id = next(item["capability_id"] for item in inventory["capabilities"] if item["name"] == "Safety policy gate")
+    scanner_id = next(item["capability_id"] for item in inventory["capabilities"] if item["name"] == "Repo value scanner")
+    evidence_refs = [
+        {
+            "capability_id": safety_id,
+            "commit_refs": ["abcdef1", "abcdef1"],
+            "file_refs": ["link_capability_gate.py", "link_capability_gate.py"],
+            "test_refs": ["tests/test_growth_pipeline.py", "tests/test_growth_pipeline.py"],
+            "healthcheck_refs": ["link_healthcheck.py"],
+            "proposal_refs": ["add-safety-policy-gate"],
+            "source_repo_refs": ["research/sota-scan-master.zip"],
+        },
+        {
+            "capability_id": scanner_id,
+            "file_refs": ["link_modes/growth/link_growth_console.py"],
+            "test_refs": ["tests/test_growth_pipeline.py"],
+        },
+    ]
+    evidence_graph = collect_capability_evidence_graph(
+        graph,
+        evidence_refs=evidence_refs,
+        metadata={"suite": "growth"},
+    )
+    same = collect_capability_evidence_graph(
+        graph,
+        evidence_refs=evidence_refs,
+        metadata={"suite": "growth"},
+    )
+
+    _require(evidence_graph["evidence_graph_version"] == CAPABILITY_EVIDENCE_GRAPH_VERSION,
+             "capability evidence graph version mismatch")
+    _require(evidence_graph["evidence_graph_id"] == same["evidence_graph_id"],
+             "capability evidence graph id must be deterministic")
+    _require(evidence_graph["source_graph_id"] == graph["graph_id"],
+             "capability evidence graph must reference source graph id")
+    _require(evidence_graph["dry_run"] is True and evidence_graph["write_allowed"] is False,
+             "capability evidence graph must remain read-only")
+    _require(evidence_graph["automation_allowed"] is False,
+             "capability evidence graph must not allow automation")
+    _require(evidence_graph["writes"] == [], "capability evidence graph must not write files")
+    _require(evidence_graph["metadata"]["suite"] == "growth",
+             "capability evidence graph must preserve metadata")
+    _require(evidence_graph["node_count"] == 2,
+             "capability evidence graph must include one evidence node per graph node")
+
+    by_name = {node["capability_name"]: node for node in evidence_graph["evidence_nodes"]}
+    safety = by_name["Safety policy gate"]
+    scanner = by_name["Repo value scanner"]
+    _require(safety["evidence_id"].startswith("capability-evidence-"),
+             "capability evidence node id must use stable prefix")
+    _require(safety["commit_refs"] == ["abcdef1"],
+             "duplicate commit refs must normalize")
+    _require(safety["file_refs"] == ["link_capability_gate.py"],
+             "duplicate file refs must normalize with graph evidence source")
+    _require(safety["test_refs"] == ["tests/test_growth_pipeline.py"],
+             "duplicate test refs must normalize")
+    _require(safety["healthcheck_refs"] == ["link_healthcheck.py"],
+             "healthcheck refs must be preserved")
+    _require(safety["proposal_refs"] == ["add-safety-policy-gate"],
+             "proposal refs must be preserved")
+    _require(safety["source_repo_refs"] == ["research/sota-scan-master.zip"],
+             "source repo refs must be preserved")
+    _require(safety["confidence_score"] == 1.0,
+             f"expected confidence score 1.0, got {safety['confidence_score']}")
+    _require(scanner["confidence_score"] == 0.7,
+             f"expected scanner confidence score 0.7, got {scanner['confidence_score']}")
+
+    encoded = stable_capability_evidence_graph_json(evidence_graph)
+    _require(encoded == stable_capability_evidence_graph_json(evidence_graph),
+             "capability evidence graph JSON serialization must be stable")
+    decoded = parse_capability_evidence_graph_json(encoded)
+    _require(decoded == evidence_graph,
+             "capability evidence graph JSON round-trip must preserve data")
+    validate_capability_evidence_graph(evidence_graph)
+
+    bad_confidence = dict(evidence_graph)
+    bad_confidence["evidence_nodes"] = [dict(evidence_graph["evidence_nodes"][0], confidence_score=1.5)]
+    bad_confidence["node_count"] = 1
+    try:
+        validate_capability_evidence_graph(bad_confidence)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability evidence graph must reject confidence outside 0..1")
+
+    try:
+        collect_capability_evidence_graph(graph, evidence_refs=[{
+            "capability_id": safety_id,
+            "commit_refs": ["not-a-commit"],
+        }])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability evidence graph must reject invalid commit refs")
+
+    try:
+        collect_capability_evidence_graph(graph, evidence_refs=[{
+            "capability_id": safety_id,
+            "file_refs": ["../outside.py"],
+        }])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability evidence graph must reject unsafe file refs")
+
+    bad_node = dict(evidence_graph)
+    bad_node["evidence_nodes"] = [dict(evidence_graph["evidence_nodes"][0], file_refs=["z.py", "a.py"])]
+    bad_node["node_count"] = 1
+    try:
+        validate_capability_evidence_graph(bad_node)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability evidence graph must reject unsorted refs")
+
+    bad_writes = dict(evidence_graph)
+    bad_writes["writes"] = [".agents/runtime.json"]
+    try:
+        validate_capability_evidence_graph(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability evidence graph must reject writes")
+
+    print("capability evidence graph helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 51. Capability discovery
+# ---------------------------------------------------------------------------
+
+def check_capability_discovery_helper() -> None:
+    """Capability discovery maps capabilities to implementation locations read-only."""
+    from link_modes.growth.link_growth_console import (
+        CAPABILITY_DISCOVERY_VERSION,
+        collect_capability_discovery,
+        collect_capability_evidence_graph,
+        collect_capability_graph,
+        collect_link_capability_inventory,
+        parse_capability_discovery_json,
+        stable_capability_discovery_json,
+        validate_capability_discovery,
+    )
+
+    inventory = collect_link_capability_inventory([
+        {
+            "name": "Capability graph helper",
+            "category": "workflow_ux",
+            "description": "Builds graph nodes and edges for capabilities.",
+            "source": "link_modes/growth/link_growth_console.py",
+            "confidence": "high",
+            "tags": ["capability", "graph"],
+            "risk_level": "low",
+            "maturity_level": "verified",
+        },
+        {
+            "name": "Capability graph helper",
+            "category": "workflow_ux",
+            "description": "Builds graph nodes and edges for capabilities.",
+            "source": "link_modes/growth/link_growth_console.py",
+            "confidence": "high",
+            "tags": ["capability", "graph"],
+            "risk_level": "low",
+            "maturity_level": "verified",
+        },
+        {
+            "name": "Receipt helpers",
+            "category": "receipts",
+            "description": "Builds stable receipt helper objects.",
+            "source": "link_core/receipts/__init__.py",
+            "confidence": "high",
+            "tags": ["receipt", "evidence"],
+            "risk_level": "low",
+            "maturity_level": "available",
+        },
+    ])
+    _require(inventory["capability_count"] == 2,
+             "duplicate capabilities must normalize before discovery")
+    graph = collect_capability_graph(inventory)
+    graph_id = next(item["capability_id"] for item in inventory["capabilities"] if item["name"] == "Capability graph helper")
+    receipt_id = next(item["capability_id"] for item in inventory["capabilities"] if item["name"] == "Receipt helpers")
+    evidence = collect_capability_evidence_graph(graph, evidence_refs=[
+        {
+            "capability_id": graph_id,
+            "file_refs": ["link_modes/growth/link_growth_console.py", "link_modes/growth/link_growth_console.py"],
+            "test_refs": ["tests/test_growth_pipeline.py", "tests/test_growth_pipeline.py"],
+            "healthcheck_refs": ["link_healthcheck.py"],
+            "commit_refs": ["abcdef1"],
+        },
+        {
+            "capability_id": receipt_id,
+            "file_refs": ["link_core/receipts/__init__.py"],
+            "test_refs": ["tests/test_growth_pipeline.py"],
+        },
+    ])
+    discovery = collect_capability_discovery(
+        inventory,
+        capability_graph=graph,
+        evidence_graph=evidence,
+        metadata={"suite": "growth"},
+    )
+    same = collect_capability_discovery(
+        inventory,
+        capability_graph=graph,
+        evidence_graph=evidence,
+        metadata={"suite": "growth"},
+    )
+
+    _require(discovery["discovery_version"] == CAPABILITY_DISCOVERY_VERSION,
+             "capability discovery version mismatch")
+    _require(discovery["discovery_id"] == same["discovery_id"],
+             "capability discovery id must be deterministic")
+    _require(discovery["source_inventory_id"] == inventory["inventory_id"],
+             "capability discovery must reference inventory id")
+    _require(discovery["source_graph_id"] == graph["graph_id"],
+             "capability discovery must reference graph id")
+    _require(discovery["source_evidence_graph_id"] == evidence["evidence_graph_id"],
+             "capability discovery must reference evidence graph id")
+    _require(discovery["dry_run"] is True and discovery["write_allowed"] is False,
+             "capability discovery must remain read-only")
+    _require(discovery["automation_allowed"] is False,
+             "capability discovery must not allow automation")
+    _require(discovery["writes"] == [], "capability discovery must not write files")
+    _require(discovery["metadata"]["suite"] == "growth",
+             "capability discovery must preserve metadata")
+    _require(discovery["capability_count"] == 2,
+             "capability discovery must include one entry per capability")
+
+    by_name = {entry["capability_name"]: entry for entry in discovery["discoveries"]}
+    graph_entry = by_name["Capability graph helper"]
+    receipt_entry = by_name["Receipt helpers"]
+    _require(graph_entry["discovery_id"].startswith("capability-discovery-"),
+             "discovery entry id must use stable prefix")
+    _require(graph_entry["capability_id"] == graph_id,
+             "discovery entry must preserve capability_id")
+    _require(graph_entry["file_paths"] == ["link_modes/growth/link_growth_console.py"],
+             "duplicate file paths must normalize")
+    _require(graph_entry["module_paths"] == ["link_modes.growth.link_growth_console"],
+             "Python file paths must map to module paths")
+    _require(graph_entry["test_paths"] == ["tests/test_growth_pipeline.py"],
+             "duplicate test paths must normalize")
+    _require(graph_entry["evidence_refs"] == ["abcdef1", "link_healthcheck.py"],
+             "evidence refs must normalize and sort")
+    _require(graph_entry["confidence_score"] == 1.0,
+             f"expected discovery confidence 1.0, got {graph_entry['confidence_score']}")
+    _require(receipt_entry["module_paths"] == ["link_core.receipts"],
+             "__init__.py file path must map to package module")
+    _require(receipt_entry["confidence_score"] == 0.7919,
+             f"expected receipt discovery confidence 0.7919, got {receipt_entry['confidence_score']}")
+
+    encoded = stable_capability_discovery_json(discovery)
+    _require(encoded == stable_capability_discovery_json(discovery),
+             "capability discovery JSON serialization must be stable")
+    decoded = parse_capability_discovery_json(encoded)
+    _require(decoded == discovery, "capability discovery JSON round-trip must preserve data")
+    validate_capability_discovery(discovery)
+
+    bad_confidence = dict(discovery)
+    bad_confidence["discoveries"] = [dict(discovery["discoveries"][0], confidence_score=1.5)]
+    bad_confidence["capability_count"] = 1
+    try:
+        validate_capability_discovery(bad_confidence)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability discovery must reject confidence outside 0..1")
+
+    bad_missing_id = dict(discovery)
+    bad_entry = dict(discovery["discoveries"][0])
+    bad_entry.pop("capability_id")
+    bad_missing_id["discoveries"] = [bad_entry]
+    bad_missing_id["capability_count"] = 1
+    try:
+        validate_capability_discovery(bad_missing_id)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability discovery must reject missing capability_id")
+
+    bad_path = dict(discovery)
+    bad_path["discoveries"] = [dict(discovery["discoveries"][0], file_paths=["../outside.py"])]
+    bad_path["capability_count"] = 1
+    try:
+        validate_capability_discovery(bad_path)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability discovery must reject unsafe paths")
+
+    bad_unsorted = dict(discovery)
+    bad_unsorted["discoveries"] = [dict(discovery["discoveries"][0], test_paths=["z.py", "a.py"])]
+    bad_unsorted["capability_count"] = 1
+    try:
+        validate_capability_discovery(bad_unsorted)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability discovery must reject unsorted duplicate-prone paths")
+
+    bad_writes = dict(discovery)
+    bad_writes["writes"] = [".link/state.json"]
+    try:
+        validate_capability_discovery(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability discovery must reject writes")
+
+    print("capability discovery helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 52. Capability intelligence payload
+# ---------------------------------------------------------------------------
+
+def check_capability_intelligence_payload_helper() -> None:
+    """Aggregate capability intelligence payload stays deterministic and read-only."""
+    from link_modes.growth.link_growth_console import (
+        CAPABILITY_INTELLIGENCE_PAYLOAD_VERSION,
+        collect_capability_intelligence_payload,
+        parse_capability_intelligence_payload_json,
+        stable_capability_intelligence_payload_json,
+        validate_capability_intelligence_payload,
+    )
+
+    repo_items = [
+        {
+            "path": "sota/policy.md",
+            "title": "Verified approval policy gate",
+            "category": "safety_approval_gates",
+            "summary": "Scanner requires policy gates before risky work.",
+            "source_kind": "docs",
+            "tags": ["safety", "policy", "gate"],
+        },
+        {
+            "path": "sota/README.md",
+            "title": "Discoverable command onboarding",
+            "category": "cli_workflow_ux",
+            "summary": "Documents CLI integration, quickstart examples, and dashboard discoverability.",
+            "source_kind": "readme",
+            "tags": ["cli", "integration", "docs"],
+        },
+    ]
+    capabilities = [
+        {
+            "name": "Safety policy gate",
+            "category": "safety",
+            "description": "Existing safety policy gate is present but still maturing.",
+            "source": "link_capability_gate.py",
+            "confidence": "high",
+            "tags": ["safety", "policy", "gate"],
+            "risk_level": "low",
+            "maturity_level": "partial",
+        },
+        {
+            "name": "Command dashboard UX",
+            "category": "workflow_ux",
+            "description": "Shows Growth commands and local workflow state.",
+            "source": "link_modes/growth/link_growth_console.py:collect_run_data",
+            "confidence": "high",
+            "tags": ["cli", "dashboard", "integration"],
+            "risk_level": "low",
+            "maturity_level": "verified",
+        },
+    ]
+    payload = collect_capability_intelligence_payload(
+        repo_items,
+        link_capabilities=capabilities,
+        top=5,
+        source_label="sota-scan",
+        metadata={"suite": "growth"},
+    )
+    same = collect_capability_intelligence_payload(
+        repo_items,
+        link_capabilities=capabilities,
+        top=5,
+        source_label="sota-scan",
+        metadata={"suite": "growth"},
+    )
+
+    _require(payload["payload_version"] == CAPABILITY_INTELLIGENCE_PAYLOAD_VERSION,
+             "capability intelligence payload version mismatch")
+    _require(payload["payload_id"] == same["payload_id"],
+             "capability intelligence payload_id must be deterministic")
+    _require(payload["dry_run"] is True and payload["write_allowed"] is False,
+             "capability intelligence payload must remain read-only")
+    _require(payload["automation_allowed"] is False,
+             "capability intelligence payload must not allow automation")
+    _require(payload["writes"] == [], "capability intelligence payload must not write files")
+    _require(payload["metadata"]["suite"] == "growth",
+             "capability intelligence payload must preserve metadata")
+
+    for field in (
+        "inventory_summary",
+        "gap_summary",
+        "planning_preview_summary",
+        "capability_graph_summary",
+        "evidence_graph_summary",
+        "discovery_summary",
+    ):
+        _require(isinstance(payload[field], dict), f"{field} must be present")
+
+    _require(payload["inventory_summary"]["capability_count"] == 2,
+             "inventory summary must count capabilities")
+    _require(payload["gap_summary"]["counts"]["repo_finding_count"] == 2,
+             "gap summary must include repo finding count")
+    _require(payload["planning_preview_summary"]["next_step_count"] == len(payload["top_recommended_next_steps"]),
+             "planning summary must count top next steps")
+    _require(payload["capability_graph_summary"]["node_count"] == 2,
+             "graph summary must count nodes")
+    _require(payload["evidence_graph_summary"]["node_count"] == 2,
+             "evidence graph summary must count nodes")
+    _require(payload["discovery_summary"]["capability_count"] == 2,
+             "discovery summary must count capabilities")
+    _require(0.0 <= payload["evidence_graph_summary"]["average_confidence_score"] <= 1.0,
+             "evidence average confidence must be bounded")
+    _require(0.0 <= payload["discovery_summary"]["average_confidence_score"] <= 1.0,
+             "discovery average confidence must be bounded")
+    _require(payload["top_recommended_next_steps"],
+             "capability intelligence payload must include recommended next steps")
+
+    encoded = stable_capability_intelligence_payload_json(payload)
+    _require(encoded == stable_capability_intelligence_payload_json(payload),
+             "capability intelligence payload JSON serialization must be stable")
+    decoded = parse_capability_intelligence_payload_json(encoded)
+    _require(decoded == payload,
+             "capability intelligence payload JSON round-trip must preserve data")
+    validate_capability_intelligence_payload(payload)
+
+    bad_missing_id = dict(payload)
+    bad_missing_id.pop("payload_id")
+    try:
+        validate_capability_intelligence_payload(bad_missing_id)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability intelligence payload must reject missing payload_id")
+
+    bad_writes = dict(payload)
+    bad_writes["writes"] = [".agents/runtime.json"]
+    try:
+        validate_capability_intelligence_payload(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability intelligence payload must reject unsafe writes")
+
+    bad_summary = dict(payload)
+    bad_summary["inventory_summary"] = {"inventory_id": "missing-counts"}
+    try:
+        validate_capability_intelligence_payload(bad_summary)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability intelligence payload must reject malformed summaries")
+
+    bad_steps = dict(payload)
+    bad_steps["top_recommended_next_steps"] = [{"step_id": "missing-fields"}]
+    try:
+        validate_capability_intelligence_payload(bad_steps)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("capability intelligence payload must reject malformed next steps")
+
+    print("capability intelligence payload helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 53. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
 
 def check_growth_archive_code_brief_dry_run() -> None:
@@ -4908,6 +5773,11 @@ def main() -> None:
     check_repo_value_scan_helper()
     check_link_capability_inventory_helper()
     check_capability_gap_preview_helper()
+    check_growth_planning_preview_helper()
+    check_capability_graph_helper()
+    check_capability_evidence_graph_helper()
+    check_capability_discovery_helper()
+    check_capability_intelligence_payload_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()
