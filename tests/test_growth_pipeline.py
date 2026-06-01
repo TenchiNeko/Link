@@ -3137,6 +3137,33 @@ def check_growth_code_brief_propose_batch() -> None:
         b_files = list(briefs_dir.glob("*.md")) if briefs_dir.exists() else []
         _require(len(b_files) == 0, "batch preview must not write code brief files")
 
+        written = collect_code_brief_propose_batch(top=2, root=td, write=True)
+        _require(written.get("ok") is True, "batch --write must set ok=True")
+        _require(written.get("dry_run") is False, "batch --write must report dry_run=False")
+        written_paths = written.get("written_paths", [])
+        _require(len(written_paths) == written.get("proposal_count"),
+                 "batch --write written_paths must match proposal_count")
+        for written_path in written_paths:
+            _require(Path(written_path).exists(),
+                     f"batch --write path must exist: {written_path}")
+        p_files = list(prop_dir.glob("*.json")) if prop_dir.exists() else []
+        _require(len(p_files) == len(set(written_paths)),
+                 "batch --write must persist proposal files without extra files")
+        b_files = list(briefs_dir.glob("*.md")) if briefs_dir.exists() else []
+        _require(len(b_files) == 0, "batch --write must not write code brief files")
+
+        write_json_out = io.StringIO()
+        with contextlib.redirect_stdout(write_json_out):
+            write_rc = code_brief_propose_batch_main([
+                "--top", "2", "--write", "--json", "--root", td,
+            ])
+        _require(write_rc == 0, f"batch --write --json command must return 0, got {write_rc}")
+        write_rendered = _json.loads(write_json_out.getvalue())
+        _require(write_rendered.get("dry_run") is False,
+                 "batch --write --json output must report dry_run=False")
+        _require(len(write_rendered.get("written_paths", [])) == write_rendered.get("proposal_count"),
+                 "batch --write --json output must include written_paths")
+
         clamped = collect_code_brief_propose_batch(top=25, root=td)
         _require(clamped.get("top_requested") == _MAX_CODE_QUEUE_TOP,
                  "batch preview top value must clamp to max code queue top")

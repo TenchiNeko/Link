@@ -581,7 +581,7 @@ def collect_propose_data(
             "proposal_count": 0,
             "proposals": [],
             "written_paths": [],
-            "dry_run": not write,
+            "dry_run": True,
             "error": f"source not found: {source_path}",
         }
 
@@ -7087,14 +7087,11 @@ def _normalize_cli_dashes(args: list[str]) -> list[str]:
 def code_brief_propose_batch_main(argv: list[str] | None = None) -> int:
     """Entry point for ``growth code-brief-propose-batch``.
 
-    Dry-run only. Ranks code sources, builds in-memory code briefs, and previews
-    proposal generation. No proposal JSON or code brief files are written.
+    Ranks code sources, builds in-memory code briefs, previews proposal generation,
+    and optionally persists generated proposals with --write.
     """
     args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
-
-    if "--write" in args:
-        print("error: code-brief-propose-batch is dry-run only in this slice", file=sys.stderr)
-        return 2
+    write = "--write" in args
 
     if "--help" in args or "-h" in args:
         print("Growth code-brief-propose-batch: preview proposals for top code queue entries")
@@ -7102,8 +7099,9 @@ def code_brief_propose_batch_main(argv: list[str] | None = None) -> int:
         print("Usage:")
         print("  python3 link.py growth code-brief-propose-batch --top <N>")
         print("  python3 link.py growth code-brief-propose-batch --top <N> --json")
+        print("  python3 link.py growth code-brief-propose-batch --top <N> --write")
         print("")
-        print("Dry-run only. Reads source text and writes no briefs or proposals.")
+        print("Reads source text and writes proposals only with --write.")
         return 0
 
     top_arg = _parse_arg(args, "--top")
@@ -7113,7 +7111,7 @@ def code_brief_propose_batch_main(argv: list[str] | None = None) -> int:
         return 1
 
     root_override = _parse_arg(args, "--root")
-    data = collect_code_brief_propose_batch(top=top, root=root_override)
+    data = collect_code_brief_propose_batch(top=top, root=root_override, write=write)
 
     if "--json" in args:
         print(json.dumps(data, indent=2, default=str))
@@ -7126,10 +7124,12 @@ def code_brief_propose_batch_main(argv: list[str] | None = None) -> int:
 def collect_code_brief_propose_batch(
     top: int = _DEFAULT_CODE_QUEUE_TOP,
     root: str | None = None,
+    write: bool = False,
 ) -> dict[str, Any]:
-    """Preview code-brief proposal generation for top archive-code-queue entries."""
+    """Preview or write code-brief proposal generation for top archive-code-queue entries."""
     from pathlib import Path
 
+    from link_core.control_plane import write_proposal as _write_proposal
     from link_core.control_plane.link_control_plane_proposals import (
         proposal_storage_dir as _proposal_storage_dir,
     )
@@ -7145,6 +7145,7 @@ def collect_code_brief_propose_batch(
     warnings.extend(queue_data.get("warnings", []) or [])
 
     source_summaries: list[dict[str, Any]] = []
+    written_paths: list[str] = []
     candidate_total = 0
     proposal_total = 0
     weak_total = 0
@@ -7183,6 +7184,10 @@ def collect_code_brief_propose_batch(
             quality_warnings = quality["quality_warnings"]
             weak_count = quality["weak_candidate_count"]
             duplicate_count = quality["duplicate_count"]
+            if write:
+                for proposal in proposals:
+                    path = _write_proposal(proposal, root=repo_root)
+                    written_paths.append(str(path))
         else:
             source_warnings.append(brief_data.get("error") or "code brief preview failed")
 
@@ -7210,7 +7215,7 @@ def collect_code_brief_propose_batch(
 
     return {
         "ok": True,
-        "dry_run": True,
+        "dry_run": not write,
         "top_requested": effective_top,
         "queued_source_count": len(queue_entries),
         "processed_source_count": len(source_summaries),
@@ -7220,7 +7225,7 @@ def collect_code_brief_propose_batch(
         "duplicate_count": duplicate_total,
         "sources": source_summaries,
         "warnings": warnings,
-        "written_paths": [],
+        "written_paths": written_paths,
         "next_commands": [
             "python3 link.py growth archive-code-queue",
             "python3 link.py growth archive-code-brief --source <path> --write",
@@ -7249,7 +7254,7 @@ def render_code_brief_propose_batch_with_rich(data: dict[str, Any]) -> None:
     console = Console(highlight=False, soft_wrap=True)
     header = Text()
     header.append("LINK GROWTH CODE BRIEF PROPOSE BATCH", style="bold bright_cyan")
-    header.append("  DRY RUN", style="yellow")
+    header.append("  DRY RUN" if data.get("dry_run") else "  WRITTEN", style="yellow" if data.get("dry_run") else "green")
     console.print(header)
     console.print(Panel(
         f"queued: {data.get('queued_source_count', 0)}  "
@@ -7272,13 +7277,18 @@ def render_code_brief_propose_batch_with_rich(data: dict[str, Any]) -> None:
     next_text = Text()
     for command in data.get("next_commands", []):
         next_text.append(f"  $ {command}\n", style="dim")
+    if data.get("written_paths"):
+        written = Text()
+        for path in data.get("written_paths", [])[:10]:
+            written.append(f"{path}\n", style="green")
+        console.print(Panel(written, title="WRITTEN PROPOSALS", border_style="green"))
     console.print(Rule(style="dim"))
     console.print(Panel(next_text, title="SUGGESTED NEXT STEPS", border_style="green"))
 
 
 def render_code_brief_propose_batch_plain(data: dict[str, Any]) -> None:
     out: list[str] = []
-    out.append("== LINK GROWTH CODE BRIEF PROPOSE BATCH (DRY RUN) ==")
+    out.append("== LINK GROWTH CODE BRIEF PROPOSE BATCH (DRY RUN) ==" if data.get("dry_run") else "== LINK GROWTH CODE BRIEF PROPOSE BATCH (WRITTEN) ==")
     out.append(
         f"queued: {data.get('queued_source_count', 0)}  "
         f"processed: {data.get('processed_source_count', 0)}  "
@@ -7299,6 +7309,10 @@ def render_code_brief_propose_batch_plain(data: dict[str, Any]) -> None:
         out.append(f"brief:      $ {source.get('suggested_brief_command', '?')}")
         out.append("")
     out.append("-- SUGGESTED NEXT STEPS --")
+    if data.get("written_paths"):
+        out.append("written proposals:")
+        for path in data.get("written_paths", [])[:10]:
+            out.append(f"  {path}")
     for command in data.get("next_commands", []):
         out.append(f"  $ {command}")
     print("\n".join(out))
@@ -7803,6 +7817,11 @@ def render_code_brief_propose_with_rich(data: dict[str, Any]) -> None:
     next_text = Text()
     for command in data.get("next_commands", []):
         next_text.append(f"  $ {command}\n", style="dim")
+    if data.get("written_paths"):
+        written = Text()
+        for path in data.get("written_paths", [])[:10]:
+            written.append(f"{path}\n", style="green")
+        console.print(Panel(written, title="WRITTEN PROPOSALS", border_style="green"))
     console.print(Rule(style="dim"))
     console.print(Panel(next_text, title="SUGGESTED NEXT STEPS", border_style="green"))
 
@@ -7851,6 +7870,10 @@ def render_code_brief_propose_plain(data: dict[str, Any]) -> None:
         out.append("")
 
     out.append("-- SUGGESTED NEXT STEPS --")
+    if data.get("written_paths"):
+        out.append("written proposals:")
+        for path in data.get("written_paths", [])[:10]:
+            out.append(f"  {path}")
     for command in data.get("next_commands", []):
         out.append(f"  $ {command}")
     print("\n".join(out))
