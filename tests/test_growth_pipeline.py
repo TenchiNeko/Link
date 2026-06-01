@@ -6646,10 +6646,24 @@ def check_growth_planning_chain_cli() -> None:
              "planning chain must not allow automation")
     _require(parsed["writes"] == [], "planning chain must not write files")
 
+    for key in (
+        "verified_patch_plan",
+        "verified_patch_diff",
+        "patch_behavior_quality_gate",
+        "autonomous_execution_package",
+        "stage_summary",
+    ):
+        _require(key in parsed, f"planning-chain JSON must include {key}")
+
     top_upgrade = parsed["upgrade_execution_plan"]["upgrade_plans"][0]
     branch_plan = parsed["implementation_branch_plan"]
     work_package = parsed["implementation_work_packages"]["packages"][0]
     verification = parsed["verification_plan"]["plans"][0]
+    patch_plan = parsed["verified_patch_plan"]
+    patch_diff = parsed["verified_patch_diff"]
+    quality_gate = parsed["patch_behavior_quality_gate"]
+    execution_package = parsed["autonomous_execution_package"]
+    stage_summary = parsed["stage_summary"]
     action = parsed["top_recommended_next_action"]
     _require(branch_plan["source_upgrade_id"] == top_upgrade["upgrade_plan_id"],
              "top upgrade must flow into branch plan")
@@ -6657,6 +6671,40 @@ def check_growth_planning_chain_cli() -> None:
              "branch plan must flow into work package")
     _require(verification["package_id"] == work_package["package_id"],
              "work package must flow into verification plan")
+    _require(patch_plan["upgrade_id"] == top_upgrade["upgrade_plan_id"],
+             "top upgrade must flow into verified patch plan")
+    _require(patch_plan["branch_plan_id"] == branch_plan["branch_plan_id"],
+             "branch plan must flow into verified patch plan")
+    _require(patch_plan["work_package_id"] == work_package["package_id"],
+             "work package must flow into verified patch plan")
+    _require(patch_diff["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
+             "verified patch plan must flow into patch diff")
+    _require(quality_gate["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
+             "verified patch plan must flow into quality gate")
+    _require(quality_gate["verified_patch_diff_id"] == patch_diff["verified_patch_diff_id"],
+             "verified patch diff must flow into quality gate")
+    _require(execution_package["verification_plan_id"] == verification["verification_plan_id"],
+             "verification plan must flow into autonomous execution package")
+    _require(execution_package["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
+             "verified patch plan must flow into autonomous execution package")
+    _require(execution_package["verified_patch_diff_id"] == patch_diff["verified_patch_diff_id"],
+             "verified patch diff must flow into autonomous execution package")
+    _require(execution_package["quality_gate_id"] == quality_gate["quality_gate_id"],
+             "quality gate must flow into autonomous execution package")
+    _require(stage_summary["verification_plan_id"] == verification["verification_plan_id"],
+             "stage summary must reference verification plan")
+    _require(stage_summary["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
+             "stage summary must reference verified patch plan")
+    _require(stage_summary["verified_patch_diff_id"] == patch_diff["verified_patch_diff_id"],
+             "stage summary must reference verified patch diff")
+    _require(stage_summary["quality_gate_id"] == quality_gate["quality_gate_id"],
+             "stage summary must reference quality gate")
+    _require(stage_summary["execution_package_id"] == execution_package["execution_package_id"],
+             "stage summary must reference autonomous execution package")
+    _require(stage_summary["execution_stage_count"] == execution_package["stage_count"],
+             "stage summary must preserve execution stage count")
+    _require(stage_summary["next_stage"] == "human review before any execution",
+             "stage summary must point to human review")
     _require(action["upgrade_id"] == top_upgrade["upgrade_plan_id"],
              "next action must reference top upgrade")
     _require(action["branch_plan_id"] == branch_plan["branch_plan_id"],
@@ -6665,6 +6713,14 @@ def check_growth_planning_chain_cli() -> None:
              "next action must reference work package")
     _require(action["verification_plan_id"] == verification["verification_plan_id"],
              "next action must reference verification plan")
+    _require(action["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
+             "next action must reference verified patch plan")
+    _require(action["verified_patch_diff_id"] == patch_diff["verified_patch_diff_id"],
+             "next action must reference verified patch diff")
+    _require(action["quality_gate_id"] == quality_gate["quality_gate_id"],
+             "next action must reference quality gate")
+    _require(action["execution_package_id"] == execution_package["execution_package_id"],
+             "next action must reference autonomous execution package")
 
     write_out = io.StringIO()
     write_err = io.StringIO()
@@ -6686,7 +6742,11 @@ def check_growth_planning_chain_cli() -> None:
              "planning-chain human mode must include planning_chain_id")
     _require("verification_plans:" in human,
              "planning-chain human mode must include verification summary")
-    _require(len(human.splitlines()) <= 10,
+    _require("quality_gate:" in human,
+             "planning-chain human mode must include quality gate summary")
+    _require("execution_stages:" in human,
+             "planning-chain human mode must include execution stage summary")
+    _require(len(human.splitlines()) <= 12,
              "planning-chain human mode must stay concise")
 
     print("growth planning-chain CLI OK")

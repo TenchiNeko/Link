@@ -9596,14 +9596,22 @@ def make_growth_planning_chain_id(
     branch_plan: dict[str, Any],
     work_packages: dict[str, Any],
     verification_plan: dict[str, Any],
+    verified_patch_plan: dict[str, Any],
+    verified_patch_diff: dict[str, Any],
+    patch_behavior_quality_gate: dict[str, Any],
+    autonomous_execution_package: dict[str, Any],
 ) -> str:
     import hashlib
 
     payload = _stable_ruflo_json({
+        "autonomous_execution_package_id": autonomous_execution_package["execution_package_id"],
         "branch_plan_id": branch_plan["branch_plan_id"],
         "gap_preview_id": gap_preview["preview_id"],
+        "patch_behavior_quality_gate_id": patch_behavior_quality_gate["quality_gate_id"],
         "upgrade_plan_id": upgrade_plan["plan_id"],
         "verification_plan_ids": [plan["verification_plan_id"] for plan in verification_plan["plans"]],
+        "verified_patch_diff_id": verified_patch_diff["verified_patch_diff_id"],
+        "verified_patch_plan_id": verified_patch_plan["verified_patch_plan_id"],
         "work_packages_id": work_packages["work_packages_id"],
         "version": GROWTH_PLANNING_CHAIN_VERSION,
     })
@@ -9640,6 +9648,30 @@ def collect_growth_planning_chain_preview(
     branch_plan = collect_implementation_branch_plan(upgrade_plan, top_upgrade)
     work_packages = collect_implementation_work_packages(branch_plan)
     verification_plan = collect_verification_plan(work_packages)
+    work_package = work_packages["packages"][0]
+    verification_entry = verification_plan["plans"][0]
+    verified_patch_plan = collect_verified_patch_plan(
+        work_package,
+        verification_plan=verification_plan,
+        provided_evidence=[
+            "git diff --stat",
+            "git status --short --branch",
+            "patch operations reviewed before implementation",
+            "verified patch plan JSON reviewed",
+        ],
+    )
+    verified_patch_diff = collect_verified_patch_diff(verified_patch_plan)
+    patch_behavior_quality_gate = collect_patch_behavior_quality_gate(
+        verified_patch_plan,
+        patch_diff=verified_patch_diff,
+        assumptions=["planning-chain is read-only and does not execute the package"],
+    )
+    autonomous_execution_package = collect_autonomous_execution_package(
+        verified_patch_plan,
+        verification_plan=verification_plan,
+        patch_diff=verified_patch_diff,
+        quality_gate=patch_behavior_quality_gate,
+    )
     chain = {
         "planning_chain_version": GROWTH_PLANNING_CHAIN_VERSION,
         "planning_chain_id": make_growth_planning_chain_id(
@@ -9648,6 +9680,10 @@ def collect_growth_planning_chain_preview(
             branch_plan,
             work_packages,
             verification_plan,
+            verified_patch_plan,
+            verified_patch_diff,
+            patch_behavior_quality_gate,
+            autonomous_execution_package,
         ),
         "dry_run": True,
         "write_allowed": False,
@@ -9657,7 +9693,26 @@ def collect_growth_planning_chain_preview(
         "implementation_branch_plan": branch_plan,
         "implementation_work_packages": work_packages,
         "verification_plan": verification_plan,
-        "top_recommended_next_action": _growth_planning_chain_next_action(top_upgrade, branch_plan, verification_plan),
+        "verified_patch_plan": verified_patch_plan,
+        "verified_patch_diff": verified_patch_diff,
+        "patch_behavior_quality_gate": patch_behavior_quality_gate,
+        "autonomous_execution_package": autonomous_execution_package,
+        "stage_summary": _growth_planning_chain_stage_summary(
+            verification_entry,
+            verified_patch_plan,
+            verified_patch_diff,
+            patch_behavior_quality_gate,
+            autonomous_execution_package,
+        ),
+        "top_recommended_next_action": _growth_planning_chain_next_action(
+            top_upgrade,
+            branch_plan,
+            verification_plan,
+            verified_patch_plan,
+            verified_patch_diff,
+            patch_behavior_quality_gate,
+            autonomous_execution_package,
+        ),
         "metadata": dict(metadata or {}),
         "writes": [],
     }
@@ -9669,7 +9724,9 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any]) -> None:
     required = (
         "planning_chain_version", "planning_chain_id", "dry_run", "write_allowed", "automation_allowed",
         "capability_gap_preview", "upgrade_execution_plan", "implementation_branch_plan",
-        "implementation_work_packages", "verification_plan", "top_recommended_next_action", "metadata", "writes",
+        "implementation_work_packages", "verification_plan", "verified_patch_plan", "verified_patch_diff",
+        "patch_behavior_quality_gate", "autonomous_execution_package", "stage_summary",
+        "top_recommended_next_action", "metadata", "writes",
     )
     missing = [field for field in required if field not in chain]
     if missing:
@@ -9689,22 +9746,71 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any]) -> None:
     validate_implementation_branch_plan(chain["implementation_branch_plan"])
     validate_implementation_work_packages(chain["implementation_work_packages"])
     validate_verification_plan(chain["verification_plan"])
+    validate_verified_patch_plan(chain["verified_patch_plan"])
+    validate_verified_patch_diff(chain["verified_patch_diff"])
+    validate_patch_behavior_quality_gate(chain["patch_behavior_quality_gate"])
+    validate_autonomous_execution_package(chain["autonomous_execution_package"])
+    stage_summary = chain["stage_summary"]
+    if not isinstance(stage_summary, dict):
+        raise TypeError("stage_summary must be a dict")
+    for field in ("verification_plan_id", "verified_patch_plan_id", "verified_patch_diff_id", "quality_gate_id", "execution_package_id", "execution_stage_count", "quality_gate_status", "next_stage"):
+        if field not in stage_summary:
+            raise ValueError(f"stage_summary missing field: {field}")
+    if not isinstance(stage_summary["execution_stage_count"], int) or stage_summary["execution_stage_count"] < 0:
+        raise ValueError("stage_summary execution_stage_count must be a non-negative integer")
+    for field in ("verification_plan_id", "verified_patch_plan_id", "verified_patch_diff_id", "quality_gate_id", "execution_package_id", "quality_gate_status", "next_stage"):
+        if not isinstance(stage_summary[field], str) or not stage_summary[field].strip():
+            raise ValueError(f"stage_summary.{field} must be a non-empty string")
     action = chain["top_recommended_next_action"]
     if not isinstance(action, dict):
         raise TypeError("top_recommended_next_action must be a dict")
-    for field in ("upgrade_id", "title", "branch_plan_id", "package_id", "verification_plan_id", "summary"):
+    for field in ("upgrade_id", "title", "branch_plan_id", "package_id", "verification_plan_id", "verified_patch_plan_id", "verified_patch_diff_id", "quality_gate_id", "execution_package_id", "summary"):
         if not isinstance(action.get(field), str) or not action[field].strip():
             raise ValueError(f"top_recommended_next_action.{field} must be a non-empty string")
     top_upgrade = chain["upgrade_execution_plan"]["upgrade_plans"][0]
     branch_plan = chain["implementation_branch_plan"]
     work_package = chain["implementation_work_packages"]["packages"][0]
     verification = chain["verification_plan"]["plans"][0]
+    patch_plan = chain["verified_patch_plan"]
+    patch_diff = chain["verified_patch_diff"]
+    quality_gate = chain["patch_behavior_quality_gate"]
+    execution_package = chain["autonomous_execution_package"]
     if branch_plan["source_upgrade_id"] != top_upgrade["upgrade_plan_id"]:
         raise ValueError("top upgrade must flow into implementation branch plan")
     if work_package["branch_plan_id"] != branch_plan["branch_plan_id"]:
         raise ValueError("implementation branch plan must flow into work package")
     if verification["package_id"] != work_package["package_id"]:
         raise ValueError("work package must flow into verification plan")
+    if patch_plan["work_package_id"] != work_package["package_id"]:
+        raise ValueError("work package must flow into verified patch plan")
+    if patch_plan["upgrade_id"] != top_upgrade["upgrade_plan_id"]:
+        raise ValueError("top upgrade must flow into verified patch plan")
+    if patch_diff["verified_patch_plan_id"] != patch_plan["verified_patch_plan_id"]:
+        raise ValueError("verified patch plan must flow into verified patch diff")
+    if quality_gate["verified_patch_plan_id"] != patch_plan["verified_patch_plan_id"]:
+        raise ValueError("verified patch plan must flow into patch behavior quality gate")
+    if quality_gate["verified_patch_diff_id"] != patch_diff["verified_patch_diff_id"]:
+        raise ValueError("verified patch diff must flow into patch behavior quality gate")
+    if execution_package["verified_patch_plan_id"] != patch_plan["verified_patch_plan_id"]:
+        raise ValueError("verified patch plan must flow into autonomous execution package")
+    if execution_package["verified_patch_diff_id"] != patch_diff["verified_patch_diff_id"]:
+        raise ValueError("verified patch diff must flow into autonomous execution package")
+    if execution_package["quality_gate_id"] != quality_gate["quality_gate_id"]:
+        raise ValueError("quality gate must flow into autonomous execution package")
+    if execution_package["verification_plan_id"] != verification["verification_plan_id"]:
+        raise ValueError("verification plan must flow into autonomous execution package")
+    if stage_summary["verification_plan_id"] != verification["verification_plan_id"]:
+        raise ValueError("stage_summary must reference verification plan")
+    if stage_summary["verified_patch_plan_id"] != patch_plan["verified_patch_plan_id"]:
+        raise ValueError("stage_summary must reference verified patch plan")
+    if stage_summary["verified_patch_diff_id"] != patch_diff["verified_patch_diff_id"]:
+        raise ValueError("stage_summary must reference verified patch diff")
+    if stage_summary["quality_gate_id"] != quality_gate["quality_gate_id"]:
+        raise ValueError("stage_summary must reference quality gate")
+    if stage_summary["execution_package_id"] != execution_package["execution_package_id"]:
+        raise ValueError("stage_summary must reference autonomous execution package")
+    if stage_summary["execution_stage_count"] != execution_package["stage_count"]:
+        raise ValueError("stage_summary execution_stage_count must match package stage count")
 
 
 def stable_growth_planning_chain_json(chain: dict[str, Any]) -> str:
@@ -9724,6 +9830,10 @@ def _growth_planning_chain_next_action(
     top_upgrade: dict[str, Any],
     branch_plan: dict[str, Any],
     verification_plan: dict[str, Any],
+    verified_patch_plan: dict[str, Any],
+    verified_patch_diff: dict[str, Any],
+    patch_behavior_quality_gate: dict[str, Any],
+    autonomous_execution_package: dict[str, Any],
 ) -> dict[str, str]:
     return {
         "upgrade_id": top_upgrade["upgrade_plan_id"],
@@ -9731,7 +9841,30 @@ def _growth_planning_chain_next_action(
         "branch_plan_id": branch_plan["branch_plan_id"],
         "package_id": verification_plan["plans"][0]["package_id"],
         "verification_plan_id": verification_plan["plans"][0]["verification_plan_id"],
-        "summary": "Review the read-only branch, work package, and verification plan before approving any implementation.",
+        "verified_patch_plan_id": verified_patch_plan["verified_patch_plan_id"],
+        "verified_patch_diff_id": verified_patch_diff["verified_patch_diff_id"],
+        "quality_gate_id": patch_behavior_quality_gate["quality_gate_id"],
+        "execution_package_id": autonomous_execution_package["execution_package_id"],
+        "summary": "Review the full read-only planning, patch, quality, and execution package chain before approving any implementation.",
+    }
+
+
+def _growth_planning_chain_stage_summary(
+    verification_entry: dict[str, Any],
+    verified_patch_plan: dict[str, Any],
+    verified_patch_diff: dict[str, Any],
+    patch_behavior_quality_gate: dict[str, Any],
+    autonomous_execution_package: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "verification_plan_id": verification_entry["verification_plan_id"],
+        "verified_patch_plan_id": verified_patch_plan["verified_patch_plan_id"],
+        "verified_patch_diff_id": verified_patch_diff["verified_patch_diff_id"],
+        "quality_gate_id": patch_behavior_quality_gate["quality_gate_id"],
+        "execution_package_id": autonomous_execution_package["execution_package_id"],
+        "execution_stage_count": autonomous_execution_package["stage_count"],
+        "quality_gate_status": patch_behavior_quality_gate["pass_status"],
+        "next_stage": "human review before any execution",
     }
 
 
@@ -9765,6 +9898,7 @@ def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     branch_plan = chain["implementation_branch_plan"]
     work_packages = chain["implementation_work_packages"]
     verification = chain["verification_plan"]
+    stage_summary = chain["stage_summary"]
     action = chain["top_recommended_next_action"]
     print("Growth planning-chain preview")
     print(f"planning_chain_id: {chain['planning_chain_id']}")
@@ -9773,6 +9907,8 @@ def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     print(f"branch_plan: {branch_plan['proposed_branch_name']} ({branch_plan['risk_level']}/{branch_plan['complexity']})")
     print(f"work_packages: {work_packages['package_count']}")
     print(f"verification_plans: {verification['plan_count']}")
+    print(f"quality_gate: {stage_summary['quality_gate_status']}")
+    print(f"execution_stages: {stage_summary['execution_stage_count']}")
     print(f"next_action: {action['summary']}")
 
 
