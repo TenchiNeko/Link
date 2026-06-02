@@ -10032,6 +10032,33 @@ def planning_chain_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def execution_readiness_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth execution-readiness`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth execution-readiness: compact execution readiness dashboard")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth execution-readiness")
+        print("  python3 link.py growth execution-readiness --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth execution-readiness is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    summary = chain.get("execution_readiness_dashboard_summary")
+    if summary is None:
+        summary = collect_execution_readiness_dashboard_summary(chain)
+    validate_execution_readiness_dashboard_summary(summary, chain)
+    if "--json" in args:
+        print(stable_execution_readiness_dashboard_summary_json(summary), end="")
+        return 0
+    render_execution_readiness_plain(summary)
+    return 0
+
+
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     validate_growth_planning_chain_preview(chain)
     gap_counts = chain["capability_gap_preview"]["counts"]
@@ -10069,6 +10096,20 @@ def render_planning_chain_plain(chain: dict[str, Any]) -> None:
         print(f"dashboard: {dashboard_summary['readiness_status']}/{dashboard_summary['preflight_status']} blockers={len(dashboard_summary['top_blockers'])} warnings={len(dashboard_summary['top_warnings'])} next={dashboard_summary['recommended_next_action']}")
     print(f"review_bundle: {review_bundle['review_bundle_id']} ({review_bundle['patch_behavior_quality_gate']['pass_status']})")
     print(f"next_action: {review_bundle['recommended_next_action']}")
+
+
+def render_execution_readiness_plain(summary: dict[str, Any]) -> None:
+    validate_execution_readiness_dashboard_summary(summary)
+    print("Growth execution readiness")
+    print(f"dashboard_summary_id: {summary['dashboard_summary_id']}")
+    print(f"planning_chain_id: {summary['planning_chain_id']}")
+    print(f"top_upgrade: {summary['top_upgrade_id']} - {summary['top_upgrade_title']}")
+    print(f"quality_gate: {summary['quality_gate']['pass_status']} score={summary['quality_gate']['quality_score']} risk={summary['quality_gate']['risk_score']}")
+    print(f"preflight: {summary['preflight_status']}")
+    print(f"blockers: {summary['preflight_blocker_count']}")
+    print(f"warnings: {summary['preflight_warning_count']}")
+    print(f"planned_attempts: {summary['planned_attempt_count']}")
+    print(f"next_action: {summary['recommended_next_action']}")
 
 
 VERIFIED_PATCH_PLAN_VERSION = "link-verified-patch-plan-v1"

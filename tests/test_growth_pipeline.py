@@ -6893,6 +6893,96 @@ def check_growth_planning_chain_cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62. Growth execution-readiness CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_execution_readiness_cli() -> None:
+    """execution-readiness exposes only the compact readiness dashboard."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_execution_readiness_dashboard_summary,
+        collect_growth_planning_chain_preview,
+        execution_readiness_main,
+        parse_execution_readiness_dashboard_summary_json,
+        validate_execution_readiness_dashboard_summary,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("execution-readiness" in help_out.getvalue(),
+             "growth help must include execution-readiness")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = execution_readiness_main(["--json"])
+    _require(json_rc == 0, "execution-readiness --json must return 0")
+    parsed = parse_execution_readiness_dashboard_summary_json(json_out.getvalue())
+    validate_execution_readiness_dashboard_summary(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected = collect_execution_readiness_dashboard_summary(chain)
+    _require(parsed["dashboard_summary_id"] == expected["dashboard_summary_id"],
+             "execution-readiness dashboard_summary_id must be deterministic")
+    _require(parsed["planning_chain_id"] == expected["planning_chain_id"],
+             "execution-readiness summary must reference planning chain")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "execution-readiness summary must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "execution-readiness summary must not allow automation or writes")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_workspace_plan",
+        "execution_readiness_bundle",
+        "planning_chain_review_bundle",
+    ):
+        _require(full_chain_key not in parsed,
+                 "execution-readiness --json must output only dashboard summary")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["execution-readiness", "--json"])
+    routed = parse_execution_readiness_dashboard_summary_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth execution-readiness --json route must return 0")
+    _require(routed["dashboard_summary_id"] == parsed["dashboard_summary_id"],
+             "growth execution-readiness route must preserve deterministic summary id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = execution_readiness_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "execution-readiness human mode must return 0")
+    for needle in (
+        "Growth execution readiness",
+        "dashboard_summary_id:",
+        "planning_chain_id:",
+        "top_upgrade:",
+        "quality_gate:",
+        "preflight:",
+        "blockers:",
+        "warnings:",
+        "planned_attempts:",
+        "next_action:",
+    ):
+        _require(needle in human, f"execution-readiness human mode must include {needle}")
+    _require(len(human.splitlines()) <= 10,
+             "execution-readiness human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = execution_readiness_main(["--write"])
+    _require(write_rc != 0, "execution-readiness --write must be rejected")
+    _require("--write is not supported" in write_err.getvalue(),
+             "execution-readiness --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "execution-readiness --write must not print normal output")
+
+    print("growth execution-readiness CLI OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Growth planning-chain review bundle helper
 # ---------------------------------------------------------------------------
 
@@ -8541,6 +8631,7 @@ def main() -> None:
     check_patch_behavior_quality_gate_helper()
     check_autonomous_execution_package_helper()
     check_growth_planning_chain_cli()
+    check_growth_execution_readiness_cli()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
     check_execution_journal_schema_helper()
