@@ -6621,6 +6621,7 @@ def check_growth_planning_chain_cli() -> None:
     from link_modes.growth.link_growth_console import (
         collect_execution_attempt_history,
         collect_execution_evidence_contract,
+        collect_execution_readiness_dashboard_summary,
         collect_execution_journal_plan,
         collect_execution_preflight_checklist,
         collect_growth_planning_chain_preview,
@@ -6664,6 +6665,7 @@ def check_growth_planning_chain_cli() -> None:
         "execution_evidence_contract",
         "execution_preflight_checklist",
         "execution_attempt_history",
+        "execution_readiness_dashboard_summary",
         "witness_manifest_plan",
         "human_approval_package",
         "execution_readiness_bundle",
@@ -6687,6 +6689,7 @@ def check_growth_planning_chain_cli() -> None:
     evidence_contract = parsed["execution_evidence_contract"]
     preflight_checklist = parsed["execution_preflight_checklist"]
     attempt_history = parsed["execution_attempt_history"]
+    dashboard_summary = parsed["execution_readiness_dashboard_summary"]
     witness_manifest = parsed["witness_manifest_plan"]
     human_approval = parsed["human_approval_package"]
     readiness_bundle = parsed["execution_readiness_bundle"]
@@ -6781,6 +6784,17 @@ def check_growth_planning_chain_cli() -> None:
     same_attempt_history = collect_execution_attempt_history(journal_plan, retry_policy=retry_policy, execution_package=execution_package)
     _require(attempt_history["attempt_history_id"] == same_attempt_history["attempt_history_id"],
              "attempt history id must be deterministic inside planning-chain JSON")
+    _require(dashboard_summary["planning_chain_id"] == parsed["planning_chain_id"],
+             "dashboard summary must reference planning chain")
+    _require(dashboard_summary["execution_readiness_bundle_id"] == readiness_bundle["execution_readiness_bundle_id"],
+             "readiness bundle must flow into dashboard summary")
+    same_dashboard = collect_execution_readiness_dashboard_summary(parsed)
+    _require(dashboard_summary["dashboard_summary_id"] == same_dashboard["dashboard_summary_id"],
+             "dashboard summary id must be deterministic inside planning-chain JSON")
+    _require(dashboard_summary["dry_run"] is True and dashboard_summary["write_allowed"] is False,
+             "dashboard summary must remain read-only inside planning-chain JSON")
+    _require(dashboard_summary["automation_allowed"] is False and dashboard_summary["writes"] == [],
+             "dashboard summary must not allow automation or writes inside planning-chain JSON")
     _require(review_bundle["planning_chain_id"] == parsed["planning_chain_id"],
              "review bundle must reference planning_chain_id")
     _require(review_bundle["verification_plan_id"] == verification["verification_plan_id"],
@@ -6864,13 +6878,15 @@ def check_growth_planning_chain_cli() -> None:
              "planning-chain human mode must include execution journal summary")
     _require("evidence_contract:" in human,
              "planning-chain human mode must include evidence contract summary")
+    _require("dashboard:" in human and "blockers=" in human and "warnings=" in human and "next=" in human,
+             "planning-chain human mode must include dashboard status, blockers, warnings, and next action")
     _require("review_bundle:" in human,
              "planning-chain human mode must include review bundle summary")
     _require(review_bundle["review_bundle_id"] in human,
              "planning-chain human mode must include review bundle id")
     _require(review_bundle["recommended_next_action"] in human,
              "planning-chain human mode must include review bundle recommended next action")
-    _require(len(human.splitlines()) <= 15,
+    _require(len(human.splitlines()) <= 16,
              "planning-chain human mode must stay concise")
 
     print("growth planning-chain CLI OK")

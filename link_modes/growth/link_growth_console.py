@@ -9762,6 +9762,7 @@ def collect_growth_planning_chain_preview(
     chain["execution_preflight_checklist"] = execution_preflight_checklist
     chain["execution_attempt_history"] = execution_attempt_history
     chain["planning_chain_review_bundle"] = collect_planning_chain_review_bundle(chain)
+    chain["execution_readiness_dashboard_summary"] = collect_execution_readiness_dashboard_summary(chain)
     validate_growth_planning_chain_preview(chain)
     return chain
 
@@ -9944,6 +9945,13 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_rev
             raise ValueError("planning chain attempt history must reference retry policy")
         if require_review_bundle and chain["planning_chain_review_bundle"]["execution_readiness_bundle_id"] != readiness["execution_readiness_bundle_id"]:
             raise ValueError("planning chain review bundle must reference readiness bundle")
+    if "execution_readiness_dashboard_summary" in chain:
+        dashboard_summary = chain["execution_readiness_dashboard_summary"]
+        validate_execution_readiness_dashboard_summary(dashboard_summary, chain)
+        if dashboard_summary["planning_chain_id"] != chain["planning_chain_id"]:
+            raise ValueError("planning chain dashboard summary must reference planning chain")
+        if dashboard_summary["dashboard_summary_id"] != make_execution_readiness_dashboard_summary_id(chain):
+            raise ValueError("planning chain dashboard summary id does not match planning chain")
 
 
 def stable_growth_planning_chain_json(chain: dict[str, Any]) -> str:
@@ -10048,6 +10056,7 @@ def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     evidence_contract = chain.get("execution_evidence_contract", {})
     preflight = chain.get("execution_preflight_checklist", {})
     attempt_history = chain.get("execution_attempt_history", {})
+    dashboard_summary = chain.get("execution_readiness_dashboard_summary", {})
     if readiness:
         print(f"readiness_bundle: {readiness['execution_readiness_bundle_id']} ({readiness['readiness_status']})")
     if journal:
@@ -10056,6 +10065,8 @@ def render_planning_chain_plain(chain: dict[str, Any]) -> None:
         print(f"evidence_contract: {evidence_contract['execution_evidence_contract_id']} ({evidence_contract['evidence_item_count']} required items)")
     if preflight and attempt_history:
         print(f"preflight: {preflight['pass_status']} blockers={preflight['blocker_count']} warnings={preflight['warning_count']} attempts={attempt_history['attempt_count']}")
+    if dashboard_summary:
+        print(f"dashboard: {dashboard_summary['readiness_status']}/{dashboard_summary['preflight_status']} blockers={len(dashboard_summary['top_blockers'])} warnings={len(dashboard_summary['top_warnings'])} next={dashboard_summary['recommended_next_action']}")
     print(f"review_bundle: {review_bundle['review_bundle_id']} ({review_bundle['patch_behavior_quality_gate']['pass_status']})")
     print(f"next_action: {review_bundle['recommended_next_action']}")
 
@@ -11093,6 +11104,7 @@ _GROWTH_PLANNING_CHAIN_RUNTIME_FIELDS = (
     "execution_evidence_contract",
     "execution_preflight_checklist",
     "execution_attempt_history",
+    "execution_readiness_dashboard_summary",
 )
 
 
@@ -12487,7 +12499,8 @@ def validate_execution_readiness_dashboard_summary(
         if values != _normalize_patch_behavior_text_list(values):
             raise ValueError(f"{field} must be normalized and sorted")
     if planning_chain is not None:
-        validate_growth_planning_chain_preview(planning_chain)
+        if not isinstance(planning_chain, dict):
+            raise TypeError("planning_chain must be a dict")
         action = planning_chain["top_recommended_next_action"]
         evidence_contract = planning_chain["execution_evidence_contract"]
         preflight = planning_chain["execution_preflight_checklist"]
