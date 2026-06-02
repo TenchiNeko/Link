@@ -7917,6 +7917,119 @@ def check_execution_readiness_dashboard_summary_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 69. Execution gate stack preview helper
+# ---------------------------------------------------------------------------
+
+def check_execution_gate_stack_preview_helper() -> None:
+    """execution gate stack aggregates future execution gates without writes."""
+    from link_modes.growth.link_growth_console import (
+        EXECUTION_GATE_TYPES,
+        collect_execution_gate_stack_preview,
+        collect_growth_planning_chain_preview,
+        parse_execution_gate_stack_preview_json,
+        stable_execution_gate_stack_preview_json,
+        validate_execution_gate_stack_preview,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    preview = collect_execution_gate_stack_preview(chain, metadata={"suite": "growth"})
+    same = collect_execution_gate_stack_preview(chain, metadata={"suite": "growth"})
+    _require(preview["gate_stack_preview_id"] == same["gate_stack_preview_id"],
+             "execution gate stack preview id must be deterministic")
+    decoded = parse_execution_gate_stack_preview_json(stable_execution_gate_stack_preview_json(preview))
+    _require(decoded == preview, "execution gate stack preview JSON must round trip")
+    validate_execution_gate_stack_preview(preview, chain)
+
+    _require(preview["planning_chain_id"] == chain["planning_chain_id"],
+             "gate stack must reference planning chain")
+    _require(preview["execution_package_id"] == chain["autonomous_execution_package"]["execution_package_id"],
+             "gate stack must reference execution package")
+    _require(preview["dashboard_summary_id"] == chain["execution_readiness_dashboard_summary"]["dashboard_summary_id"],
+             "gate stack must reference dashboard summary")
+    _require(preview["preflight_checklist_id"] == chain["execution_preflight_checklist"]["preflight_checklist_id"],
+             "gate stack must reference preflight checklist")
+    _require(preview["execution_evidence_contract_id"] == chain["execution_evidence_contract"]["execution_evidence_contract_id"],
+             "gate stack must reference evidence contract")
+    _require(preview["quality_gate_id"] == chain["patch_behavior_quality_gate"]["quality_gate_id"],
+             "gate stack must reference quality gate")
+    _require(preview["human_approval_package_id"] == chain["human_approval_package"]["approval_package_id"],
+             "gate stack must reference human approval package")
+    _require(preview["attempt_history_id"] == chain["execution_attempt_history"]["attempt_history_id"],
+             "gate stack must reference attempt history")
+
+    gates = preview["gates"]
+    _require(preview["gate_count"] == len(gates),
+             "gate stack gate_count must match gates")
+    _require({gate["gate_type"] for gate in gates} == set(EXECUTION_GATE_TYPES),
+             "gate stack must include all required gate types")
+    _require(preview["pass_count"] == sum(1 for gate in gates if gate["pass_status"] == "pass"),
+             "gate stack pass_count must match gates")
+    _require(preview["review_count"] == sum(1 for gate in gates if gate["pass_status"] == "review"),
+             "gate stack review_count must match gates")
+    _require(preview["block_count"] == sum(1 for gate in gates if gate["pass_status"] == "block"),
+             "gate stack block_count must match gates")
+    _require(preview["block_count"] > 0,
+             "default gate stack should block while execution readiness is blocked")
+
+    by_type = {gate["gate_type"]: gate for gate in gates}
+    _require(by_type["human_approval"]["blockers"],
+             "human approval gate must surface approval blockers")
+    _require(by_type["command_allowlist"]["warnings"],
+             "command allowlist gate must surface command warnings")
+    _require(by_type["quality_gate"]["required_evidence"],
+             "quality gate must preserve missing evidence requirements")
+    evidence_types = {item["evidence_type"] for item in chain["execution_evidence_contract"]["evidence_items"]}
+    _require(evidence_types.issubset(set(by_type["evidence_contract"]["required_evidence"])),
+             "evidence contract gate must aggregate required evidence")
+    _require(by_type["workspace_isolation"]["required_human_action"],
+             "workspace isolation gate must include required human action")
+
+    _require(preview["dry_run"] is True and preview["write_allowed"] is False,
+             "gate stack must remain read-only")
+    _require(preview["automation_allowed"] is False and preview["writes"] == [],
+             "gate stack must not allow automation or writes")
+
+    bad_status = dict(preview)
+    bad_status["gates"] = [dict(gate) for gate in gates]
+    bad_status["gates"][0]["pass_status"] = "maybe"
+    try:
+        validate_execution_gate_stack_preview(bad_status)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("gate stack must reject invalid gate status")
+
+    bad_missing = dict(preview)
+    del bad_missing["planning_chain_id"]
+    try:
+        validate_execution_gate_stack_preview(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("gate stack must reject missing planning_chain_id")
+
+    bad_link = dict(preview)
+    bad_link["execution_package_id"] = "wrong-package"
+    try:
+        validate_execution_gate_stack_preview(bad_link, chain)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("gate stack must reject planning-chain id flow mismatch")
+
+    bad_writes = dict(preview)
+    bad_writes["writes"] = [".link/execution-gates.json"]
+    try:
+        validate_execution_gate_stack_preview(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("gate stack must reject writes")
+
+    print("execution gate stack preview helper OK")
+
+
+# ---------------------------------------------------------------------------
 # 58. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
 
@@ -8639,6 +8752,7 @@ def main() -> None:
     check_execution_preflight_checklist_helper()
     check_execution_attempt_history_helper()
     check_execution_readiness_dashboard_summary_helper()
+    check_execution_gate_stack_preview_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()

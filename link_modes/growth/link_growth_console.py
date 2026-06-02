@@ -12591,6 +12591,393 @@ def parse_execution_readiness_dashboard_summary_json(text: str) -> dict[str, Any
     return summary
 
 
+EXECUTION_GATE_STACK_PREVIEW_VERSION = "link-execution-gate-stack-preview-v1"
+EXECUTION_GATE_TYPES = (
+    "human_approval",
+    "clean_tree",
+    "path_safety",
+    "command_allowlist",
+    "evidence_contract",
+    "quality_gate",
+    "retry_policy",
+    "workspace_isolation",
+)
+
+
+def make_execution_gate_id(planning_chain_id: str, gate_type: str, source_component: str) -> str:
+    return _execution_readiness_id("execution-gate", {
+        "gate_type": gate_type,
+        "planning_chain_id": planning_chain_id,
+        "source_component": source_component,
+        "version": EXECUTION_GATE_STACK_PREVIEW_VERSION,
+    })
+
+
+def make_execution_gate_stack_preview_id(
+    planning_chain_id: str,
+    execution_package_id: str,
+    gates: list[dict[str, Any]],
+) -> str:
+    return _execution_readiness_id("execution-gate-stack-preview", {
+        "execution_package_id": execution_package_id,
+        "gate_ids": [gate["gate_id"] for gate in gates],
+        "planning_chain_id": planning_chain_id,
+        "version": EXECUTION_GATE_STACK_PREVIEW_VERSION,
+    })
+
+
+def _execution_gate_status(blockers: list[str], warnings: list[str], preferred: str | None = None) -> str:
+    if blockers:
+        return "block"
+    if preferred == "block":
+        return "block"
+    if warnings or preferred in {"review", "warning"}:
+        return "review"
+    return "pass"
+
+
+def _execution_gate_from_preflight_checks(
+    *,
+    planning_chain_id: str,
+    gate_name: str,
+    gate_type: str,
+    source_component: str,
+    checks: list[dict[str, Any]],
+    required_human_action: str,
+    required_evidence: list[str] | None = None,
+    recommended_next_action: str,
+) -> dict[str, Any]:
+    blockers = _normalize_patch_behavior_text_list([
+        f"{check['name']}: {check['requirement']}"
+        for check in checks
+        if check["status"] == "block"
+    ])
+    warnings = _normalize_patch_behavior_text_list([
+        f"{check['name']}: {check['requirement']}"
+        for check in checks
+        if check["status"] == "warning"
+    ])
+    return {
+        "gate_id": make_execution_gate_id(planning_chain_id, gate_type, source_component),
+        "gate_name": gate_name,
+        "gate_type": gate_type,
+        "source_component": source_component,
+        "pass_status": _execution_gate_status(blockers, warnings),
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_action": required_human_action,
+        "required_evidence": _normalize_implementation_branch_refs(required_evidence or []),
+        "recommended_next_action": recommended_next_action,
+    }
+
+
+def _execution_quality_gate_preview(planning_chain_id: str, quality_gate: dict[str, Any]) -> dict[str, Any]:
+    blockers = _normalize_patch_behavior_text_list([
+        finding["message"]
+        for finding in quality_gate["findings"]
+        if finding["severity"] == "block"
+    ])
+    warnings = _normalize_patch_behavior_text_list([
+        finding["message"]
+        for finding in quality_gate["findings"]
+        if finding["severity"] == "review"
+    ])
+    return {
+        "gate_id": make_execution_gate_id(planning_chain_id, "quality_gate", quality_gate["quality_gate_id"]),
+        "gate_name": "patch behavior quality gate",
+        "gate_type": "quality_gate",
+        "source_component": quality_gate["quality_gate_id"],
+        "pass_status": _execution_gate_status(blockers, warnings, quality_gate["pass_status"]),
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_action": "revise or explicitly review patch behavior quality findings before execution",
+        "required_evidence": _normalize_implementation_branch_refs(["quality_gate"]),
+        "recommended_next_action": quality_gate["recommended_next_action"],
+    }
+
+
+def _execution_retry_gate_preview(planning_chain_id: str, attempt_history: dict[str, Any]) -> dict[str, Any]:
+    warnings = []
+    if attempt_history["retry_allowed_count"]:
+        warnings.append(f"{attempt_history['retry_allowed_count']} retry attempt(s) require human review before reuse")
+    if attempt_history["rollback_required_count"]:
+        warnings.append(f"{attempt_history['rollback_required_count']} planned attempt(s) require rollback readiness")
+    return {
+        "gate_id": make_execution_gate_id(planning_chain_id, "retry_policy", attempt_history["attempt_history_id"]),
+        "gate_name": "retry and attempt policy",
+        "gate_type": "retry_policy",
+        "source_component": attempt_history["attempt_history_id"],
+        "pass_status": _execution_gate_status([], warnings),
+        "blockers": [],
+        "warnings": _normalize_patch_behavior_text_list(warnings),
+        "required_human_action": "confirm retryable failures and stop conditions before any repeated execution attempt",
+        "required_evidence": _normalize_implementation_branch_refs(
+            attempt_history["attempts"][0]["expected_evidence"] if attempt_history["attempts"] else []
+        ),
+        "recommended_next_action": "Keep retries planned only; execute attempts only after explicit approval and evidence capture is ready.",
+    }
+
+
+def collect_execution_gate_stack_preview(
+    planning_chain: dict[str, Any] | None = None,
+    *,
+    execution_readiness_dashboard_summary: dict[str, Any] | None = None,
+    execution_preflight_checklist: dict[str, Any] | None = None,
+    execution_evidence_contract: dict[str, Any] | None = None,
+    patch_behavior_quality_gate: dict[str, Any] | None = None,
+    human_approval_package: dict[str, Any] | None = None,
+    execution_attempt_history: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aggregate future execution gates without creating workspaces or running commands."""
+    chain = planning_chain if planning_chain is not None else collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(chain)
+    dashboard = execution_readiness_dashboard_summary if execution_readiness_dashboard_summary is not None else chain["execution_readiness_dashboard_summary"]
+    preflight = execution_preflight_checklist if execution_preflight_checklist is not None else chain["execution_preflight_checklist"]
+    evidence_contract = execution_evidence_contract if execution_evidence_contract is not None else chain["execution_evidence_contract"]
+    quality_gate = patch_behavior_quality_gate if patch_behavior_quality_gate is not None else chain["patch_behavior_quality_gate"]
+    approval = human_approval_package if human_approval_package is not None else chain["human_approval_package"]
+    attempts = execution_attempt_history if execution_attempt_history is not None else chain["execution_attempt_history"]
+    validate_execution_readiness_dashboard_summary(dashboard, chain)
+    validate_execution_preflight_checklist(preflight, chain)
+    validate_execution_evidence_contract(evidence_contract, chain["execution_journal_plan"])
+    validate_patch_behavior_quality_gate(quality_gate)
+    validate_human_approval_package(approval)
+    validate_execution_attempt_history(
+        attempts,
+        chain["execution_journal_plan"],
+        chain["execution_retry_policy"],
+        chain["autonomous_execution_package"],
+    )
+
+    planning_chain_id = chain["planning_chain_id"]
+    evidence_types = _normalize_implementation_branch_refs([
+        item["evidence_type"] for item in evidence_contract["evidence_items"]
+    ])
+    gates = [
+        _execution_gate_from_preflight_checks(
+            planning_chain_id=planning_chain_id,
+            gate_name="human approval gate",
+            gate_type="human_approval",
+            source_component=approval["approval_package_id"],
+            checks=preflight["required_human_approvals"],
+            required_human_action="Brandon must explicitly approve the specific workspace and patch application before any writes.",
+            required_evidence=evidence_types,
+            recommended_next_action=approval["recommended_human_decision"],
+        ),
+        _execution_gate_from_preflight_checks(
+            planning_chain_id=planning_chain_id,
+            gate_name="clean tree gate",
+            gate_type="clean_tree",
+            source_component=preflight["preflight_checklist_id"],
+            checks=preflight["clean_tree_checks"],
+            required_human_action="confirm the main worktree is clean or intentionally snapshotted before isolation",
+            required_evidence=["journal_entry_id", "reviewer_visible_summary"],
+            recommended_next_action="Resolve clean-tree blockers before creating any workspace.",
+        ),
+        _execution_gate_from_preflight_checks(
+            planning_chain_id=planning_chain_id,
+            gate_name="path safety gate",
+            gate_type="path_safety",
+            source_component=preflight["preflight_checklist_id"],
+            checks=preflight["path_safety_checks"],
+            required_human_action="confirm target and workspace paths are inside approved Link execution boundaries",
+            required_evidence=["changed_file_refs", "changed_file_hashes"],
+            recommended_next_action="Keep path checks read-only until every target path is reviewable.",
+        ),
+        _execution_gate_from_preflight_checks(
+            planning_chain_id=planning_chain_id,
+            gate_name="command allowlist gate",
+            gate_type="command_allowlist",
+            source_component=preflight["preflight_checklist_id"],
+            checks=preflight["command_allowlist_checks"],
+            required_human_action="approve only bounded allowlisted compile/test/healthcheck commands",
+            required_evidence=["command", "exit_code", "combined_log_ref", "log_hash"],
+            recommended_next_action="Review command warnings before enabling any verification runner.",
+        ),
+        _execution_gate_from_preflight_checks(
+            planning_chain_id=planning_chain_id,
+            gate_name="evidence contract gate",
+            gate_type="evidence_contract",
+            source_component=evidence_contract["execution_evidence_contract_id"],
+            checks=preflight["evidence_contract_checks"],
+            required_human_action="confirm every required evidence item can be captured before execution starts",
+            required_evidence=evidence_types,
+            recommended_next_action="Do not execute until missing evidence fields have a capture path.",
+        ),
+        _execution_quality_gate_preview(planning_chain_id, quality_gate),
+        _execution_retry_gate_preview(planning_chain_id, attempts),
+        _execution_gate_from_preflight_checks(
+            planning_chain_id=planning_chain_id,
+            gate_name="workspace isolation gate",
+            gate_type="workspace_isolation",
+            source_component=preflight["workspace_id"],
+            checks=preflight["branch_worktree_isolation_checks"],
+            required_human_action="confirm branch and worktree creation remain disabled until explicit approval",
+            required_evidence=["journal_entry_id", "attempt_id", "reviewer_visible_summary"],
+            recommended_next_action="Keep branch/worktree creation planned-only until all gates pass or are explicitly reviewed.",
+        ),
+    ]
+    pass_count = sum(1 for gate in gates if gate["pass_status"] == "pass")
+    review_count = sum(1 for gate in gates if gate["pass_status"] == "review")
+    block_count = sum(1 for gate in gates if gate["pass_status"] == "block")
+    if block_count:
+        next_action = "Resolve execution gate blockers before any workspace, branch, patch, or verification execution."
+    elif review_count:
+        next_action = "Review execution gate warnings and required human actions before enabling any runtime step."
+    else:
+        next_action = "Gate stack is clear for human review; execution remains disabled until explicitly approved."
+    preview = {
+        "gate_stack_preview_version": EXECUTION_GATE_STACK_PREVIEW_VERSION,
+        "gate_stack_preview_id": make_execution_gate_stack_preview_id(
+            planning_chain_id,
+            chain["autonomous_execution_package"]["execution_package_id"],
+            gates,
+        ),
+        "planning_chain_id": planning_chain_id,
+        "execution_package_id": chain["autonomous_execution_package"]["execution_package_id"],
+        "dashboard_summary_id": dashboard["dashboard_summary_id"],
+        "preflight_checklist_id": preflight["preflight_checklist_id"],
+        "execution_evidence_contract_id": evidence_contract["execution_evidence_contract_id"],
+        "quality_gate_id": quality_gate["quality_gate_id"],
+        "human_approval_package_id": approval["approval_package_id"],
+        "attempt_history_id": attempts["attempt_history_id"],
+        "gate_count": len(gates),
+        "pass_count": pass_count,
+        "review_count": review_count,
+        "block_count": block_count,
+        "gates": gates,
+        "recommended_next_action": next_action,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_gate_stack_preview(preview, chain)
+    return preview
+
+
+def validate_execution_gate_preview_gate(gate: dict[str, Any]) -> None:
+    required = (
+        "gate_id", "gate_name", "gate_type", "source_component", "pass_status",
+        "blockers", "warnings", "required_human_action", "required_evidence",
+        "recommended_next_action",
+    )
+    missing = [field for field in required if field not in gate]
+    if missing:
+        raise ValueError(f"execution gate missing fields: {missing}")
+    for field in ("gate_id", "gate_name", "gate_type", "source_component", "pass_status", "required_human_action", "recommended_next_action"):
+        _validate_non_empty_string(gate[field], field)
+    if gate["gate_type"] not in EXECUTION_GATE_TYPES:
+        raise ValueError(f"invalid execution gate type: {gate['gate_type']}")
+    if gate["pass_status"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid execution gate pass_status")
+    for field in ("blockers", "warnings"):
+        values = gate[field]
+        if not isinstance(values, list):
+            raise TypeError(f"gate {field} must be a list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"gate {field} must be normalized and sorted")
+    evidence = gate["required_evidence"]
+    if not isinstance(evidence, list):
+        raise TypeError("gate required_evidence must be a list")
+    if evidence != _normalize_implementation_branch_refs(evidence):
+        raise ValueError("gate required_evidence must be normalized and sorted")
+    expected_status = _execution_gate_status(gate["blockers"], gate["warnings"])
+    if gate["pass_status"] == "pass" and expected_status != "pass":
+        raise ValueError("gate pass_status must account for blockers and warnings")
+    if gate["pass_status"] == "review" and gate["blockers"]:
+        raise ValueError("review gates must not contain blockers")
+
+
+def validate_execution_gate_stack_preview(
+    preview: dict[str, Any],
+    planning_chain: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "gate_stack_preview_version", "gate_stack_preview_id", "planning_chain_id",
+        "execution_package_id", "dashboard_summary_id", "preflight_checklist_id",
+        "execution_evidence_contract_id", "quality_gate_id", "human_approval_package_id",
+        "attempt_history_id", "gate_count", "pass_count", "review_count", "block_count",
+        "gates", "recommended_next_action", "dry_run", "write_allowed",
+        "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in preview]
+    if missing:
+        raise ValueError(f"execution gate stack preview missing fields: {missing}")
+    if preview["gate_stack_preview_version"] != EXECUTION_GATE_STACK_PREVIEW_VERSION:
+        raise ValueError("unsupported execution gate stack preview version")
+    _validate_execution_read_only(preview, "execution gate stack preview")
+    for field in (
+        "gate_stack_preview_id", "planning_chain_id", "execution_package_id",
+        "dashboard_summary_id", "preflight_checklist_id", "execution_evidence_contract_id",
+        "quality_gate_id", "human_approval_package_id", "attempt_history_id",
+        "recommended_next_action",
+    ):
+        _validate_non_empty_string(preview[field], field)
+    gates = preview["gates"]
+    if not isinstance(gates, list) or not gates:
+        raise TypeError("execution gate stack gates must be a non-empty list")
+    gate_ids: set[str] = set()
+    gate_types: set[str] = set()
+    for gate in gates:
+        validate_execution_gate_preview_gate(gate)
+        if gate["gate_id"] in gate_ids:
+            raise ValueError(f"duplicate execution gate id: {gate['gate_id']}")
+        gate_ids.add(gate["gate_id"])
+        gate_types.add(gate["gate_type"])
+    missing_gate_types = set(EXECUTION_GATE_TYPES) - gate_types
+    if missing_gate_types:
+        raise ValueError(f"execution gate stack missing gate types: {sorted(missing_gate_types)}")
+    if not isinstance(preview["gate_count"], int) or preview["gate_count"] != len(gates):
+        raise ValueError("gate_count must match gates")
+    counts = {
+        "pass_count": sum(1 for gate in gates if gate["pass_status"] == "pass"),
+        "review_count": sum(1 for gate in gates if gate["pass_status"] == "review"),
+        "block_count": sum(1 for gate in gates if gate["pass_status"] == "block"),
+    }
+    for field, value in counts.items():
+        if preview[field] != value:
+            raise ValueError(f"{field} must match gates")
+    expected_id = make_execution_gate_stack_preview_id(
+        preview["planning_chain_id"],
+        preview["execution_package_id"],
+        gates,
+    )
+    if preview["gate_stack_preview_id"] != expected_id:
+        raise ValueError("execution gate stack preview id does not match gates")
+    if planning_chain is not None:
+        if not isinstance(planning_chain, dict):
+            raise TypeError("planning_chain must be a dict")
+        expected_refs = {
+            "planning_chain_id": planning_chain["planning_chain_id"],
+            "execution_package_id": planning_chain["autonomous_execution_package"]["execution_package_id"],
+            "dashboard_summary_id": planning_chain["execution_readiness_dashboard_summary"]["dashboard_summary_id"],
+            "preflight_checklist_id": planning_chain["execution_preflight_checklist"]["preflight_checklist_id"],
+            "execution_evidence_contract_id": planning_chain["execution_evidence_contract"]["execution_evidence_contract_id"],
+            "quality_gate_id": planning_chain["patch_behavior_quality_gate"]["quality_gate_id"],
+            "human_approval_package_id": planning_chain["human_approval_package"]["approval_package_id"],
+            "attempt_history_id": planning_chain["execution_attempt_history"]["attempt_history_id"],
+        }
+        for field, value in expected_refs.items():
+            if preview[field] != value:
+                raise ValueError(f"execution gate stack {field} does not match planning chain")
+
+
+def stable_execution_gate_stack_preview_json(preview: dict[str, Any]) -> str:
+    validate_execution_gate_stack_preview(preview)
+    return _stable_ruflo_json(preview, indent=2) + "\n"
+
+
+def parse_execution_gate_stack_preview_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    preview = _json.loads(text)
+    validate_execution_gate_stack_preview(preview)
+    return preview
+
+
 def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:
     import hashlib
 
