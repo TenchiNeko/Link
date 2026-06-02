@@ -7684,6 +7684,133 @@ def check_execution_attempt_history_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 68. Execution readiness dashboard summary helper
+# ---------------------------------------------------------------------------
+
+def check_execution_readiness_dashboard_summary_helper() -> None:
+    """execution readiness dashboard summary distills planning-chain state."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_readiness_dashboard_summary,
+        collect_growth_planning_chain_preview,
+        parse_execution_readiness_dashboard_summary_json,
+        stable_execution_readiness_dashboard_summary_json,
+        validate_execution_readiness_dashboard_summary,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    summary = collect_execution_readiness_dashboard_summary(chain, metadata={"suite": "growth"})
+    same = collect_execution_readiness_dashboard_summary(chain, metadata={"suite": "growth"})
+    _require(summary["dashboard_summary_id"] == same["dashboard_summary_id"],
+             "execution readiness dashboard summary id must be deterministic")
+    decoded = parse_execution_readiness_dashboard_summary_json(stable_execution_readiness_dashboard_summary_json(summary))
+    _require(decoded == summary, "execution readiness dashboard summary JSON must round trip")
+    validate_execution_readiness_dashboard_summary(summary, chain)
+
+    quality_gate = chain["patch_behavior_quality_gate"]
+    evidence_contract = chain["execution_evidence_contract"]
+    preflight = chain["execution_preflight_checklist"]
+    attempts = chain["execution_attempt_history"]
+    readiness = chain["execution_readiness_bundle"]
+    execution = chain["autonomous_execution_package"]
+    approval = chain["human_approval_package"]
+    review_bundle = chain["planning_chain_review_bundle"]
+
+    _require(summary["planning_chain_id"] == chain["planning_chain_id"],
+             "dashboard summary must reference planning chain")
+    _require(summary["top_upgrade_id"] == chain["top_recommended_next_action"]["upgrade_id"],
+             "dashboard summary must preserve top upgrade id")
+    _require(summary["top_upgrade_title"] == chain["top_recommended_next_action"]["title"],
+             "dashboard summary must preserve top upgrade title")
+    _require(summary["quality_gate"]["quality_gate_id"] == quality_gate["quality_gate_id"],
+             "dashboard summary must preserve quality gate id")
+    _require(summary["quality_gate"]["pass_status"] == quality_gate["pass_status"],
+             "dashboard summary must preserve quality gate status")
+    _require(summary["quality_gate"]["quality_score"] == quality_gate["quality_score"],
+             "dashboard summary must preserve quality gate score")
+    _require(summary["quality_gate"]["risk_score"] == quality_gate["risk_score"],
+             "dashboard summary must preserve quality gate risk")
+    _require(summary["execution_evidence_contract_id"] == evidence_contract["execution_evidence_contract_id"],
+             "dashboard summary must reference evidence contract")
+    _require(summary["required_evidence_count"] == evidence_contract["evidence_item_count"],
+             "dashboard summary must summarize evidence count")
+    _require(summary["preflight_checklist_id"] == preflight["preflight_checklist_id"],
+             "dashboard summary must reference preflight checklist")
+    _require(summary["preflight_status"] == preflight["pass_status"],
+             "dashboard summary must preserve preflight status")
+    _require(summary["preflight_blocker_count"] == preflight["blocker_count"],
+             "dashboard summary must preserve preflight blocker count")
+    _require(summary["preflight_warning_count"] == preflight["warning_count"],
+             "dashboard summary must preserve preflight warning count")
+    _require(summary["attempt_history_id"] == attempts["attempt_history_id"],
+             "dashboard summary must reference attempt history")
+    _require(summary["planned_attempt_count"] == attempts["attempt_count"],
+             "dashboard summary must summarize planned attempts")
+    _require(summary["execution_readiness_bundle_id"] == readiness["execution_readiness_bundle_id"],
+             "dashboard summary must reference readiness bundle")
+    _require(summary["readiness_status"] == readiness["readiness_status"],
+             "dashboard summary must preserve readiness status")
+    _require(summary["execution_package_id"] == execution["execution_package_id"],
+             "dashboard summary must reference execution package")
+    _require(summary["execution_stage_count"] == execution["stage_count"],
+             "dashboard summary must summarize execution stages")
+    _require(summary["required_approvals_count"] == len(approval["required_approvals"]),
+             "dashboard summary must summarize required approvals")
+    _require(summary["missing_evidence_count"] == len(review_bundle["missing_evidence"]),
+             "dashboard summary must summarize missing evidence")
+    _require(summary["required_clarifications_count"] == len(review_bundle["required_clarifications"]),
+             "dashboard summary must summarize required clarifications")
+    _require(isinstance(summary["top_blockers"], list) and summary["top_blockers"],
+             "dashboard summary must include top blockers for default blocked state")
+    _require(isinstance(summary["top_warnings"], list),
+             "dashboard summary must include top warnings list")
+    _require(summary["recommended_next_action"] == readiness["recommended_next_action"],
+             "dashboard summary must preserve recommended next action")
+    _require(summary["dry_run"] is True and summary["write_allowed"] is False,
+             "dashboard summary must remain read-only")
+    _require(summary["automation_allowed"] is False and summary["writes"] == [],
+             "dashboard summary must not allow automation or writes")
+
+    bad_missing = dict(summary)
+    del bad_missing["dashboard_summary_id"]
+    try:
+        validate_execution_readiness_dashboard_summary(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("dashboard summary must reject missing dashboard_summary_id")
+
+    bad_quality = dict(summary)
+    bad_quality["quality_gate"] = dict(summary["quality_gate"])
+    bad_quality["quality_gate"]["risk_score"] = 2
+    try:
+        validate_execution_readiness_dashboard_summary(bad_quality)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("dashboard summary must reject invalid quality gate risk")
+
+    bad_link = dict(summary)
+    bad_link["attempt_history_id"] = "wrong-attempt-history"
+    try:
+        validate_execution_readiness_dashboard_summary(bad_link, chain)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("dashboard summary must reject planning-chain ID mismatch")
+
+    bad_writes = dict(summary)
+    bad_writes["writes"] = [".link/execution-dashboard-summary.json"]
+    try:
+        validate_execution_readiness_dashboard_summary(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("dashboard summary must reject writes")
+
+    print("execution readiness dashboard summary helper OK")
+
+
+# ---------------------------------------------------------------------------
 # 58. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
 
@@ -8404,6 +8531,7 @@ def main() -> None:
     check_execution_evidence_contract_helper()
     check_execution_preflight_checklist_helper()
     check_execution_attempt_history_helper()
+    check_execution_readiness_dashboard_summary_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()

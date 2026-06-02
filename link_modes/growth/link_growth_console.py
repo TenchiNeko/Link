@@ -12308,6 +12308,235 @@ def parse_execution_attempt_history_json(text: str) -> dict[str, Any]:
     return history
 
 
+EXECUTION_READINESS_DASHBOARD_SUMMARY_VERSION = "link-execution-readiness-dashboard-summary-v1"
+
+
+def make_execution_readiness_dashboard_summary_id(chain: dict[str, Any]) -> str:
+    return _execution_readiness_id("execution-readiness-dashboard-summary", {
+        "attempt_history_id": chain["execution_attempt_history"]["attempt_history_id"],
+        "evidence_contract_id": chain["execution_evidence_contract"]["execution_evidence_contract_id"],
+        "planning_chain_id": chain["planning_chain_id"],
+        "preflight_checklist_id": chain["execution_preflight_checklist"]["preflight_checklist_id"],
+        "readiness_bundle_id": chain["execution_readiness_bundle"]["execution_readiness_bundle_id"],
+        "version": EXECUTION_READINESS_DASHBOARD_SUMMARY_VERSION,
+    })
+
+
+def _execution_dashboard_top_blockers(chain: dict[str, Any]) -> list[str]:
+    readiness = chain["execution_readiness_bundle"]
+    preflight = chain["execution_preflight_checklist"]
+    quality_gate = chain["patch_behavior_quality_gate"]
+    blockers = list(readiness["blocking_reasons"])
+    blockers.extend(
+        f"{check['category']}: {check['name']}"
+        for group in (
+            preflight["required_human_approvals"],
+            preflight["clean_tree_checks"],
+            preflight["path_safety_checks"],
+            preflight["command_allowlist_checks"],
+            preflight["branch_worktree_isolation_checks"],
+            preflight["evidence_contract_checks"],
+        )
+        for check in group
+        if check["status"] == "block"
+    )
+    blockers.extend(
+        finding["message"]
+        for finding in quality_gate["findings"]
+        if finding["severity"] == "block"
+    )
+    return _normalize_patch_behavior_text_list(blockers)[:8] if blockers else []
+
+
+def _execution_dashboard_top_warnings(chain: dict[str, Any]) -> list[str]:
+    preflight = chain["execution_preflight_checklist"]
+    quality_gate = chain["patch_behavior_quality_gate"]
+    warnings = [
+        f"{check['category']}: {check['name']}"
+        for group in (
+            preflight["required_human_approvals"],
+            preflight["clean_tree_checks"],
+            preflight["path_safety_checks"],
+            preflight["command_allowlist_checks"],
+            preflight["branch_worktree_isolation_checks"],
+            preflight["evidence_contract_checks"],
+        )
+        for check in group
+        if check["status"] == "warning"
+    ]
+    warnings.extend(
+        finding["message"]
+        for finding in quality_gate["findings"]
+        if finding["severity"] == "review"
+    )
+    return _normalize_patch_behavior_text_list(warnings)[:8] if warnings else []
+
+
+def collect_execution_readiness_dashboard_summary(
+    planning_chain: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize full execution readiness state for human review."""
+    chain = planning_chain if planning_chain is not None else collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(chain)
+    action = chain["top_recommended_next_action"]
+    quality_gate = chain["patch_behavior_quality_gate"]
+    evidence_contract = chain["execution_evidence_contract"]
+    preflight = chain["execution_preflight_checklist"]
+    attempt_history = chain["execution_attempt_history"]
+    readiness = chain["execution_readiness_bundle"]
+    execution_package = chain["autonomous_execution_package"]
+    approval = chain["human_approval_package"]
+    review_bundle = chain["planning_chain_review_bundle"]
+    summary = {
+        "dashboard_summary_version": EXECUTION_READINESS_DASHBOARD_SUMMARY_VERSION,
+        "dashboard_summary_id": make_execution_readiness_dashboard_summary_id(chain),
+        "planning_chain_id": chain["planning_chain_id"],
+        "top_upgrade_id": action["upgrade_id"],
+        "top_upgrade_title": action["title"],
+        "quality_gate": {
+            "quality_gate_id": quality_gate["quality_gate_id"],
+            "pass_status": quality_gate["pass_status"],
+            "quality_score": quality_gate["quality_score"],
+            "risk_score": quality_gate["risk_score"],
+        },
+        "execution_evidence_contract_id": evidence_contract["execution_evidence_contract_id"],
+        "required_evidence_count": evidence_contract["evidence_item_count"],
+        "preflight_checklist_id": preflight["preflight_checklist_id"],
+        "preflight_status": preflight["pass_status"],
+        "preflight_blocker_count": preflight["blocker_count"],
+        "preflight_warning_count": preflight["warning_count"],
+        "attempt_history_id": attempt_history["attempt_history_id"],
+        "planned_attempt_count": attempt_history["attempt_count"],
+        "execution_readiness_bundle_id": readiness["execution_readiness_bundle_id"],
+        "readiness_status": readiness["readiness_status"],
+        "execution_package_id": execution_package["execution_package_id"],
+        "execution_stage_count": execution_package["stage_count"],
+        "required_approvals_count": len(approval["required_approvals"]),
+        "missing_evidence_count": len(review_bundle["missing_evidence"]),
+        "required_clarifications_count": len(review_bundle["required_clarifications"]),
+        "top_blockers": _execution_dashboard_top_blockers(chain),
+        "top_warnings": _execution_dashboard_top_warnings(chain),
+        "recommended_next_action": readiness["recommended_next_action"],
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_readiness_dashboard_summary(summary, chain)
+    return summary
+
+
+def validate_execution_readiness_dashboard_summary(
+    summary: dict[str, Any],
+    planning_chain: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "dashboard_summary_version", "dashboard_summary_id", "planning_chain_id",
+        "top_upgrade_id", "top_upgrade_title", "quality_gate",
+        "execution_evidence_contract_id", "required_evidence_count",
+        "preflight_checklist_id", "preflight_status", "preflight_blocker_count",
+        "preflight_warning_count", "attempt_history_id", "planned_attempt_count",
+        "execution_readiness_bundle_id", "readiness_status", "execution_package_id",
+        "execution_stage_count", "required_approvals_count", "missing_evidence_count",
+        "required_clarifications_count", "top_blockers", "top_warnings",
+        "recommended_next_action", "dry_run", "write_allowed", "automation_allowed",
+        "metadata", "writes",
+    )
+    missing = [field for field in required if field not in summary]
+    if missing:
+        raise ValueError(f"execution readiness dashboard summary missing fields: {missing}")
+    if summary["dashboard_summary_version"] != EXECUTION_READINESS_DASHBOARD_SUMMARY_VERSION:
+        raise ValueError("unsupported execution readiness dashboard summary version")
+    _validate_execution_read_only(summary, "execution readiness dashboard summary")
+    for field in (
+        "dashboard_summary_id", "planning_chain_id", "top_upgrade_id", "top_upgrade_title",
+        "execution_evidence_contract_id", "preflight_checklist_id", "preflight_status",
+        "attempt_history_id", "execution_readiness_bundle_id", "readiness_status",
+        "execution_package_id", "recommended_next_action",
+    ):
+        _validate_non_empty_string(summary[field], field)
+    if summary["preflight_status"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid preflight_status")
+    if summary["readiness_status"] not in {"ready_for_review", "blocked", "needs_evidence"}:
+        raise ValueError("invalid readiness_status")
+    quality_gate = summary["quality_gate"]
+    if not isinstance(quality_gate, dict):
+        raise TypeError("quality_gate must be a dict")
+    for field in ("quality_gate_id", "pass_status"):
+        _validate_non_empty_string(quality_gate.get(field), f"quality_gate.{field}")
+    if quality_gate["pass_status"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid quality gate status")
+    for field in ("quality_score", "risk_score"):
+        value = quality_gate.get(field)
+        if not isinstance(value, (int, float)) or value < 0 or value > 1:
+            raise ValueError(f"quality_gate.{field} must be between 0 and 1")
+    for field in (
+        "required_evidence_count", "preflight_blocker_count", "preflight_warning_count",
+        "planned_attempt_count", "execution_stage_count", "required_approvals_count",
+        "missing_evidence_count", "required_clarifications_count",
+    ):
+        if not isinstance(summary[field], int) or summary[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    for field in ("top_blockers", "top_warnings"):
+        values = summary[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if planning_chain is not None:
+        validate_growth_planning_chain_preview(planning_chain)
+        action = planning_chain["top_recommended_next_action"]
+        evidence_contract = planning_chain["execution_evidence_contract"]
+        preflight = planning_chain["execution_preflight_checklist"]
+        attempt_history = planning_chain["execution_attempt_history"]
+        readiness = planning_chain["execution_readiness_bundle"]
+        execution_package = planning_chain["autonomous_execution_package"]
+        approval = planning_chain["human_approval_package"]
+        review_bundle = planning_chain["planning_chain_review_bundle"]
+        expected = {
+            "dashboard_summary_id": make_execution_readiness_dashboard_summary_id(planning_chain),
+            "planning_chain_id": planning_chain["planning_chain_id"],
+            "top_upgrade_id": action["upgrade_id"],
+            "top_upgrade_title": action["title"],
+            "execution_evidence_contract_id": evidence_contract["execution_evidence_contract_id"],
+            "required_evidence_count": evidence_contract["evidence_item_count"],
+            "preflight_checklist_id": preflight["preflight_checklist_id"],
+            "preflight_status": preflight["pass_status"],
+            "preflight_blocker_count": preflight["blocker_count"],
+            "preflight_warning_count": preflight["warning_count"],
+            "attempt_history_id": attempt_history["attempt_history_id"],
+            "planned_attempt_count": attempt_history["attempt_count"],
+            "execution_readiness_bundle_id": readiness["execution_readiness_bundle_id"],
+            "readiness_status": readiness["readiness_status"],
+            "execution_package_id": execution_package["execution_package_id"],
+            "execution_stage_count": execution_package["stage_count"],
+            "required_approvals_count": len(approval["required_approvals"]),
+            "missing_evidence_count": len(review_bundle["missing_evidence"]),
+            "required_clarifications_count": len(review_bundle["required_clarifications"]),
+        }
+        for field, value in expected.items():
+            if summary[field] != value:
+                raise ValueError(f"dashboard summary {field} does not match planning chain")
+        if summary["quality_gate"]["quality_gate_id"] != planning_chain["patch_behavior_quality_gate"]["quality_gate_id"]:
+            raise ValueError("dashboard summary quality gate id does not match planning chain")
+
+
+def stable_execution_readiness_dashboard_summary_json(summary: dict[str, Any]) -> str:
+    validate_execution_readiness_dashboard_summary(summary)
+    return _stable_ruflo_json(summary, indent=2) + "\n"
+
+
+def parse_execution_readiness_dashboard_summary_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    summary = _json.loads(text)
+    validate_execution_readiness_dashboard_summary(summary)
+    return summary
+
+
 def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:
     import hashlib
 
