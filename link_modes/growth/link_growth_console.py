@@ -9737,6 +9737,18 @@ def collect_growth_planning_chain_preview(
     )
     execution_journal_plan = collect_execution_journal_plan(execution_readiness_bundle)
     execution_evidence_contract = collect_execution_evidence_contract(execution_journal_plan)
+    execution_preflight_checklist = collect_execution_preflight_checklist(
+        chain,
+        execution_readiness_bundle=execution_readiness_bundle,
+        execution_evidence_contract=execution_evidence_contract,
+        human_approval_package=human_approval_package,
+        execution_workspace_plan=execution_workspace_plan,
+    )
+    execution_attempt_history = collect_execution_attempt_history(
+        execution_journal_plan,
+        retry_policy=execution_retry_policy,
+        execution_package=autonomous_execution_package,
+    )
     execution_readiness_bundle["execution_journal_plan_id"] = execution_journal_plan["execution_journal_id"]
     execution_readiness_bundle["execution_evidence_contract_id"] = execution_evidence_contract["execution_evidence_contract_id"]
     chain["execution_workspace_plan"] = execution_workspace_plan
@@ -9747,6 +9759,8 @@ def collect_growth_planning_chain_preview(
     chain["execution_readiness_bundle"] = execution_readiness_bundle
     chain["execution_journal_plan"] = execution_journal_plan
     chain["execution_evidence_contract"] = execution_evidence_contract
+    chain["execution_preflight_checklist"] = execution_preflight_checklist
+    chain["execution_attempt_history"] = execution_attempt_history
     chain["planning_chain_review_bundle"] = collect_planning_chain_review_bundle(chain)
     validate_growth_planning_chain_preview(chain)
     return chain
@@ -9856,6 +9870,8 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_rev
         "execution_readiness_bundle",
         "execution_journal_plan",
         "execution_evidence_contract",
+        "execution_preflight_checklist",
+        "execution_attempt_history",
     )
     present_runtime_fields = [field for field in optional_runtime_fields if field in chain]
     if present_runtime_fields:
@@ -9870,6 +9886,8 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_rev
         readiness = chain["execution_readiness_bundle"]
         journal = chain["execution_journal_plan"]
         evidence_contract = chain["execution_evidence_contract"]
+        preflight = chain["execution_preflight_checklist"]
+        attempt_history = chain["execution_attempt_history"]
         validate_execution_workspace_plan(workspace)
         validate_execution_event_timeline(timeline, workspace)
         validate_execution_retry_policy(retry, timeline)
@@ -9878,6 +9896,8 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_rev
         validate_execution_readiness_bundle(readiness)
         validate_execution_journal_plan(journal, readiness)
         validate_execution_evidence_contract(evidence_contract, journal)
+        validate_execution_preflight_checklist(preflight, chain)
+        validate_execution_attempt_history(attempt_history, journal, retry, execution_package)
         if workspace["planning_chain_id"] != chain["planning_chain_id"]:
             raise ValueError("planning chain workspace must reference planning chain")
         if workspace["execution_package_id"] != execution_package["execution_package_id"]:
@@ -9908,6 +9928,20 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_rev
             raise ValueError("planning chain evidence contract must reference execution journal")
         if readiness.get("execution_evidence_contract_id") != evidence_contract["execution_evidence_contract_id"]:
             raise ValueError("planning chain readiness must reference evidence contract")
+        if preflight["planning_chain_id"] != chain["planning_chain_id"]:
+            raise ValueError("planning chain preflight checklist must reference planning chain")
+        if preflight["execution_package_id"] != execution_package["execution_package_id"]:
+            raise ValueError("planning chain preflight checklist must reference execution package")
+        if preflight["execution_readiness_bundle_id"] != readiness["execution_readiness_bundle_id"]:
+            raise ValueError("planning chain preflight checklist must reference readiness bundle")
+        if preflight["execution_evidence_contract_id"] != evidence_contract["execution_evidence_contract_id"]:
+            raise ValueError("planning chain preflight checklist must reference evidence contract")
+        if attempt_history["execution_package_id"] != execution_package["execution_package_id"]:
+            raise ValueError("planning chain attempt history must reference execution package")
+        if attempt_history["execution_journal_plan_id"] != journal["execution_journal_id"]:
+            raise ValueError("planning chain attempt history must reference execution journal")
+        if attempt_history["retry_policy_id"] != retry["retry_policy_id"]:
+            raise ValueError("planning chain attempt history must reference retry policy")
         if require_review_bundle and chain["planning_chain_review_bundle"]["execution_readiness_bundle_id"] != readiness["execution_readiness_bundle_id"]:
             raise ValueError("planning chain review bundle must reference readiness bundle")
 
@@ -10012,12 +10046,16 @@ def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     readiness = chain.get("execution_readiness_bundle", {})
     journal = chain.get("execution_journal_plan", {})
     evidence_contract = chain.get("execution_evidence_contract", {})
+    preflight = chain.get("execution_preflight_checklist", {})
+    attempt_history = chain.get("execution_attempt_history", {})
     if readiness:
         print(f"readiness_bundle: {readiness['execution_readiness_bundle_id']} ({readiness['readiness_status']})")
     if journal:
         print(f"execution_journal: {journal['execution_journal_id']} ({len(journal['journal_entries'])} planned entries)")
     if evidence_contract:
         print(f"evidence_contract: {evidence_contract['execution_evidence_contract_id']} ({evidence_contract['evidence_item_count']} required items)")
+    if preflight and attempt_history:
+        print(f"preflight: {preflight['pass_status']} blockers={preflight['blocker_count']} warnings={preflight['warning_count']} attempts={attempt_history['attempt_count']}")
     print(f"review_bundle: {review_bundle['review_bundle_id']} ({review_bundle['patch_behavior_quality_gate']['pass_status']})")
     print(f"next_action: {review_bundle['recommended_next_action']}")
 
@@ -11053,6 +11091,8 @@ _GROWTH_PLANNING_CHAIN_RUNTIME_FIELDS = (
     "execution_readiness_bundle",
     "execution_journal_plan",
     "execution_evidence_contract",
+    "execution_preflight_checklist",
+    "execution_attempt_history",
 )
 
 
@@ -11695,7 +11735,8 @@ def collect_execution_preflight_checklist(
     approval = human_approval_package if human_approval_package is not None else chain["human_approval_package"]
     workspace = execution_workspace_plan if execution_workspace_plan is not None else chain["execution_workspace_plan"]
     validate_execution_readiness_bundle(readiness)
-    validate_execution_evidence_contract(evidence_contract, chain["execution_journal_plan"])
+    journal_for_contract = chain.get("execution_journal_plan") if isinstance(chain, dict) else None
+    validate_execution_evidence_contract(evidence_contract, journal_for_contract)
     validate_human_approval_package(approval)
     validate_execution_workspace_plan(workspace)
 
@@ -11862,7 +11903,8 @@ def collect_execution_preflight_checklist(
         "metadata": dict(metadata or {}),
         "writes": [],
     }
-    validate_execution_preflight_checklist(checklist, chain)
+    validation_chain = chain if "execution_readiness_bundle" in chain else None
+    validate_execution_preflight_checklist(checklist, validation_chain)
     return checklist
 
 
@@ -11945,7 +11987,8 @@ def validate_execution_preflight_checklist(
     if checklist["pass_status"] != expected_status:
         raise ValueError("preflight pass_status must match blocker/warning counts")
     if planning_chain is not None:
-        validate_growth_planning_chain_preview(planning_chain)
+        if not isinstance(planning_chain, dict):
+            raise TypeError("planning_chain must be a dict")
         readiness = planning_chain["execution_readiness_bundle"]
         evidence_contract = planning_chain["execution_evidence_contract"]
         approval = planning_chain["human_approval_package"]

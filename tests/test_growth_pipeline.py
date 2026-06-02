@@ -6619,8 +6619,10 @@ def check_growth_planning_chain_cli() -> None:
     """planning-chain exposes the full read-only planning chain via CLI."""
     from link import _cmd_growth
     from link_modes.growth.link_growth_console import (
+        collect_execution_attempt_history,
         collect_execution_evidence_contract,
         collect_execution_journal_plan,
+        collect_execution_preflight_checklist,
         collect_growth_planning_chain_preview,
         collect_planning_chain_review_bundle,
         parse_growth_planning_chain_json,
@@ -6660,6 +6662,8 @@ def check_growth_planning_chain_cli() -> None:
         "execution_event_timeline",
         "execution_journal_plan",
         "execution_evidence_contract",
+        "execution_preflight_checklist",
+        "execution_attempt_history",
         "witness_manifest_plan",
         "human_approval_package",
         "execution_readiness_bundle",
@@ -6681,6 +6685,8 @@ def check_growth_planning_chain_cli() -> None:
     event_timeline = parsed["execution_event_timeline"]
     journal_plan = parsed["execution_journal_plan"]
     evidence_contract = parsed["execution_evidence_contract"]
+    preflight_checklist = parsed["execution_preflight_checklist"]
+    attempt_history = parsed["execution_attempt_history"]
     witness_manifest = parsed["witness_manifest_plan"]
     human_approval = parsed["human_approval_package"]
     readiness_bundle = parsed["execution_readiness_bundle"]
@@ -6755,6 +6761,26 @@ def check_growth_planning_chain_cli() -> None:
     same_contract = collect_execution_evidence_contract(journal_plan)
     _require(evidence_contract["execution_evidence_contract_id"] == same_contract["execution_evidence_contract_id"],
              "evidence contract id must be deterministic inside planning-chain JSON")
+    _require(preflight_checklist["planning_chain_id"] == parsed["planning_chain_id"],
+             "preflight checklist must reference planning chain")
+    _require(preflight_checklist["execution_package_id"] == execution_package["execution_package_id"],
+             "execution package must flow into preflight checklist")
+    _require(preflight_checklist["execution_readiness_bundle_id"] == readiness_bundle["execution_readiness_bundle_id"],
+             "readiness bundle must flow into preflight checklist")
+    _require(preflight_checklist["execution_evidence_contract_id"] == evidence_contract["execution_evidence_contract_id"],
+             "evidence contract must flow into preflight checklist")
+    same_preflight = collect_execution_preflight_checklist(parsed)
+    _require(preflight_checklist["preflight_checklist_id"] == same_preflight["preflight_checklist_id"],
+             "preflight checklist id must be deterministic inside planning-chain JSON")
+    _require(attempt_history["execution_package_id"] == execution_package["execution_package_id"],
+             "execution package must flow into attempt history")
+    _require(attempt_history["execution_journal_plan_id"] == journal_plan["execution_journal_id"],
+             "execution journal must flow into attempt history")
+    _require(attempt_history["retry_policy_id"] == retry_policy["retry_policy_id"],
+             "retry policy must flow into attempt history")
+    same_attempt_history = collect_execution_attempt_history(journal_plan, retry_policy=retry_policy, execution_package=execution_package)
+    _require(attempt_history["attempt_history_id"] == same_attempt_history["attempt_history_id"],
+             "attempt history id must be deterministic inside planning-chain JSON")
     _require(review_bundle["planning_chain_id"] == parsed["planning_chain_id"],
              "review bundle must reference planning_chain_id")
     _require(review_bundle["verification_plan_id"] == verification["verification_plan_id"],
