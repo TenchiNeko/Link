@@ -11340,6 +11340,8 @@ def parse_execution_journal_plan_json(text: str) -> dict[str, Any]:
 
 
 EXECUTION_EVIDENCE_CONTRACT_VERSION = "link-execution-evidence-contract-v1"
+EXECUTION_PREFLIGHT_CHECKLIST_VERSION = "link-execution-preflight-checklist-v1"
+EXECUTION_ATTEMPT_HISTORY_VERSION = "link-execution-attempt-history-v1"
 _EXECUTION_EVIDENCE_TYPES = (
     "compile",
     "tests",
@@ -11626,6 +11628,641 @@ def parse_execution_evidence_contract_json(text: str) -> dict[str, Any]:
     return contract
 
 
+def make_execution_preflight_check_id(planning_chain_id: str, category: str, name: str, source_ref: str) -> str:
+    return _execution_readiness_id("execution-preflight-check", {
+        "category": category,
+        "name": name,
+        "planning_chain_id": planning_chain_id,
+        "source_ref": source_ref,
+        "version": EXECUTION_PREFLIGHT_CHECKLIST_VERSION,
+    })
+
+
+def make_execution_preflight_checklist_id(
+    planning_chain: dict[str, Any],
+    readiness_bundle: dict[str, Any],
+    evidence_contract: dict[str, Any],
+    human_approval_package: dict[str, Any],
+    workspace_plan: dict[str, Any],
+    checks: list[dict[str, Any]],
+) -> str:
+    return _execution_readiness_id("execution-preflight-checklist", {
+        "check_ids": [check["check_id"] for check in checks],
+        "execution_evidence_contract_id": evidence_contract["execution_evidence_contract_id"],
+        "execution_readiness_bundle_id": readiness_bundle["execution_readiness_bundle_id"],
+        "human_approval_package_id": human_approval_package["approval_package_id"],
+        "planning_chain_id": planning_chain["planning_chain_id"],
+        "workspace_id": workspace_plan["workspace_id"],
+        "version": EXECUTION_PREFLIGHT_CHECKLIST_VERSION,
+    })
+
+
+def _execution_preflight_check(
+    planning_chain_id: str,
+    category: str,
+    name: str,
+    requirement: str,
+    status: str,
+    severity: str,
+    source_ref: str,
+) -> dict[str, Any]:
+    return {
+        "check_id": make_execution_preflight_check_id(planning_chain_id, category, name, source_ref),
+        "category": category,
+        "name": name,
+        "requirement": requirement,
+        "status": status,
+        "severity": severity,
+        "source_ref": source_ref,
+        "blocking": status == "block",
+    }
+
+
+def collect_execution_preflight_checklist(
+    planning_chain: dict[str, Any] | None = None,
+    *,
+    execution_readiness_bundle: dict[str, Any] | None = None,
+    execution_evidence_contract: dict[str, Any] | None = None,
+    human_approval_package: dict[str, Any] | None = None,
+    execution_workspace_plan: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a read-only checklist for future execution preflight review."""
+    chain = planning_chain if planning_chain is not None else collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(chain)
+    readiness = execution_readiness_bundle if execution_readiness_bundle is not None else chain["execution_readiness_bundle"]
+    evidence_contract = execution_evidence_contract if execution_evidence_contract is not None else chain["execution_evidence_contract"]
+    approval = human_approval_package if human_approval_package is not None else chain["human_approval_package"]
+    workspace = execution_workspace_plan if execution_workspace_plan is not None else chain["execution_workspace_plan"]
+    validate_execution_readiness_bundle(readiness)
+    validate_execution_evidence_contract(evidence_contract, chain["execution_journal_plan"])
+    validate_human_approval_package(approval)
+    validate_execution_workspace_plan(workspace)
+
+    planning_chain_id = chain["planning_chain_id"]
+    approval_status = "pass" if approval["recommended_human_decision"] == "approve" else "block"
+    readiness_status = "pass" if readiness["readiness_status"] == "ready_for_review" else "block"
+    quality_status = approval["quality_gate_status"]
+    quality_check_status = "pass" if quality_status == "pass" else ("block" if quality_status == "block" else "warning")
+
+    required_human_approvals = [
+        _execution_preflight_check(
+            planning_chain_id,
+            "human_approval",
+            approval_text,
+            approval_text,
+            approval_status,
+            "block" if approval_status == "block" else "info",
+            approval["approval_package_id"],
+        )
+        for approval_text in approval["required_approvals"]
+    ]
+    clean_tree_checks = [
+        _execution_preflight_check(
+            planning_chain_id,
+            "clean_tree",
+            "clean or snapshotted working tree",
+            "confirm working tree state is clean or explicitly snapshotted before creating any workspace",
+            readiness_status,
+            "block" if readiness_status == "block" else "info",
+            readiness["execution_readiness_bundle_id"],
+        ),
+        _execution_preflight_check(
+            planning_chain_id,
+            "clean_tree",
+            "safe base ref",
+            f"confirm base ref {workspace['base_ref']} matches the reviewed safe point",
+            "pass",
+            "info",
+            workspace["workspace_id"],
+        ),
+    ]
+    path_safety_checks = [
+        _execution_preflight_check(
+            planning_chain_id,
+            "path_safety",
+            "target files stay inside repository",
+            "confirm all target files are relative project paths and exclude research/runtime state",
+            "pass" if workspace["target_files"] else "block",
+            "info" if workspace["target_files"] else "block",
+            workspace["workspace_id"],
+        ),
+        _execution_preflight_check(
+            planning_chain_id,
+            "path_safety",
+            "planned worktree path is isolated",
+            "confirm proposed worktree path is under .link/worktrees and is not created until approval",
+            "pass" if "/.link/worktrees/" in workspace["proposed_worktree_path"] else "block",
+            "info" if "/.link/worktrees/" in workspace["proposed_worktree_path"] else "block",
+            workspace["workspace_id"],
+        ),
+    ]
+    command_allowlist_checks = [
+        _execution_preflight_check(
+            planning_chain_id,
+            "command_allowlist",
+            command,
+            "confirm command is allowlisted before future execution",
+            "warning",
+            "warning",
+            workspace["workspace_id"],
+        )
+        for command in workspace["verification_requirements"]
+    ]
+    isolation_checks = [
+        _execution_preflight_check(
+            planning_chain_id,
+            "branch_worktree_isolation",
+            "branch creation remains human gated",
+            "confirm no branch is created until explicit human approval",
+            "pass",
+            "info",
+            workspace["workspace_id"],
+        ),
+        _execution_preflight_check(
+            planning_chain_id,
+            "branch_worktree_isolation",
+            "worktree creation remains human gated",
+            "confirm no worktree is created until explicit human approval",
+            "pass",
+            "info",
+            workspace["workspace_id"],
+        ),
+    ]
+    evidence_contract_checks = [
+        _execution_preflight_check(
+            planning_chain_id,
+            "evidence_contract",
+            item["evidence_type"],
+            f"future {item['evidence_type']} evidence must include {', '.join(item['required_fields'])}",
+            "pass",
+            "info",
+            item["evidence_id"],
+        )
+        for item in evidence_contract["evidence_items"]
+    ]
+    if quality_check_status != "pass":
+        evidence_contract_checks.append(_execution_preflight_check(
+            planning_chain_id,
+            "evidence_contract",
+            "quality gate must not block",
+            "confirm patch behavior quality gate is pass or explicitly revised before execution",
+            quality_check_status,
+            "block" if quality_check_status == "block" else "warning",
+            approval["approval_package_id"],
+        ))
+
+    all_checks = [
+        *required_human_approvals,
+        *clean_tree_checks,
+        *path_safety_checks,
+        *command_allowlist_checks,
+        *isolation_checks,
+        *evidence_contract_checks,
+    ]
+    blocker_count = sum(1 for check in all_checks if check["status"] == "block")
+    warning_count = sum(1 for check in all_checks if check["status"] == "warning")
+    pass_status = "block" if blocker_count else ("review" if warning_count else "pass")
+    if pass_status == "pass":
+        next_action = "Preflight checklist is clear for human review; execution remains disabled until explicit approval."
+    elif pass_status == "review":
+        next_action = "Review preflight warnings and command allowlist expectations before approving any workspace creation."
+    else:
+        next_action = "Resolve preflight blockers before creating any branch, worktree, patch, or verification run."
+
+    checklist = {
+        "preflight_checklist_version": EXECUTION_PREFLIGHT_CHECKLIST_VERSION,
+        "preflight_checklist_id": make_execution_preflight_checklist_id(
+            chain,
+            readiness,
+            evidence_contract,
+            approval,
+            workspace,
+            all_checks,
+        ),
+        "planning_chain_id": planning_chain_id,
+        "execution_package_id": chain["autonomous_execution_package"]["execution_package_id"],
+        "execution_readiness_bundle_id": readiness["execution_readiness_bundle_id"],
+        "execution_evidence_contract_id": evidence_contract["execution_evidence_contract_id"],
+        "human_approval_package_id": approval["approval_package_id"],
+        "workspace_id": workspace["workspace_id"],
+        "required_human_approvals": required_human_approvals,
+        "clean_tree_checks": clean_tree_checks,
+        "path_safety_checks": path_safety_checks,
+        "command_allowlist_checks": command_allowlist_checks,
+        "branch_worktree_isolation_checks": isolation_checks,
+        "evidence_contract_checks": evidence_contract_checks,
+        "blocker_count": blocker_count,
+        "warning_count": warning_count,
+        "pass_status": pass_status,
+        "recommended_next_action": next_action,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_preflight_checklist(checklist, chain)
+    return checklist
+
+
+def validate_execution_preflight_check(item: dict[str, Any]) -> None:
+    required = ("check_id", "category", "name", "requirement", "status", "severity", "source_ref", "blocking")
+    missing = [field for field in required if field not in item]
+    if missing:
+        raise ValueError(f"execution preflight check missing fields: {missing}")
+    for field in ("check_id", "category", "name", "requirement", "status", "severity", "source_ref"):
+        _validate_non_empty_string(item[field], field)
+    if item["category"] not in {"human_approval", "clean_tree", "path_safety", "command_allowlist", "branch_worktree_isolation", "evidence_contract"}:
+        raise ValueError(f"invalid preflight check category: {item['category']}")
+    if item["status"] not in {"pass", "warning", "block"}:
+        raise ValueError("invalid preflight check status")
+    if item["severity"] not in {"info", "warning", "block"}:
+        raise ValueError("invalid preflight check severity")
+    if not isinstance(item["blocking"], bool):
+        raise TypeError("preflight check blocking must be a boolean")
+    if item["blocking"] is not (item["status"] == "block"):
+        raise ValueError("preflight check blocking must match block status")
+
+
+def validate_execution_preflight_checklist(
+    checklist: dict[str, Any],
+    planning_chain: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "preflight_checklist_version", "preflight_checklist_id", "planning_chain_id",
+        "execution_package_id", "execution_readiness_bundle_id", "execution_evidence_contract_id",
+        "human_approval_package_id", "workspace_id", "required_human_approvals",
+        "clean_tree_checks", "path_safety_checks", "command_allowlist_checks",
+        "branch_worktree_isolation_checks", "evidence_contract_checks", "blocker_count",
+        "warning_count", "pass_status", "recommended_next_action", "dry_run",
+        "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in checklist]
+    if missing:
+        raise ValueError(f"execution preflight checklist missing fields: {missing}")
+    if checklist["preflight_checklist_version"] != EXECUTION_PREFLIGHT_CHECKLIST_VERSION:
+        raise ValueError("unsupported execution preflight checklist version")
+    _validate_execution_read_only(checklist, "execution preflight checklist")
+    for field in (
+        "preflight_checklist_id", "planning_chain_id", "execution_package_id",
+        "execution_readiness_bundle_id", "execution_evidence_contract_id",
+        "human_approval_package_id", "workspace_id", "recommended_next_action",
+    ):
+        _validate_non_empty_string(checklist[field], field)
+    if checklist["pass_status"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid preflight checklist pass_status")
+    if not isinstance(checklist["blocker_count"], int) or checklist["blocker_count"] < 0:
+        raise ValueError("blocker_count must be a non-negative integer")
+    if not isinstance(checklist["warning_count"], int) or checklist["warning_count"] < 0:
+        raise ValueError("warning_count must be a non-negative integer")
+    check_groups = (
+        "required_human_approvals",
+        "clean_tree_checks",
+        "path_safety_checks",
+        "command_allowlist_checks",
+        "branch_worktree_isolation_checks",
+        "evidence_contract_checks",
+    )
+    all_checks: list[dict[str, Any]] = []
+    for group in check_groups:
+        checks = checklist[group]
+        if not isinstance(checks, list) or not checks:
+            raise TypeError(f"{group} must be a non-empty list")
+        for check in checks:
+            validate_execution_preflight_check(check)
+            all_checks.append(check)
+    check_ids = [check["check_id"] for check in all_checks]
+    if len(check_ids) != len(set(check_ids)):
+        raise ValueError("preflight check ids must be unique")
+    blocker_count = sum(1 for check in all_checks if check["status"] == "block")
+    warning_count = sum(1 for check in all_checks if check["status"] == "warning")
+    if checklist["blocker_count"] != blocker_count:
+        raise ValueError("blocker_count must match checks")
+    if checklist["warning_count"] != warning_count:
+        raise ValueError("warning_count must match checks")
+    expected_status = "block" if blocker_count else ("review" if warning_count else "pass")
+    if checklist["pass_status"] != expected_status:
+        raise ValueError("preflight pass_status must match blocker/warning counts")
+    if planning_chain is not None:
+        validate_growth_planning_chain_preview(planning_chain)
+        readiness = planning_chain["execution_readiness_bundle"]
+        evidence_contract = planning_chain["execution_evidence_contract"]
+        approval = planning_chain["human_approval_package"]
+        workspace = planning_chain["execution_workspace_plan"]
+        expected = {
+            "planning_chain_id": planning_chain["planning_chain_id"],
+            "execution_package_id": planning_chain["autonomous_execution_package"]["execution_package_id"],
+            "execution_readiness_bundle_id": readiness["execution_readiness_bundle_id"],
+            "execution_evidence_contract_id": evidence_contract["execution_evidence_contract_id"],
+            "human_approval_package_id": approval["approval_package_id"],
+            "workspace_id": workspace["workspace_id"],
+        }
+        for field, value in expected.items():
+            if checklist[field] != value:
+                raise ValueError(f"preflight checklist {field} does not match planning chain")
+        expected_id = make_execution_preflight_checklist_id(
+            planning_chain,
+            readiness,
+            evidence_contract,
+            approval,
+            workspace,
+            all_checks,
+        )
+        if checklist["preflight_checklist_id"] != expected_id:
+            raise ValueError("preflight checklist id does not match planning chain")
+
+
+def stable_execution_preflight_checklist_json(checklist: dict[str, Any]) -> str:
+    validate_execution_preflight_checklist(checklist)
+    return _stable_ruflo_json(checklist, indent=2) + "\n"
+
+
+def parse_execution_preflight_checklist_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    checklist = _json.loads(text)
+    validate_execution_preflight_checklist(checklist)
+    return checklist
+
+
+_EXECUTION_ATTEMPT_STATUSES = (
+    "planned",
+    "running",
+    "success",
+    "failed",
+    "rolled_back",
+    "abandoned",
+)
+
+
+def _execution_attempt_expected_evidence(journal: dict[str, Any]) -> list[str]:
+    stage_to_evidence = {
+        "apply_patch_operations": "patch_application",
+        "run_compile": "compile",
+        "run_tests": "tests",
+        "run_healthcheck": "healthcheck",
+        "evaluate_quality_gate": "quality_gate",
+    }
+    expected = [
+        evidence_type
+        for entry in journal["journal_entries"]
+        for stage, evidence_type in stage_to_evidence.items()
+        if entry["stage"] == stage
+    ]
+    if any(entry["rollback_required"] for entry in journal["journal_entries"]):
+        expected.append("rollback")
+    return _normalize_implementation_branch_refs(expected)
+
+
+def make_execution_attempt_id(execution_package_id: str, journal_id: str, retry_policy_id: str, sequence: int) -> str:
+    return _execution_readiness_id("execution-attempt", {
+        "execution_package_id": execution_package_id,
+        "journal_id": journal_id,
+        "retry_policy_id": retry_policy_id,
+        "sequence": sequence,
+        "version": EXECUTION_ATTEMPT_HISTORY_VERSION,
+    })
+
+
+def make_execution_attempt_history_id(
+    execution_package: dict[str, Any],
+    journal: dict[str, Any],
+    retry_policy: dict[str, Any],
+    attempts: list[dict[str, Any]],
+) -> str:
+    return _execution_readiness_id("execution-attempt-history", {
+        "attempt_ids": [attempt["attempt_id"] for attempt in attempts],
+        "execution_package_id": execution_package["execution_package_id"],
+        "journal_id": journal["execution_journal_id"],
+        "retry_policy_id": retry_policy["retry_policy_id"],
+        "version": EXECUTION_ATTEMPT_HISTORY_VERSION,
+    })
+
+
+def _planned_execution_attempt(
+    execution_package: dict[str, Any],
+    journal: dict[str, Any],
+    retry_policy: dict[str, Any],
+    sequence: int,
+    expected_evidence: list[str],
+) -> dict[str, Any]:
+    max_attempts = retry_policy["max_attempts"]
+    retry_allowed = sequence < max_attempts
+    rollback_required = any(entry["rollback_required"] for entry in journal["journal_entries"])
+    triggering_event = "initial_execution_request" if sequence == 1 else "retry_after_retryable_failure"
+    next_action = (
+        "await explicit human approval before starting the planned execution attempt"
+        if sequence == 1
+        else "retry only after a retryable failure and human review confirms the workspace state is known"
+    )
+    return {
+        "attempt_id": make_execution_attempt_id(
+            execution_package["execution_package_id"],
+            journal["execution_journal_id"],
+            retry_policy["retry_policy_id"],
+            sequence,
+        ),
+        "sequence": sequence,
+        "status": "planned",
+        "start_policy": "assign_utc_timestamp_when_attempt_starts_after_explicit_approval",
+        "completion_policy": "record terminal status only after evidence contract requirements are satisfied or blocked",
+        "triggering_event": triggering_event,
+        "expected_evidence": list(expected_evidence),
+        "retry_allowed": retry_allowed,
+        "rollback_required": rollback_required,
+        "next_action": next_action,
+    }
+
+
+def collect_execution_attempt_history(
+    execution_journal_plan: dict[str, Any] | None = None,
+    *,
+    retry_policy: dict[str, Any] | None = None,
+    execution_package: dict[str, Any] | None = None,
+    attempts: list[dict[str, Any]] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Model future execution attempts without starting them."""
+    if execution_journal_plan is None or retry_policy is None or execution_package is None:
+        chain = collect_growth_planning_chain_preview()
+        journal = execution_journal_plan if execution_journal_plan is not None else chain["execution_journal_plan"]
+        retry = retry_policy if retry_policy is not None else chain["execution_retry_policy"]
+        package = execution_package if execution_package is not None else chain["autonomous_execution_package"]
+    else:
+        journal = execution_journal_plan
+        retry = retry_policy
+        package = execution_package
+    validate_execution_journal_plan(journal)
+    validate_execution_retry_policy(retry)
+    validate_autonomous_execution_package(package)
+    if journal["execution_package_id"] != package["execution_package_id"]:
+        raise ValueError("execution attempt history journal must reference execution package")
+
+    expected_evidence = _execution_attempt_expected_evidence(journal)
+    if attempts is None:
+        planned_attempts = [
+            _planned_execution_attempt(package, journal, retry, sequence, expected_evidence)
+            for sequence in range(1, retry["max_attempts"] + 1)
+        ]
+    else:
+        if not isinstance(attempts, list):
+            raise TypeError("attempts must be a list")
+        planned_attempts = [dict(attempt) for attempt in attempts]
+
+    history = {
+        "attempt_history_version": EXECUTION_ATTEMPT_HISTORY_VERSION,
+        "attempt_history_id": make_execution_attempt_history_id(package, journal, retry, planned_attempts),
+        "execution_package_id": package["execution_package_id"],
+        "execution_journal_plan_id": journal["execution_journal_id"],
+        "retry_policy_id": retry["retry_policy_id"],
+        "max_attempts": retry["max_attempts"],
+        "attempts": planned_attempts,
+        "attempt_count": len(planned_attempts),
+        "retry_allowed_count": sum(1 for attempt in planned_attempts if attempt["retry_allowed"]),
+        "rollback_required_count": sum(1 for attempt in planned_attempts if attempt["rollback_required"]),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_attempt_history(history, journal, retry, package)
+    return history
+
+
+def validate_execution_attempt(attempt: dict[str, Any]) -> None:
+    required = (
+        "attempt_id", "sequence", "status", "start_policy", "completion_policy",
+        "triggering_event", "expected_evidence", "retry_allowed", "rollback_required",
+        "next_action",
+    )
+    missing = [field for field in required if field not in attempt]
+    if missing:
+        raise ValueError(f"execution attempt missing fields: {missing}")
+    for field in ("attempt_id", "status", "start_policy", "completion_policy", "triggering_event", "next_action"):
+        _validate_non_empty_string(attempt[field], field)
+    if not isinstance(attempt["sequence"], int) or attempt["sequence"] < 1:
+        raise ValueError("attempt sequence must be a positive integer")
+    if attempt["status"] not in _EXECUTION_ATTEMPT_STATUSES:
+        raise ValueError(f"invalid execution attempt status: {attempt['status']}")
+    if not isinstance(attempt["expected_evidence"], list) or not attempt["expected_evidence"]:
+        raise TypeError("expected_evidence must be a non-empty list")
+    if attempt["expected_evidence"] != _normalize_implementation_branch_refs(attempt["expected_evidence"]):
+        raise ValueError("expected_evidence must be normalized and sorted")
+    for field in ("retry_allowed", "rollback_required"):
+        if not isinstance(attempt[field], bool):
+            raise TypeError(f"{field} must be a boolean")
+    if attempt["status"] == "success" and attempt["rollback_required"]:
+        raise ValueError("successful attempts must not require rollback")
+    if attempt["status"] == "rolled_back" and not attempt["rollback_required"]:
+        raise ValueError("rolled_back attempts must require rollback")
+
+
+def validate_execution_attempt_history(
+    history: dict[str, Any],
+    execution_journal_plan: dict[str, Any] | None = None,
+    retry_policy: dict[str, Any] | None = None,
+    execution_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "attempt_history_version", "attempt_history_id", "execution_package_id",
+        "execution_journal_plan_id", "retry_policy_id", "max_attempts", "attempts",
+        "attempt_count", "retry_allowed_count", "rollback_required_count", "dry_run",
+        "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in history]
+    if missing:
+        raise ValueError(f"execution attempt history missing fields: {missing}")
+    if history["attempt_history_version"] != EXECUTION_ATTEMPT_HISTORY_VERSION:
+        raise ValueError("unsupported execution attempt history version")
+    _validate_execution_read_only(history, "execution attempt history")
+    for field in ("attempt_history_id", "execution_package_id", "execution_journal_plan_id", "retry_policy_id"):
+        _validate_non_empty_string(history[field], field)
+    if not isinstance(history["max_attempts"], int) or history["max_attempts"] < 1 or history["max_attempts"] > 5:
+        raise ValueError("max_attempts must be an integer from 1 to 5")
+    attempts = history["attempts"]
+    if not isinstance(attempts, list) or not attempts:
+        raise TypeError("attempts must be a non-empty list")
+    if not isinstance(history["attempt_count"], int) or history["attempt_count"] != len(attempts):
+        raise ValueError("attempt_count must match attempts length")
+    if len(attempts) > history["max_attempts"]:
+        raise ValueError("attempt_count must not exceed max_attempts")
+    sequences: set[int] = set()
+    attempt_ids: set[str] = set()
+    for index, attempt in enumerate(attempts, start=1):
+        validate_execution_attempt(attempt)
+        if attempt["sequence"] in sequences:
+            raise ValueError(f"duplicate execution attempt sequence: {attempt['sequence']}")
+        if attempt["attempt_id"] in attempt_ids:
+            raise ValueError(f"duplicate execution attempt id: {attempt['attempt_id']}")
+        sequences.add(attempt["sequence"])
+        attempt_ids.add(attempt["attempt_id"])
+        if attempt["sequence"] != index:
+            raise ValueError("execution attempts must be ordered by sequence without gaps")
+    retry_count = sum(1 for attempt in attempts if attempt["retry_allowed"])
+    rollback_count = sum(1 for attempt in attempts if attempt["rollback_required"])
+    if history["retry_allowed_count"] != retry_count:
+        raise ValueError("retry_allowed_count must match attempts")
+    if history["rollback_required_count"] != rollback_count:
+        raise ValueError("rollback_required_count must match attempts")
+    if execution_journal_plan is not None:
+        validate_execution_journal_plan(execution_journal_plan)
+        if history["execution_journal_plan_id"] != execution_journal_plan["execution_journal_id"]:
+            raise ValueError("attempt history must reference execution journal")
+        if history["execution_package_id"] != execution_journal_plan["execution_package_id"]:
+            raise ValueError("attempt history package id must match journal")
+    if retry_policy is not None:
+        validate_execution_retry_policy(retry_policy)
+        if history["retry_policy_id"] != retry_policy["retry_policy_id"]:
+            raise ValueError("attempt history must reference retry policy")
+        if history["max_attempts"] != retry_policy["max_attempts"]:
+            raise ValueError("attempt history max_attempts must match retry policy")
+        for attempt in attempts:
+            expected_retry = attempt["sequence"] < retry_policy["max_attempts"]
+            if attempt["retry_allowed"] != expected_retry:
+                raise ValueError("attempt retry_allowed must match retry policy")
+    if execution_package is not None:
+        validate_autonomous_execution_package(execution_package)
+        if history["execution_package_id"] != execution_package["execution_package_id"]:
+            raise ValueError("attempt history must reference execution package")
+    if execution_journal_plan is not None and retry_policy is not None and execution_package is not None:
+        expected_evidence = _execution_attempt_expected_evidence(execution_journal_plan)
+        rollback_required = any(entry["rollback_required"] for entry in execution_journal_plan["journal_entries"])
+        for attempt in attempts:
+            if attempt["expected_evidence"] != expected_evidence:
+                raise ValueError("attempt expected_evidence must match execution journal")
+            if attempt["rollback_required"] != rollback_required:
+                raise ValueError("attempt rollback_required must match execution journal")
+            expected_id = make_execution_attempt_id(
+                execution_package["execution_package_id"],
+                execution_journal_plan["execution_journal_id"],
+                retry_policy["retry_policy_id"],
+                attempt["sequence"],
+            )
+            if attempt["attempt_id"] != expected_id:
+                raise ValueError("execution attempt id does not match inputs")
+        expected_history_id = make_execution_attempt_history_id(
+            execution_package,
+            execution_journal_plan,
+            retry_policy,
+            attempts,
+        )
+        if history["attempt_history_id"] != expected_history_id:
+            raise ValueError("execution attempt history id does not match inputs")
+
+
+def stable_execution_attempt_history_json(history: dict[str, Any]) -> str:
+    validate_execution_attempt_history(history)
+    return _stable_ruflo_json(history, indent=2) + "\n"
+
+
+def parse_execution_attempt_history_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    history = _json.loads(text)
+    validate_execution_attempt_history(history)
+    return history
 
 
 def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:

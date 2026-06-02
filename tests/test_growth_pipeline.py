@@ -7430,6 +7430,234 @@ def check_execution_evidence_contract_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 66. Execution preflight checklist helper
+# ---------------------------------------------------------------------------
+
+def check_execution_preflight_checklist_helper() -> None:
+    """execution preflight checklist summarizes future execution prerequisites."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_preflight_checklist,
+        collect_growth_planning_chain_preview,
+        parse_execution_preflight_checklist_json,
+        stable_execution_preflight_checklist_json,
+        validate_execution_preflight_checklist,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    checklist = collect_execution_preflight_checklist(chain, metadata={"suite": "growth"})
+    same = collect_execution_preflight_checklist(chain, metadata={"suite": "growth"})
+    _require(checklist["preflight_checklist_id"] == same["preflight_checklist_id"],
+             "execution preflight checklist id must be deterministic")
+    decoded = parse_execution_preflight_checklist_json(stable_execution_preflight_checklist_json(checklist))
+    _require(decoded == checklist, "execution preflight checklist JSON must round trip")
+    validate_execution_preflight_checklist(checklist, chain)
+
+    readiness = chain["execution_readiness_bundle"]
+    evidence_contract = chain["execution_evidence_contract"]
+    approval = chain["human_approval_package"]
+    workspace = chain["execution_workspace_plan"]
+    _require(checklist["planning_chain_id"] == chain["planning_chain_id"],
+             "preflight checklist must reference planning chain")
+    _require(checklist["execution_package_id"] == chain["autonomous_execution_package"]["execution_package_id"],
+             "preflight checklist must reference execution package")
+    _require(checklist["execution_readiness_bundle_id"] == readiness["execution_readiness_bundle_id"],
+             "preflight checklist must reference readiness bundle")
+    _require(checklist["execution_evidence_contract_id"] == evidence_contract["execution_evidence_contract_id"],
+             "preflight checklist must reference evidence contract")
+    _require(checklist["human_approval_package_id"] == approval["approval_package_id"],
+             "preflight checklist must reference human approval package")
+    _require(checklist["workspace_id"] == workspace["workspace_id"],
+             "preflight checklist must reference workspace plan")
+
+    _require(checklist["required_human_approvals"],
+             "preflight checklist must include required human approvals")
+    _require(checklist["clean_tree_checks"],
+             "preflight checklist must include clean-tree checks")
+    _require(checklist["path_safety_checks"],
+             "preflight checklist must include path safety checks")
+    _require(checklist["command_allowlist_checks"],
+             "preflight checklist must include command allowlist checks")
+    _require(checklist["branch_worktree_isolation_checks"],
+             "preflight checklist must include branch/worktree isolation checks")
+    _require(checklist["evidence_contract_checks"],
+             "preflight checklist must include evidence contract checks")
+    _require({check["name"] for check in checklist["required_human_approvals"]} == set(approval["required_approvals"]),
+             "preflight checklist must preserve human approvals")
+    _require({check["name"] for check in checklist["command_allowlist_checks"]} == set(workspace["verification_requirements"]),
+             "preflight checklist must preserve command allowlist checks")
+    evidence_types = {item["evidence_type"] for item in evidence_contract["evidence_items"]}
+    _require(evidence_types.issubset({check["name"] for check in checklist["evidence_contract_checks"]}),
+             "preflight checklist must cover evidence contract requirements")
+
+    all_checks = []
+    for group in (
+        "required_human_approvals",
+        "clean_tree_checks",
+        "path_safety_checks",
+        "command_allowlist_checks",
+        "branch_worktree_isolation_checks",
+        "evidence_contract_checks",
+    ):
+        all_checks.extend(checklist[group])
+    _require(checklist["blocker_count"] == sum(1 for check in all_checks if check["status"] == "block"),
+             "preflight checklist blocker_count must match checks")
+    _require(checklist["warning_count"] == sum(1 for check in all_checks if check["status"] == "warning"),
+             "preflight checklist warning_count must match checks")
+    _require(checklist["pass_status"] in {"pass", "review", "block"},
+             "preflight checklist pass_status must be bounded")
+    _require(checklist["blocker_count"] > 0 and checklist["pass_status"] == "block",
+             "default preflight checklist should block while readiness evidence is missing")
+    _require(checklist["dry_run"] is True and checklist["write_allowed"] is False,
+             "preflight checklist must remain read-only")
+    _require(checklist["automation_allowed"] is False and checklist["writes"] == [],
+             "preflight checklist must not allow automation or writes")
+
+    bad_missing = dict(checklist)
+    del bad_missing["execution_readiness_bundle_id"]
+    try:
+        validate_execution_preflight_checklist(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("preflight checklist must reject missing readiness reference")
+
+    bad_evidence = dict(checklist)
+    bad_evidence["execution_evidence_contract_id"] = "wrong-contract"
+    try:
+        validate_execution_preflight_checklist(bad_evidence, chain)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("preflight checklist must reject mismatched evidence reference")
+
+    bad_writes = dict(checklist)
+    bad_writes["writes"] = [".link/preflight.json"]
+    try:
+        validate_execution_preflight_checklist(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("preflight checklist must reject writes")
+
+    bad_status = dict(checklist)
+    bad_status["required_human_approvals"] = [dict(check) for check in checklist["required_human_approvals"]]
+    bad_status["required_human_approvals"][0]["status"] = "maybe"
+    try:
+        validate_execution_preflight_checklist(bad_status)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("preflight checklist must reject malformed check status")
+
+    print("execution preflight checklist helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 67. Execution attempt history helper
+# ---------------------------------------------------------------------------
+
+def check_execution_attempt_history_helper() -> None:
+    """execution attempt history models future attempts without running them."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_attempt_history,
+        collect_growth_planning_chain_preview,
+        parse_execution_attempt_history_json,
+        stable_execution_attempt_history_json,
+        validate_execution_attempt_history,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    journal = chain["execution_journal_plan"]
+    retry = chain["execution_retry_policy"]
+    execution = chain["autonomous_execution_package"]
+    history = collect_execution_attempt_history(journal, retry_policy=retry, execution_package=execution, metadata={"suite": "growth"})
+    same = collect_execution_attempt_history(journal, retry_policy=retry, execution_package=execution, metadata={"suite": "growth"})
+    _require(history["attempt_history_id"] == same["attempt_history_id"],
+             "execution attempt history id must be deterministic")
+    decoded = parse_execution_attempt_history_json(stable_execution_attempt_history_json(history))
+    _require(decoded == history, "execution attempt history JSON must round trip")
+    validate_execution_attempt_history(history, journal, retry, execution)
+
+    _require(history["execution_package_id"] == execution["execution_package_id"],
+             "attempt history must reference execution package")
+    _require(history["execution_journal_plan_id"] == journal["execution_journal_id"],
+             "attempt history must reference execution journal")
+    _require(history["retry_policy_id"] == retry["retry_policy_id"],
+             "attempt history must reference retry policy")
+    _require(history["attempt_count"] == retry["max_attempts"],
+             "attempt history should plan attempts from retry policy")
+    _require([attempt["sequence"] for attempt in history["attempts"]] == list(range(1, retry["max_attempts"] + 1)),
+             "attempt history must preserve ordered attempt sequences")
+    _require(all(attempt["status"] == "planned" for attempt in history["attempts"]),
+             "default attempts must be planned only")
+    _require(history["retry_allowed_count"] == retry["max_attempts"] - 1,
+             "retry accounting must follow retry policy")
+    _require(history["attempts"][-1]["retry_allowed"] is False,
+             "last attempt must not allow another retry")
+    _require(history["rollback_required_count"] == history["attempt_count"],
+             "rollback accounting must follow journal rollback policy")
+    expected_evidence = {"compile", "healthcheck", "patch_application", "quality_gate", "rollback", "tests"}
+    _require(set(history["attempts"][0]["expected_evidence"]) == expected_evidence,
+             "attempts must preserve expected evidence labels")
+    _require(history["dry_run"] is True and history["write_allowed"] is False,
+             "attempt history must remain read-only")
+    _require(history["automation_allowed"] is False and history["writes"] == [],
+             "attempt history must not allow automation or writes")
+
+    bad_status = dict(history)
+    bad_status["attempts"] = [dict(attempt) for attempt in history["attempts"]]
+    bad_status["attempts"][0]["status"] = "maybe"
+    try:
+        validate_execution_attempt_history(bad_status)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("attempt history must reject invalid statuses")
+
+    bad_retry = dict(history)
+    bad_retry["attempts"] = [dict(attempt) for attempt in history["attempts"]]
+    bad_retry["attempts"][0]["retry_allowed"] = False
+    bad_retry["retry_allowed_count"] = sum(1 for attempt in bad_retry["attempts"] if attempt["retry_allowed"])
+    try:
+        validate_execution_attempt_history(bad_retry, journal, retry, execution)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("attempt history must reject retry accounting mismatches")
+
+    bad_rollback = dict(history)
+    bad_rollback["attempts"] = [dict(attempt) for attempt in history["attempts"]]
+    bad_rollback["attempts"][0]["rollback_required"] = False
+    bad_rollback["rollback_required_count"] = sum(1 for attempt in bad_rollback["attempts"] if attempt["rollback_required"])
+    try:
+        validate_execution_attempt_history(bad_rollback, journal, retry, execution)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("attempt history must reject rollback accounting mismatches")
+
+    bad_link = dict(history)
+    bad_link["execution_journal_plan_id"] = "wrong-journal"
+    try:
+        validate_execution_attempt_history(bad_link, journal, retry, execution)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("attempt history must reject journal linkage mismatch")
+
+    bad_writes = dict(history)
+    bad_writes["writes"] = [".link/execution-attempt-history.json"]
+    try:
+        validate_execution_attempt_history(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("attempt history must reject writes")
+
+    print("execution attempt history helper OK")
+
+
+# ---------------------------------------------------------------------------
 # 58. Growth archive-code-brief -- dry-run
 # ---------------------------------------------------------------------------
 
@@ -8148,6 +8376,8 @@ def main() -> None:
     check_execution_readiness_stack_helper()
     check_execution_journal_schema_helper()
     check_execution_evidence_contract_helper()
+    check_execution_preflight_checklist_helper()
+    check_execution_attempt_history_helper()
     check_growth_archive_code_brief_dry_run()
     check_growth_archive_code_brief_write()
     check_growth_code_brief_propose()
