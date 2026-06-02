@@ -6619,6 +6619,7 @@ def check_growth_planning_chain_cli() -> None:
     """planning-chain exposes the full read-only planning chain via CLI."""
     from link import _cmd_growth
     from link_modes.growth.link_growth_console import (
+        collect_execution_evidence_contract,
         collect_execution_journal_plan,
         collect_growth_planning_chain_preview,
         collect_planning_chain_review_bundle,
@@ -6658,6 +6659,7 @@ def check_growth_planning_chain_cli() -> None:
         "execution_retry_policy",
         "execution_event_timeline",
         "execution_journal_plan",
+        "execution_evidence_contract",
         "witness_manifest_plan",
         "human_approval_package",
         "execution_readiness_bundle",
@@ -6678,6 +6680,7 @@ def check_growth_planning_chain_cli() -> None:
     retry_policy = parsed["execution_retry_policy"]
     event_timeline = parsed["execution_event_timeline"]
     journal_plan = parsed["execution_journal_plan"]
+    evidence_contract = parsed["execution_evidence_contract"]
     witness_manifest = parsed["witness_manifest_plan"]
     human_approval = parsed["human_approval_package"]
     readiness_bundle = parsed["execution_readiness_bundle"]
@@ -6743,6 +6746,15 @@ def check_growth_planning_chain_cli() -> None:
     same_journal = collect_execution_journal_plan(readiness_bundle)
     _require(journal_plan["execution_journal_id"] == same_journal["execution_journal_id"],
              "execution journal id must be deterministic inside planning-chain JSON")
+    _require(evidence_contract["execution_journal_id"] == journal_plan["execution_journal_id"],
+             "execution journal must flow into evidence contract")
+    _require(evidence_contract["execution_package_id"] == execution_package["execution_package_id"],
+             "autonomous execution package must flow into evidence contract")
+    _require(readiness_bundle["execution_evidence_contract_id"] == evidence_contract["execution_evidence_contract_id"],
+             "readiness bundle must reference evidence contract")
+    same_contract = collect_execution_evidence_contract(journal_plan)
+    _require(evidence_contract["execution_evidence_contract_id"] == same_contract["execution_evidence_contract_id"],
+             "evidence contract id must be deterministic inside planning-chain JSON")
     _require(review_bundle["planning_chain_id"] == parsed["planning_chain_id"],
              "review bundle must reference planning_chain_id")
     _require(review_bundle["verification_plan_id"] == verification["verification_plan_id"],
@@ -6755,6 +6767,12 @@ def check_growth_planning_chain_cli() -> None:
              "review bundle must reference autonomous execution package")
     _require(review_bundle["execution_readiness_bundle_id"] == readiness_bundle["execution_readiness_bundle_id"],
              "review bundle must reference readiness bundle")
+    _require(review_bundle["execution_evidence_contract_id"] == evidence_contract["execution_evidence_contract_id"],
+             "review bundle must reference evidence contract")
+    _require(review_bundle["evidence_item_count"] == evidence_contract["evidence_item_count"],
+             "review bundle must summarize evidence item count")
+    _require(review_bundle["evidence_required_types"] == sorted(item["evidence_type"] for item in evidence_contract["evidence_items"]),
+             "review bundle must summarize evidence required types")
     _require(review_bundle["dry_run"] is True and review_bundle["write_allowed"] is False,
              "review bundle must remain read-only inside planning-chain JSON")
     _require(review_bundle["automation_allowed"] is False and review_bundle["writes"] == [],
@@ -6818,13 +6836,15 @@ def check_growth_planning_chain_cli() -> None:
              "planning-chain human mode must include readiness bundle summary")
     _require("execution_journal:" in human,
              "planning-chain human mode must include execution journal summary")
+    _require("evidence_contract:" in human,
+             "planning-chain human mode must include evidence contract summary")
     _require("review_bundle:" in human,
              "planning-chain human mode must include review bundle summary")
     _require(review_bundle["review_bundle_id"] in human,
              "planning-chain human mode must include review bundle id")
     _require(review_bundle["recommended_next_action"] in human,
              "planning-chain human mode must include review bundle recommended next action")
-    _require(len(human.splitlines()) <= 14,
+    _require(len(human.splitlines()) <= 15,
              "planning-chain human mode must stay concise")
 
     print("growth planning-chain CLI OK")

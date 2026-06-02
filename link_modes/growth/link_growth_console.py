@@ -9736,7 +9736,9 @@ def collect_growth_planning_chain_preview(
         human_approval_package=human_approval_package,
     )
     execution_journal_plan = collect_execution_journal_plan(execution_readiness_bundle)
+    execution_evidence_contract = collect_execution_evidence_contract(execution_journal_plan)
     execution_readiness_bundle["execution_journal_plan_id"] = execution_journal_plan["execution_journal_id"]
+    execution_readiness_bundle["execution_evidence_contract_id"] = execution_evidence_contract["execution_evidence_contract_id"]
     chain["execution_workspace_plan"] = execution_workspace_plan
     chain["execution_event_timeline"] = execution_event_timeline
     chain["execution_retry_policy"] = execution_retry_policy
@@ -9744,6 +9746,7 @@ def collect_growth_planning_chain_preview(
     chain["human_approval_package"] = human_approval_package
     chain["execution_readiness_bundle"] = execution_readiness_bundle
     chain["execution_journal_plan"] = execution_journal_plan
+    chain["execution_evidence_contract"] = execution_evidence_contract
     chain["planning_chain_review_bundle"] = collect_planning_chain_review_bundle(chain)
     validate_growth_planning_chain_preview(chain)
     return chain
@@ -9852,6 +9855,7 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_rev
         "human_approval_package",
         "execution_readiness_bundle",
         "execution_journal_plan",
+        "execution_evidence_contract",
     )
     present_runtime_fields = [field for field in optional_runtime_fields if field in chain]
     if present_runtime_fields:
@@ -9865,6 +9869,7 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_rev
         approval = chain["human_approval_package"]
         readiness = chain["execution_readiness_bundle"]
         journal = chain["execution_journal_plan"]
+        evidence_contract = chain["execution_evidence_contract"]
         validate_execution_workspace_plan(workspace)
         validate_execution_event_timeline(timeline, workspace)
         validate_execution_retry_policy(retry, timeline)
@@ -9872,6 +9877,7 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_rev
         validate_human_approval_package(approval)
         validate_execution_readiness_bundle(readiness)
         validate_execution_journal_plan(journal, readiness)
+        validate_execution_evidence_contract(evidence_contract, journal)
         if workspace["planning_chain_id"] != chain["planning_chain_id"]:
             raise ValueError("planning chain workspace must reference planning chain")
         if workspace["execution_package_id"] != execution_package["execution_package_id"]:
@@ -9898,6 +9904,10 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_rev
             raise ValueError("planning chain readiness must reference execution journal plan")
         if journal["execution_package_id"] != execution_package["execution_package_id"]:
             raise ValueError("planning chain journal must reference autonomous execution package")
+        if evidence_contract["execution_journal_id"] != journal["execution_journal_id"]:
+            raise ValueError("planning chain evidence contract must reference execution journal")
+        if readiness.get("execution_evidence_contract_id") != evidence_contract["execution_evidence_contract_id"]:
+            raise ValueError("planning chain readiness must reference evidence contract")
         if require_review_bundle and chain["planning_chain_review_bundle"]["execution_readiness_bundle_id"] != readiness["execution_readiness_bundle_id"]:
             raise ValueError("planning chain review bundle must reference readiness bundle")
 
@@ -10001,10 +10011,13 @@ def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     print(f"execution_stages: {stage_summary['execution_stage_count']}")
     readiness = chain.get("execution_readiness_bundle", {})
     journal = chain.get("execution_journal_plan", {})
+    evidence_contract = chain.get("execution_evidence_contract", {})
     if readiness:
         print(f"readiness_bundle: {readiness['execution_readiness_bundle_id']} ({readiness['readiness_status']})")
     if journal:
         print(f"execution_journal: {journal['execution_journal_id']} ({len(journal['journal_entries'])} planned entries)")
+    if evidence_contract:
+        print(f"evidence_contract: {evidence_contract['execution_evidence_contract_id']} ({evidence_contract['evidence_item_count']} required items)")
     print(f"review_bundle: {review_bundle['review_bundle_id']} ({review_bundle['patch_behavior_quality_gate']['pass_status']})")
     print(f"next_action: {review_bundle['recommended_next_action']}")
 
@@ -10055,6 +10068,20 @@ def collect_planning_chain_review_bundle(
     readiness_bundle_id = ""
     if isinstance(readiness_bundle, dict):
         readiness_bundle_id = str(readiness_bundle.get("execution_readiness_bundle_id") or "")
+    evidence_contract = source_chain.get("execution_evidence_contract")
+    evidence_contract_id = ""
+    evidence_item_count = 0
+    evidence_required_types: list[str] = []
+    if isinstance(evidence_contract, dict):
+        evidence_contract_id = str(evidence_contract.get("execution_evidence_contract_id") or "")
+        evidence_item_count = int(evidence_contract.get("evidence_item_count") or 0)
+        raw_items = evidence_contract.get("evidence_items") or []
+        if isinstance(raw_items, list):
+            evidence_required_types = _normalize_implementation_branch_refs([
+                str(item.get("evidence_type") or "")
+                for item in raw_items
+                if isinstance(item, dict) and item.get("evidence_type")
+            ])
     bundle = {
         "review_bundle_version": PLANNING_CHAIN_REVIEW_BUNDLE_VERSION,
         "review_bundle_id": make_planning_chain_review_bundle_id(source_chain),
@@ -10074,6 +10101,9 @@ def collect_planning_chain_review_bundle(
         },
         "autonomous_execution_package_id": action["execution_package_id"],
         "execution_readiness_bundle_id": readiness_bundle_id,
+        "execution_evidence_contract_id": evidence_contract_id,
+        "evidence_item_count": evidence_item_count,
+        "evidence_required_types": evidence_required_types,
         "execution_stage_count": execution_package["stage_count"],
         "required_evidence": _normalize_implementation_branch_refs(patch_plan["required_evidence"]),
         "missing_evidence": _normalize_implementation_branch_refs(patch_plan["missing_evidence"]),
@@ -10099,7 +10129,7 @@ def validate_planning_chain_review_bundle(
         "review_bundle_version", "review_bundle_id", "planning_chain_id", "top_upgrade_id",
         "top_upgrade_title", "branch_plan_id", "work_package_id", "verification_plan_id",
         "verified_patch_plan_id", "verified_patch_diff_id", "patch_behavior_quality_gate",
-        "autonomous_execution_package_id", "execution_readiness_bundle_id", "execution_stage_count", "required_evidence",
+        "autonomous_execution_package_id", "execution_readiness_bundle_id", "execution_evidence_contract_id", "evidence_item_count", "evidence_required_types", "execution_stage_count", "required_evidence",
         "missing_evidence", "top_risks", "required_clarifications", "recommended_next_action",
         "dry_run", "write_allowed", "automation_allowed", "metadata", "writes",
     )
@@ -10117,6 +10147,14 @@ def validate_planning_chain_review_bundle(
             raise ValueError(f"{field} must be a non-empty string")
     if not isinstance(bundle["execution_readiness_bundle_id"], str):
         raise TypeError("execution_readiness_bundle_id must be a string")
+    if not isinstance(bundle["execution_evidence_contract_id"], str):
+        raise TypeError("execution_evidence_contract_id must be a string")
+    if not isinstance(bundle["evidence_item_count"], int) or bundle["evidence_item_count"] < 0:
+        raise ValueError("evidence_item_count must be a non-negative integer")
+    if not isinstance(bundle["evidence_required_types"], list):
+        raise TypeError("evidence_required_types must be a list")
+    if bundle["evidence_required_types"] != _normalize_implementation_branch_refs(bundle["evidence_required_types"]):
+        raise ValueError("evidence_required_types must be normalized and sorted")
     if bundle["dry_run"] is not True or bundle["write_allowed"] is not False or bundle["automation_allowed"] is not False:
         raise ValueError("planning-chain review bundle must remain read-only")
     if bundle["writes"] != []:
@@ -10186,6 +10224,20 @@ def validate_planning_chain_review_bundle(
                 raise ValueError("review bundle must reference execution readiness bundle")
         elif bundle["execution_readiness_bundle_id"]:
             raise ValueError("review bundle cannot reference missing execution readiness bundle")
+        evidence_contract = chain.get("execution_evidence_contract")
+        if isinstance(evidence_contract, dict):
+            expected_contract_id = evidence_contract.get("execution_evidence_contract_id")
+            if bundle["execution_evidence_contract_id"] != expected_contract_id:
+                raise ValueError("review bundle must reference execution evidence contract")
+            if bundle["evidence_item_count"] != evidence_contract.get("evidence_item_count"):
+                raise ValueError("review bundle evidence_item_count must summarize evidence contract")
+            expected_types = _normalize_implementation_branch_refs([
+                item["evidence_type"] for item in evidence_contract["evidence_items"]
+            ])
+            if bundle["evidence_required_types"] != expected_types:
+                raise ValueError("review bundle evidence_required_types must summarize evidence contract")
+        elif bundle["execution_evidence_contract_id"] or bundle["evidence_item_count"] or bundle["evidence_required_types"]:
+            raise ValueError("review bundle cannot summarize missing execution evidence contract")
 
 
 def stable_planning_chain_review_bundle_json(bundle: dict[str, Any]) -> str:
@@ -11000,6 +11052,7 @@ _GROWTH_PLANNING_CHAIN_RUNTIME_FIELDS = (
     "human_approval_package",
     "execution_readiness_bundle",
     "execution_journal_plan",
+    "execution_evidence_contract",
 )
 
 
@@ -11011,9 +11064,14 @@ def _growth_planning_chain_without_runtime_fields(chain: dict[str, Any]) -> dict
         if key not in _GROWTH_PLANNING_CHAIN_RUNTIME_FIELDS
     }
     review_bundle = base.get("planning_chain_review_bundle")
-    if isinstance(review_bundle, dict) and review_bundle.get("execution_readiness_bundle_id"):
+    if isinstance(review_bundle, dict):
         review_copy = dict(review_bundle)
-        review_copy["execution_readiness_bundle_id"] = ""
+        if review_copy.get("execution_readiness_bundle_id"):
+            review_copy["execution_readiness_bundle_id"] = ""
+        if review_copy.get("execution_evidence_contract_id"):
+            review_copy["execution_evidence_contract_id"] = ""
+            review_copy["evidence_item_count"] = 0
+            review_copy["evidence_required_types"] = []
         base["planning_chain_review_bundle"] = review_copy
     return base
 
