@@ -7024,6 +7024,100 @@ def check_growth_execution_readiness_cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62. Growth execution-gates CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_execution_gates_cli() -> None:
+    """execution-gates exposes only the read-only gate stack preview."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_execution_gate_stack_preview,
+        collect_growth_planning_chain_preview,
+        execution_gates_main,
+        parse_execution_gate_stack_preview_json,
+        validate_execution_gate_stack_preview,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("execution-gates" in help_out.getvalue(),
+             "growth help must include execution-gates")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = execution_gates_main(["--json"])
+    _require(json_rc == 0, "execution-gates --json must return 0")
+    parsed = parse_execution_gate_stack_preview_json(json_out.getvalue())
+    validate_execution_gate_stack_preview(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected = collect_execution_gate_stack_preview(chain)
+    validate_execution_gate_stack_preview(parsed, chain)
+    _require(parsed["gate_stack_preview_id"] == expected["gate_stack_preview_id"],
+             "execution-gates gate stack id must be deterministic")
+    _require(parsed["planning_chain_id"] == chain["planning_chain_id"],
+             "execution-gates preview must reference planning chain")
+    _require(parsed["execution_package_id"] == chain["autonomous_execution_package"]["execution_package_id"],
+             "execution-gates preview must reference execution package")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "execution-gates preview must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "execution-gates preview must not allow automation or writes")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_readiness_dashboard_summary",
+        "planning_chain_review_bundle",
+        "execution_readiness_bundle",
+    ):
+        _require(full_chain_key not in parsed,
+                 "execution-gates --json must output only gate stack preview")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["execution-gates", "--json"])
+    routed = parse_execution_gate_stack_preview_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth execution-gates --json route must return 0")
+    _require(routed["gate_stack_preview_id"] == parsed["gate_stack_preview_id"],
+             "growth execution-gates route must preserve deterministic gate stack id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = execution_gates_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "execution-gates human mode must return 0")
+    for needle in (
+        "Growth execution gates",
+        "gate_stack_preview_id:",
+        "planning_chain_id:",
+        "execution_package_id:",
+        "gate_count:",
+        "pass_count:",
+        "review_count:",
+        "block_count:",
+        "top_blocker_count:",
+        "top_warning_count:",
+        "next_action:",
+    ):
+        _require(needle in human, f"execution-gates human mode must include {needle}")
+    _require(len(human.splitlines()) <= 11,
+             "execution-gates human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = execution_gates_main(["--write"])
+    _require(write_rc != 0, "execution-gates --write must be rejected")
+    _require("--write is not supported" in write_err.getvalue(),
+             "execution-gates --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "execution-gates --write must not print normal output")
+
+    print("growth execution-gates CLI OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Growth planning-chain review bundle helper
 # ---------------------------------------------------------------------------
 
@@ -8801,6 +8895,7 @@ def main() -> None:
     check_autonomous_execution_package_helper()
     check_growth_planning_chain_cli()
     check_growth_execution_readiness_cli()
+    check_growth_execution_gates_cli()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
     check_execution_journal_schema_helper()

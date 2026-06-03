@@ -435,6 +435,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import execution_readiness_main as _growth_execution_readiness_main
 
         return _growth_execution_readiness_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "execution-gates":
+        from link_modes.growth.link_growth_console import execution_gates_main as _growth_execution_gates_main
+
+        return _growth_execution_gates_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "run":
         from link_modes.growth.link_growth_console import run_main as _growth_run_main
 
@@ -463,6 +467,7 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  code-brief-propose-batch Preview proposals for top code queue entries")
         print("  planning-chain     Preview gaps-to-verification planning chain")
         print("  execution-readiness Preview compact execution readiness dashboard")
+        print("  execution-gates    Preview execution gate stack")
         print("  run                Guided Growth workflow dashboard")
         return 0
     print(f"growth: unknown subcommand: {subcommand}", file=sys.stderr)

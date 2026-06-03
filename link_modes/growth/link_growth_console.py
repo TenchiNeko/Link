@@ -10072,6 +10072,33 @@ def execution_readiness_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def execution_gates_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth execution-gates`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth execution-gates: compact execution gate stack preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth execution-gates")
+        print("  python3 link.py growth execution-gates --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth execution-gates is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    preview = chain.get("execution_gate_stack_preview")
+    if preview is None:
+        preview = collect_execution_gate_stack_preview(chain)
+    validate_execution_gate_stack_preview(preview, chain)
+    if "--json" in args:
+        print(stable_execution_gate_stack_preview_json(preview), end="")
+        return 0
+    render_execution_gates_plain(preview)
+    return 0
+
+
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     validate_growth_planning_chain_preview(chain)
     gap_counts = chain["capability_gap_preview"]["counts"]
@@ -10125,6 +10152,23 @@ def render_execution_readiness_plain(summary: dict[str, Any]) -> None:
     if summary.get("gate_stack_preview_id"):
         print(f"gate stack: pass={summary['pass_count']} review={summary['review_count']} block={summary['block_count']} next={summary['recommended_next_action']}")
     print(f"next_action: {summary['recommended_next_action']}")
+
+
+def render_execution_gates_plain(preview: dict[str, Any]) -> None:
+    validate_execution_gate_stack_preview(preview)
+    blockers = _execution_dashboard_gate_stack_blockers(preview)
+    warnings = _execution_dashboard_gate_stack_warnings(preview)
+    print("Growth execution gates")
+    print(f"gate_stack_preview_id: {preview['gate_stack_preview_id']}")
+    print(f"planning_chain_id: {preview['planning_chain_id']}")
+    print(f"execution_package_id: {preview['execution_package_id']}")
+    print(f"gate_count: {preview['gate_count']}")
+    print(f"pass_count: {preview['pass_count']}")
+    print(f"review_count: {preview['review_count']}")
+    print(f"block_count: {preview['block_count']}")
+    print(f"top_blocker_count: {len(blockers)}")
+    print(f"top_warning_count: {len(warnings)}")
+    print(f"next_action: {preview['recommended_next_action']}")
 
 
 VERIFIED_PATCH_PLAN_VERSION = "link-verified-patch-plan-v1"
