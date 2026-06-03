@@ -6621,6 +6621,7 @@ def check_growth_planning_chain_cli() -> None:
     from link_modes.growth.link_growth_console import (
         collect_execution_attempt_history,
         collect_execution_evidence_contract,
+        collect_execution_gate_stack_preview,
         collect_execution_readiness_dashboard_summary,
         collect_execution_journal_plan,
         collect_execution_preflight_checklist,
@@ -6666,6 +6667,7 @@ def check_growth_planning_chain_cli() -> None:
         "execution_preflight_checklist",
         "execution_attempt_history",
         "execution_readiness_dashboard_summary",
+        "execution_gate_stack_preview",
         "witness_manifest_plan",
         "human_approval_package",
         "execution_readiness_bundle",
@@ -6690,6 +6692,7 @@ def check_growth_planning_chain_cli() -> None:
     preflight_checklist = parsed["execution_preflight_checklist"]
     attempt_history = parsed["execution_attempt_history"]
     dashboard_summary = parsed["execution_readiness_dashboard_summary"]
+    gate_stack = parsed["execution_gate_stack_preview"]
     witness_manifest = parsed["witness_manifest_plan"]
     human_approval = parsed["human_approval_package"]
     readiness_bundle = parsed["execution_readiness_bundle"]
@@ -6795,6 +6798,27 @@ def check_growth_planning_chain_cli() -> None:
              "dashboard summary must remain read-only inside planning-chain JSON")
     _require(dashboard_summary["automation_allowed"] is False and dashboard_summary["writes"] == [],
              "dashboard summary must not allow automation or writes inside planning-chain JSON")
+    _require(gate_stack["planning_chain_id"] == parsed["planning_chain_id"],
+             "gate stack must reference planning chain")
+    _require(gate_stack["execution_package_id"] == execution_package["execution_package_id"],
+             "execution package must flow into gate stack")
+    same_gate_stack = collect_execution_gate_stack_preview(parsed)
+    _require(gate_stack["gate_stack_preview_id"] == same_gate_stack["gate_stack_preview_id"],
+             "gate stack preview id must be deterministic inside planning-chain JSON")
+    _require(dashboard_summary["gate_stack_preview_id"] == gate_stack["gate_stack_preview_id"],
+             "dashboard summary must reference gate stack")
+    _require(dashboard_summary["gate_count"] == gate_stack["gate_count"],
+             "dashboard summary must summarize gate count")
+    _require(dashboard_summary["pass_count"] == gate_stack["pass_count"],
+             "dashboard summary must summarize gate pass count")
+    _require(dashboard_summary["review_count"] == gate_stack["review_count"],
+             "dashboard summary must summarize gate review count")
+    _require(dashboard_summary["block_count"] == gate_stack["block_count"],
+             "dashboard summary must summarize gate block count")
+    _require(gate_stack["dry_run"] is True and gate_stack["write_allowed"] is False,
+             "gate stack must remain read-only inside planning-chain JSON")
+    _require(gate_stack["automation_allowed"] is False and gate_stack["writes"] == [],
+             "gate stack must not allow automation or writes inside planning-chain JSON")
     _require(review_bundle["planning_chain_id"] == parsed["planning_chain_id"],
              "review bundle must reference planning_chain_id")
     _require(review_bundle["verification_plan_id"] == verification["verification_plan_id"],
@@ -6930,11 +6954,27 @@ def check_growth_execution_readiness_cli() -> None:
              "execution-readiness summary must remain read-only")
     _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
              "execution-readiness summary must not allow automation or writes")
+    gate_stack = chain["execution_gate_stack_preview"]
+    _require(parsed["gate_stack_preview_id"] == gate_stack["gate_stack_preview_id"],
+             "execution-readiness summary must include gate stack id")
+    _require(parsed["gate_count"] == gate_stack["gate_count"],
+             "execution-readiness summary must include gate count")
+    _require(parsed["pass_count"] == gate_stack["pass_count"],
+             "execution-readiness summary must include gate pass count")
+    _require(parsed["review_count"] == gate_stack["review_count"],
+             "execution-readiness summary must include gate review count")
+    _require(parsed["block_count"] == gate_stack["block_count"],
+             "execution-readiness summary must include gate block count")
+    _require(isinstance(parsed["gate_stack_top_blockers"], list),
+             "execution-readiness summary must include gate stack top blockers")
+    _require(isinstance(parsed["gate_stack_top_warnings"], list),
+             "execution-readiness summary must include gate stack top warnings")
     for full_chain_key in (
         "capability_gap_preview",
         "upgrade_execution_plan",
         "execution_workspace_plan",
         "execution_readiness_bundle",
+        "execution_gate_stack_preview",
         "planning_chain_review_bundle",
     ):
         _require(full_chain_key not in parsed,
@@ -6963,10 +7003,11 @@ def check_growth_execution_readiness_cli() -> None:
         "blockers:",
         "warnings:",
         "planned_attempts:",
+        "gate stack:",
         "next_action:",
     ):
         _require(needle in human, f"execution-readiness human mode must include {needle}")
-    _require(len(human.splitlines()) <= 10,
+    _require(len(human.splitlines()) <= 11,
              "execution-readiness human mode must stay concise")
 
     write_out = io.StringIO()
@@ -7865,12 +7906,27 @@ def check_execution_readiness_dashboard_summary_helper() -> None:
              "dashboard summary must summarize missing evidence")
     _require(summary["required_clarifications_count"] == len(review_bundle["required_clarifications"]),
              "dashboard summary must summarize required clarifications")
+    gate_stack = chain["execution_gate_stack_preview"]
+    _require(summary["gate_stack_preview_id"] == gate_stack["gate_stack_preview_id"],
+             "dashboard summary must reference gate stack")
+    _require(summary["gate_count"] == gate_stack["gate_count"],
+             "dashboard summary must summarize gate count")
+    _require(summary["pass_count"] == gate_stack["pass_count"],
+             "dashboard summary must summarize gate pass count")
+    _require(summary["review_count"] == gate_stack["review_count"],
+             "dashboard summary must summarize gate review count")
+    _require(summary["block_count"] == gate_stack["block_count"],
+             "dashboard summary must summarize gate block count")
+    _require(isinstance(summary["gate_stack_top_blockers"], list),
+             "dashboard summary must include gate stack top blockers")
+    _require(isinstance(summary["gate_stack_top_warnings"], list),
+             "dashboard summary must include gate stack top warnings")
     _require(isinstance(summary["top_blockers"], list) and summary["top_blockers"],
              "dashboard summary must include top blockers for default blocked state")
     _require(isinstance(summary["top_warnings"], list),
              "dashboard summary must include top warnings list")
-    _require(summary["recommended_next_action"] == readiness["recommended_next_action"],
-             "dashboard summary must preserve recommended next action")
+    _require(summary["recommended_next_action"] == gate_stack["recommended_next_action"],
+             "dashboard summary must preserve gate stack recommended next action when present")
     _require(summary["dry_run"] is True and summary["write_allowed"] is False,
              "dashboard summary must remain read-only")
     _require(summary["automation_allowed"] is False and summary["writes"] == [],

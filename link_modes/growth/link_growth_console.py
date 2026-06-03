@@ -9763,6 +9763,9 @@ def collect_growth_planning_chain_preview(
     chain["execution_attempt_history"] = execution_attempt_history
     chain["planning_chain_review_bundle"] = collect_planning_chain_review_bundle(chain)
     chain["execution_readiness_dashboard_summary"] = collect_execution_readiness_dashboard_summary(chain)
+    chain["execution_gate_stack_preview"] = collect_execution_gate_stack_preview(chain)
+    chain.pop("execution_readiness_dashboard_summary", None)
+    chain["execution_readiness_dashboard_summary"] = collect_execution_readiness_dashboard_summary(chain)
     validate_growth_planning_chain_preview(chain)
     return chain
 
@@ -9945,6 +9948,16 @@ def validate_growth_planning_chain_preview(chain: dict[str, Any], *, require_rev
             raise ValueError("planning chain attempt history must reference retry policy")
         if require_review_bundle and chain["planning_chain_review_bundle"]["execution_readiness_bundle_id"] != readiness["execution_readiness_bundle_id"]:
             raise ValueError("planning chain review bundle must reference readiness bundle")
+    if "execution_gate_stack_preview" in chain:
+        gate_stack = chain["execution_gate_stack_preview"]
+        if "execution_readiness_dashboard_summary" in chain:
+            validate_execution_gate_stack_preview(gate_stack, chain)
+        else:
+            validate_execution_gate_stack_preview(gate_stack)
+        if gate_stack["planning_chain_id"] != chain["planning_chain_id"]:
+            raise ValueError("planning chain gate stack must reference planning chain")
+        if gate_stack["execution_package_id"] != chain["autonomous_execution_package"]["execution_package_id"]:
+            raise ValueError("planning chain gate stack must reference execution package")
     if "execution_readiness_dashboard_summary" in chain:
         dashboard_summary = chain["execution_readiness_dashboard_summary"]
         validate_execution_readiness_dashboard_summary(dashboard_summary, chain)
@@ -10109,6 +10122,8 @@ def render_execution_readiness_plain(summary: dict[str, Any]) -> None:
     print(f"blockers: {summary['preflight_blocker_count']}")
     print(f"warnings: {summary['preflight_warning_count']}")
     print(f"planned_attempts: {summary['planned_attempt_count']}")
+    if summary.get("gate_stack_preview_id"):
+        print(f"gate stack: pass={summary['pass_count']} review={summary['review_count']} block={summary['block_count']} next={summary['recommended_next_action']}")
     print(f"next_action: {summary['recommended_next_action']}")
 
 
@@ -12425,6 +12440,28 @@ def _execution_dashboard_top_warnings(chain: dict[str, Any]) -> list[str]:
     return _normalize_patch_behavior_text_list(warnings)[:8] if warnings else []
 
 
+def _execution_dashboard_gate_stack_blockers(gate_stack: dict[str, Any] | None) -> list[str]:
+    if not gate_stack:
+        return []
+    blockers = [
+        f"{gate['gate_type']}: {blocker}"
+        for gate in gate_stack.get("gates", [])
+        for blocker in gate.get("blockers", [])
+    ]
+    return _normalize_patch_behavior_text_list(blockers)[:8] if blockers else []
+
+
+def _execution_dashboard_gate_stack_warnings(gate_stack: dict[str, Any] | None) -> list[str]:
+    if not gate_stack:
+        return []
+    warnings = [
+        f"{gate['gate_type']}: {warning}"
+        for gate in gate_stack.get("gates", [])
+        for warning in gate.get("warnings", [])
+    ]
+    return _normalize_patch_behavior_text_list(warnings)[:8] if warnings else []
+
+
 def collect_execution_readiness_dashboard_summary(
     planning_chain: dict[str, Any] | None = None,
     *,
@@ -12442,6 +12479,12 @@ def collect_execution_readiness_dashboard_summary(
     execution_package = chain["autonomous_execution_package"]
     approval = chain["human_approval_package"]
     review_bundle = chain["planning_chain_review_bundle"]
+    gate_stack = chain.get("execution_gate_stack_preview")
+    if gate_stack is not None:
+        if "execution_readiness_dashboard_summary" in chain:
+            validate_execution_gate_stack_preview(gate_stack, chain)
+        else:
+            validate_execution_gate_stack_preview(gate_stack)
     summary = {
         "dashboard_summary_version": EXECUTION_READINESS_DASHBOARD_SUMMARY_VERSION,
         "dashboard_summary_id": make_execution_readiness_dashboard_summary_id(chain),
@@ -12469,9 +12512,16 @@ def collect_execution_readiness_dashboard_summary(
         "required_approvals_count": len(approval["required_approvals"]),
         "missing_evidence_count": len(review_bundle["missing_evidence"]),
         "required_clarifications_count": len(review_bundle["required_clarifications"]),
+        "gate_stack_preview_id": gate_stack["gate_stack_preview_id"] if gate_stack else "",
+        "gate_count": gate_stack["gate_count"] if gate_stack else 0,
+        "pass_count": gate_stack["pass_count"] if gate_stack else 0,
+        "review_count": gate_stack["review_count"] if gate_stack else 0,
+        "block_count": gate_stack["block_count"] if gate_stack else 0,
+        "gate_stack_top_blockers": _execution_dashboard_gate_stack_blockers(gate_stack),
+        "gate_stack_top_warnings": _execution_dashboard_gate_stack_warnings(gate_stack),
         "top_blockers": _execution_dashboard_top_blockers(chain),
         "top_warnings": _execution_dashboard_top_warnings(chain),
-        "recommended_next_action": readiness["recommended_next_action"],
+        "recommended_next_action": gate_stack["recommended_next_action"] if gate_stack else readiness["recommended_next_action"],
         "dry_run": True,
         "write_allowed": False,
         "automation_allowed": False,
@@ -12494,7 +12544,9 @@ def validate_execution_readiness_dashboard_summary(
         "preflight_warning_count", "attempt_history_id", "planned_attempt_count",
         "execution_readiness_bundle_id", "readiness_status", "execution_package_id",
         "execution_stage_count", "required_approvals_count", "missing_evidence_count",
-        "required_clarifications_count", "top_blockers", "top_warnings",
+        "required_clarifications_count", "gate_stack_preview_id", "gate_count",
+        "pass_count", "review_count", "block_count", "gate_stack_top_blockers",
+        "gate_stack_top_warnings", "top_blockers", "top_warnings",
         "recommended_next_action", "dry_run", "write_allowed", "automation_allowed",
         "metadata", "writes",
     )
@@ -12511,6 +12563,8 @@ def validate_execution_readiness_dashboard_summary(
         "execution_package_id", "recommended_next_action",
     ):
         _validate_non_empty_string(summary[field], field)
+    if summary["gate_stack_preview_id"]:
+        _validate_non_empty_string(summary["gate_stack_preview_id"], "gate_stack_preview_id")
     if summary["preflight_status"] not in {"pass", "review", "block"}:
         raise ValueError("invalid preflight_status")
     if summary["readiness_status"] not in {"ready_for_review", "blocked", "needs_evidence"}:
@@ -12529,16 +12583,19 @@ def validate_execution_readiness_dashboard_summary(
     for field in (
         "required_evidence_count", "preflight_blocker_count", "preflight_warning_count",
         "planned_attempt_count", "execution_stage_count", "required_approvals_count",
-        "missing_evidence_count", "required_clarifications_count",
+        "missing_evidence_count", "required_clarifications_count", "gate_count",
+        "pass_count", "review_count", "block_count",
     ):
         if not isinstance(summary[field], int) or summary[field] < 0:
             raise ValueError(f"{field} must be a non-negative integer")
-    for field in ("top_blockers", "top_warnings"):
+    for field in ("top_blockers", "top_warnings", "gate_stack_top_blockers", "gate_stack_top_warnings"):
         values = summary[field]
         if not isinstance(values, list):
             raise TypeError(f"{field} must be a list")
         if values != _normalize_patch_behavior_text_list(values):
             raise ValueError(f"{field} must be normalized and sorted")
+    if summary["gate_count"] != summary["pass_count"] + summary["review_count"] + summary["block_count"]:
+        raise ValueError("gate stack counts must add up")
     if planning_chain is not None:
         if not isinstance(planning_chain, dict):
             raise TypeError("planning_chain must be a dict")
@@ -12550,6 +12607,7 @@ def validate_execution_readiness_dashboard_summary(
         execution_package = planning_chain["autonomous_execution_package"]
         approval = planning_chain["human_approval_package"]
         review_bundle = planning_chain["planning_chain_review_bundle"]
+        gate_stack = planning_chain.get("execution_gate_stack_preview")
         expected = {
             "dashboard_summary_id": make_execution_readiness_dashboard_summary_id(planning_chain),
             "planning_chain_id": planning_chain["planning_chain_id"],
@@ -12570,12 +12628,22 @@ def validate_execution_readiness_dashboard_summary(
             "required_approvals_count": len(approval["required_approvals"]),
             "missing_evidence_count": len(review_bundle["missing_evidence"]),
             "required_clarifications_count": len(review_bundle["required_clarifications"]),
+            "gate_stack_preview_id": gate_stack["gate_stack_preview_id"] if gate_stack else "",
+            "gate_count": gate_stack["gate_count"] if gate_stack else 0,
+            "pass_count": gate_stack["pass_count"] if gate_stack else 0,
+            "review_count": gate_stack["review_count"] if gate_stack else 0,
+            "block_count": gate_stack["block_count"] if gate_stack else 0,
         }
         for field, value in expected.items():
             if summary[field] != value:
                 raise ValueError(f"dashboard summary {field} does not match planning chain")
         if summary["quality_gate"]["quality_gate_id"] != planning_chain["patch_behavior_quality_gate"]["quality_gate_id"]:
             raise ValueError("dashboard summary quality gate id does not match planning chain")
+        if gate_stack is not None:
+            if summary["gate_stack_top_blockers"] != _execution_dashboard_gate_stack_blockers(gate_stack):
+                raise ValueError("dashboard summary gate stack blockers do not match planning chain")
+            if summary["gate_stack_top_warnings"] != _execution_dashboard_gate_stack_warnings(gate_stack):
+                raise ValueError("dashboard summary gate stack warnings do not match planning chain")
 
 
 def stable_execution_readiness_dashboard_summary_json(summary: dict[str, Any]) -> str:
