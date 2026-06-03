@@ -7239,6 +7239,138 @@ def check_growth_execution_approval_checklist_cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62. Growth execution-review CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_execution_review_cli() -> None:
+    """execution-review exposes compact reviewer-facing execution state."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_execution_review,
+        collect_growth_planning_chain_preview,
+        execution_review_main,
+        parse_execution_review_json,
+        stable_execution_review_json,
+        validate_execution_review,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("execution-review" in help_out.getvalue(),
+             "growth help must include execution-review")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = execution_review_main(["--json"])
+    _require(json_rc == 0, "execution-review --json must return 0")
+    parsed = parse_execution_review_json(json_out.getvalue())
+    validate_execution_review(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected = collect_execution_review(chain)
+    validate_execution_review(parsed, chain)
+    _require(parsed["execution_review_id"] == expected["execution_review_id"],
+             "execution review id must be deterministic")
+    _require(parsed == parse_execution_review_json(stable_execution_review_json(parsed)),
+             "execution review JSON must round trip")
+    _require(parsed["planning_chain_id"] == chain["planning_chain_id"],
+             "execution review must reference planning chain")
+    _require(parsed["execution_package_id"] == chain["autonomous_execution_package"]["execution_package_id"],
+             "execution review must reference execution package")
+    _require(parsed["dashboard_summary_id"] == chain["execution_readiness_dashboard_summary"]["dashboard_summary_id"],
+             "execution review must reference dashboard summary")
+    _require(parsed["gate_stack_preview_id"] == chain["execution_gate_stack_preview"]["gate_stack_preview_id"],
+             "execution review must reference gate stack")
+    _require(parsed["approval_checklist_id"] == expected["approval_checklist_id"],
+             "execution review must reference approval checklist")
+    _require(parsed["readiness_summary"]["top_upgrade_id"] == chain["top_recommended_next_action"]["upgrade_id"],
+             "execution review must summarize top upgrade")
+    _require(parsed["gate_summary"]["gate_count"] == chain["execution_gate_stack_preview"]["gate_count"],
+             "execution review must summarize gate count")
+    _require(parsed["approval_summary"]["required_approval_count"] == len(chain["human_approval_package"]["required_approvals"]),
+             "execution review must summarize required approvals")
+    _require(parsed["attempt_summary"]["planned_attempt_count"] == chain["execution_attempt_history"]["attempt_count"],
+             "execution review must summarize attempts")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "execution review must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "execution review must not allow automation or writes")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_gate_stack_preview",
+        "execution_readiness_dashboard_summary",
+        "execution_approval_checklist",
+        "planning_chain_review_bundle",
+    ):
+        _require(full_chain_key not in parsed,
+                 "execution-review --json must output only compact review")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["execution-review", "--json"])
+    routed = parse_execution_review_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth execution-review --json route must return 0")
+    _require(routed["execution_review_id"] == parsed["execution_review_id"],
+             "growth execution-review route must preserve deterministic review id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = execution_review_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "execution-review human mode must return 0")
+    for needle in (
+        "Growth execution review",
+        "review_id:",
+        "planning_chain_id:",
+        "top_upgrade:",
+        "readiness_status:",
+        "quality_gate:",
+        "gate_counts:",
+        "approval_status:",
+        "required_approval_count:",
+        "blocker_count:",
+        "warning_count:",
+        "planned_attempt_count:",
+        "next_action:",
+    ):
+        _require(needle in human, f"execution-review human mode must include {needle}")
+    _require(len(human.splitlines()) <= 13,
+             "execution-review human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = execution_review_main(["--write"])
+    _require(write_rc != 0, "execution-review --write must be rejected")
+    _require("--write is not supported" in write_err.getvalue(),
+             "execution-review --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "execution-review --write must not print normal output")
+
+    bad_missing = dict(parsed)
+    bad_missing.pop("execution_review_id")
+    try:
+        validate_execution_review(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("execution review must reject missing id")
+
+    bad_writes = dict(parsed)
+    bad_writes["writes"] = [".link/execution-review.json"]
+    try:
+        validate_execution_review(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("execution review must reject writes")
+
+    print("growth execution-review CLI OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Growth planning-chain review bundle helper
 # ---------------------------------------------------------------------------
 
@@ -9018,6 +9150,7 @@ def main() -> None:
     check_growth_execution_readiness_cli()
     check_growth_execution_gates_cli()
     check_growth_execution_approval_checklist_cli()
+    check_growth_execution_review_cli()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
     check_execution_journal_schema_helper()

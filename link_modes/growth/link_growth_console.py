@@ -10124,6 +10124,31 @@ def execution_approval_checklist_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def execution_review_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth execution-review`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth execution-review: compact execution review")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth execution-review")
+        print("  python3 link.py growth execution-review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth execution-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    review = collect_execution_review(chain)
+    validate_execution_review(review, chain)
+    if "--json" in args:
+        print(stable_execution_review_json(review), end="")
+        return 0
+    render_execution_review_plain(review)
+    return 0
+
+
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     validate_growth_planning_chain_preview(chain)
     gap_counts = chain["capability_gap_preview"]["counts"]
@@ -10207,6 +10232,23 @@ def render_execution_approval_checklist_plain(checklist: dict[str, Any]) -> None
     print(f"warning_count: {len(checklist['approval_warnings'])}")
     print(f"approval_status: {checklist['approval_status']}")
     print(f"next_action: {checklist['recommended_next_action']}")
+
+
+def render_execution_review_plain(review: dict[str, Any]) -> None:
+    validate_execution_review(review)
+    print("Growth execution review")
+    print(f"review_id: {review['execution_review_id']}")
+    print(f"planning_chain_id: {review['planning_chain_id']}")
+    print(f"top_upgrade: {review['readiness_summary']['top_upgrade_id']} - {review['readiness_summary']['top_upgrade_title']}")
+    print(f"readiness_status: {review['readiness_summary']['readiness_status']}")
+    print(f"quality_gate: {review['readiness_summary']['quality_gate_status']}")
+    print(f"gate_counts: pass={review['gate_summary']['pass_count']} review={review['gate_summary']['review_count']} block={review['gate_summary']['block_count']}")
+    print(f"approval_status: {review['approval_summary']['approval_status']}")
+    print(f"required_approval_count: {review['approval_summary']['required_approval_count']}")
+    print(f"blocker_count: {review['blocker_summary']['blocker_count']}")
+    print(f"warning_count: {review['warning_summary']['warning_count']}")
+    print(f"planned_attempt_count: {review['attempt_summary']['planned_attempt_count']}")
+    print(f"next_action: {review['recommended_next_action']}")
 
 
 VERIFIED_PATCH_PLAN_VERSION = "link-verified-patch-plan-v1"
@@ -13311,6 +13353,253 @@ def parse_execution_approval_checklist_json(text: str) -> dict[str, Any]:
     checklist = _json.loads(text)
     validate_execution_approval_checklist(checklist)
     return checklist
+
+
+EXECUTION_REVIEW_VERSION = "link-execution-review-v1"
+
+
+def make_execution_review_id(
+    planning_chain_id: str,
+    execution_package_id: str,
+    dashboard_summary_id: str,
+    gate_stack_preview_id: str,
+    approval_checklist_id: str,
+) -> str:
+    return _execution_readiness_id("execution-review", {
+        "approval_checklist_id": approval_checklist_id,
+        "dashboard_summary_id": dashboard_summary_id,
+        "execution_package_id": execution_package_id,
+        "gate_stack_preview_id": gate_stack_preview_id,
+        "planning_chain_id": planning_chain_id,
+        "version": EXECUTION_REVIEW_VERSION,
+    })
+
+
+def _execution_review_blockers(dashboard: dict[str, Any], gate_stack: dict[str, Any], checklist: dict[str, Any]) -> list[str]:
+    blockers = [
+        *dashboard["top_blockers"],
+        *checklist["approval_blockers"],
+    ]
+    blockers.extend(
+        f"{gate['gate_type']}: {blocker}"
+        for gate in gate_stack["gates"]
+        for blocker in gate["blockers"]
+    )
+    return _normalize_patch_behavior_text_list(blockers)[:12] if blockers else []
+
+
+def _execution_review_warnings(dashboard: dict[str, Any], gate_stack: dict[str, Any], checklist: dict[str, Any]) -> list[str]:
+    warnings = [
+        *dashboard["top_warnings"],
+        *checklist["approval_warnings"],
+    ]
+    warnings.extend(
+        f"{gate['gate_type']}: {warning}"
+        for gate in gate_stack["gates"]
+        for warning in gate["warnings"]
+    )
+    return _normalize_patch_behavior_text_list(warnings)[:12] if warnings else []
+
+
+def collect_execution_review(
+    planning_chain: dict[str, Any] | None = None,
+    *,
+    execution_readiness_dashboard_summary: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_approval_checklist: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a compact read-only reviewer-facing execution payload."""
+    chain = planning_chain if planning_chain is not None else collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(chain)
+    dashboard = execution_readiness_dashboard_summary if execution_readiness_dashboard_summary is not None else chain["execution_readiness_dashboard_summary"]
+    gate_stack = execution_gate_stack_preview if execution_gate_stack_preview is not None else chain["execution_gate_stack_preview"]
+    checklist = execution_approval_checklist if execution_approval_checklist is not None else collect_execution_approval_checklist(chain)
+    validate_execution_readiness_dashboard_summary(dashboard, chain)
+    validate_execution_gate_stack_preview(gate_stack, chain)
+    validate_execution_approval_checklist(checklist, chain)
+
+    blockers = _execution_review_blockers(dashboard, gate_stack, checklist)
+    warnings = _execution_review_warnings(dashboard, gate_stack, checklist)
+    if checklist["approval_status"] == "block" or gate_stack["block_count"]:
+        next_action = "Resolve execution review blockers before any workspace, branch, patch, or verification execution."
+    elif checklist["approval_status"] == "review" or gate_stack["review_count"] or warnings:
+        next_action = "Review execution warnings and required approvals with Brandon before enabling any runtime step."
+    else:
+        next_action = "Execution review is clear for human approval; execution remains disabled until explicitly approved."
+    review = {
+        "execution_review_version": EXECUTION_REVIEW_VERSION,
+        "execution_review_id": make_execution_review_id(
+            chain["planning_chain_id"],
+            chain["autonomous_execution_package"]["execution_package_id"],
+            dashboard["dashboard_summary_id"],
+            gate_stack["gate_stack_preview_id"],
+            checklist["approval_checklist_id"],
+        ),
+        "planning_chain_id": chain["planning_chain_id"],
+        "execution_package_id": chain["autonomous_execution_package"]["execution_package_id"],
+        "dashboard_summary_id": dashboard["dashboard_summary_id"],
+        "gate_stack_preview_id": gate_stack["gate_stack_preview_id"],
+        "approval_checklist_id": checklist["approval_checklist_id"],
+        "readiness_summary": {
+            "top_upgrade_id": dashboard["top_upgrade_id"],
+            "top_upgrade_title": dashboard["top_upgrade_title"],
+            "readiness_status": dashboard["readiness_status"],
+            "preflight_status": dashboard["preflight_status"],
+            "quality_gate_status": dashboard["quality_gate"]["pass_status"],
+            "quality_score": dashboard["quality_gate"]["quality_score"],
+            "risk_score": dashboard["quality_gate"]["risk_score"],
+        },
+        "gate_summary": {
+            "gate_count": gate_stack["gate_count"],
+            "pass_count": gate_stack["pass_count"],
+            "review_count": gate_stack["review_count"],
+            "block_count": gate_stack["block_count"],
+        },
+        "approval_summary": {
+            "approval_status": checklist["approval_status"],
+            "required_approval_count": len(checklist["required_approvals"]),
+            "human_approval_package_id": checklist["human_approval_package_id"],
+        },
+        "blocker_summary": {
+            "blocker_count": len(blockers),
+            "top_blockers": blockers,
+        },
+        "warning_summary": {
+            "warning_count": len(warnings),
+            "top_warnings": warnings,
+        },
+        "attempt_summary": {
+            "attempt_history_id": dashboard["attempt_history_id"],
+            "planned_attempt_count": dashboard["planned_attempt_count"],
+        },
+        "recommended_next_action": next_action,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_review(review, chain)
+    return review
+
+
+def validate_execution_review(review: dict[str, Any], planning_chain: dict[str, Any] | None = None) -> None:
+    required = (
+        "execution_review_version", "execution_review_id", "planning_chain_id",
+        "execution_package_id", "dashboard_summary_id", "gate_stack_preview_id",
+        "approval_checklist_id", "readiness_summary", "gate_summary",
+        "approval_summary", "blocker_summary", "warning_summary", "attempt_summary",
+        "recommended_next_action", "dry_run", "write_allowed", "automation_allowed",
+        "metadata", "writes",
+    )
+    missing = [field for field in required if field not in review]
+    if missing:
+        raise ValueError(f"execution review missing fields: {missing}")
+    if review["execution_review_version"] != EXECUTION_REVIEW_VERSION:
+        raise ValueError("unsupported execution review version")
+    _validate_execution_read_only(review, "execution review")
+    for field in (
+        "execution_review_id", "planning_chain_id", "execution_package_id",
+        "dashboard_summary_id", "gate_stack_preview_id", "approval_checklist_id",
+        "recommended_next_action",
+    ):
+        _validate_non_empty_string(review[field], field)
+    readiness = review["readiness_summary"]
+    if not isinstance(readiness, dict):
+        raise TypeError("readiness_summary must be a dict")
+    for field in ("top_upgrade_id", "top_upgrade_title", "readiness_status", "preflight_status", "quality_gate_status"):
+        _validate_non_empty_string(readiness.get(field), f"readiness_summary.{field}")
+    if readiness["readiness_status"] not in {"ready_for_review", "blocked", "needs_evidence"}:
+        raise ValueError("invalid readiness status")
+    if readiness["preflight_status"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid preflight status")
+    if readiness["quality_gate_status"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid quality gate status")
+    _validate_probability_score(readiness.get("quality_score"), "readiness_summary.quality_score")
+    _validate_probability_score(readiness.get("risk_score"), "readiness_summary.risk_score")
+    gate_summary = review["gate_summary"]
+    if not isinstance(gate_summary, dict):
+        raise TypeError("gate_summary must be a dict")
+    for field in ("gate_count", "pass_count", "review_count", "block_count"):
+        if not isinstance(gate_summary.get(field), int) or gate_summary[field] < 0:
+            raise ValueError(f"gate_summary.{field} must be a non-negative integer")
+    if gate_summary["gate_count"] != gate_summary["pass_count"] + gate_summary["review_count"] + gate_summary["block_count"]:
+        raise ValueError("gate summary counts must add up")
+    approval = review["approval_summary"]
+    if not isinstance(approval, dict):
+        raise TypeError("approval_summary must be a dict")
+    _validate_non_empty_string(approval.get("approval_status"), "approval_summary.approval_status")
+    _validate_non_empty_string(approval.get("human_approval_package_id"), "approval_summary.human_approval_package_id")
+    if approval["approval_status"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid approval status")
+    if not isinstance(approval.get("required_approval_count"), int) or approval["required_approval_count"] < 0:
+        raise ValueError("approval_summary.required_approval_count must be a non-negative integer")
+    for section_name, list_name, count_name in (
+        ("blocker_summary", "top_blockers", "blocker_count"),
+        ("warning_summary", "top_warnings", "warning_count"),
+    ):
+        section = review[section_name]
+        if not isinstance(section, dict):
+            raise TypeError(f"{section_name} must be a dict")
+        if not isinstance(section.get(count_name), int) or section[count_name] < 0:
+            raise ValueError(f"{section_name}.{count_name} must be a non-negative integer")
+        values = section.get(list_name)
+        if not isinstance(values, list):
+            raise TypeError(f"{section_name}.{list_name} must be a list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{section_name}.{list_name} must be normalized and sorted")
+        if section[count_name] != len(values):
+            raise ValueError(f"{section_name}.{count_name} must match {list_name}")
+    attempts = review["attempt_summary"]
+    if not isinstance(attempts, dict):
+        raise TypeError("attempt_summary must be a dict")
+    _validate_non_empty_string(attempts.get("attempt_history_id"), "attempt_summary.attempt_history_id")
+    if not isinstance(attempts.get("planned_attempt_count"), int) or attempts["planned_attempt_count"] < 0:
+        raise ValueError("attempt_summary.planned_attempt_count must be a non-negative integer")
+    expected_id = make_execution_review_id(
+        review["planning_chain_id"],
+        review["execution_package_id"],
+        review["dashboard_summary_id"],
+        review["gate_stack_preview_id"],
+        review["approval_checklist_id"],
+    )
+    if review["execution_review_id"] != expected_id:
+        raise ValueError("execution review id does not match contents")
+    if planning_chain is not None:
+        validate_growth_planning_chain_preview(planning_chain)
+        dashboard = planning_chain["execution_readiness_dashboard_summary"]
+        gate_stack = planning_chain["execution_gate_stack_preview"]
+        checklist = collect_execution_approval_checklist(planning_chain)
+        expected_refs = {
+            "planning_chain_id": planning_chain["planning_chain_id"],
+            "execution_package_id": planning_chain["autonomous_execution_package"]["execution_package_id"],
+            "dashboard_summary_id": dashboard["dashboard_summary_id"],
+            "gate_stack_preview_id": gate_stack["gate_stack_preview_id"],
+            "approval_checklist_id": checklist["approval_checklist_id"],
+        }
+        for field, value in expected_refs.items():
+            if review[field] != value:
+                raise ValueError(f"execution review {field} does not match planning chain")
+        if review["readiness_summary"]["readiness_status"] != dashboard["readiness_status"]:
+            raise ValueError("execution review readiness status does not match dashboard")
+        if review["gate_summary"]["gate_count"] != gate_stack["gate_count"]:
+            raise ValueError("execution review gate count does not match gate stack")
+        if review["approval_summary"]["approval_status"] != checklist["approval_status"]:
+            raise ValueError("execution review approval status does not match checklist")
+
+
+def stable_execution_review_json(review: dict[str, Any]) -> str:
+    validate_execution_review(review)
+    return _stable_ruflo_json(review, indent=2) + "\n"
+
+
+def parse_execution_review_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    review = _json.loads(text)
+    validate_execution_review(review)
+    return review
 
 
 def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:
