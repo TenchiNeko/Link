@@ -7118,6 +7118,127 @@ def check_growth_execution_gates_cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62. Growth execution-approval-checklist CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_execution_approval_checklist_cli() -> None:
+    """execution-approval-checklist exposes only human approval state."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_execution_approval_checklist,
+        collect_growth_planning_chain_preview,
+        execution_approval_checklist_main,
+        parse_execution_approval_checklist_json,
+        stable_execution_approval_checklist_json,
+        validate_execution_approval_checklist,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("execution-approval-checklist" in help_out.getvalue(),
+             "growth help must include execution-approval-checklist")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = execution_approval_checklist_main(["--json"])
+    _require(json_rc == 0, "execution-approval-checklist --json must return 0")
+    parsed = parse_execution_approval_checklist_json(json_out.getvalue())
+    validate_execution_approval_checklist(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected = collect_execution_approval_checklist(chain)
+    validate_execution_approval_checklist(parsed, chain)
+    _require(parsed["approval_checklist_id"] == expected["approval_checklist_id"],
+             "execution approval checklist id must be deterministic")
+    _require(parsed == parse_execution_approval_checklist_json(stable_execution_approval_checklist_json(parsed)),
+             "execution approval checklist JSON must round trip")
+    _require(parsed["planning_chain_id"] == chain["planning_chain_id"],
+             "execution approval checklist must reference planning chain")
+    _require(parsed["execution_package_id"] == chain["autonomous_execution_package"]["execution_package_id"],
+             "execution approval checklist must reference execution package")
+    _require(parsed["human_approval_package_id"] == chain["human_approval_package"]["approval_package_id"],
+             "execution approval checklist must reference human approval package")
+    _require(parsed["gate_stack_preview_id"] == chain["execution_gate_stack_preview"]["gate_stack_preview_id"],
+             "execution approval checklist must reference gate stack")
+    _require(parsed["required_approvals"] == sorted(chain["human_approval_package"]["required_approvals"]),
+             "execution approval checklist must preserve required approvals")
+    _require(parsed["approval_status"] in {"pass", "review", "block"},
+             "execution approval checklist status must be bounded")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "execution approval checklist must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "execution approval checklist must not allow automation or writes")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_gate_stack_preview",
+        "human_approval_package",
+        "planning_chain_review_bundle",
+    ):
+        _require(full_chain_key not in parsed,
+                 "execution-approval-checklist --json must output only approval checklist")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["execution-approval-checklist", "--json"])
+    routed = parse_execution_approval_checklist_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth execution-approval-checklist --json route must return 0")
+    _require(routed["approval_checklist_id"] == parsed["approval_checklist_id"],
+             "growth execution-approval-checklist route must preserve deterministic checklist id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = execution_approval_checklist_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "execution-approval-checklist human mode must return 0")
+    for needle in (
+        "Growth execution approval checklist",
+        "approval_checklist_id:",
+        "planning_chain_id:",
+        "execution_package_id:",
+        "required_approval_count:",
+        "blocker_count:",
+        "warning_count:",
+        "approval_status:",
+        "next_action:",
+    ):
+        _require(needle in human, f"execution-approval-checklist human mode must include {needle}")
+    _require(len(human.splitlines()) <= 9,
+             "execution-approval-checklist human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = execution_approval_checklist_main(["--write"])
+    _require(write_rc != 0, "execution-approval-checklist --write must be rejected")
+    _require("--write is not supported" in write_err.getvalue(),
+             "execution-approval-checklist --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "execution-approval-checklist --write must not print normal output")
+
+    bad_missing = dict(parsed)
+    bad_missing.pop("approval_checklist_id")
+    try:
+        validate_execution_approval_checklist(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("execution approval checklist must reject missing id")
+
+    bad_writes = dict(parsed)
+    bad_writes["writes"] = [".link/execution-approval-checklist.json"]
+    try:
+        validate_execution_approval_checklist(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("execution approval checklist must reject writes")
+
+    print("growth execution-approval-checklist CLI OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Growth planning-chain review bundle helper
 # ---------------------------------------------------------------------------
 
@@ -8896,6 +9017,7 @@ def main() -> None:
     check_growth_planning_chain_cli()
     check_growth_execution_readiness_cli()
     check_growth_execution_gates_cli()
+    check_growth_execution_approval_checklist_cli()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
     check_execution_journal_schema_helper()

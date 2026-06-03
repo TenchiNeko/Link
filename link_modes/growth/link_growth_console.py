@@ -10099,6 +10099,31 @@ def execution_gates_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def execution_approval_checklist_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth execution-approval-checklist`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth execution-approval-checklist: compact human approval checklist")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth execution-approval-checklist")
+        print("  python3 link.py growth execution-approval-checklist --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth execution-approval-checklist is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    checklist = collect_execution_approval_checklist(chain)
+    validate_execution_approval_checklist(checklist, chain)
+    if "--json" in args:
+        print(stable_execution_approval_checklist_json(checklist), end="")
+        return 0
+    render_execution_approval_checklist_plain(checklist)
+    return 0
+
+
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     validate_growth_planning_chain_preview(chain)
     gap_counts = chain["capability_gap_preview"]["counts"]
@@ -10169,6 +10194,19 @@ def render_execution_gates_plain(preview: dict[str, Any]) -> None:
     print(f"top_blocker_count: {len(blockers)}")
     print(f"top_warning_count: {len(warnings)}")
     print(f"next_action: {preview['recommended_next_action']}")
+
+
+def render_execution_approval_checklist_plain(checklist: dict[str, Any]) -> None:
+    validate_execution_approval_checklist(checklist)
+    print("Growth execution approval checklist")
+    print(f"approval_checklist_id: {checklist['approval_checklist_id']}")
+    print(f"planning_chain_id: {checklist['planning_chain_id']}")
+    print(f"execution_package_id: {checklist['execution_package_id']}")
+    print(f"required_approval_count: {len(checklist['required_approvals'])}")
+    print(f"blocker_count: {len(checklist['approval_blockers'])}")
+    print(f"warning_count: {len(checklist['approval_warnings'])}")
+    print(f"approval_status: {checklist['approval_status']}")
+    print(f"next_action: {checklist['recommended_next_action']}")
 
 
 VERIFIED_PATCH_PLAN_VERSION = "link-verified-patch-plan-v1"
@@ -13088,6 +13126,191 @@ def parse_execution_gate_stack_preview_json(text: str) -> dict[str, Any]:
     preview = _json.loads(text)
     validate_execution_gate_stack_preview(preview)
     return preview
+
+
+EXECUTION_APPROVAL_CHECKLIST_VERSION = "link-execution-approval-checklist-v1"
+
+
+def make_execution_approval_checklist_id(
+    planning_chain_id: str,
+    execution_package_id: str,
+    human_approval_package_id: str,
+    gate_stack_preview_id: str,
+    required_approvals: list[str],
+    approval_blockers: list[str],
+    approval_warnings: list[str],
+) -> str:
+    return _execution_readiness_id("execution-approval-checklist", {
+        "approval_blockers": approval_blockers,
+        "approval_warnings": approval_warnings,
+        "execution_package_id": execution_package_id,
+        "gate_stack_preview_id": gate_stack_preview_id,
+        "human_approval_package_id": human_approval_package_id,
+        "planning_chain_id": planning_chain_id,
+        "required_approvals": required_approvals,
+        "version": EXECUTION_APPROVAL_CHECKLIST_VERSION,
+    })
+
+
+def _execution_approval_human_gate(gate_stack: dict[str, Any]) -> dict[str, Any]:
+    human_gates = [gate for gate in gate_stack["gates"] if gate["gate_type"] == "human_approval"]
+    if len(human_gates) != 1:
+        raise ValueError("execution approval checklist requires exactly one human approval gate")
+    return human_gates[0]
+
+
+def collect_execution_approval_checklist(
+    planning_chain: dict[str, Any] | None = None,
+    *,
+    human_approval_package: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a human approval checklist without enabling execution."""
+    chain = planning_chain if planning_chain is not None else collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(chain)
+    approval = human_approval_package if human_approval_package is not None else chain["human_approval_package"]
+    gate_stack = execution_gate_stack_preview if execution_gate_stack_preview is not None else chain["execution_gate_stack_preview"]
+    validate_human_approval_package(approval)
+    validate_execution_gate_stack_preview(gate_stack, chain)
+    human_gate = _execution_approval_human_gate(gate_stack)
+
+    required_approvals = _normalize_patch_behavior_text_list(approval["required_approvals"])
+    approval_blockers = _normalize_patch_behavior_text_list([
+        *approval["blocking_concerns"],
+        *human_gate["blockers"],
+    ]) if (approval["blocking_concerns"] or human_gate["blockers"]) else []
+    approval_warnings = _normalize_patch_behavior_text_list([
+        *approval["risk_summary"],
+        *human_gate["warnings"],
+        *(approval["required_approvals"] if approval["recommended_human_decision"] != "approve" else []),
+    ]) if (approval["risk_summary"] or human_gate["warnings"] or approval["recommended_human_decision"] != "approve") else []
+    if approval_blockers or human_gate["pass_status"] == "block" or approval["recommended_human_decision"] == "reject":
+        approval_status = "block"
+    elif approval_warnings or human_gate["pass_status"] == "review" or approval["recommended_human_decision"] == "revise":
+        approval_status = "review"
+    else:
+        approval_status = "pass"
+    if approval_status == "block":
+        next_action = "Resolve approval blockers before any workspace, branch, patch, or verification execution."
+    elif approval_status == "review":
+        next_action = "Present the approval checklist to a human reviewer; execution remains disabled until explicit approval."
+    else:
+        next_action = "Approval checklist is clear for human review; execution remains disabled until explicitly approved."
+    checklist = {
+        "approval_checklist_version": EXECUTION_APPROVAL_CHECKLIST_VERSION,
+        "approval_checklist_id": make_execution_approval_checklist_id(
+            chain["planning_chain_id"],
+            chain["autonomous_execution_package"]["execution_package_id"],
+            approval["approval_package_id"],
+            gate_stack["gate_stack_preview_id"],
+            required_approvals,
+            approval_blockers,
+            approval_warnings,
+        ),
+        "planning_chain_id": chain["planning_chain_id"],
+        "execution_package_id": chain["autonomous_execution_package"]["execution_package_id"],
+        "human_approval_package_id": approval["approval_package_id"],
+        "gate_stack_preview_id": gate_stack["gate_stack_preview_id"],
+        "required_approvals": required_approvals,
+        "approval_blockers": approval_blockers,
+        "approval_warnings": approval_warnings,
+        "approval_status": approval_status,
+        "recommended_next_action": next_action,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_approval_checklist(checklist, chain)
+    return checklist
+
+
+def validate_execution_approval_checklist(
+    checklist: dict[str, Any],
+    planning_chain: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "approval_checklist_version", "approval_checklist_id", "planning_chain_id",
+        "execution_package_id", "human_approval_package_id", "gate_stack_preview_id",
+        "required_approvals", "approval_blockers", "approval_warnings",
+        "approval_status", "recommended_next_action", "dry_run", "write_allowed",
+        "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in checklist]
+    if missing:
+        raise ValueError(f"execution approval checklist missing fields: {missing}")
+    if checklist["approval_checklist_version"] != EXECUTION_APPROVAL_CHECKLIST_VERSION:
+        raise ValueError("unsupported execution approval checklist version")
+    _validate_execution_read_only(checklist, "execution approval checklist")
+    for field in (
+        "approval_checklist_id", "planning_chain_id", "execution_package_id",
+        "human_approval_package_id", "gate_stack_preview_id", "approval_status",
+        "recommended_next_action",
+    ):
+        _validate_non_empty_string(checklist[field], field)
+    if checklist["approval_status"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid approval_status")
+    for field in ("required_approvals", "approval_blockers", "approval_warnings"):
+        values = checklist[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if field == "required_approvals" and not values:
+            raise ValueError("required_approvals must not be empty")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if checklist["approval_blockers"] and checklist["approval_status"] != "block":
+        raise ValueError("approval blockers must produce block status")
+    if checklist["approval_status"] == "pass" and checklist["approval_warnings"]:
+        raise ValueError("approval warnings must not produce pass status")
+    expected_id = make_execution_approval_checklist_id(
+        checklist["planning_chain_id"],
+        checklist["execution_package_id"],
+        checklist["human_approval_package_id"],
+        checklist["gate_stack_preview_id"],
+        checklist["required_approvals"],
+        checklist["approval_blockers"],
+        checklist["approval_warnings"],
+    )
+    if checklist["approval_checklist_id"] != expected_id:
+        raise ValueError("execution approval checklist id does not match contents")
+    if planning_chain is not None:
+        validate_growth_planning_chain_preview(planning_chain)
+        approval = planning_chain["human_approval_package"]
+        gate_stack = planning_chain["execution_gate_stack_preview"]
+        expected_refs = {
+            "planning_chain_id": planning_chain["planning_chain_id"],
+            "execution_package_id": planning_chain["autonomous_execution_package"]["execution_package_id"],
+            "human_approval_package_id": approval["approval_package_id"],
+            "gate_stack_preview_id": gate_stack["gate_stack_preview_id"],
+        }
+        for field, value in expected_refs.items():
+            if checklist[field] != value:
+                raise ValueError(f"execution approval checklist {field} does not match planning chain")
+        human_gate = _execution_approval_human_gate(gate_stack)
+        expected_required = _normalize_patch_behavior_text_list(approval["required_approvals"])
+        expected_blockers = _normalize_patch_behavior_text_list([
+            *approval["blocking_concerns"],
+            *human_gate["blockers"],
+        ]) if (approval["blocking_concerns"] or human_gate["blockers"]) else []
+        if checklist["required_approvals"] != expected_required:
+            raise ValueError("execution approval checklist required approvals do not match planning chain")
+        if checklist["approval_blockers"] != expected_blockers:
+            raise ValueError("execution approval checklist blockers do not match planning chain")
+
+
+def stable_execution_approval_checklist_json(checklist: dict[str, Any]) -> str:
+    validate_execution_approval_checklist(checklist)
+    return _stable_ruflo_json(checklist, indent=2) + "\n"
+
+
+def parse_execution_approval_checklist_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    checklist = _json.loads(text)
+    validate_execution_approval_checklist(checklist)
+    return checklist
 
 
 def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:
