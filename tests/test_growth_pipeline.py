@@ -7371,6 +7371,134 @@ def check_growth_execution_review_cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62. Workspace creator runtime boundary helper
+# ---------------------------------------------------------------------------
+
+def check_workspace_creator_runtime_boundary_helper() -> None:
+    """workspace creator boundary stays read-only before runtime creation."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_approval_checklist,
+        collect_execution_review,
+        collect_growth_planning_chain_preview,
+        collect_workspace_creator_runtime_boundary,
+        parse_workspace_creator_runtime_boundary_json,
+        stable_workspace_creator_runtime_boundary_json,
+        validate_workspace_creator_runtime_boundary,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    boundary = collect_workspace_creator_runtime_boundary(chain, metadata={"suite": "growth"})
+    same = collect_workspace_creator_runtime_boundary(chain, metadata={"suite": "growth"})
+    _require(boundary["workspace_boundary_id"] == same["workspace_boundary_id"],
+             "workspace boundary id must be deterministic")
+    decoded = parse_workspace_creator_runtime_boundary_json(stable_workspace_creator_runtime_boundary_json(boundary))
+    _require(decoded == boundary, "workspace boundary JSON must round trip")
+    validate_workspace_creator_runtime_boundary(boundary, chain)
+
+    review = collect_execution_review(chain)
+    approval = collect_execution_approval_checklist(chain)
+    _require(boundary["planning_chain_id"] == chain["planning_chain_id"],
+             "workspace boundary must reference planning chain")
+    _require(boundary["execution_package_id"] == chain["autonomous_execution_package"]["execution_package_id"],
+             "workspace boundary must reference execution package")
+    _require(boundary["branch_plan_id"] == chain["implementation_branch_plan"]["branch_plan_id"],
+             "workspace boundary must reference branch plan")
+    _require(boundary["execution_review_id"] == review["execution_review_id"],
+             "workspace boundary must reference execution review")
+    _require(boundary["gate_stack_preview_id"] == chain["execution_gate_stack_preview"]["gate_stack_preview_id"],
+             "workspace boundary must reference gate stack")
+    _require(boundary["preflight_checklist_id"] == chain["execution_preflight_checklist"]["preflight_checklist_id"],
+             "workspace boundary must reference preflight checklist")
+    _require(boundary["approval_checklist_id"] == approval["approval_checklist_id"],
+             "workspace boundary must reference approval checklist")
+    _require(boundary["attempt_history_id"] == chain["execution_attempt_history"]["attempt_history_id"],
+             "workspace boundary must reference attempt history")
+    _require(boundary["execution_evidence_contract_id"] == chain["execution_evidence_contract"]["execution_evidence_contract_id"],
+             "workspace boundary must reference evidence contract")
+    _require(boundary["target_branch_name"] == chain["execution_workspace_plan"]["proposed_branch_name"],
+             "workspace boundary must preserve target branch name")
+    _require(boundary["cleanup_policy"] == chain["execution_workspace_plan"]["cleanup_policy"],
+             "workspace boundary must preserve cleanup policy")
+    _require(boundary["rollback_policy"] == chain["execution_workspace_plan"]["rollback_policy"],
+             "workspace boundary must preserve rollback policy")
+    _require(boundary["required_approvals"] == approval["required_approvals"],
+             "workspace boundary must preserve required approvals")
+    evidence_types = sorted({item["evidence_type"] for item in chain["execution_evidence_contract"]["evidence_items"]})
+    _require(boundary["required_evidence"] == evidence_types,
+             "workspace boundary must preserve required evidence types")
+    _require(boundary["isolation_rules"], "workspace boundary must include isolation rules")
+    _require(boundary["pre_creation_checks"], "workspace boundary must include pre-creation checks")
+    for forbidden in (
+        "apply patches",
+        "create branches",
+        "create directories",
+        "create git worktrees",
+        "execute verification commands",
+        "modify runtime state",
+        "run subprocesses",
+    ):
+        _require(forbidden in boundary["forbidden_operations"],
+                 f"workspace boundary must forbid {forbidden}")
+    _require(not (set(boundary["allowed_operations"]) & set(boundary["forbidden_operations"])),
+             "workspace boundary allowed operations must not overlap forbidden operations")
+    _require(boundary["boundary_status"] in {"pass", "review", "block"},
+             "workspace boundary status must be bounded")
+    _require(boundary["blocker_count"] >= 0 and boundary["warning_count"] >= 0,
+             "workspace boundary must count blockers and warnings")
+    _require(boundary["dry_run"] is True and boundary["write_allowed"] is False,
+             "workspace boundary must remain read-only")
+    _require(boundary["automation_allowed"] is False and boundary["writes"] == [],
+             "workspace boundary must not allow automation or writes")
+
+    bad_missing = dict(boundary)
+    bad_missing.pop("workspace_boundary_id")
+    try:
+        validate_workspace_creator_runtime_boundary(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace boundary must reject missing id")
+
+    bad_overlap = dict(boundary)
+    bad_overlap["allowed_operations"] = sorted([*boundary["allowed_operations"], "create directories"])
+    try:
+        validate_workspace_creator_runtime_boundary(bad_overlap)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace boundary must reject allowed/forbidden overlap")
+
+    bad_status = dict(boundary)
+    bad_status["boundary_status"] = "maybe"
+    try:
+        validate_workspace_creator_runtime_boundary(bad_status)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace boundary must reject invalid status")
+
+    bad_writes = dict(boundary)
+    bad_writes["writes"] = [".link/worktrees/generated"]
+    try:
+        validate_workspace_creator_runtime_boundary(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace boundary must reject writes")
+
+    bad_link = dict(boundary)
+    bad_link["execution_package_id"] = "wrong-package"
+    try:
+        validate_workspace_creator_runtime_boundary(bad_link, chain)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace boundary must reject ID flow mismatch")
+
+    print("workspace creator runtime boundary helper OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Growth planning-chain review bundle helper
 # ---------------------------------------------------------------------------
 
@@ -9151,6 +9279,7 @@ def main() -> None:
     check_growth_execution_gates_cli()
     check_growth_execution_approval_checklist_cli()
     check_growth_execution_review_cli()
+    check_workspace_creator_runtime_boundary_helper()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
     check_execution_journal_schema_helper()

@@ -13602,6 +13602,282 @@ def parse_execution_review_json(text: str) -> dict[str, Any]:
     return review
 
 
+WORKSPACE_CREATOR_RUNTIME_BOUNDARY_VERSION = "link-workspace-creator-runtime-boundary-v1"
+
+
+def make_workspace_creator_runtime_boundary_id(
+    planning_chain_id: str,
+    execution_package_id: str,
+    execution_review_id: str,
+    gate_stack_preview_id: str,
+    preflight_checklist_id: str,
+    approval_checklist_id: str,
+    target_branch_name: str,
+) -> str:
+    return _execution_readiness_id("workspace-creator-boundary", {
+        "approval_checklist_id": approval_checklist_id,
+        "execution_package_id": execution_package_id,
+        "execution_review_id": execution_review_id,
+        "gate_stack_preview_id": gate_stack_preview_id,
+        "planning_chain_id": planning_chain_id,
+        "preflight_checklist_id": preflight_checklist_id,
+        "target_branch_name": target_branch_name,
+        "version": WORKSPACE_CREATOR_RUNTIME_BOUNDARY_VERSION,
+    })
+
+
+def _workspace_boundary_check_messages(preflight: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+    groups = (
+        "required_human_approvals",
+        "clean_tree_checks",
+        "path_safety_checks",
+        "command_allowlist_checks",
+        "branch_worktree_isolation_checks",
+        "evidence_contract_checks",
+    )
+    checks = [check for group in groups for check in preflight[group]]
+    all_messages = _normalize_patch_behavior_text_list([
+        f"{check['category']}: {check['name']} - {check['requirement']} ({check['status']})"
+        for check in checks
+    ])
+    blockers = _normalize_patch_behavior_text_list([
+        f"{check['category']}: {check['name']} - {check['requirement']}"
+        for check in checks
+        if check["status"] == "block"
+    ])
+    warnings = _normalize_patch_behavior_text_list([
+        f"{check['category']}: {check['name']} - {check['requirement']}"
+        for check in checks
+        if check["status"] == "warning"
+    ])
+    return all_messages, blockers, warnings
+
+
+def collect_workspace_creator_runtime_boundary(
+    planning_chain: dict[str, Any] | None = None,
+    *,
+    execution_review: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_preflight_checklist: dict[str, Any] | None = None,
+    execution_approval_checklist: dict[str, Any] | None = None,
+    execution_attempt_history: dict[str, Any] | None = None,
+    execution_evidence_contract: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Describe the future workspace creation boundary without creating anything."""
+    chain = planning_chain if planning_chain is not None else collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(chain)
+    review = execution_review if execution_review is not None else collect_execution_review(chain)
+    gate_stack = execution_gate_stack_preview if execution_gate_stack_preview is not None else chain["execution_gate_stack_preview"]
+    preflight = execution_preflight_checklist if execution_preflight_checklist is not None else chain["execution_preflight_checklist"]
+    approval = execution_approval_checklist if execution_approval_checklist is not None else collect_execution_approval_checklist(chain)
+    attempts = execution_attempt_history if execution_attempt_history is not None else chain["execution_attempt_history"]
+    evidence_contract = execution_evidence_contract if execution_evidence_contract is not None else chain["execution_evidence_contract"]
+    validate_execution_review(review, chain)
+    validate_execution_gate_stack_preview(gate_stack, chain)
+    validate_execution_preflight_checklist(preflight, chain)
+    validate_execution_approval_checklist(approval, chain)
+    validate_execution_attempt_history(
+        attempts,
+        chain["execution_journal_plan"],
+        chain["execution_retry_policy"],
+        chain["autonomous_execution_package"],
+    )
+    validate_execution_evidence_contract(evidence_contract, chain["execution_journal_plan"])
+
+    workspace = chain["execution_workspace_plan"]
+    branch_plan = chain["implementation_branch_plan"]
+    pre_creation_checks, preflight_blockers, preflight_warnings = _workspace_boundary_check_messages(preflight)
+    review_blockers = review["blocker_summary"]["top_blockers"]
+    review_warnings = review["warning_summary"]["top_warnings"]
+    blocker_count = len(_normalize_patch_behavior_text_list([*preflight_blockers, *review_blockers]))
+    warning_count = len(_normalize_patch_behavior_text_list([*preflight_warnings, *review_warnings]))
+    boundary_status = "block" if blocker_count else ("review" if warning_count else "pass")
+    if boundary_status == "block":
+        next_action = "Resolve workspace boundary blockers before creating any directory, branch, worktree, patch, or verification run."
+    elif boundary_status == "review":
+        next_action = "Review workspace boundary warnings and required approvals before enabling workspace creation."
+    else:
+        next_action = "Workspace creator boundary is clear for human review; workspace creation remains disabled until explicitly approved."
+    allowed_operations = _normalize_patch_behavior_text_list([
+        "collect read-only planning chain payload",
+        "preview deterministic workspace path policy",
+        "review human approval requirements",
+        "validate evidence contract requirements",
+        "validate path and isolation rules",
+    ])
+    forbidden_operations = _normalize_patch_behavior_text_list([
+        "apply patches",
+        "create branches",
+        "create directories",
+        "create git worktrees",
+        "execute verification commands",
+        "modify runtime state",
+        "run subprocesses",
+    ])
+    boundary = {
+        "workspace_boundary_version": WORKSPACE_CREATOR_RUNTIME_BOUNDARY_VERSION,
+        "workspace_boundary_id": make_workspace_creator_runtime_boundary_id(
+            chain["planning_chain_id"],
+            chain["autonomous_execution_package"]["execution_package_id"],
+            review["execution_review_id"],
+            gate_stack["gate_stack_preview_id"],
+            preflight["preflight_checklist_id"],
+            approval["approval_checklist_id"],
+            workspace["proposed_branch_name"],
+        ),
+        "planning_chain_id": chain["planning_chain_id"],
+        "execution_package_id": chain["autonomous_execution_package"]["execution_package_id"],
+        "branch_plan_id": branch_plan["branch_plan_id"],
+        "execution_review_id": review["execution_review_id"],
+        "gate_stack_preview_id": gate_stack["gate_stack_preview_id"],
+        "preflight_checklist_id": preflight["preflight_checklist_id"],
+        "approval_checklist_id": approval["approval_checklist_id"],
+        "attempt_history_id": attempts["attempt_history_id"],
+        "execution_evidence_contract_id": evidence_contract["execution_evidence_contract_id"],
+        "target_branch_name": workspace["proposed_branch_name"],
+        "workspace_root_policy": "future workspaces must live under the reviewed repo .link/worktrees path and this helper must not create them",
+        "worktree_name_policy": "derive the worktree name deterministically from the reviewed execution workspace plan id",
+        "isolation_rules": _normalize_patch_behavior_text_list([
+            "branch creation remains disabled until explicit human approval",
+            "patch application must happen only inside the approved isolated workspace",
+            "target files must stay inside the repository and outside research/runtime state",
+            "verification commands must be allowlisted before execution",
+            "worktree creation remains disabled until explicit human approval",
+        ]),
+        "pre_creation_checks": pre_creation_checks,
+        "cleanup_policy": workspace["cleanup_policy"],
+        "rollback_policy": workspace["rollback_policy"],
+        "required_approvals": approval["required_approvals"],
+        "required_evidence": _normalize_implementation_branch_refs([
+            item["evidence_type"] for item in evidence_contract["evidence_items"]
+        ]),
+        "allowed_operations": allowed_operations,
+        "forbidden_operations": forbidden_operations,
+        "boundary_status": boundary_status,
+        "blocker_count": blocker_count,
+        "warning_count": warning_count,
+        "recommended_next_action": next_action,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_workspace_creator_runtime_boundary(boundary, chain)
+    return boundary
+
+
+def validate_workspace_creator_runtime_boundary(
+    boundary: dict[str, Any],
+    planning_chain: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "workspace_boundary_version", "workspace_boundary_id", "planning_chain_id",
+        "execution_package_id", "branch_plan_id", "execution_review_id",
+        "gate_stack_preview_id", "preflight_checklist_id", "approval_checklist_id",
+        "attempt_history_id", "execution_evidence_contract_id", "target_branch_name",
+        "workspace_root_policy", "worktree_name_policy", "isolation_rules",
+        "pre_creation_checks", "cleanup_policy", "rollback_policy", "required_approvals",
+        "required_evidence", "allowed_operations", "forbidden_operations",
+        "boundary_status", "blocker_count", "warning_count", "recommended_next_action",
+        "dry_run", "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in boundary]
+    if missing:
+        raise ValueError(f"workspace creator runtime boundary missing fields: {missing}")
+    if boundary["workspace_boundary_version"] != WORKSPACE_CREATOR_RUNTIME_BOUNDARY_VERSION:
+        raise ValueError("unsupported workspace creator runtime boundary version")
+    _validate_execution_read_only(boundary, "workspace creator runtime boundary")
+    for field in (
+        "workspace_boundary_id", "planning_chain_id", "execution_package_id",
+        "branch_plan_id", "execution_review_id", "gate_stack_preview_id",
+        "preflight_checklist_id", "approval_checklist_id", "attempt_history_id",
+        "execution_evidence_contract_id", "target_branch_name", "workspace_root_policy",
+        "worktree_name_policy", "cleanup_policy", "rollback_policy", "boundary_status",
+        "recommended_next_action",
+    ):
+        _validate_non_empty_string(boundary[field], field)
+    if boundary["boundary_status"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid workspace boundary status")
+    for field in ("blocker_count", "warning_count"):
+        if not isinstance(boundary[field], int) or boundary[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    for field in (
+        "isolation_rules", "pre_creation_checks", "required_approvals",
+        "required_evidence", "allowed_operations", "forbidden_operations",
+    ):
+        values = boundary[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        expected = _normalize_implementation_branch_refs(values) if field == "required_evidence" else _normalize_patch_behavior_text_list(values)
+        if values != expected:
+            raise ValueError(f"{field} must be normalized and sorted")
+    forbidden_set = set(boundary["forbidden_operations"])
+    if set(boundary["allowed_operations"]) & forbidden_set:
+        raise ValueError("allowed operations must not overlap forbidden operations")
+    required_forbidden = {
+        "apply patches",
+        "create branches",
+        "create directories",
+        "create git worktrees",
+        "execute verification commands",
+        "modify runtime state",
+        "run subprocesses",
+    }
+    if not required_forbidden.issubset(forbidden_set):
+        raise ValueError("workspace boundary missing required forbidden operations")
+    if boundary["blocker_count"] and boundary["boundary_status"] != "block":
+        raise ValueError("workspace boundary blockers must produce block status")
+    if not boundary["blocker_count"] and boundary["warning_count"] and boundary["boundary_status"] != "review":
+        raise ValueError("workspace boundary warnings must produce review status")
+    expected_id = make_workspace_creator_runtime_boundary_id(
+        boundary["planning_chain_id"],
+        boundary["execution_package_id"],
+        boundary["execution_review_id"],
+        boundary["gate_stack_preview_id"],
+        boundary["preflight_checklist_id"],
+        boundary["approval_checklist_id"],
+        boundary["target_branch_name"],
+    )
+    if boundary["workspace_boundary_id"] != expected_id:
+        raise ValueError("workspace creator runtime boundary id does not match contents")
+    if planning_chain is not None:
+        validate_growth_planning_chain_preview(planning_chain)
+        review = collect_execution_review(planning_chain)
+        approval = collect_execution_approval_checklist(planning_chain)
+        expected_refs = {
+            "planning_chain_id": planning_chain["planning_chain_id"],
+            "execution_package_id": planning_chain["autonomous_execution_package"]["execution_package_id"],
+            "branch_plan_id": planning_chain["implementation_branch_plan"]["branch_plan_id"],
+            "execution_review_id": review["execution_review_id"],
+            "gate_stack_preview_id": planning_chain["execution_gate_stack_preview"]["gate_stack_preview_id"],
+            "preflight_checklist_id": planning_chain["execution_preflight_checklist"]["preflight_checklist_id"],
+            "approval_checklist_id": approval["approval_checklist_id"],
+            "attempt_history_id": planning_chain["execution_attempt_history"]["attempt_history_id"],
+            "execution_evidence_contract_id": planning_chain["execution_evidence_contract"]["execution_evidence_contract_id"],
+            "target_branch_name": planning_chain["execution_workspace_plan"]["proposed_branch_name"],
+        }
+        for field, value in expected_refs.items():
+            if boundary[field] != value:
+                raise ValueError(f"workspace creator runtime boundary {field} does not match planning chain")
+        if boundary["required_approvals"] != approval["required_approvals"]:
+            raise ValueError("workspace boundary required approvals do not match approval checklist")
+
+
+def stable_workspace_creator_runtime_boundary_json(boundary: dict[str, Any]) -> str:
+    validate_workspace_creator_runtime_boundary(boundary)
+    return _stable_ruflo_json(boundary, indent=2) + "\n"
+
+
+def parse_workspace_creator_runtime_boundary_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    boundary = _json.loads(text)
+    validate_workspace_creator_runtime_boundary(boundary)
+    return boundary
+
+
 def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:
     import hashlib
 
