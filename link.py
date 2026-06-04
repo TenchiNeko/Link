@@ -447,6 +447,14 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import execution_review_main as _growth_execution_review_main
 
         return _growth_execution_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "workspace-boundary":
+        from link_modes.growth.link_growth_console import workspace_boundary_main as _growth_workspace_boundary_main
+
+        return _growth_workspace_boundary_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "workspace-create":
+        from link_modes.growth.link_growth_console import workspace_create_main as _growth_workspace_create_main
+
+        return _growth_workspace_create_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "run":
         from link_modes.growth.link_growth_console import run_main as _growth_run_main
 
@@ -478,6 +486,8 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  execution-gates    Preview execution gate stack")
         print("  execution-approval-checklist Preview human approval checklist")
         print("  execution-review   Preview compact execution review")
+        print("  workspace-boundary Preview workspace creator runtime boundary")
+        print("  workspace-create   Create guarded temporary workspace with approval")
         print("  run                Guided Growth workflow dashboard")
         return 0
     print(f"growth: unknown subcommand: {subcommand}", file=sys.stderr)

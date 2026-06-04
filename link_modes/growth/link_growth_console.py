@@ -10149,6 +10149,97 @@ def execution_review_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def workspace_boundary_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth workspace-boundary`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth workspace-boundary: workspace creator runtime boundary")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth workspace-boundary")
+        print("  python3 link.py growth workspace-boundary --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth workspace-boundary is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    boundary = collect_workspace_creator_runtime_boundary(chain)
+    validate_workspace_creator_runtime_boundary(boundary, chain)
+    if "--json" in args:
+        print(stable_workspace_creator_runtime_boundary_json(boundary), end="")
+        return 0
+    render_workspace_boundary_plain(boundary)
+    return 0
+
+
+def _workspace_create_arg_value(args: list[str], name: str) -> str | None:
+    if name not in args:
+        return None
+    index = args.index(name)
+    if index + 1 >= len(args):
+        raise ValueError(f"{name} requires a value")
+    return args[index + 1]
+
+
+def workspace_create_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth workspace-create`` guarded runtime component."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth workspace-create: guarded temporary workspace creator")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth workspace-create")
+        print("  python3 link.py growth workspace-create --json")
+        print("  python3 link.py growth workspace-create --write --approved --json")
+        print("")
+        print("Preview by default. --write requires --approved and passing runtime gates.")
+        return 0
+    try:
+        workspace_root = _workspace_create_arg_value(args, "--workspace-root")
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    write = "--write" in args
+    approved = "--approved" in args
+    chain = collect_growth_planning_chain_preview()
+    runtime_plan = collect_workspace_creator_runtime_plan(chain)
+    review = collect_execution_review(chain)
+    gate_stack = chain["execution_gate_stack_preview"]
+    approval = collect_execution_approval_checklist(chain)
+    preflight = chain["execution_preflight_checklist"]
+    try:
+        request = make_guarded_workspace_request(
+            runtime_plan,
+            approved=approved,
+            write=write,
+            workspace_root=workspace_root,
+        )
+        if write:
+            receipt = create_guarded_workspace(
+                request,
+                runtime_plan,
+                execution_review=review,
+                execution_gate_stack_preview=gate_stack,
+                execution_approval_checklist=approval,
+                execution_preflight_checklist=preflight,
+            )
+        else:
+            receipt = preview_guarded_workspace_creation(request, runtime_plan)
+    except PermissionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except FileExistsError as exc:
+        print(f"error: workspace already exists: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_workspace_creation_receipt_json(receipt), end="")
+        return 0
+    render_workspace_creation_receipt_plain(receipt)
+    return 0
+
+
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     validate_growth_planning_chain_preview(chain)
     gap_counts = chain["capability_gap_preview"]["counts"]
@@ -10249,6 +10340,33 @@ def render_execution_review_plain(review: dict[str, Any]) -> None:
     print(f"warning_count: {review['warning_summary']['warning_count']}")
     print(f"planned_attempt_count: {review['attempt_summary']['planned_attempt_count']}")
     print(f"next_action: {review['recommended_next_action']}")
+
+
+def render_workspace_boundary_plain(boundary: dict[str, Any]) -> None:
+    validate_workspace_creator_runtime_boundary(boundary)
+    print("Growth workspace boundary")
+    print(f"workspace_boundary_id: {boundary['workspace_boundary_id']}")
+    print(f"planning_chain_id: {boundary['planning_chain_id']}")
+    print(f"execution_package_id: {boundary['execution_package_id']}")
+    print(f"boundary_status: {boundary['boundary_status']}")
+    print(f"blocker_count: {boundary['blocker_count']}")
+    print(f"warning_count: {boundary['warning_count']}")
+    print(f"required_approval_count: {len(boundary['required_approvals'])}")
+    print(f"required_evidence_count: {len(boundary['required_evidence'])}")
+    print(f"next_action: {boundary['recommended_next_action']}")
+
+
+def render_workspace_creation_receipt_plain(receipt: dict[str, Any]) -> None:
+    validate_workspace_creation_receipt(receipt)
+    print("Growth workspace creation")
+    print(f"creation_receipt_id: {receipt['creation_receipt_id']}")
+    print(f"workspace_id: {receipt['workspace_id']}")
+    print(f"workspace_path: {receipt['workspace_path']}")
+    print(f"status: {receipt['status']}")
+    print(f"runtime_workspace_plan_id: {receipt['runtime_workspace_plan_id']}")
+    print(f"workspace_boundary_id: {receipt['workspace_boundary_id']}")
+    print(f"manifest_hash: {receipt['manifest_hash']}")
+    print(f"workspace_hash: {receipt['workspace_hash']}")
 
 
 VERIFIED_PATCH_PLAN_VERSION = "link-verified-patch-plan-v1"
@@ -13876,6 +13994,780 @@ def parse_workspace_creator_runtime_boundary_json(text: str) -> dict[str, Any]:
     boundary = _json.loads(text)
     validate_workspace_creator_runtime_boundary(boundary)
     return boundary
+
+
+WORKSPACE_CREATOR_RUNTIME_PLAN_VERSION = "link-workspace-creator-runtime-plan-v1"
+
+
+def make_workspace_creator_runtime_plan_id(
+    planning_chain_id: str,
+    execution_package_id: str,
+    workspace_boundary_id: str,
+    execution_review_id: str,
+    gate_stack_preview_id: str,
+    approval_checklist_id: str,
+    preflight_checklist_id: str,
+    branch_name: str,
+) -> str:
+    return _execution_readiness_id("workspace-creator-runtime-plan", {
+        "approval_checklist_id": approval_checklist_id,
+        "branch_name": branch_name,
+        "execution_package_id": execution_package_id,
+        "execution_review_id": execution_review_id,
+        "gate_stack_preview_id": gate_stack_preview_id,
+        "planning_chain_id": planning_chain_id,
+        "preflight_checklist_id": preflight_checklist_id,
+        "version": WORKSPACE_CREATOR_RUNTIME_PLAN_VERSION,
+        "workspace_boundary_id": workspace_boundary_id,
+    })
+
+
+def _workspace_runtime_gate_requirements(gate_stack: dict[str, Any]) -> list[str]:
+    return _normalize_patch_behavior_text_list([
+        f"{gate['gate_type']}: {gate['gate_name']} must be {gate['pass_status']} before workspace creation"
+        for gate in gate_stack["gates"]
+    ])
+
+
+def _workspace_runtime_clean_tree_requirements(preflight: dict[str, Any]) -> list[str]:
+    return _normalize_patch_behavior_text_list([
+        f"{check['name']}: {check['requirement']} ({check['status']})"
+        for check in preflight["clean_tree_checks"]
+    ])
+
+
+def _workspace_runtime_command_allowlist_requirements(preflight: dict[str, Any]) -> list[str]:
+    return _normalize_patch_behavior_text_list([
+        f"{check['name']}: {check['requirement']} ({check['status']})"
+        for check in preflight["command_allowlist_checks"]
+    ])
+
+
+def collect_workspace_creator_runtime_plan(
+    planning_chain: dict[str, Any] | None = None,
+    *,
+    workspace_creator_runtime_boundary: dict[str, Any] | None = None,
+    execution_review: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_approval_checklist: dict[str, Any] | None = None,
+    execution_preflight_checklist: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the disabled runtime specification for future workspace creation."""
+    chain = planning_chain if planning_chain is not None else collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(chain)
+    boundary = workspace_creator_runtime_boundary if workspace_creator_runtime_boundary is not None else collect_workspace_creator_runtime_boundary(chain)
+    review = execution_review if execution_review is not None else collect_execution_review(chain)
+    gate_stack = execution_gate_stack_preview if execution_gate_stack_preview is not None else chain["execution_gate_stack_preview"]
+    approval = execution_approval_checklist if execution_approval_checklist is not None else collect_execution_approval_checklist(chain)
+    preflight = execution_preflight_checklist if execution_preflight_checklist is not None else chain["execution_preflight_checklist"]
+    validate_workspace_creator_runtime_boundary(boundary, chain)
+    validate_execution_review(review, chain)
+    validate_execution_gate_stack_preview(gate_stack, chain)
+    validate_execution_approval_checklist(approval, chain)
+    validate_execution_preflight_checklist(preflight, chain)
+
+    branch_name = boundary["target_branch_name"]
+    workspace_name = f"workspace-{boundary['workspace_boundary_id'].split('-')[-1]}"
+    gate_requirements = _workspace_runtime_gate_requirements(gate_stack)
+    clean_tree_requirements = _workspace_runtime_clean_tree_requirements(preflight)
+    command_allowlist_requirements = _workspace_runtime_command_allowlist_requirements(preflight)
+    evidence_requirements = boundary["required_evidence"]
+    approval_requirements = boundary["required_approvals"]
+    allowed_runtime_actions = _normalize_patch_behavior_text_list([
+        "derive deterministic workspace name",
+        "prepare disabled runtime contract",
+        "validate approval requirements",
+        "validate gate requirements",
+        "validate read-only boundary inputs",
+    ])
+    forbidden_runtime_actions = _normalize_patch_behavior_text_list([
+        "apply patches",
+        "create branches",
+        "create directories",
+        "create git worktrees",
+        "execute verification commands",
+        "modify runtime state",
+        "run subprocesses",
+    ])
+    failure_states = _normalize_patch_behavior_text_list([
+        "approval missing",
+        "boundary blocked",
+        "clean tree check failed",
+        "command allowlist missing",
+        "evidence contract incomplete",
+        "gate stack blocked",
+        "path isolation failed",
+    ])
+    rollback_triggers = _normalize_patch_behavior_text_list([
+        "branch or worktree creation attempted outside approved runtime",
+        "evidence contract cannot be satisfied",
+        "pre-creation checks report block status",
+        "workspace path would escape repository policy",
+    ])
+    cleanup_triggers = _normalize_patch_behavior_text_list([
+        "future workspace creation aborts before patch application",
+        "future workspace verification fails before review bundle creation",
+        "human approval is revoked before runtime execution",
+    ])
+    escalation_requirements = _normalize_patch_behavior_text_list([
+        "Brandon approval is required before enabling any workspace creation action",
+        "blocked gate stack requires human review before runtime execution",
+        "missing evidence requirements require review before runtime execution",
+    ])
+    expected_outputs = _normalize_patch_behavior_text_list([
+        "approved workspace path plan",
+        "isolated branch or worktree identifier once future execution is explicitly enabled",
+        "workspace creation evidence refs once future execution is explicitly enabled",
+    ])
+    plan_status = "block" if boundary["boundary_status"] == "block" else ("review" if boundary["boundary_status"] == "review" else "pass")
+    if plan_status == "block":
+        next_action = "Resolve runtime workspace plan blockers before enabling any workspace creation component."
+    elif plan_status == "review":
+        next_action = "Review runtime workspace plan warnings and approval requirements before enabling workspace creation."
+    else:
+        next_action = "Runtime workspace plan is ready for human review; execution remains disabled until explicitly approved."
+
+    plan = {
+        "workspace_creator_runtime_plan_version": WORKSPACE_CREATOR_RUNTIME_PLAN_VERSION,
+        "runtime_workspace_plan_id": make_workspace_creator_runtime_plan_id(
+            chain["planning_chain_id"],
+            boundary["execution_package_id"],
+            boundary["workspace_boundary_id"],
+            review["execution_review_id"],
+            gate_stack["gate_stack_preview_id"],
+            approval["approval_checklist_id"],
+            preflight["preflight_checklist_id"],
+            branch_name,
+        ),
+        "planning_chain_id": chain["planning_chain_id"],
+        "execution_package_id": boundary["execution_package_id"],
+        "workspace_boundary_id": boundary["workspace_boundary_id"],
+        "execution_review_id": review["execution_review_id"],
+        "gate_stack_preview_id": gate_stack["gate_stack_preview_id"],
+        "approval_checklist_id": approval["approval_checklist_id"],
+        "preflight_checklist_id": preflight["preflight_checklist_id"],
+        "workspace_root": ".link/worktrees",
+        "workspace_name": workspace_name,
+        "branch_name": branch_name,
+        "workspace_type": "git_worktree_planned",
+        "isolation_mode": "disabled_until_explicit_human_approval",
+        "cleanup_policy": boundary["cleanup_policy"],
+        "rollback_policy": boundary["rollback_policy"],
+        "approval_requirements": approval_requirements,
+        "gate_requirements": gate_requirements,
+        "evidence_requirements": evidence_requirements,
+        "clean_tree_requirements": clean_tree_requirements,
+        "command_allowlist_requirements": command_allowlist_requirements,
+        "failure_states": failure_states,
+        "rollback_triggers": rollback_triggers,
+        "cleanup_triggers": cleanup_triggers,
+        "escalation_requirements": escalation_requirements,
+        "allowed_runtime_actions": allowed_runtime_actions,
+        "forbidden_runtime_actions": forbidden_runtime_actions,
+        "expected_outputs": expected_outputs,
+        "required_evidence": evidence_requirements,
+        "plan_status": plan_status,
+        "recommended_next_action": next_action,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_workspace_creator_runtime_plan(plan, boundary, review, gate_stack, approval, preflight)
+    return plan
+
+
+def validate_workspace_creator_runtime_plan(
+    plan: dict[str, Any],
+    workspace_creator_runtime_boundary: dict[str, Any] | None = None,
+    execution_review: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_approval_checklist: dict[str, Any] | None = None,
+    execution_preflight_checklist: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "workspace_creator_runtime_plan_version", "runtime_workspace_plan_id",
+        "planning_chain_id", "execution_package_id", "workspace_boundary_id",
+        "execution_review_id", "gate_stack_preview_id", "approval_checklist_id",
+        "preflight_checklist_id", "workspace_root", "workspace_name", "branch_name",
+        "workspace_type", "isolation_mode", "cleanup_policy", "rollback_policy",
+        "approval_requirements", "gate_requirements", "evidence_requirements",
+        "clean_tree_requirements", "command_allowlist_requirements", "failure_states",
+        "rollback_triggers", "cleanup_triggers", "escalation_requirements",
+        "allowed_runtime_actions", "forbidden_runtime_actions", "expected_outputs",
+        "required_evidence", "plan_status", "recommended_next_action", "dry_run",
+        "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in plan]
+    if missing:
+        raise ValueError(f"workspace creator runtime plan missing fields: {missing}")
+    if plan["workspace_creator_runtime_plan_version"] != WORKSPACE_CREATOR_RUNTIME_PLAN_VERSION:
+        raise ValueError("unsupported workspace creator runtime plan version")
+    _validate_execution_read_only(plan, "workspace creator runtime plan")
+    for field in (
+        "runtime_workspace_plan_id", "planning_chain_id", "execution_package_id",
+        "workspace_boundary_id", "execution_review_id", "gate_stack_preview_id",
+        "approval_checklist_id", "preflight_checklist_id", "workspace_root",
+        "workspace_name", "branch_name", "workspace_type", "isolation_mode",
+        "cleanup_policy", "rollback_policy", "plan_status", "recommended_next_action",
+    ):
+        _validate_non_empty_string(plan[field], field)
+    if plan["workspace_root"] != ".link/worktrees":
+        raise ValueError("workspace root must use the reviewed .link/worktrees policy")
+    if plan["workspace_type"] != "git_worktree_planned":
+        raise ValueError("workspace type must remain planned only")
+    if plan["isolation_mode"] != "disabled_until_explicit_human_approval":
+        raise ValueError("workspace isolation mode must remain approval-gated")
+    if plan["plan_status"] not in {"pass", "review", "block"}:
+        raise ValueError("invalid workspace creator runtime plan status")
+    for field in (
+        "approval_requirements", "gate_requirements", "evidence_requirements",
+        "clean_tree_requirements", "command_allowlist_requirements", "failure_states",
+        "rollback_triggers", "cleanup_triggers", "escalation_requirements",
+        "allowed_runtime_actions", "forbidden_runtime_actions", "expected_outputs",
+        "required_evidence",
+    ):
+        values = plan[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        expected = _normalize_implementation_branch_refs(values) if field in {"evidence_requirements", "required_evidence"} else _normalize_patch_behavior_text_list(values)
+        if values != expected:
+            raise ValueError(f"{field} must be normalized and sorted")
+    if plan["evidence_requirements"] != plan["required_evidence"]:
+        raise ValueError("runtime plan evidence requirements must match required evidence")
+    forbidden_set = set(plan["forbidden_runtime_actions"])
+    if set(plan["allowed_runtime_actions"]) & forbidden_set:
+        raise ValueError("allowed runtime actions must not overlap forbidden runtime actions")
+    required_forbidden = {
+        "apply patches",
+        "create branches",
+        "create directories",
+        "create git worktrees",
+        "execute verification commands",
+        "modify runtime state",
+        "run subprocesses",
+    }
+    if not required_forbidden.issubset(forbidden_set):
+        raise ValueError("workspace creator runtime plan missing required forbidden actions")
+    expected_id = make_workspace_creator_runtime_plan_id(
+        plan["planning_chain_id"],
+        plan["execution_package_id"],
+        plan["workspace_boundary_id"],
+        plan["execution_review_id"],
+        plan["gate_stack_preview_id"],
+        plan["approval_checklist_id"],
+        plan["preflight_checklist_id"],
+        plan["branch_name"],
+    )
+    if plan["runtime_workspace_plan_id"] != expected_id:
+        raise ValueError("workspace creator runtime plan id does not match contents")
+    if workspace_creator_runtime_boundary is not None:
+        validate_workspace_creator_runtime_boundary(workspace_creator_runtime_boundary)
+        expected_refs = {
+            "planning_chain_id": workspace_creator_runtime_boundary["planning_chain_id"],
+            "execution_package_id": workspace_creator_runtime_boundary["execution_package_id"],
+            "workspace_boundary_id": workspace_creator_runtime_boundary["workspace_boundary_id"],
+            "branch_name": workspace_creator_runtime_boundary["target_branch_name"],
+            "cleanup_policy": workspace_creator_runtime_boundary["cleanup_policy"],
+            "rollback_policy": workspace_creator_runtime_boundary["rollback_policy"],
+        }
+        for field, value in expected_refs.items():
+            if plan[field] != value:
+                raise ValueError(f"workspace creator runtime plan {field} does not match boundary")
+        if plan["approval_requirements"] != workspace_creator_runtime_boundary["required_approvals"]:
+            raise ValueError("workspace creator runtime plan approval requirements do not match boundary")
+        if plan["evidence_requirements"] != workspace_creator_runtime_boundary["required_evidence"]:
+            raise ValueError("workspace creator runtime plan evidence requirements do not match boundary")
+        if plan["plan_status"] != workspace_creator_runtime_boundary["boundary_status"]:
+            raise ValueError("workspace creator runtime plan status does not match boundary")
+    if execution_review is not None:
+        validate_execution_review(execution_review)
+        if plan["execution_review_id"] != execution_review["execution_review_id"]:
+            raise ValueError("workspace creator runtime plan execution review id mismatch")
+    if execution_gate_stack_preview is not None:
+        validate_execution_gate_stack_preview(execution_gate_stack_preview)
+        if plan["gate_stack_preview_id"] != execution_gate_stack_preview["gate_stack_preview_id"]:
+            raise ValueError("workspace creator runtime plan gate stack id mismatch")
+    if execution_approval_checklist is not None:
+        validate_execution_approval_checklist(execution_approval_checklist)
+        if plan["approval_checklist_id"] != execution_approval_checklist["approval_checklist_id"]:
+            raise ValueError("workspace creator runtime plan approval checklist id mismatch")
+    if execution_preflight_checklist is not None:
+        validate_execution_preflight_checklist(execution_preflight_checklist)
+        if plan["preflight_checklist_id"] != execution_preflight_checklist["preflight_checklist_id"]:
+            raise ValueError("workspace creator runtime plan preflight checklist id mismatch")
+
+
+def stable_workspace_creator_runtime_plan_json(plan: dict[str, Any]) -> str:
+    validate_workspace_creator_runtime_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def parse_workspace_creator_runtime_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    plan = _json.loads(text)
+    validate_workspace_creator_runtime_plan(plan)
+    return plan
+
+
+GUARDED_WORKSPACE_CREATOR_VERSION = "link-guarded-workspace-creator-v1"
+WORKSPACE_CREATION_RECEIPT_VERSION = "link-workspace-creation-receipt-v1"
+
+
+def make_guarded_workspace_request_id(
+    runtime_workspace_plan_id: str,
+    workspace_boundary_id: str,
+    execution_review_id: str,
+    approval_checklist_id: str,
+    workspace_root: str,
+    workspace_name: str,
+    approved: bool,
+    write: bool,
+) -> str:
+    return _execution_readiness_id("guarded-workspace-request", {
+        "approval_checklist_id": approval_checklist_id,
+        "approved": approved,
+        "execution_review_id": execution_review_id,
+        "runtime_workspace_plan_id": runtime_workspace_plan_id,
+        "version": GUARDED_WORKSPACE_CREATOR_VERSION,
+        "workspace_boundary_id": workspace_boundary_id,
+        "workspace_name": workspace_name,
+        "workspace_root": workspace_root,
+        "write": write,
+    })
+
+
+def make_workspace_creation_receipt_id(
+    request_id: str,
+    runtime_workspace_plan_id: str,
+    workspace_id: str,
+    manifest_hash: str,
+) -> str:
+    return _execution_readiness_id("workspace-creation-receipt", {
+        "manifest_hash": manifest_hash,
+        "request_id": request_id,
+        "runtime_workspace_plan_id": runtime_workspace_plan_id,
+        "version": WORKSPACE_CREATION_RECEIPT_VERSION,
+        "workspace_id": workspace_id,
+    })
+
+
+def make_guarded_workspace_request(
+    workspace_runtime_plan: dict[str, Any],
+    *,
+    approved: bool = False,
+    write: bool = False,
+    workspace_root: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a guarded workspace creation request without touching the filesystem."""
+    validate_workspace_creator_runtime_plan(workspace_runtime_plan)
+    root = workspace_root or workspace_runtime_plan["workspace_root"]
+    name = workspace_runtime_plan["workspace_name"]
+    request = {
+        "guarded_workspace_creator_version": GUARDED_WORKSPACE_CREATOR_VERSION,
+        "request_id": make_guarded_workspace_request_id(
+            workspace_runtime_plan["runtime_workspace_plan_id"],
+            workspace_runtime_plan["workspace_boundary_id"],
+            workspace_runtime_plan["execution_review_id"],
+            workspace_runtime_plan["approval_checklist_id"],
+            root,
+            name,
+            approved,
+            write,
+        ),
+        "runtime_workspace_plan_id": workspace_runtime_plan["runtime_workspace_plan_id"],
+        "planning_chain_id": workspace_runtime_plan["planning_chain_id"],
+        "execution_package_id": workspace_runtime_plan["execution_package_id"],
+        "workspace_boundary_id": workspace_runtime_plan["workspace_boundary_id"],
+        "execution_review_id": workspace_runtime_plan["execution_review_id"],
+        "gate_stack_preview_id": workspace_runtime_plan["gate_stack_preview_id"],
+        "approval_checklist_id": workspace_runtime_plan["approval_checklist_id"],
+        "preflight_checklist_id": workspace_runtime_plan["preflight_checklist_id"],
+        "workspace_root": root,
+        "workspace_name": name,
+        "branch_name": workspace_runtime_plan["branch_name"],
+        "approved": approved,
+        "write": write,
+        "required_approval_state": "explicit_approved_flag_and_passing_checklists",
+        "dry_run": not write,
+        "metadata": dict(metadata or {}),
+    }
+    validate_guarded_workspace_request(request, workspace_runtime_plan)
+    return request
+
+
+def _guarded_workspace_path(root: str, name: str):
+    from pathlib import Path
+
+    root_path = Path(root).expanduser()
+    workspace_path = root_path / name
+    resolved_root = root_path.resolve(strict=False)
+    resolved_workspace = workspace_path.resolve(strict=False)
+    try:
+        resolved_workspace.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError("workspace path must stay under workspace root") from exc
+    return root_path, workspace_path
+
+
+def validate_guarded_workspace_request(
+    request: dict[str, Any],
+    workspace_runtime_plan: dict[str, Any] | None = None,
+    execution_review: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_approval_checklist: dict[str, Any] | None = None,
+    execution_preflight_checklist: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "guarded_workspace_creator_version", "request_id", "runtime_workspace_plan_id",
+        "planning_chain_id", "execution_package_id", "workspace_boundary_id",
+        "execution_review_id", "gate_stack_preview_id", "approval_checklist_id",
+        "preflight_checklist_id", "workspace_root", "workspace_name", "branch_name",
+        "approved", "write", "required_approval_state", "dry_run", "metadata",
+    )
+    missing = [field for field in required if field not in request]
+    if missing:
+        raise ValueError(f"guarded workspace request missing fields: {missing}")
+    if request["guarded_workspace_creator_version"] != GUARDED_WORKSPACE_CREATOR_VERSION:
+        raise ValueError("unsupported guarded workspace creator version")
+    for field in (
+        "request_id", "runtime_workspace_plan_id", "planning_chain_id", "execution_package_id",
+        "workspace_boundary_id", "execution_review_id", "gate_stack_preview_id",
+        "approval_checklist_id", "preflight_checklist_id", "workspace_root", "workspace_name",
+        "branch_name", "required_approval_state",
+    ):
+        _validate_non_empty_string(request[field], field)
+    if not isinstance(request["approved"], bool) or not isinstance(request["write"], bool):
+        raise TypeError("approved and write must be booleans")
+    if request["dry_run"] != (not request["write"]):
+        raise ValueError("guarded workspace request dry_run must invert write")
+    if not isinstance(request["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    if ".." in request["workspace_name"] or "/" in request["workspace_name"] or "\\" in request["workspace_name"]:
+        raise ValueError("workspace_name must be a simple directory name")
+    _guarded_workspace_path(request["workspace_root"], request["workspace_name"])
+    expected_id = make_guarded_workspace_request_id(
+        request["runtime_workspace_plan_id"],
+        request["workspace_boundary_id"],
+        request["execution_review_id"],
+        request["approval_checklist_id"],
+        request["workspace_root"],
+        request["workspace_name"],
+        request["approved"],
+        request["write"],
+    )
+    if request["request_id"] != expected_id:
+        raise ValueError("guarded workspace request id does not match contents")
+    if request["write"] and not request["approved"]:
+        raise PermissionError("guarded workspace creation requires explicit approval")
+    if workspace_runtime_plan is not None:
+        validate_workspace_creator_runtime_plan(workspace_runtime_plan)
+        expected_refs = {
+            "runtime_workspace_plan_id": workspace_runtime_plan["runtime_workspace_plan_id"],
+            "planning_chain_id": workspace_runtime_plan["planning_chain_id"],
+            "execution_package_id": workspace_runtime_plan["execution_package_id"],
+            "workspace_boundary_id": workspace_runtime_plan["workspace_boundary_id"],
+            "execution_review_id": workspace_runtime_plan["execution_review_id"],
+            "gate_stack_preview_id": workspace_runtime_plan["gate_stack_preview_id"],
+            "approval_checklist_id": workspace_runtime_plan["approval_checklist_id"],
+            "preflight_checklist_id": workspace_runtime_plan["preflight_checklist_id"],
+            "branch_name": workspace_runtime_plan["branch_name"],
+        }
+        for field, value in expected_refs.items():
+            if request[field] != value:
+                raise ValueError(f"guarded workspace request {field} does not match runtime plan")
+        if workspace_runtime_plan["plan_status"] == "block" and request["write"]:
+            raise PermissionError("guarded workspace creation blocked by runtime plan")
+    if execution_review is not None:
+        validate_execution_review(execution_review)
+        if request["execution_review_id"] != execution_review["execution_review_id"]:
+            raise ValueError("guarded workspace request execution review mismatch")
+        if execution_review["approval_summary"]["approval_status"] != "pass" and request["write"]:
+            raise PermissionError("guarded workspace creation requires passing approval summary")
+    if execution_gate_stack_preview is not None:
+        validate_execution_gate_stack_preview(execution_gate_stack_preview)
+        if request["gate_stack_preview_id"] != execution_gate_stack_preview["gate_stack_preview_id"]:
+            raise ValueError("guarded workspace request gate stack mismatch")
+        if execution_gate_stack_preview["block_count"] and request["write"]:
+            raise PermissionError("guarded workspace creation blocked by gate stack")
+    if execution_approval_checklist is not None:
+        validate_execution_approval_checklist(execution_approval_checklist)
+        if request["approval_checklist_id"] != execution_approval_checklist["approval_checklist_id"]:
+            raise ValueError("guarded workspace request approval checklist mismatch")
+        if execution_approval_checklist["approval_status"] != "pass" and request["write"]:
+            raise PermissionError("guarded workspace creation requires passing approval checklist")
+    if execution_preflight_checklist is not None:
+        validate_execution_preflight_checklist(execution_preflight_checklist)
+        if request["preflight_checklist_id"] != execution_preflight_checklist["preflight_checklist_id"]:
+            raise ValueError("guarded workspace request preflight checklist mismatch")
+        if execution_preflight_checklist["pass_status"] != "pass" and request["write"]:
+            raise PermissionError("guarded workspace creation requires passing preflight checklist")
+
+
+def _workspace_hash(path: str) -> str:
+    import hashlib
+    from pathlib import Path
+
+    root = Path(path)
+    entries: list[str] = []
+    if root.exists():
+        for child in sorted(root.rglob("*")):
+            if child.is_file():
+                rel = child.relative_to(root).as_posix()
+                entries.append(f"{rel}:{hashlib.sha256(child.read_bytes()).hexdigest()}")
+            elif child.is_dir():
+                entries.append(f"{child.relative_to(root).as_posix()}/")
+    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+
+
+def collect_workspace_creation_receipt(
+    request: dict[str, Any],
+    *,
+    workspace_id: str,
+    workspace_path: str,
+    workspace_manifest: dict[str, Any],
+    creation_timestamp: str,
+    manifest_hash: str,
+    workspace_hash: str,
+    status: str = "created",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a workspace creation receipt from already-collected evidence."""
+    validate_guarded_workspace_request(request)
+    receipt = {
+        "workspace_creation_receipt_version": WORKSPACE_CREATION_RECEIPT_VERSION,
+        "creation_receipt_id": make_workspace_creation_receipt_id(
+            request["request_id"],
+            request["runtime_workspace_plan_id"],
+            workspace_id,
+            manifest_hash,
+        ),
+        "request_id": request["request_id"],
+        "runtime_workspace_plan_id": request["runtime_workspace_plan_id"],
+        "planning_chain_id": request["planning_chain_id"],
+        "execution_package_id": request["execution_package_id"],
+        "workspace_boundary_id": request["workspace_boundary_id"],
+        "execution_review_id": request["execution_review_id"],
+        "gate_stack_preview_id": request["gate_stack_preview_id"],
+        "approval_checklist_id": request["approval_checklist_id"],
+        "preflight_checklist_id": request["preflight_checklist_id"],
+        "workspace_id": workspace_id,
+        "workspace_path": workspace_path,
+        "creation_timestamp": creation_timestamp,
+        "workspace_manifest": workspace_manifest,
+        "manifest_hash": manifest_hash,
+        "workspace_hash": workspace_hash,
+        "status": status,
+        "allowed_actions_performed": _normalize_patch_behavior_text_list([
+            "create metadata manifest",
+            "create temporary workspace directory",
+            "create workspace receipt",
+        ]),
+        "forbidden_actions_avoided": _normalize_patch_behavior_text_list([
+            "apply patches",
+            "create commits",
+            "create git branches",
+            "execute verification commands",
+            "merge changes",
+            "modify repository files",
+            "modify repository working tree",
+            "run network commands",
+        ]),
+        "metadata": dict(metadata or {}),
+    }
+    validate_workspace_creation_receipt(receipt, request)
+    return receipt
+
+
+def validate_workspace_creation_receipt(
+    receipt: dict[str, Any],
+    request: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "workspace_creation_receipt_version", "creation_receipt_id", "request_id",
+        "runtime_workspace_plan_id", "planning_chain_id", "execution_package_id",
+        "workspace_boundary_id", "execution_review_id", "gate_stack_preview_id",
+        "approval_checklist_id", "preflight_checklist_id", "workspace_id", "workspace_path",
+        "creation_timestamp", "workspace_manifest", "manifest_hash", "workspace_hash",
+        "status", "allowed_actions_performed", "forbidden_actions_avoided", "metadata",
+    )
+    missing = [field for field in required if field not in receipt]
+    if missing:
+        raise ValueError(f"workspace creation receipt missing fields: {missing}")
+    if receipt["workspace_creation_receipt_version"] != WORKSPACE_CREATION_RECEIPT_VERSION:
+        raise ValueError("unsupported workspace creation receipt version")
+    for field in (
+        "creation_receipt_id", "request_id", "runtime_workspace_plan_id", "planning_chain_id",
+        "execution_package_id", "workspace_boundary_id", "execution_review_id",
+        "gate_stack_preview_id", "approval_checklist_id", "preflight_checklist_id",
+        "workspace_id", "workspace_path", "creation_timestamp", "manifest_hash",
+        "workspace_hash", "status",
+    ):
+        _validate_non_empty_string(receipt[field], field)
+    if receipt["status"] not in {"created", "preview"}:
+        raise ValueError("invalid workspace creation receipt status")
+    if not isinstance(receipt["workspace_manifest"], dict):
+        raise TypeError("workspace_manifest must be a dict")
+    manifest = receipt["workspace_manifest"]
+    for field in ("workspace_id", "runtime_workspace_plan_id", "planning_chain_id", "branch_name", "created_by"):
+        _validate_non_empty_string(manifest.get(field), f"workspace_manifest.{field}")
+    for field in ("allowed_actions_performed", "forbidden_actions_avoided"):
+        values = receipt[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if "modify repository files" not in receipt["forbidden_actions_avoided"]:
+        raise ValueError("workspace receipt must record repository mutation avoidance")
+    expected_id = make_workspace_creation_receipt_id(
+        receipt["request_id"],
+        receipt["runtime_workspace_plan_id"],
+        receipt["workspace_id"],
+        receipt["manifest_hash"],
+    )
+    if receipt["creation_receipt_id"] != expected_id:
+        raise ValueError("workspace creation receipt id does not match contents")
+    if request is not None:
+        validate_guarded_workspace_request(request)
+        expected_refs = {
+            "request_id": request["request_id"],
+            "runtime_workspace_plan_id": request["runtime_workspace_plan_id"],
+            "planning_chain_id": request["planning_chain_id"],
+            "execution_package_id": request["execution_package_id"],
+            "workspace_boundary_id": request["workspace_boundary_id"],
+            "execution_review_id": request["execution_review_id"],
+            "gate_stack_preview_id": request["gate_stack_preview_id"],
+            "approval_checklist_id": request["approval_checklist_id"],
+            "preflight_checklist_id": request["preflight_checklist_id"],
+        }
+        for field, value in expected_refs.items():
+            if receipt[field] != value:
+                raise ValueError(f"workspace creation receipt {field} does not match request")
+
+
+def stable_workspace_creation_receipt_json(receipt: dict[str, Any]) -> str:
+    validate_workspace_creation_receipt(receipt)
+    return _stable_ruflo_json(receipt, indent=2) + "\n"
+
+
+def create_guarded_workspace(
+    request: dict[str, Any],
+    workspace_runtime_plan: dict[str, Any],
+    *,
+    execution_review: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_approval_checklist: dict[str, Any] | None = None,
+    execution_preflight_checklist: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a guarded temporary workspace directory and manifest after approval."""
+    import hashlib
+    import shutil
+    from datetime import datetime, timezone
+
+    validate_guarded_workspace_request(
+        request,
+        workspace_runtime_plan,
+        execution_review,
+        execution_gate_stack_preview,
+        execution_approval_checklist,
+        execution_preflight_checklist,
+    )
+    if not request["write"]:
+        raise PermissionError("guarded workspace creation requires --write")
+    if not request["approved"]:
+        raise PermissionError("guarded workspace creation requires explicit approval")
+    root_path, workspace_path = _guarded_workspace_path(request["workspace_root"], request["workspace_name"])
+    workspace_id = _execution_readiness_id("guarded-workspace", {
+        "request_id": request["request_id"],
+        "runtime_workspace_plan_id": request["runtime_workspace_plan_id"],
+        "workspace_path": str(workspace_path),
+    })
+    created_workspace = False
+    try:
+        root_path.mkdir(parents=True, exist_ok=True)
+        workspace_path.mkdir(mode=0o700, parents=False, exist_ok=False)
+        created_workspace = True
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        manifest = {
+            "workspace_manifest_version": "link-guarded-workspace-manifest-v1",
+            "workspace_id": workspace_id,
+            "runtime_workspace_plan_id": request["runtime_workspace_plan_id"],
+            "planning_chain_id": request["planning_chain_id"],
+            "execution_package_id": request["execution_package_id"],
+            "workspace_boundary_id": request["workspace_boundary_id"],
+            "branch_name": request["branch_name"],
+            "workspace_path": str(workspace_path),
+            "created_by": "growth workspace-create --write",
+            "created_at": timestamp,
+            "no_patch_application": True,
+            "no_verification_execution": True,
+            "no_repo_mutation": True,
+        }
+        manifest_text = _stable_ruflo_json(manifest, indent=2) + "\n"
+        manifest_path = workspace_path / "workspace_manifest.json"
+        manifest_path.write_text(manifest_text, encoding="utf-8")
+        manifest_hash = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
+        workspace_hash = _workspace_hash(str(workspace_path))
+        receipt = collect_workspace_creation_receipt(
+            request,
+            workspace_id=workspace_id,
+            workspace_path=str(workspace_path),
+            workspace_manifest=manifest,
+            creation_timestamp=timestamp,
+            manifest_hash=manifest_hash,
+            workspace_hash=workspace_hash,
+        )
+        return receipt
+    except Exception:
+        if created_workspace and workspace_path.exists():
+            shutil.rmtree(workspace_path)
+        raise
+
+
+def preview_guarded_workspace_creation(
+    request: dict[str, Any],
+    workspace_runtime_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a read-only preview receipt shape without creating a workspace."""
+    import hashlib
+
+    validate_guarded_workspace_request(request, workspace_runtime_plan)
+    _, workspace_path = _guarded_workspace_path(request["workspace_root"], request["workspace_name"])
+    workspace_id = _execution_readiness_id("guarded-workspace-preview", {
+        "request_id": request["request_id"],
+        "runtime_workspace_plan_id": request["runtime_workspace_plan_id"],
+        "workspace_path": str(workspace_path),
+    })
+    manifest = {
+        "workspace_manifest_version": "link-guarded-workspace-manifest-v1",
+        "workspace_id": workspace_id,
+        "runtime_workspace_plan_id": request["runtime_workspace_plan_id"],
+        "planning_chain_id": request["planning_chain_id"],
+        "execution_package_id": request["execution_package_id"],
+        "workspace_boundary_id": request["workspace_boundary_id"],
+        "branch_name": request["branch_name"],
+        "workspace_path": str(workspace_path),
+        "created_by": "growth workspace-create preview",
+        "created_at": "preview-only",
+        "no_patch_application": True,
+        "no_verification_execution": True,
+        "no_repo_mutation": True,
+    }
+    manifest_text = _stable_ruflo_json(manifest, indent=2) + "\n"
+    return collect_workspace_creation_receipt(
+        request,
+        workspace_id=workspace_id,
+        workspace_path=str(workspace_path),
+        workspace_manifest=manifest,
+        creation_timestamp="preview-only",
+        manifest_hash=hashlib.sha256(manifest_text.encode("utf-8")).hexdigest(),
+        workspace_hash=hashlib.sha256(b"preview-only").hexdigest(),
+        status="preview",
+    )
 
 
 def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:

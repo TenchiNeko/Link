@@ -7499,6 +7499,362 @@ def check_workspace_creator_runtime_boundary_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62. Growth workspace-boundary CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_workspace_boundary_cli() -> None:
+    """workspace-boundary exposes only the workspace creator boundary."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_growth_planning_chain_preview,
+        collect_workspace_creator_runtime_boundary,
+        parse_workspace_creator_runtime_boundary_json,
+        stable_workspace_creator_runtime_boundary_json,
+        validate_workspace_creator_runtime_boundary,
+        workspace_boundary_main,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("workspace-boundary" in help_out.getvalue(),
+             "growth help must include workspace-boundary")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = workspace_boundary_main(["--json"])
+    _require(json_rc == 0, "workspace-boundary --json must return 0")
+    parsed = parse_workspace_creator_runtime_boundary_json(json_out.getvalue())
+    validate_workspace_creator_runtime_boundary(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected = collect_workspace_creator_runtime_boundary(chain)
+    validate_workspace_creator_runtime_boundary(parsed, chain)
+    _require(parsed["workspace_boundary_id"] == expected["workspace_boundary_id"],
+             "workspace-boundary id must be deterministic")
+    _require(parsed == parse_workspace_creator_runtime_boundary_json(stable_workspace_creator_runtime_boundary_json(parsed)),
+             "workspace-boundary JSON must round trip")
+    _require(parsed["planning_chain_id"] == chain["planning_chain_id"],
+             "workspace-boundary must reference planning chain")
+    _require(parsed["execution_package_id"] == chain["autonomous_execution_package"]["execution_package_id"],
+             "workspace-boundary must reference execution package")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "workspace-boundary must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "workspace-boundary must not allow automation or writes")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_gate_stack_preview",
+        "execution_review",
+        "execution_preflight_checklist",
+        "planning_chain_review_bundle",
+    ):
+        _require(full_chain_key not in parsed,
+                 "workspace-boundary --json must output only boundary payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["workspace-boundary", "--json"])
+    routed = parse_workspace_creator_runtime_boundary_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth workspace-boundary --json route must return 0")
+    _require(routed["workspace_boundary_id"] == parsed["workspace_boundary_id"],
+             "growth workspace-boundary route must preserve deterministic boundary id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = workspace_boundary_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "workspace-boundary human mode must return 0")
+    for needle in (
+        "Growth workspace boundary",
+        "workspace_boundary_id:",
+        "planning_chain_id:",
+        "execution_package_id:",
+        "boundary_status:",
+        "blocker_count:",
+        "warning_count:",
+        "required_approval_count:",
+        "required_evidence_count:",
+        "next_action:",
+    ):
+        _require(needle in human, f"workspace-boundary human mode must include {needle}")
+    _require(len(human.splitlines()) <= 10,
+             "workspace-boundary human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = workspace_boundary_main(["--write"])
+    _require(write_rc != 0, "workspace-boundary --write must be rejected")
+    _require("--write is not supported" in write_err.getvalue(),
+             "workspace-boundary --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "workspace-boundary --write must not print normal output")
+
+    print("growth workspace-boundary CLI OK")
+
+
+# ---------------------------------------------------------------------------
+# 62. Workspace creator runtime plan helper
+# ---------------------------------------------------------------------------
+
+def check_workspace_creator_runtime_plan_helper() -> None:
+    """workspace creator runtime plan stays disabled and read-only."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_approval_checklist,
+        collect_execution_review,
+        collect_growth_planning_chain_preview,
+        collect_workspace_creator_runtime_boundary,
+        collect_workspace_creator_runtime_plan,
+        parse_workspace_creator_runtime_plan_json,
+        stable_workspace_creator_runtime_plan_json,
+        validate_workspace_creator_runtime_plan,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    boundary = collect_workspace_creator_runtime_boundary(chain)
+    review = collect_execution_review(chain)
+    approval = collect_execution_approval_checklist(chain)
+    gate_stack = chain["execution_gate_stack_preview"]
+    preflight = chain["execution_preflight_checklist"]
+    plan = collect_workspace_creator_runtime_plan(chain, metadata={"suite": "growth"})
+    same = collect_workspace_creator_runtime_plan(chain, metadata={"suite": "growth"})
+    _require(plan["runtime_workspace_plan_id"] == same["runtime_workspace_plan_id"],
+             "workspace runtime plan id must be deterministic")
+    decoded = parse_workspace_creator_runtime_plan_json(stable_workspace_creator_runtime_plan_json(plan))
+    _require(decoded == plan, "workspace runtime plan JSON must round trip")
+    validate_workspace_creator_runtime_plan(plan, boundary, review, gate_stack, approval, preflight)
+
+    _require(plan["planning_chain_id"] == chain["planning_chain_id"],
+             "workspace runtime plan must reference planning chain")
+    _require(plan["execution_package_id"] == boundary["execution_package_id"],
+             "workspace runtime plan must reference execution package")
+    _require(plan["workspace_boundary_id"] == boundary["workspace_boundary_id"],
+             "workspace runtime plan must reference boundary")
+    _require(plan["execution_review_id"] == review["execution_review_id"],
+             "workspace runtime plan must reference execution review")
+    _require(plan["gate_stack_preview_id"] == gate_stack["gate_stack_preview_id"],
+             "workspace runtime plan must reference gate stack")
+    _require(plan["approval_checklist_id"] == approval["approval_checklist_id"],
+             "workspace runtime plan must reference approval checklist")
+    _require(plan["preflight_checklist_id"] == preflight["preflight_checklist_id"],
+             "workspace runtime plan must reference preflight checklist")
+    _require(plan["branch_name"] == boundary["target_branch_name"],
+             "workspace runtime plan must preserve target branch")
+    _require(plan["cleanup_policy"] == boundary["cleanup_policy"],
+             "workspace runtime plan must preserve cleanup policy")
+    _require(plan["rollback_policy"] == boundary["rollback_policy"],
+             "workspace runtime plan must preserve rollback policy")
+    _require(plan["approval_requirements"] == boundary["required_approvals"],
+             "workspace runtime plan must preserve approval requirements")
+    _require(plan["evidence_requirements"] == boundary["required_evidence"],
+             "workspace runtime plan must preserve evidence requirements")
+    _require(plan["required_evidence"] == boundary["required_evidence"],
+             "workspace runtime plan must preserve required evidence")
+    _require(plan["gate_requirements"], "workspace runtime plan must include gate requirements")
+    _require(plan["clean_tree_requirements"], "workspace runtime plan must include clean tree requirements")
+    _require(plan["command_allowlist_requirements"],
+             "workspace runtime plan must include command allowlist requirements")
+    _require(plan["rollback_triggers"], "workspace runtime plan must include rollback triggers")
+    _require(plan["failure_states"], "workspace runtime plan must include failure states")
+    _require(plan["expected_outputs"], "workspace runtime plan must include expected outputs")
+    _require(plan["workspace_root"] == ".link/worktrees",
+             "workspace runtime plan must keep reviewed workspace root policy")
+    _require(plan["workspace_type"] == "git_worktree_planned",
+             "workspace runtime plan must remain planned only")
+    _require(plan["isolation_mode"] == "disabled_until_explicit_human_approval",
+             "workspace runtime plan must stay approval gated")
+    for forbidden in (
+        "apply patches",
+        "create branches",
+        "create directories",
+        "create git worktrees",
+        "execute verification commands",
+        "modify runtime state",
+        "run subprocesses",
+    ):
+        _require(forbidden in plan["forbidden_runtime_actions"],
+                 f"workspace runtime plan must forbid {forbidden}")
+    _require(not (set(plan["allowed_runtime_actions"]) & set(plan["forbidden_runtime_actions"])),
+             "workspace runtime plan allowed actions must not overlap forbidden actions")
+    _require(plan["dry_run"] is True and plan["write_allowed"] is False,
+             "workspace runtime plan must remain read-only")
+    _require(plan["automation_allowed"] is False and plan["writes"] == [],
+             "workspace runtime plan must not allow automation or writes")
+
+    bad_missing = dict(plan)
+    bad_missing.pop("runtime_workspace_plan_id")
+    try:
+        validate_workspace_creator_runtime_plan(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace runtime plan must reject missing id")
+
+    bad_overlap = dict(plan)
+    bad_overlap["allowed_runtime_actions"] = sorted([*plan["allowed_runtime_actions"], "create directories"])
+    try:
+        validate_workspace_creator_runtime_plan(bad_overlap)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace runtime plan must reject forbidden action overlap")
+
+    bad_status = dict(plan)
+    bad_status["plan_status"] = "enabled"
+    try:
+        validate_workspace_creator_runtime_plan(bad_status)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace runtime plan must reject invalid status")
+
+    bad_rollback = dict(plan)
+    bad_rollback["rollback_triggers"] = []
+    try:
+        validate_workspace_creator_runtime_plan(bad_rollback)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("workspace runtime plan must reject missing rollback triggers")
+
+    bad_writes = dict(plan)
+    bad_writes["writes"] = [".link/worktrees/generated"]
+    try:
+        validate_workspace_creator_runtime_plan(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace runtime plan must reject writes")
+
+    bad_link = dict(plan)
+    bad_link["workspace_boundary_id"] = "wrong-boundary"
+    try:
+        validate_workspace_creator_runtime_plan(bad_link, boundary)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace runtime plan must reject boundary mismatch")
+
+    print("workspace creator runtime plan helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 62. Guarded workspace creator runtime component
+# ---------------------------------------------------------------------------
+
+def check_guarded_workspace_creator_runtime_component() -> None:
+    """guarded workspace creator writes only an approved temp workspace."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_growth_planning_chain_preview,
+        collect_workspace_creator_runtime_plan,
+        create_guarded_workspace,
+        make_guarded_workspace_request,
+        preview_guarded_workspace_creation,
+        stable_workspace_creation_receipt_json,
+        validate_guarded_workspace_request,
+        validate_workspace_creation_receipt,
+        workspace_create_main,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    plan = collect_workspace_creator_runtime_plan(chain)
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("workspace-create" in help_out.getvalue(),
+             "growth help must include workspace-create")
+
+    preview_out = io.StringIO()
+    with contextlib.redirect_stdout(preview_out):
+        preview_rc = workspace_create_main(["--json"])
+    _require(preview_rc == 0, "workspace-create --json preview must return 0")
+    preview = json.loads(preview_out.getvalue())
+    validate_workspace_creation_receipt(preview)
+    _require(preview["status"] == "preview", "workspace-create default must preview only")
+    _require("capability_gap_preview" not in preview,
+             "workspace-create preview must output only receipt payload")
+
+    denied_out = io.StringIO()
+    denied_err = io.StringIO()
+    with contextlib.redirect_stdout(denied_out), contextlib.redirect_stderr(denied_err):
+        denied_rc = workspace_create_main(["--write", "--json"])
+    _require(denied_rc != 0, "workspace-create --write without approval must fail closed")
+    _require("approval" in denied_err.getvalue().lower(),
+             "workspace-create --write without approval must explain approval requirement")
+    _require(denied_out.getvalue() == "",
+             "workspace-create denied write must not print a receipt")
+
+    with tempfile.TemporaryDirectory() as temp_root:
+        safe_plan = dict(plan)
+        safe_plan["plan_status"] = "pass"
+        safe_plan["recommended_next_action"] = "test-only approved temp workspace creation"
+        request = make_guarded_workspace_request(
+            safe_plan,
+            approved=True,
+            write=True,
+            workspace_root=temp_root,
+            metadata={"suite": "growth"},
+        )
+        validate_guarded_workspace_request(request, safe_plan)
+        receipt = create_guarded_workspace(request, safe_plan)
+        validate_workspace_creation_receipt(receipt, request)
+        decoded = json.loads(stable_workspace_creation_receipt_json(receipt))
+        _require(decoded == receipt, "workspace creation receipt JSON must round trip")
+        workspace_path = Path(receipt["workspace_path"])
+        manifest_path = workspace_path / "workspace_manifest.json"
+        _require(workspace_path.exists() and workspace_path.is_dir(),
+                 "guarded workspace creation must create temp workspace directory")
+        _require(manifest_path.exists(), "guarded workspace creation must write manifest")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        _require(manifest == receipt["workspace_manifest"],
+                 "workspace manifest must match receipt")
+        _require(receipt["workspace_id"] == manifest["workspace_id"],
+                 "workspace receipt must preserve workspace id")
+        _require(receipt["workspace_boundary_id"] == safe_plan["workspace_boundary_id"],
+                 "workspace receipt must preserve boundary id")
+        _require(receipt["status"] == "created", "guarded workspace creation must return created receipt")
+        _require("modify repository files" in receipt["forbidden_actions_avoided"],
+                 "workspace receipt must record repository mutation avoidance")
+        _require(not (ROOT / ".link/worktrees" / safe_plan["workspace_name"]).exists(),
+                 "guarded workspace test must not create repo runtime workspace")
+
+    with tempfile.TemporaryDirectory() as temp_root:
+        safe_plan = dict(plan)
+        safe_plan["plan_status"] = "pass"
+        safe_plan["recommended_next_action"] = "test-only approved temp workspace creation"
+        request = make_guarded_workspace_request(safe_plan, approved=True, write=True, workspace_root=temp_root)
+        bad_request = dict(request)
+        bad_request["workspace_name"] = "../escape"
+        try:
+            validate_guarded_workspace_request(bad_request, safe_plan)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("guarded workspace request must reject escaping workspace name")
+
+        preview_request = make_guarded_workspace_request(safe_plan, approved=False, write=False, workspace_root=temp_root)
+        preview_receipt = preview_guarded_workspace_creation(preview_request, safe_plan)
+        validate_workspace_creation_receipt(preview_receipt, preview_request)
+        _require(preview_receipt["status"] == "preview", "preview helper must return preview receipt")
+        _require(not Path(preview_receipt["workspace_path"]).exists(),
+                 "preview helper must not create workspace directory")
+
+        try:
+            make_guarded_workspace_request(safe_plan, approved=False, write=True, workspace_root=temp_root)
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("guarded workspace request must require approval for writes")
+
+    print("guarded workspace creator runtime component OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Growth planning-chain review bundle helper
 # ---------------------------------------------------------------------------
 
@@ -9280,6 +9636,9 @@ def main() -> None:
     check_growth_execution_approval_checklist_cli()
     check_growth_execution_review_cli()
     check_workspace_creator_runtime_boundary_helper()
+    check_growth_workspace_boundary_cli()
+    check_workspace_creator_runtime_plan_helper()
+    check_guarded_workspace_creator_runtime_component()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
     check_execution_journal_schema_helper()
