@@ -8672,6 +8672,275 @@ def check_growth_verification_boundary_cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62e. Guarded verification runner runtime component
+# ---------------------------------------------------------------------------
+
+def check_guarded_verification_runner_runtime_component() -> None:
+    """guarded verification runs only allowlisted Python commands in temp workspaces."""
+    from link_modes.growth.link_growth_console import (
+        apply_guarded_patch,
+        collect_execution_approval_checklist,
+        collect_execution_review,
+        collect_growth_planning_chain_preview,
+        collect_patch_applier_boundary,
+        collect_verification_runner_boundary,
+        collect_workspace_creator_runtime_boundary,
+        collect_workspace_creator_runtime_plan,
+        create_guarded_workspace,
+        make_execution_approval_checklist_id,
+        make_execution_gate_stack_preview_id,
+        make_guarded_patch_request,
+        make_guarded_verification_request,
+        make_guarded_workspace_request,
+        run_guarded_verification,
+        validate_guarded_verification_receipt,
+        validate_guarded_verification_request,
+    )
+
+    def pass_gate_stack(gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(gate_stack)
+        gates = []
+        for gate in gate_stack["gates"]:
+            clean_gate = dict(gate)
+            clean_gate["blockers"] = []
+            clean_gate["warnings"] = []
+            clean_gate["pass_status"] = "pass"
+            clean_gate["recommended_next_action"] = "test-only approval for guarded verification"
+            gates.append(clean_gate)
+        passed["gates"] = gates
+        passed["pass_count"] = len(gates)
+        passed["review_count"] = 0
+        passed["block_count"] = 0
+        passed["gate_stack_preview_id"] = make_execution_gate_stack_preview_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            gates,
+        )
+        return passed
+
+    def pass_approval(checklist: dict[str, Any], gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(checklist)
+        passed["gate_stack_preview_id"] = gate_stack["gate_stack_preview_id"]
+        passed["approval_blockers"] = []
+        passed["approval_warnings"] = []
+        passed["approval_status"] = "pass"
+        passed["recommended_next_action"] = "test-only explicit approval supplied"
+        passed["approval_checklist_id"] = make_execution_approval_checklist_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            passed["human_approval_package_id"],
+            passed["gate_stack_preview_id"],
+            passed["required_approvals"],
+            passed["approval_blockers"],
+            passed["approval_warnings"],
+        )
+        return passed
+
+    chain = collect_growth_planning_chain_preview()
+    patch_plan = chain["verified_patch_plan"]
+    patch_diff = chain["verified_patch_diff"]
+    gate_stack = pass_gate_stack(chain["execution_gate_stack_preview"])
+    approval = pass_approval(collect_execution_approval_checklist(chain), gate_stack)
+    evidence_contract = chain["execution_evidence_contract"]
+    retry_policy = chain["execution_retry_policy"]
+    workspace_boundary = collect_workspace_creator_runtime_boundary(chain)
+    workspace_runtime_plan = collect_workspace_creator_runtime_plan(chain)
+    patch_boundary = collect_patch_applier_boundary(
+        patch_plan,
+        patch_diff,
+        gate_stack,
+        approval,
+        evidence_contract,
+        workspace_boundary,
+        workspace_runtime_plan,
+        planning_chain_id=chain["planning_chain_id"],
+    )
+
+    repo_file = ROOT / patch_plan["target_files"][0]
+    repo_before = repo_file.read_bytes() if repo_file.exists() else b""
+    with tempfile.TemporaryDirectory() as temp_root:
+        safe_plan = dict(workspace_runtime_plan)
+        safe_plan["plan_status"] = "pass"
+        safe_plan["recommended_next_action"] = "test-only approved temp workspace creation"
+        workspace_request = make_guarded_workspace_request(
+            safe_plan,
+            approved=True,
+            write=True,
+            workspace_root=temp_root,
+        )
+        workspace_receipt = create_guarded_workspace(workspace_request, safe_plan)
+        workspace_path = Path(workspace_receipt["workspace_path"])
+        first_target = workspace_path / patch_plan["target_files"][0]
+        first_target.parent.mkdir(parents=True, exist_ok=True)
+        first_target.write_text("original workspace content\n", encoding="utf-8")
+
+        patch_request = make_guarded_patch_request(patch_boundary, workspace_receipt, approved=True, write=True)
+        patch_receipt = apply_guarded_patch(
+            patch_request,
+            patch_boundary,
+            patch_plan,
+            patch_diff,
+            workspace_receipt,
+            workspace_receipt["workspace_manifest"],
+            approval,
+            gate_stack,
+            evidence_contract,
+        )
+        execution_review = collect_execution_review(chain)
+        verification_boundary = collect_verification_runner_boundary(
+            patch_receipt,
+            patch_boundary,
+            evidence_contract,
+            retry_policy,
+            gate_stack,
+            approval,
+            chain["execution_preflight_checklist"],
+            execution_review,
+        )
+
+        command = "python3 -c \"print('guarded verification ok')\""
+        request = make_guarded_verification_request(
+            verification_boundary,
+            commands=[command],
+            approved=True,
+            write=True,
+        )
+        validate_guarded_verification_request(request, verification_boundary)
+        receipt = run_guarded_verification(
+            request,
+            verification_boundary,
+            patch_receipt,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+        )
+        validate_guarded_verification_receipt(
+            receipt,
+            request,
+            verification_boundary,
+            patch_receipt,
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+        )
+        _require(receipt["verification_result"] == "passed",
+                 "allowlisted python verification command must pass")
+        _require(receipt["exit_codes"] == [0], "verification receipt must capture exit code")
+        _require(receipt["executed_commands"][0]["command"] == command,
+                 "verification receipt must preserve executed command")
+        _require(receipt["retry_count"] == 0, "successful verification must not retry")
+        _require(receipt["rollback_triggered"] is False,
+                 "successful verification must not trigger rollback")
+        _require(receipt["safety_metadata"]["dry_run"] is False,
+                 "verification write receipt must not be dry run")
+        _require(receipt["safety_metadata"]["write_allowed"] is True,
+                 "verification write receipt must record workspace-local write allowance")
+        _require(receipt["safety_metadata"]["automation_allowed"] is False,
+                 "guarded verification must keep automation disabled")
+        _require("guarded_verification_receipt.json" in receipt["safety_metadata"]["writes"],
+                 "verification receipt writes must include workspace-local receipt")
+        stdout_path = workspace_path / receipt["stdout_refs"][0]
+        stderr_path = workspace_path / receipt["stderr_refs"][0]
+        evidence_path = workspace_path / receipt["evidence_refs"][0]
+        _require(stdout_path.exists(), "verification must write workspace-local stdout log")
+        _require(stderr_path.exists(), "verification must write workspace-local stderr log")
+        _require(evidence_path.exists(), "verification must write workspace-local evidence")
+        _require("guarded verification ok" in stdout_path.read_text(encoding="utf-8"),
+                 "verification stdout log must capture command output")
+        _require((workspace_path / "guarded_verification_receipt.json").exists(),
+                 "verification must write workspace-local receipt")
+
+        bad_no_write = make_guarded_verification_request(
+            verification_boundary,
+            commands=[command],
+            approved=False,
+            write=False,
+        )
+        try:
+            run_guarded_verification(
+                bad_no_write,
+                verification_boundary,
+                patch_receipt,
+                workspace_receipt["workspace_manifest"],
+                workspace_receipt,
+                evidence_contract,
+                retry_policy,
+            )
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("guarded verification runtime must require --write")
+
+        for forbidden in ("git status", "bash -lc echo no", "python3 -m pip install nope", "python3 -c \"import urllib.request\""):
+            try:
+                make_guarded_verification_request(
+                    verification_boundary,
+                    commands=[forbidden],
+                    approved=True,
+                    write=True,
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"guarded verification must reject forbidden command: {forbidden}")
+
+        bad_request = dict(request)
+        bad_request["workspace_path"] = str(ROOT)
+        try:
+            validate_guarded_verification_request(bad_request)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("guarded verification request must reject repo workspace path")
+
+        bad_boundary = dict(verification_boundary)
+        bad_boundary["verification_runner_boundary_id"] = "wrong-boundary"
+        try:
+            validate_guarded_verification_request(request, bad_boundary)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("guarded verification request must reject boundary mismatch")
+
+        fail_command = "python3 -c \"raise SystemExit(2)\""
+        fail_request = make_guarded_verification_request(
+            verification_boundary,
+            commands=[fail_command],
+            approved=True,
+            write=True,
+        )
+        fail_receipt = run_guarded_verification(
+            fail_request,
+            verification_boundary,
+            patch_receipt,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+        )
+        validate_guarded_verification_receipt(
+            fail_receipt,
+            fail_request,
+            verification_boundary,
+            patch_receipt,
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+        )
+        _require(fail_receipt["verification_result"] == "failed",
+                 "failing verification command must produce failed receipt")
+        _require(fail_receipt["exit_codes"] == [2],
+                 "failing verification receipt must capture nonzero exit code")
+        _require(fail_receipt["rollback_triggered"] is True,
+                 "failing verification must trigger rollback flag")
+
+    _require(repo_file.read_bytes() == repo_before if repo_file.exists() else repo_before == b"",
+             "guarded verification tests must leave repo file unchanged")
+    print("guarded verification runner runtime component OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Guarded workspace cleanup / abandon lifecycle
 # ---------------------------------------------------------------------------
 
@@ -10604,6 +10873,7 @@ def main() -> None:
     check_guarded_patch_applier_runtime_component()
     check_verification_runner_boundary_helper()
     check_growth_verification_boundary_cli()
+    check_guarded_verification_runner_runtime_component()
     check_guarded_workspace_lifecycle_cleanup_abandon()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()

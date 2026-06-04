@@ -17246,6 +17246,507 @@ def parse_verification_runner_boundary_json(text: str) -> dict[str, Any]:
     return boundary
 
 
+
+GUARDED_VERIFICATION_RUNNER_VERSION = "link-guarded-verification-runner-v1"
+GUARDED_VERIFICATION_RECEIPT_VERSION = "link-guarded-verification-receipt-v1"
+
+
+def make_guarded_verification_request_id(
+    verification_runner_boundary_id: str,
+    workspace_id: str,
+    commands: list[str],
+    approved: bool,
+    write: bool,
+) -> str:
+    return _execution_readiness_id("guarded-verification-request", {
+        "approved": approved,
+        "commands": commands,
+        "verification_runner_boundary_id": verification_runner_boundary_id,
+        "version": GUARDED_VERIFICATION_RUNNER_VERSION,
+        "workspace_id": workspace_id,
+        "write": write,
+    })
+
+
+def make_guarded_verification_receipt_id(
+    request_id: str,
+    verification_runner_boundary_id: str,
+    workspace_id: str,
+    command_hashes: list[str],
+) -> str:
+    return _execution_readiness_id("guarded-verification-receipt", {
+        "command_hashes": command_hashes,
+        "request_id": request_id,
+        "verification_runner_boundary_id": verification_runner_boundary_id,
+        "version": GUARDED_VERIFICATION_RECEIPT_VERSION,
+        "workspace_id": workspace_id,
+    })
+
+
+def _guarded_verification_command_hash(command: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(command.encode("utf-8")).hexdigest()
+
+
+def _guarded_verification_split_command(command: str) -> tuple[dict[str, str], list[str]]:
+    import shlex
+
+    _validate_non_empty_string(command, "verification command")
+    if any(token in command for token in ("|", "&&", ";", "`", "$(", ">", "<")):
+        raise ValueError("verification command must not use shell chaining, redirection, or substitution")
+    parts = shlex.split(command)
+    if not parts:
+        raise ValueError("verification command must not be empty")
+    env_updates: dict[str, str] = {}
+    if parts[0] == "PYTHONDONTWRITEBYTECODE=1":
+        env_updates["PYTHONDONTWRITEBYTECODE"] = "1"
+        parts = parts[1:]
+    if not parts:
+        raise ValueError("verification command missing executable")
+    return env_updates, parts
+
+
+def _validate_guarded_verification_command(command: str, boundary: dict[str, Any]) -> None:
+    env_updates, parts = _guarded_verification_split_command(command)
+    executable = parts[0]
+    family = executable.rsplit("/", 1)[-1]
+    if family not in boundary["allowed_command_families"]:
+        raise ValueError(f"verification command family is not allowed: {family}")
+    if family in boundary["forbidden_command_families"]:
+        raise ValueError(f"verification command family is forbidden: {family}")
+    forbidden_tokens = set(boundary["forbidden_command_families"])
+    if any(part.rsplit("/", 1)[-1] in forbidden_tokens for part in parts):
+        raise ValueError("verification command references forbidden command family")
+    if len(parts) >= 3 and parts[1] == "-m" and parts[2] in {"pip", "ensurepip"}:
+        raise ValueError("verification command must not install packages")
+    command_text = " ".join(parts[1:]).lower()
+    forbidden_python_tokens = (
+        "http://", "https://", "os.system", "requests", "socket", "subprocess", "urllib",
+    )
+    if any(token in command_text for token in forbidden_python_tokens):
+        raise ValueError("verification command must not request network or subprocess behavior")
+    if env_updates and env_updates != {"PYTHONDONTWRITEBYTECODE": "1"}:
+        raise ValueError("verification command contains unsupported environment override")
+
+
+def make_guarded_verification_request(
+    verification_runner_boundary: dict[str, Any],
+    *,
+    commands: list[str],
+    approved: bool = False,
+    write: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a guarded verification request without executing commands."""
+    validate_verification_runner_boundary(verification_runner_boundary)
+    normalized_commands = [command.strip() for command in commands]
+    request = {
+        "guarded_verification_runner_version": GUARDED_VERIFICATION_RUNNER_VERSION,
+        "request_id": make_guarded_verification_request_id(
+            verification_runner_boundary["verification_runner_boundary_id"],
+            verification_runner_boundary["workspace_id"],
+            normalized_commands,
+            approved,
+            write,
+        ),
+        "verification_runner_boundary_id": verification_runner_boundary["verification_runner_boundary_id"],
+        "planning_chain_id": verification_runner_boundary["planning_chain_id"],
+        "execution_package_id": verification_runner_boundary["execution_package_id"],
+        "workspace_id": verification_runner_boundary["workspace_id"],
+        "workspace_path": verification_runner_boundary["workspace_path"],
+        "commands": normalized_commands,
+        "approved": approved,
+        "write": write,
+        "dry_run": not write,
+        "metadata": dict(metadata or {}),
+    }
+    validate_guarded_verification_request(request, verification_runner_boundary)
+    return request
+
+
+def validate_guarded_verification_request(
+    request: dict[str, Any],
+    verification_runner_boundary: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "guarded_verification_runner_version", "request_id", "verification_runner_boundary_id",
+        "planning_chain_id", "execution_package_id", "workspace_id", "workspace_path",
+        "commands", "approved", "write", "dry_run", "metadata",
+    )
+    missing = [field for field in required if field not in request]
+    if missing:
+        raise ValueError(f"guarded verification request missing fields: {missing}")
+    if request["guarded_verification_runner_version"] != GUARDED_VERIFICATION_RUNNER_VERSION:
+        raise ValueError("unsupported guarded verification runner version")
+    for field in ("request_id", "verification_runner_boundary_id", "planning_chain_id", "execution_package_id", "workspace_id", "workspace_path"):
+        _validate_non_empty_string(request[field], field)
+    if not isinstance(request["approved"], bool) or not isinstance(request["write"], bool):
+        raise TypeError("approved and write must be booleans")
+    if request["dry_run"] != (not request["write"]):
+        raise ValueError("guarded verification request dry_run must invert write")
+    if not isinstance(request["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    commands = request["commands"]
+    if not isinstance(commands, list) or not commands:
+        raise TypeError("commands must be a non-empty list")
+    if not all(isinstance(command, str) and command.strip() for command in commands):
+        raise TypeError("commands must contain non-empty strings")
+    if commands != [command.strip() for command in commands]:
+        raise ValueError("commands must be stripped")
+    _guarded_patch_workspace_path(request["workspace_path"])
+    if request["write"] and not request["approved"]:
+        raise PermissionError("guarded verification requires explicit approval")
+    if verification_runner_boundary is not None:
+        validate_verification_runner_boundary(verification_runner_boundary)
+        expected_refs = {
+            "verification_runner_boundary_id": verification_runner_boundary["verification_runner_boundary_id"],
+            "planning_chain_id": verification_runner_boundary["planning_chain_id"],
+            "execution_package_id": verification_runner_boundary["execution_package_id"],
+            "workspace_id": verification_runner_boundary["workspace_id"],
+            "workspace_path": verification_runner_boundary["workspace_path"],
+        }
+        for field, value in expected_refs.items():
+            if request[field] != value:
+                raise ValueError(f"guarded verification request {field} does not match boundary")
+        if len(commands) > verification_runner_boundary["max_command_count"]:
+            raise ValueError("guarded verification command count exceeds boundary")
+        for command in commands:
+            _validate_guarded_verification_command(command, verification_runner_boundary)
+    expected_id = make_guarded_verification_request_id(
+        request["verification_runner_boundary_id"],
+        request["workspace_id"],
+        commands,
+        request["approved"],
+        request["write"],
+    )
+    if request["request_id"] != expected_id:
+        raise ValueError("guarded verification request id does not match contents")
+
+
+def collect_guarded_verification_receipt(
+    request: dict[str, Any],
+    verification_runner_boundary: dict[str, Any],
+    guarded_patch_receipt: dict[str, Any],
+    workspace_manifest: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+    execution_evidence_contract: dict[str, Any],
+    execution_retry_policy: dict[str, Any],
+    *,
+    executed_commands: list[dict[str, Any]],
+    receipt_timestamp: str,
+    retry_count: int = 0,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Collect a guarded verification receipt from command evidence."""
+    validate_guarded_verification_request(request, verification_runner_boundary)
+    validate_verification_runner_boundary(verification_runner_boundary, guarded_patch_receipt, None, execution_evidence_contract, execution_retry_policy)
+    validate_guarded_patch_receipt(guarded_patch_receipt)
+    validate_workspace_creation_receipt(workspace_creation_receipt)
+    validate_execution_evidence_contract(execution_evidence_contract)
+    validate_execution_retry_policy(execution_retry_policy)
+    if workspace_manifest != workspace_creation_receipt["workspace_manifest"]:
+        raise ValueError("workspace manifest must match workspace creation receipt")
+    commands = sorted([dict(command) for command in executed_commands], key=lambda item: item["sequence"])
+    command_hashes = [item["command_hash"] for item in commands]
+    exit_codes = [item["exit_code"] for item in commands]
+    stdout_refs = _normalize_implementation_branch_refs([item["stdout_ref"] for item in commands])
+    stderr_refs = _normalize_implementation_branch_refs([item["stderr_ref"] for item in commands])
+    evidence_refs = _normalize_implementation_branch_refs([item["evidence_ref"] for item in commands])
+    verification_result = "passed" if commands and all(code == 0 for code in exit_codes) else "failed"
+    rollback_triggered = verification_result != "passed"
+    safety = {
+        "dry_run": not request["write"],
+        "write_allowed": bool(request["write"]),
+        "automation_allowed": False,
+        "writes": evidence_refs if request["write"] else [],
+    }
+    receipt = {
+        "guarded_verification_receipt_version": GUARDED_VERIFICATION_RECEIPT_VERSION,
+        "verification_receipt_id": make_guarded_verification_receipt_id(
+            request["request_id"],
+            verification_runner_boundary["verification_runner_boundary_id"],
+            request["workspace_id"],
+            command_hashes,
+        ),
+        "request_id": request["request_id"],
+        "workspace_id": request["workspace_id"],
+        "workspace_path": request["workspace_path"],
+        "verification_runner_boundary_id": verification_runner_boundary["verification_runner_boundary_id"],
+        "guarded_patch_receipt_id": guarded_patch_receipt["guarded_patch_receipt_id"],
+        "executed_commands": commands,
+        "exit_codes": exit_codes,
+        "stdout_refs": stdout_refs,
+        "stderr_refs": stderr_refs,
+        "evidence_refs": evidence_refs,
+        "verification_result": verification_result,
+        "retry_count": retry_count,
+        "rollback_triggered": rollback_triggered,
+        "receipt_timestamp": receipt_timestamp,
+        "safety_metadata": safety,
+        "metadata": dict(metadata or {}),
+    }
+    validate_guarded_verification_receipt(receipt, request, verification_runner_boundary, guarded_patch_receipt, workspace_creation_receipt, execution_evidence_contract, execution_retry_policy)
+    return receipt
+
+
+def validate_guarded_verification_receipt(
+    receipt: dict[str, Any],
+    request: dict[str, Any] | None = None,
+    verification_runner_boundary: dict[str, Any] | None = None,
+    guarded_patch_receipt: dict[str, Any] | None = None,
+    workspace_creation_receipt: dict[str, Any] | None = None,
+    execution_evidence_contract: dict[str, Any] | None = None,
+    execution_retry_policy: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "guarded_verification_receipt_version", "verification_receipt_id", "request_id",
+        "workspace_id", "workspace_path", "verification_runner_boundary_id", "guarded_patch_receipt_id",
+        "executed_commands", "exit_codes", "stdout_refs", "stderr_refs", "evidence_refs",
+        "verification_result", "retry_count", "rollback_triggered", "receipt_timestamp",
+        "safety_metadata", "metadata",
+    )
+    missing = [field for field in required if field not in receipt]
+    if missing:
+        raise ValueError(f"guarded verification receipt missing fields: {missing}")
+    if receipt["guarded_verification_receipt_version"] != GUARDED_VERIFICATION_RECEIPT_VERSION:
+        raise ValueError("unsupported guarded verification receipt version")
+    for field in ("verification_receipt_id", "request_id", "workspace_id", "workspace_path", "verification_runner_boundary_id", "guarded_patch_receipt_id", "receipt_timestamp"):
+        _validate_non_empty_string(receipt[field], field)
+    if receipt["verification_result"] not in {"passed", "failed"}:
+        raise ValueError("invalid verification_result")
+    if not isinstance(receipt["retry_count"], int) or receipt["retry_count"] < 0:
+        raise ValueError("retry_count must be a non-negative integer")
+    if not isinstance(receipt["rollback_triggered"], bool):
+        raise TypeError("rollback_triggered must be a boolean")
+    commands = receipt["executed_commands"]
+    if not isinstance(commands, list) or not commands:
+        raise TypeError("executed_commands must be a non-empty list")
+    for index, command in enumerate(commands, start=1):
+        for field in ("command", "command_hash", "stdout_ref", "stderr_ref", "evidence_ref", "status"):
+            _validate_non_empty_string(command.get(field), f"executed command {field}")
+        if command.get("sequence") != index:
+            raise ValueError("executed command sequence must be contiguous")
+        if not isinstance(command.get("exit_code"), int):
+            raise TypeError("executed command exit_code must be an integer")
+        if command["command_hash"] != _guarded_verification_command_hash(command["command"]):
+            raise ValueError("executed command hash does not match command")
+        if command["status"] not in {"passed", "failed"}:
+            raise ValueError("invalid executed command status")
+    if receipt["exit_codes"] != [item["exit_code"] for item in commands]:
+        raise ValueError("exit_codes must match executed commands")
+    for field in ("stdout_refs", "stderr_refs", "evidence_refs"):
+        values = receipt[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_implementation_branch_refs(values):
+            raise ValueError(f"{field} must be normalized")
+    if receipt["verification_result"] == "passed" and any(code != 0 for code in receipt["exit_codes"]):
+        raise ValueError("passed verification cannot include failing exit codes")
+    if receipt["verification_result"] == "failed" and all(code == 0 for code in receipt["exit_codes"]):
+        raise ValueError("failed verification must include a failing exit code")
+    if receipt["rollback_triggered"] != (receipt["verification_result"] == "failed"):
+        raise ValueError("rollback_triggered must match verification failure")
+    safety = receipt["safety_metadata"]
+    if not isinstance(safety, dict):
+        raise TypeError("safety_metadata must be a dict")
+    if safety.get("automation_allowed") is not False:
+        raise ValueError("guarded verification must keep automation disabled")
+    if not isinstance(safety.get("writes"), list):
+        raise TypeError("guarded verification safety writes must be a list")
+    if safety["writes"] != _normalize_implementation_branch_refs(safety["writes"]):
+        raise ValueError("guarded verification safety writes must be normalized")
+    if not isinstance(receipt["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    expected_id = make_guarded_verification_receipt_id(
+        receipt["request_id"],
+        receipt["verification_runner_boundary_id"],
+        receipt["workspace_id"],
+        [item["command_hash"] for item in commands],
+    )
+    if receipt["verification_receipt_id"] != expected_id:
+        raise ValueError("guarded verification receipt id does not match contents")
+    if request is not None:
+        validate_guarded_verification_request(request, verification_runner_boundary)
+        if receipt["request_id"] != request["request_id"]:
+            raise ValueError("guarded verification receipt request mismatch")
+        if receipt["verification_result"] == "passed" and not request["write"]:
+            raise ValueError("passed guarded verification receipt requires write request")
+        if receipt["verification_result"] == "passed" and safety.get("dry_run") is not False:
+            raise ValueError("passed guarded verification receipt must not be dry run")
+    if verification_runner_boundary is not None:
+        validate_verification_runner_boundary(verification_runner_boundary)
+        if receipt["verification_runner_boundary_id"] != verification_runner_boundary["verification_runner_boundary_id"]:
+            raise ValueError("guarded verification receipt boundary mismatch")
+        if receipt["workspace_id"] != verification_runner_boundary["workspace_id"]:
+            raise ValueError("guarded verification receipt workspace mismatch")
+    if guarded_patch_receipt is not None:
+        validate_guarded_patch_receipt(guarded_patch_receipt)
+        if receipt["guarded_patch_receipt_id"] != guarded_patch_receipt["guarded_patch_receipt_id"]:
+            raise ValueError("guarded verification receipt patch receipt mismatch")
+    if workspace_creation_receipt is not None:
+        validate_workspace_creation_receipt(workspace_creation_receipt)
+        if receipt["workspace_id"] != workspace_creation_receipt["workspace_id"]:
+            raise ValueError("guarded verification receipt workspace creation mismatch")
+    if execution_evidence_contract is not None:
+        validate_execution_evidence_contract(execution_evidence_contract)
+    if execution_retry_policy is not None:
+        validate_execution_retry_policy(execution_retry_policy)
+        if receipt["retry_count"] > execution_retry_policy["max_attempts"] - 1:
+            raise ValueError("guarded verification retry count exceeds retry policy")
+
+
+def _validate_guarded_verification_runtime_inputs(
+    request: dict[str, Any],
+    verification_runner_boundary: dict[str, Any],
+    guarded_patch_receipt: dict[str, Any],
+    workspace_manifest: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+    execution_evidence_contract: dict[str, Any],
+    execution_retry_policy: dict[str, Any],
+) -> None:
+    validate_guarded_verification_request(request, verification_runner_boundary)
+    validate_verification_runner_boundary(verification_runner_boundary, guarded_patch_receipt, None, execution_evidence_contract, execution_retry_policy)
+    validate_guarded_patch_receipt(guarded_patch_receipt)
+    validate_workspace_creation_receipt(workspace_creation_receipt)
+    validate_execution_evidence_contract(execution_evidence_contract)
+    validate_execution_retry_policy(execution_retry_policy)
+    if workspace_manifest != workspace_creation_receipt["workspace_manifest"]:
+        raise ValueError("workspace manifest must match workspace creation receipt")
+    if request["workspace_id"] != workspace_creation_receipt["workspace_id"]:
+        raise ValueError("guarded verification request workspace must match creation receipt")
+    if request["workspace_path"] != workspace_creation_receipt["workspace_path"]:
+        raise ValueError("guarded verification request workspace path must match creation receipt")
+    if guarded_patch_receipt["workspace_id"] != workspace_creation_receipt["workspace_id"]:
+        raise ValueError("guarded verification patch receipt workspace mismatch")
+    workspace_path = _guarded_patch_workspace_path(workspace_creation_receipt["workspace_path"])
+    if request["write"]:
+        if workspace_creation_receipt["status"] != "created":
+            raise PermissionError("guarded verification requires a created workspace")
+        if guarded_patch_receipt["status"] != "applied":
+            raise PermissionError("guarded verification requires an applied patch receipt")
+        if not workspace_path.exists() or not workspace_path.is_dir():
+            raise FileNotFoundError("guarded verification workspace does not exist")
+        manifest_path = workspace_path / "workspace_manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError("guarded verification workspace manifest is missing")
+        on_disk_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if on_disk_manifest != workspace_manifest:
+            raise ValueError("on-disk workspace manifest does not match receipt")
+
+
+def _run_guarded_verification_command(command: str, workspace_path, evidence_dir, sequence: int, timeout: int) -> dict[str, Any]:
+    import os
+    import subprocess
+
+    env_updates, parts = _guarded_verification_split_command(command)
+    env = dict(os.environ)
+    env.update(env_updates)
+    completed = subprocess.run(
+        parts,
+        cwd=str(workspace_path),
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        shell=False,
+    )
+    command_hash = _guarded_verification_command_hash(command)
+    stem = f"command-{sequence}-{command_hash[:12]}"
+    stdout_ref = f"verification_evidence/{stem}.stdout.log"
+    stderr_ref = f"verification_evidence/{stem}.stderr.log"
+    evidence_ref = f"verification_evidence/{stem}.evidence.json"
+    stdout_path = workspace_path / stdout_ref
+    stderr_path = workspace_path / stderr_ref
+    evidence_path = workspace_path / evidence_ref
+    stdout_path.write_text(completed.stdout, encoding="utf-8")
+    stderr_path.write_text(completed.stderr, encoding="utf-8")
+    evidence = {
+        "command": command,
+        "command_hash": command_hash,
+        "exit_code": completed.returncode,
+        "stdout_ref": stdout_ref,
+        "stderr_ref": stderr_ref,
+        "status": "passed" if completed.returncode == 0 else "failed",
+    }
+    evidence_path.write_text(_stable_ruflo_json(evidence, indent=2) + "\n", encoding="utf-8")
+    return {
+        "sequence": sequence,
+        "command": command,
+        "command_hash": command_hash,
+        "exit_code": completed.returncode,
+        "stdout_ref": stdout_ref,
+        "stderr_ref": stderr_ref,
+        "evidence_ref": evidence_ref,
+        "status": evidence["status"],
+    }
+
+
+def run_guarded_verification(
+    request: dict[str, Any],
+    verification_runner_boundary: dict[str, Any],
+    guarded_patch_receipt: dict[str, Any],
+    workspace_manifest: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+    execution_evidence_contract: dict[str, Any],
+    execution_retry_policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Run allowlisted Python verification commands inside a guarded workspace."""
+    from datetime import datetime, timezone
+
+    _validate_guarded_verification_runtime_inputs(
+        request,
+        verification_runner_boundary,
+        guarded_patch_receipt,
+        workspace_manifest,
+        workspace_creation_receipt,
+        execution_evidence_contract,
+        execution_retry_policy,
+    )
+    if not request["write"]:
+        raise PermissionError("guarded verification requires --write")
+    if not request["approved"]:
+        raise PermissionError("guarded verification requires explicit approval")
+    workspace_path = _guarded_patch_workspace_path(workspace_creation_receipt["workspace_path"])
+    evidence_dir = workspace_path / "verification_evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    executed: list[dict[str, Any]] = []
+    retry_count = 0
+    for index, command in enumerate(request["commands"], start=1):
+        result = _run_guarded_verification_command(
+            command,
+            workspace_path,
+            evidence_dir,
+            index,
+            verification_runner_boundary["per_command_timeout_seconds"],
+        )
+        executed.append(result)
+        if result["exit_code"] != 0:
+            break
+    timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    receipt = collect_guarded_verification_receipt(
+        request,
+        verification_runner_boundary,
+        guarded_patch_receipt,
+        workspace_manifest,
+        workspace_creation_receipt,
+        execution_evidence_contract,
+        execution_retry_policy,
+        executed_commands=executed,
+        receipt_timestamp=timestamp,
+        retry_count=retry_count,
+    )
+    receipt_path = workspace_path / "guarded_verification_receipt.json"
+    receipt_path.write_text(_stable_ruflo_json(receipt, indent=2) + "\n", encoding="utf-8")
+    receipt["safety_metadata"]["writes"] = _normalize_implementation_branch_refs([
+        *receipt["evidence_refs"],
+        "guarded_verification_receipt.json",
+    ])
+    validate_guarded_verification_receipt(receipt, request, verification_runner_boundary, guarded_patch_receipt, workspace_creation_receipt, execution_evidence_contract, execution_retry_policy)
+    receipt_path.write_text(_stable_ruflo_json(receipt, indent=2) + "\n", encoding="utf-8")
+    return receipt
+
+
 def validate_verified_patch_diff_entry(entry: dict[str, Any]) -> None:
     required = (
         "diff_entry_id", "operation_id", "file_path", "operation_type", "before_summary",
