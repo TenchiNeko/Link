@@ -10174,6 +10174,58 @@ def workspace_boundary_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def collect_patch_boundary_preview_from_chain(chain: dict[str, Any]) -> dict[str, Any]:
+    """Collect the read-only patch applier boundary for a planning chain."""
+    approval = collect_execution_approval_checklist(chain)
+    workspace_boundary = collect_workspace_creator_runtime_boundary(chain)
+    workspace_plan = collect_workspace_creator_runtime_plan(chain)
+    boundary = collect_patch_applier_boundary(
+        chain["verified_patch_plan"],
+        chain["verified_patch_diff"],
+        chain["execution_gate_stack_preview"],
+        approval,
+        chain["execution_evidence_contract"],
+        workspace_boundary,
+        workspace_plan,
+        planning_chain_id=chain["planning_chain_id"],
+    )
+    validate_patch_applier_boundary(
+        boundary,
+        chain["verified_patch_plan"],
+        chain["verified_patch_diff"],
+        chain["execution_gate_stack_preview"],
+        approval,
+        chain["execution_evidence_contract"],
+        workspace_boundary,
+        workspace_plan,
+    )
+    return boundary
+
+
+def patch_boundary_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth patch-boundary`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth patch-boundary: patch applier runtime boundary")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth patch-boundary")
+        print("  python3 link.py growth patch-boundary --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth patch-boundary is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    boundary = collect_patch_boundary_preview_from_chain(chain)
+    if "--json" in args:
+        print(stable_patch_applier_boundary_json(boundary), end="")
+        return 0
+    render_patch_boundary_plain(boundary)
+    return 0
+
+
 def _workspace_create_arg_value(args: list[str], name: str) -> str | None:
     if name not in args:
         return None
@@ -10181,6 +10233,82 @@ def _workspace_create_arg_value(args: list[str], name: str) -> str | None:
     if index + 1 >= len(args):
         raise ValueError(f"{name} requires a value")
     return args[index + 1]
+
+
+def patch_apply_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth patch-apply`` guarded workspace-only runtime."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth patch-apply: guarded patch applier for temporary workspaces")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth patch-apply --json")
+        print("  python3 link.py growth patch-apply --write --approved --workspace-path PATH --json")
+        print("")
+        print("Preview by default. --write requires --approved and a guarded workspace path.")
+        return 0
+    write = "--write" in args
+    approved = "--approved" in args
+    try:
+        workspace_path_arg = _workspace_create_arg_value(args, "--workspace-path")
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    boundary = collect_patch_boundary_preview_from_chain(chain)
+    approval = collect_execution_approval_checklist(chain)
+    gate_stack = chain["execution_gate_stack_preview"]
+    evidence_contract = chain["execution_evidence_contract"]
+    try:
+        if workspace_path_arg:
+            workspace_receipt = _workspace_lifecycle_receipt_from_manifest(workspace_path_arg)
+        else:
+            workspace_plan = collect_workspace_creator_runtime_plan(chain)
+            preview_request = make_guarded_workspace_request(
+                workspace_plan,
+                approved=False,
+                write=False,
+                workspace_root="/tmp/link-guarded-patch-preview",
+            )
+            workspace_receipt = preview_guarded_workspace_creation(preview_request, workspace_plan)
+        request = make_guarded_patch_request(
+            boundary,
+            workspace_receipt,
+            approved=approved,
+            write=write,
+        )
+        if write:
+            receipt = apply_guarded_patch(
+                request,
+                boundary,
+                chain["verified_patch_plan"],
+                chain["verified_patch_diff"],
+                workspace_receipt,
+                workspace_receipt["workspace_manifest"],
+                approval,
+                gate_stack,
+                evidence_contract,
+            )
+        else:
+            receipt = preview_guarded_patch_application(
+                request,
+                boundary,
+                chain["verified_patch_plan"],
+                chain["verified_patch_diff"],
+                workspace_receipt,
+                workspace_receipt["workspace_manifest"],
+                approval,
+                gate_stack,
+                evidence_contract,
+            )
+    except (OSError, PermissionError, TypeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(_stable_ruflo_json(receipt, indent=2) + "\n", end="")
+        return 0
+    render_guarded_patch_receipt_plain(receipt)
+    return 0
 
 
 def workspace_create_main(argv: list[str] | None = None) -> int:
@@ -10415,6 +10543,32 @@ def render_workspace_boundary_plain(boundary: dict[str, Any]) -> None:
     print(f"next_action: {boundary['recommended_next_action']}")
 
 
+def render_patch_boundary_plain(boundary: dict[str, Any]) -> None:
+    validate_patch_applier_boundary(boundary)
+    evidence_count = (
+        len(boundary["required_patch_evidence"])
+        + len(boundary["required_diff_evidence"])
+        + len(boundary["required_file_hash_evidence"])
+        + len(boundary["required_journal_evidence"])
+        + (1 if boundary["required_reviewer_summary"] else 0)
+    )
+    forbidden_path_count = len(boundary["forbidden_target_paths"]) + len(boundary["forbidden_path_prefixes"])
+    print("Growth patch boundary")
+    print(f"patch_applier_boundary_id: {boundary['patch_applier_boundary_id']}")
+    print(f"planning_chain_id: {boundary['planning_chain_id']}")
+    print(f"verified_patch_plan_id: {boundary['verified_patch_plan_id']}")
+    print(f"verified_patch_diff_id: {boundary['verified_patch_diff_id']}")
+    print(f"execution_package_id: {boundary['execution_package_id']}")
+    print(f"workspace_boundary_id: {boundary['workspace_boundary_id']}")
+    print(f"runtime_workspace_plan_id: {boundary['runtime_workspace_plan_id']}")
+    print(f"allowed_target_file_count: {len(boundary['allowed_target_files'])}")
+    print(f"forbidden_path_count: {forbidden_path_count}")
+    print(f"max_files_changed: {boundary['max_files_changed']}")
+    print(f"max_operations: {boundary['max_operations']}")
+    print(f"evidence_requirement_count: {evidence_count}")
+    print("next_action: review patch boundary before enabling patch applier runtime")
+
+
 def render_workspace_creation_receipt_plain(receipt: dict[str, Any]) -> None:
     validate_workspace_creation_receipt(receipt)
     print("Growth workspace creation")
@@ -10426,6 +10580,21 @@ def render_workspace_creation_receipt_plain(receipt: dict[str, Any]) -> None:
     print(f"workspace_boundary_id: {receipt['workspace_boundary_id']}")
     print(f"manifest_hash: {receipt['manifest_hash']}")
     print(f"workspace_hash: {receipt['workspace_hash']}")
+
+
+def render_guarded_patch_receipt_plain(receipt: dict[str, Any]) -> None:
+    validate_guarded_patch_receipt(receipt)
+    print("Growth patch apply")
+    print(f"guarded_patch_receipt_id: {receipt['guarded_patch_receipt_id']}")
+    print(f"workspace_id: {receipt['workspace_id']}")
+    print(f"patch_applier_boundary_id: {receipt['patch_applier_boundary_id']}")
+    print(f"verified_patch_plan_id: {receipt['verified_patch_plan_id']}")
+    print(f"verified_patch_diff_id: {receipt['verified_patch_diff_id']}")
+    print(f"status: {receipt['status']}")
+    print(f"applied_operation_count: {len(receipt['applied_operations'])}")
+    print(f"skipped_operation_count: {len(receipt['skipped_operations'])}")
+    print(f"changed_file_count: {len(receipt['changed_files'])}")
+    print(f"write_allowed: {receipt['safety_metadata']['write_allowed']}")
 
 
 def render_workspace_lifecycle_plain(label: str, payload: dict[str, Any]) -> None:
@@ -16079,6 +16248,564 @@ def parse_patch_applier_boundary_json(text: str) -> dict[str, Any]:
     boundary = json.loads(text)
     validate_patch_applier_boundary(boundary)
     return boundary
+
+
+
+GUARDED_PATCH_APPLIER_VERSION = "link-guarded-patch-applier-v1"
+GUARDED_PATCH_RECEIPT_VERSION = "link-guarded-patch-receipt-v1"
+
+
+def make_guarded_patch_request_id(
+    patch_applier_boundary_id: str,
+    workspace_id: str,
+    workspace_path: str,
+    approved: bool,
+    write: bool,
+) -> str:
+    return _execution_readiness_id("guarded-patch-request", {
+        "approved": approved,
+        "patch_applier_boundary_id": patch_applier_boundary_id,
+        "version": GUARDED_PATCH_APPLIER_VERSION,
+        "workspace_id": workspace_id,
+        "workspace_path": workspace_path,
+        "write": write,
+    })
+
+
+def make_guarded_patch_receipt_id(
+    request_id: str,
+    patch_applier_boundary_id: str,
+    workspace_id: str,
+    patch_hash: str,
+) -> str:
+    return _execution_readiness_id("guarded-patch-receipt", {
+        "patch_applier_boundary_id": patch_applier_boundary_id,
+        "patch_hash": patch_hash,
+        "request_id": request_id,
+        "version": GUARDED_PATCH_RECEIPT_VERSION,
+        "workspace_id": workspace_id,
+    })
+
+
+def make_guarded_patch_request(
+    patch_applier_boundary: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+    *,
+    approved: bool = False,
+    write: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a guarded patch request without touching files."""
+    validate_patch_applier_boundary(patch_applier_boundary)
+    validate_workspace_creation_receipt(workspace_creation_receipt)
+    request = {
+        "guarded_patch_applier_version": GUARDED_PATCH_APPLIER_VERSION,
+        "request_id": make_guarded_patch_request_id(
+            patch_applier_boundary["patch_applier_boundary_id"],
+            workspace_creation_receipt["workspace_id"],
+            workspace_creation_receipt["workspace_path"],
+            approved,
+            write,
+        ),
+        "planning_chain_id": patch_applier_boundary["planning_chain_id"],
+        "execution_package_id": patch_applier_boundary["execution_package_id"],
+        "patch_applier_boundary_id": patch_applier_boundary["patch_applier_boundary_id"],
+        "verified_patch_plan_id": patch_applier_boundary["verified_patch_plan_id"],
+        "verified_patch_diff_id": patch_applier_boundary["verified_patch_diff_id"],
+        "workspace_id": workspace_creation_receipt["workspace_id"],
+        "workspace_path": workspace_creation_receipt["workspace_path"],
+        "creation_receipt_id": workspace_creation_receipt["creation_receipt_id"],
+        "approved": approved,
+        "write": write,
+        "dry_run": not write,
+        "metadata": dict(metadata or {}),
+    }
+    validate_guarded_patch_request(request, patch_applier_boundary, workspace_creation_receipt)
+    return request
+
+
+def _guarded_patch_repo_root():
+    from pathlib import Path
+
+    return Path.cwd().resolve(strict=False)
+
+
+def _guarded_patch_workspace_path(path: str):
+    from pathlib import Path
+
+    workspace = Path(path).expanduser().resolve(strict=False)
+    repo_root = _guarded_patch_repo_root()
+    try:
+        workspace.relative_to(repo_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("guarded patch workspace must be outside the repository root")
+    return workspace
+
+
+def _guarded_patch_target_path(workspace_path: str, file_path: str):
+    workspace = _guarded_patch_workspace_path(workspace_path)
+    _patch_applier_validate_target_path(file_path)
+    target = (workspace / file_path).resolve(strict=False)
+    try:
+        target.relative_to(workspace)
+    except ValueError as exc:
+        raise ValueError("guarded patch target must stay inside workspace") from exc
+    return target
+
+
+def _guarded_patch_file_hash(path) -> str:
+    import hashlib
+
+    if not path.exists() or not path.is_file():
+        return ""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _guarded_patch_diff_hash(verified_patch_diff: dict[str, Any]) -> str:
+    import hashlib
+
+    return hashlib.sha256(stable_verified_patch_diff_json(verified_patch_diff).encode("utf-8")).hexdigest()
+
+
+def validate_guarded_patch_request(
+    request: dict[str, Any],
+    patch_applier_boundary: dict[str, Any] | None = None,
+    workspace_creation_receipt: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "guarded_patch_applier_version", "request_id", "planning_chain_id", "execution_package_id",
+        "patch_applier_boundary_id", "verified_patch_plan_id", "verified_patch_diff_id",
+        "workspace_id", "workspace_path", "creation_receipt_id", "approved", "write", "dry_run", "metadata",
+    )
+    missing = [field for field in required if field not in request]
+    if missing:
+        raise ValueError(f"guarded patch request missing fields: {missing}")
+    if request["guarded_patch_applier_version"] != GUARDED_PATCH_APPLIER_VERSION:
+        raise ValueError("unsupported guarded patch applier version")
+    for field in (
+        "request_id", "planning_chain_id", "execution_package_id", "patch_applier_boundary_id",
+        "verified_patch_plan_id", "verified_patch_diff_id", "workspace_id", "workspace_path", "creation_receipt_id",
+    ):
+        _validate_non_empty_string(request[field], field)
+    if not isinstance(request["approved"], bool) or not isinstance(request["write"], bool):
+        raise TypeError("approved and write must be booleans")
+    if request["dry_run"] != (not request["write"]):
+        raise ValueError("guarded patch request dry_run must invert write")
+    if not isinstance(request["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    _guarded_patch_workspace_path(request["workspace_path"])
+    expected_id = make_guarded_patch_request_id(
+        request["patch_applier_boundary_id"],
+        request["workspace_id"],
+        request["workspace_path"],
+        request["approved"],
+        request["write"],
+    )
+    if request["request_id"] != expected_id:
+        raise ValueError("guarded patch request id does not match contents")
+    if request["write"] and not request["approved"]:
+        raise PermissionError("guarded patch application requires explicit approval")
+    if patch_applier_boundary is not None:
+        validate_patch_applier_boundary(patch_applier_boundary)
+        expected_refs = {
+            "planning_chain_id": patch_applier_boundary["planning_chain_id"],
+            "execution_package_id": patch_applier_boundary["execution_package_id"],
+            "patch_applier_boundary_id": patch_applier_boundary["patch_applier_boundary_id"],
+            "verified_patch_plan_id": patch_applier_boundary["verified_patch_plan_id"],
+            "verified_patch_diff_id": patch_applier_boundary["verified_patch_diff_id"],
+        }
+        for field, value in expected_refs.items():
+            if request[field] != value:
+                raise ValueError(f"guarded patch request {field} does not match boundary")
+    if workspace_creation_receipt is not None:
+        validate_workspace_creation_receipt(workspace_creation_receipt)
+        if request["workspace_id"] != workspace_creation_receipt["workspace_id"]:
+            raise ValueError("guarded patch request workspace id mismatch")
+        if request["workspace_path"] != workspace_creation_receipt["workspace_path"]:
+            raise ValueError("guarded patch request workspace path mismatch")
+        if request["creation_receipt_id"] != workspace_creation_receipt["creation_receipt_id"]:
+            raise ValueError("guarded patch request creation receipt mismatch")
+        if request["write"] and workspace_creation_receipt["status"] != "created":
+            raise PermissionError("guarded patch application requires a created workspace")
+
+
+def _guarded_patch_operation_text(operation: dict[str, Any]) -> str:
+    prefix = "#"
+    if operation["file_path"].lower().endswith((".md", ".rst", ".txt")):
+        prefix = "<!--"
+        suffix = " -->"
+    else:
+        suffix = ""
+    if prefix == "<!--":
+        return (
+            f"\n<!-- Link guarded patch operation: {operation['operation_id']} -->\n"
+            f"<!-- Expected result: {operation['expected_result']} -->\n"
+        )
+    return (
+        f"\n# Link guarded patch operation: {operation['operation_id']}\n"
+        f"# Expected result: {operation['expected_result']}\n"
+    )
+
+
+def _apply_guarded_patch_operation(workspace_path: str, operation: dict[str, Any]) -> dict[str, Any]:
+    target = _guarded_patch_target_path(workspace_path, operation["file_path"])
+    before_hash = _guarded_patch_file_hash(target)
+    operation_type = operation["operation_type"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if operation_type == "delete_file":
+        if target.exists() and target.is_file():
+            target.unlink()
+        status = "deleted"
+    elif operation_type in {"create_file", "add_test"}:
+        if target.exists():
+            raise FileExistsError("guarded patch create operation refuses to overwrite existing file")
+        target.write_text(_guarded_patch_operation_text(operation), encoding="utf-8")
+        status = "created"
+    elif operation_type in {"modify_file", "update_test", "documentation_update"}:
+        existing = target.read_text(encoding="utf-8") if target.exists() else ""
+        target.write_text(existing + _guarded_patch_operation_text(operation), encoding="utf-8")
+        status = "modified"
+    else:
+        raise ValueError(f"unsupported guarded patch operation type: {operation_type}")
+    after_hash = _guarded_patch_file_hash(target)
+    return {
+        "operation_id": operation["operation_id"],
+        "operation_type": operation_type,
+        "file_path": operation["file_path"],
+        "status": status,
+        "before_hash": before_hash,
+        "after_hash": after_hash,
+    }
+
+
+def collect_guarded_patch_receipt(
+    request: dict[str, Any],
+    patch_applier_boundary: dict[str, Any],
+    verified_patch_plan: dict[str, Any],
+    verified_patch_diff: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+    *,
+    applied_operations: list[dict[str, Any]],
+    skipped_operations: list[dict[str, Any]] | None = None,
+    receipt_timestamp: str = "preview-only",
+    status: str = "preview",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Collect a guarded patch receipt from already-applied workspace-local operations."""
+    validate_guarded_patch_request(request, patch_applier_boundary, workspace_creation_receipt)
+    validate_patch_applier_boundary(patch_applier_boundary, verified_patch_plan, verified_patch_diff)
+    validate_verified_patch_plan(verified_patch_plan)
+    validate_verified_patch_diff(verified_patch_diff)
+    validate_workspace_creation_receipt(workspace_creation_receipt)
+    applied = sorted([dict(item) for item in applied_operations], key=lambda item: item["operation_id"])
+    skipped = sorted([dict(item) for item in (skipped_operations or [])], key=lambda item: item["operation_id"])
+    before_hashes = {item["file_path"]: item["before_hash"] for item in applied}
+    after_hashes = {item["file_path"]: item["after_hash"] for item in applied}
+    changed_files = _normalize_implementation_branch_refs([item["file_path"] for item in applied if item["before_hash"] != item["after_hash"]])
+    patch_hash = _guarded_patch_diff_hash(verified_patch_diff)
+    safety = {
+        "dry_run": not request["write"],
+        "write_allowed": bool(request["write"]),
+        "automation_allowed": False,
+        "writes": changed_files if request["write"] else [],
+    }
+    receipt = {
+        "guarded_patch_receipt_version": GUARDED_PATCH_RECEIPT_VERSION,
+        "guarded_patch_receipt_id": make_guarded_patch_receipt_id(
+            request["request_id"],
+            patch_applier_boundary["patch_applier_boundary_id"],
+            workspace_creation_receipt["workspace_id"],
+            patch_hash,
+        ),
+        "request_id": request["request_id"],
+        "workspace_id": workspace_creation_receipt["workspace_id"],
+        "workspace_path": workspace_creation_receipt["workspace_path"],
+        "patch_applier_boundary_id": patch_applier_boundary["patch_applier_boundary_id"],
+        "verified_patch_plan_id": verified_patch_plan["verified_patch_plan_id"],
+        "verified_patch_diff_id": verified_patch_diff["verified_patch_diff_id"],
+        "applied_operations": applied,
+        "skipped_operations": skipped,
+        "before_file_hashes": before_hashes,
+        "after_file_hashes": after_hashes,
+        "patch_hash": patch_hash,
+        "changed_files": changed_files,
+        "added_lines": verified_patch_diff["estimated_added_lines"],
+        "removed_lines": verified_patch_diff["estimated_removed_lines"],
+        "modified_lines": verified_patch_diff["estimated_modified_lines"],
+        "receipt_timestamp": receipt_timestamp,
+        "status": status,
+        "safety_metadata": safety,
+        "metadata": dict(metadata or {}),
+    }
+    validate_guarded_patch_receipt(receipt, request, patch_applier_boundary, verified_patch_plan, verified_patch_diff, workspace_creation_receipt)
+    return receipt
+
+
+def validate_guarded_patch_receipt(
+    receipt: dict[str, Any],
+    request: dict[str, Any] | None = None,
+    patch_applier_boundary: dict[str, Any] | None = None,
+    verified_patch_plan: dict[str, Any] | None = None,
+    verified_patch_diff: dict[str, Any] | None = None,
+    workspace_creation_receipt: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "guarded_patch_receipt_version", "guarded_patch_receipt_id", "request_id", "workspace_id",
+        "workspace_path", "patch_applier_boundary_id", "verified_patch_plan_id", "verified_patch_diff_id",
+        "applied_operations", "skipped_operations", "before_file_hashes", "after_file_hashes",
+        "patch_hash", "changed_files", "added_lines", "removed_lines", "modified_lines",
+        "receipt_timestamp", "status", "safety_metadata", "metadata",
+    )
+    missing = [field for field in required if field not in receipt]
+    if missing:
+        raise ValueError(f"guarded patch receipt missing fields: {missing}")
+    if receipt["guarded_patch_receipt_version"] != GUARDED_PATCH_RECEIPT_VERSION:
+        raise ValueError("unsupported guarded patch receipt version")
+    for field in (
+        "guarded_patch_receipt_id", "request_id", "workspace_id", "workspace_path",
+        "patch_applier_boundary_id", "verified_patch_plan_id", "verified_patch_diff_id",
+        "patch_hash", "receipt_timestamp", "status",
+    ):
+        _validate_non_empty_string(receipt[field], field)
+    if receipt["status"] not in {"preview", "applied"}:
+        raise ValueError("invalid guarded patch receipt status")
+    for field in ("applied_operations", "skipped_operations"):
+        if not isinstance(receipt[field], list):
+            raise TypeError(f"{field} must be a list")
+    for item in receipt["applied_operations"] + receipt["skipped_operations"]:
+        for field in ("operation_id", "operation_type", "file_path", "status"):
+            _validate_non_empty_string(item.get(field), f"guarded patch operation {field}")
+        _patch_applier_validate_target_path(item["file_path"])
+        if item["operation_type"] not in VERIFIED_PATCH_OPERATION_TYPES:
+            raise ValueError("guarded patch receipt contains invalid operation type")
+    for field in ("before_file_hashes", "after_file_hashes", "safety_metadata", "metadata"):
+        if not isinstance(receipt[field], dict):
+            raise TypeError(f"{field} must be a dict")
+    if receipt["changed_files"] != _normalize_implementation_branch_refs(receipt["changed_files"]):
+        raise ValueError("guarded patch changed_files must be normalized")
+    for field in ("added_lines", "removed_lines", "modified_lines"):
+        if not isinstance(receipt[field], int) or receipt[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    safety = receipt["safety_metadata"]
+    if safety.get("automation_allowed") is not False:
+        raise ValueError("guarded patch receipt must keep automation disabled")
+    if not isinstance(safety.get("writes"), list):
+        raise TypeError("guarded patch receipt safety writes must be a list")
+    if safety["writes"] != _normalize_implementation_branch_refs(safety["writes"]):
+        raise ValueError("guarded patch receipt safety writes must be normalized")
+    if receipt["status"] == "preview":
+        if safety.get("dry_run") is not True or safety.get("write_allowed") is not False or safety["writes"] != []:
+            raise ValueError("guarded patch preview receipt must be read-only")
+    if receipt["status"] == "applied":
+        if safety.get("dry_run") is not False or safety.get("write_allowed") is not True:
+            raise ValueError("guarded patch applied receipt must record write allowance")
+        if safety["writes"] != receipt["changed_files"]:
+            raise ValueError("guarded patch applied receipt writes must match changed files")
+    expected_id = make_guarded_patch_receipt_id(
+        receipt["request_id"],
+        receipt["patch_applier_boundary_id"],
+        receipt["workspace_id"],
+        receipt["patch_hash"],
+    )
+    if receipt["guarded_patch_receipt_id"] != expected_id:
+        raise ValueError("guarded patch receipt id does not match contents")
+    if request is not None:
+        validate_guarded_patch_request(request)
+        if receipt["request_id"] != request["request_id"]:
+            raise ValueError("guarded patch receipt request mismatch")
+        if receipt["status"] == "applied" and not request["write"]:
+            raise ValueError("guarded patch applied receipt requires write request")
+    if patch_applier_boundary is not None:
+        validate_patch_applier_boundary(patch_applier_boundary)
+        if receipt["patch_applier_boundary_id"] != patch_applier_boundary["patch_applier_boundary_id"]:
+            raise ValueError("guarded patch receipt boundary mismatch")
+    if verified_patch_plan is not None:
+        validate_verified_patch_plan(verified_patch_plan)
+        if receipt["verified_patch_plan_id"] != verified_patch_plan["verified_patch_plan_id"]:
+            raise ValueError("guarded patch receipt patch plan mismatch")
+        operation_ids = {operation["operation_id"] for operation in verified_patch_plan["patch_operations"]}
+        applied_ids = {operation["operation_id"] for operation in receipt["applied_operations"]}
+        skipped_ids = {operation["operation_id"] for operation in receipt["skipped_operations"]}
+        if applied_ids | skipped_ids != operation_ids:
+            raise ValueError("guarded patch receipt must account for every operation")
+    if verified_patch_diff is not None:
+        validate_verified_patch_diff(verified_patch_diff)
+        if receipt["verified_patch_diff_id"] != verified_patch_diff["verified_patch_diff_id"]:
+            raise ValueError("guarded patch receipt patch diff mismatch")
+        if receipt["patch_hash"] != _guarded_patch_diff_hash(verified_patch_diff):
+            raise ValueError("guarded patch receipt patch hash mismatch")
+    if workspace_creation_receipt is not None:
+        validate_workspace_creation_receipt(workspace_creation_receipt)
+        if receipt["workspace_id"] != workspace_creation_receipt["workspace_id"]:
+            raise ValueError("guarded patch receipt workspace mismatch")
+        if receipt["workspace_path"] != workspace_creation_receipt["workspace_path"]:
+            raise ValueError("guarded patch receipt workspace path mismatch")
+
+
+def _validate_guarded_patch_runtime_inputs(
+    request: dict[str, Any],
+    patch_applier_boundary: dict[str, Any],
+    verified_patch_plan: dict[str, Any],
+    verified_patch_diff: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+    workspace_manifest: dict[str, Any],
+    execution_approval_checklist: dict[str, Any],
+    execution_gate_stack_preview: dict[str, Any],
+    execution_evidence_contract: dict[str, Any],
+) -> None:
+    validate_guarded_patch_request(request, patch_applier_boundary, workspace_creation_receipt)
+    validate_patch_applier_boundary(
+        patch_applier_boundary,
+        verified_patch_plan,
+        verified_patch_diff,
+        execution_gate_stack_preview,
+        execution_approval_checklist,
+        execution_evidence_contract,
+    )
+    validate_workspace_creation_receipt(workspace_creation_receipt)
+    validate_execution_approval_checklist(execution_approval_checklist)
+    validate_execution_gate_stack_preview(execution_gate_stack_preview)
+    validate_execution_evidence_contract(execution_evidence_contract)
+    if workspace_manifest != workspace_creation_receipt["workspace_manifest"]:
+        raise ValueError("workspace manifest must match workspace creation receipt")
+    if request["write"]:
+        if execution_approval_checklist["approval_status"] != "pass":
+            raise PermissionError("guarded patch application requires passing approval checklist")
+        if execution_gate_stack_preview["block_count"]:
+            raise PermissionError("guarded patch application blocked by gate stack")
+        if workspace_creation_receipt["status"] != "created":
+            raise PermissionError("guarded patch application requires a created workspace")
+        workspace_path = _guarded_patch_workspace_path(workspace_creation_receipt["workspace_path"])
+        if not workspace_path.exists() or not workspace_path.is_dir():
+            raise FileNotFoundError("guarded patch workspace does not exist")
+        manifest_path = workspace_path / "workspace_manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError("guarded patch workspace manifest is missing")
+        on_disk_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if on_disk_manifest != workspace_manifest:
+            raise ValueError("on-disk workspace manifest does not match receipt")
+    if len(verified_patch_plan["patch_operations"]) > patch_applier_boundary["max_operations"]:
+        raise ValueError("guarded patch operation count exceeds boundary")
+    if len(verified_patch_plan["target_files"]) > patch_applier_boundary["max_files_changed"]:
+        raise ValueError("guarded patch target file count exceeds boundary")
+    if verified_patch_diff["estimated_added_lines"] > patch_applier_boundary["max_estimated_added_lines"]:
+        raise ValueError("guarded patch added lines exceed boundary")
+    if verified_patch_diff["estimated_removed_lines"] > patch_applier_boundary["max_estimated_removed_lines"]:
+        raise ValueError("guarded patch removed lines exceed boundary")
+    allowed_targets = set(patch_applier_boundary["allowed_target_files"])
+    allowed_operations = set(patch_applier_boundary["allowed_operation_types"])
+    for operation in verified_patch_plan["patch_operations"]:
+        if operation["file_path"] not in allowed_targets:
+            raise ValueError("guarded patch operation target is not allowed")
+        if operation["operation_type"] not in allowed_operations:
+            raise ValueError("guarded patch operation type is not allowed")
+        _guarded_patch_target_path(workspace_creation_receipt["workspace_path"], operation["file_path"])
+
+
+def preview_guarded_patch_application(
+    request: dict[str, Any],
+    patch_applier_boundary: dict[str, Any],
+    verified_patch_plan: dict[str, Any],
+    verified_patch_diff: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+    workspace_manifest: dict[str, Any],
+    execution_approval_checklist: dict[str, Any],
+    execution_gate_stack_preview: dict[str, Any],
+    execution_evidence_contract: dict[str, Any],
+) -> dict[str, Any]:
+    _validate_guarded_patch_runtime_inputs(
+        request,
+        patch_applier_boundary,
+        verified_patch_plan,
+        verified_patch_diff,
+        workspace_creation_receipt,
+        workspace_manifest,
+        execution_approval_checklist,
+        execution_gate_stack_preview,
+        execution_evidence_contract,
+    )
+    skipped = [
+        {
+            "operation_id": operation["operation_id"],
+            "operation_type": operation["operation_type"],
+            "file_path": operation["file_path"],
+            "status": "preview_only",
+        }
+        for operation in verified_patch_plan["patch_operations"]
+    ]
+    return collect_guarded_patch_receipt(
+        request,
+        patch_applier_boundary,
+        verified_patch_plan,
+        verified_patch_diff,
+        workspace_creation_receipt,
+        applied_operations=[],
+        skipped_operations=skipped,
+        status="preview",
+    )
+
+
+def apply_guarded_patch(
+    request: dict[str, Any],
+    patch_applier_boundary: dict[str, Any],
+    verified_patch_plan: dict[str, Any],
+    verified_patch_diff: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+    workspace_manifest: dict[str, Any],
+    execution_approval_checklist: dict[str, Any],
+    execution_gate_stack_preview: dict[str, Any],
+    execution_evidence_contract: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply verified patch operations only inside a guarded temporary workspace."""
+    import shutil
+    from datetime import datetime, timezone
+
+    _validate_guarded_patch_runtime_inputs(
+        request,
+        patch_applier_boundary,
+        verified_patch_plan,
+        verified_patch_diff,
+        workspace_creation_receipt,
+        workspace_manifest,
+        execution_approval_checklist,
+        execution_gate_stack_preview,
+        execution_evidence_contract,
+    )
+    if not request["write"]:
+        raise PermissionError("guarded patch application requires --write")
+    if not request["approved"]:
+        raise PermissionError("guarded patch application requires explicit approval")
+    workspace_path = _guarded_patch_workspace_path(workspace_creation_receipt["workspace_path"])
+    backup_path = workspace_path.parent / f".{workspace_path.name}.patch-backup-{request['request_id']}"
+    if backup_path.exists():
+        shutil.rmtree(backup_path)
+    shutil.copytree(workspace_path, backup_path)
+    try:
+        applied = [_apply_guarded_patch_operation(str(workspace_path), operation) for operation in verified_patch_plan["patch_operations"]]
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        receipt = collect_guarded_patch_receipt(
+            request,
+            patch_applier_boundary,
+            verified_patch_plan,
+            verified_patch_diff,
+            workspace_creation_receipt,
+            applied_operations=applied,
+            skipped_operations=[],
+            receipt_timestamp=timestamp,
+            status="applied",
+        )
+        receipt_path = workspace_path / "guarded_patch_receipt.json"
+        receipt_path.write_text(_stable_ruflo_json(receipt, indent=2) + "\n", encoding="utf-8")
+        shutil.rmtree(backup_path)
+        return receipt
+    except Exception:
+        if workspace_path.exists():
+            shutil.rmtree(workspace_path)
+        shutil.copytree(backup_path, workspace_path)
+        shutil.rmtree(backup_path)
+        raise
 
 
 def validate_verified_patch_diff_entry(entry: dict[str, Any]) -> None:

@@ -7783,6 +7783,114 @@ def check_growth_workspace_boundary_cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62a. Growth patch-boundary CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_patch_boundary_cli() -> None:
+    """patch-boundary exposes only the patch applier boundary."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_growth_planning_chain_preview,
+        collect_patch_boundary_preview_from_chain,
+        parse_patch_applier_boundary_json,
+        patch_boundary_main,
+        stable_patch_applier_boundary_json,
+        validate_patch_applier_boundary,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("patch-boundary" in help_out.getvalue(),
+             "growth help must include patch-boundary")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = patch_boundary_main(["--json"])
+    _require(json_rc == 0, "patch-boundary --json must return 0")
+    parsed = parse_patch_applier_boundary_json(json_out.getvalue())
+    validate_patch_applier_boundary(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected = collect_patch_boundary_preview_from_chain(chain)
+    _require(parsed["patch_applier_boundary_id"] == expected["patch_applier_boundary_id"],
+             "patch-boundary id must be deterministic")
+    _require(parsed == parse_patch_applier_boundary_json(stable_patch_applier_boundary_json(parsed)),
+             "patch-boundary JSON must round trip")
+    _require(parsed["planning_chain_id"] == chain["planning_chain_id"],
+             "patch-boundary must reference planning chain")
+    _require(parsed["verified_patch_plan_id"] == chain["verified_patch_plan"]["verified_patch_plan_id"],
+             "patch-boundary must reference verified patch plan")
+    _require(parsed["verified_patch_diff_id"] == chain["verified_patch_diff"]["verified_patch_diff_id"],
+             "patch-boundary must reference verified patch diff")
+    _require(parsed["execution_package_id"] == chain["autonomous_execution_package"]["execution_package_id"],
+             "patch-boundary must reference execution package")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "patch-boundary must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "patch-boundary must not allow automation or writes")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "verified_patch_plan",
+        "verified_patch_diff",
+        "execution_gate_stack_preview",
+        "execution_approval_checklist",
+        "execution_evidence_contract",
+        "workspace_creator_runtime_boundary",
+        "workspace_runtime_plan",
+        "planning_chain_review_bundle",
+    ):
+        _require(full_chain_key not in parsed,
+                 "patch-boundary --json must output only boundary payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["patch-boundary", "--json"])
+    routed = parse_patch_applier_boundary_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth patch-boundary --json route must return 0")
+    _require(routed["patch_applier_boundary_id"] == parsed["patch_applier_boundary_id"],
+             "growth patch-boundary route must preserve deterministic boundary id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = patch_boundary_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "patch-boundary human mode must return 0")
+    for needle in (
+        "Growth patch boundary",
+        "patch_applier_boundary_id:",
+        "planning_chain_id:",
+        "verified_patch_plan_id:",
+        "verified_patch_diff_id:",
+        "execution_package_id:",
+        "workspace_boundary_id:",
+        "runtime_workspace_plan_id:",
+        "allowed_target_file_count:",
+        "forbidden_path_count:",
+        "max_files_changed:",
+        "max_operations:",
+        "evidence_requirement_count:",
+        "next_action:",
+    ):
+        _require(needle in human, f"patch-boundary human mode must include {needle}")
+    _require(len(human.splitlines()) <= 14,
+             "patch-boundary human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = patch_boundary_main(["--write"])
+    _require(write_rc != 0, "patch-boundary --write must be rejected")
+    _require("--write is not supported" in write_err.getvalue(),
+             "patch-boundary --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "patch-boundary --write must not print normal output")
+
+    print("growth patch-boundary CLI OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Workspace creator runtime plan helper
 # ---------------------------------------------------------------------------
 
@@ -8039,6 +8147,221 @@ def check_guarded_workspace_creator_runtime_component() -> None:
             raise AssertionError("guarded workspace request must require approval for writes")
 
     print("guarded workspace creator runtime component OK")
+
+
+# ---------------------------------------------------------------------------
+# 62b. Guarded patch applier runtime component
+# ---------------------------------------------------------------------------
+
+def check_guarded_patch_applier_runtime_component() -> None:
+    """guarded patch applier writes only inside an approved temp workspace."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        apply_guarded_patch,
+        collect_execution_approval_checklist,
+        collect_growth_planning_chain_preview,
+        collect_patch_applier_boundary,
+        collect_workspace_creator_runtime_boundary,
+        collect_workspace_creator_runtime_plan,
+        create_guarded_workspace,
+        make_execution_approval_checklist_id,
+        make_execution_gate_stack_preview_id,
+        make_guarded_patch_request,
+        make_guarded_workspace_request,
+        patch_apply_main,
+        preview_guarded_patch_application,
+        validate_guarded_patch_receipt,
+        validate_guarded_patch_request,
+    )
+
+    def pass_gate_stack(gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(gate_stack)
+        gates = []
+        for gate in gate_stack["gates"]:
+            clean_gate = dict(gate)
+            clean_gate["blockers"] = []
+            clean_gate["warnings"] = []
+            clean_gate["pass_status"] = "pass"
+            clean_gate["recommended_next_action"] = "test-only approval for guarded workspace patching"
+            gates.append(clean_gate)
+        passed["gates"] = gates
+        passed["pass_count"] = len(gates)
+        passed["review_count"] = 0
+        passed["block_count"] = 0
+        passed["gate_stack_preview_id"] = make_execution_gate_stack_preview_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            gates,
+        )
+        return passed
+
+    def pass_approval(checklist: dict[str, Any], gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(checklist)
+        passed["gate_stack_preview_id"] = gate_stack["gate_stack_preview_id"]
+        passed["approval_blockers"] = []
+        passed["approval_warnings"] = []
+        passed["approval_status"] = "pass"
+        passed["recommended_next_action"] = "test-only explicit approval supplied"
+        passed["approval_checklist_id"] = make_execution_approval_checklist_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            passed["human_approval_package_id"],
+            passed["gate_stack_preview_id"],
+            passed["required_approvals"],
+            passed["approval_blockers"],
+            passed["approval_warnings"],
+        )
+        return passed
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("patch-apply" in help_out.getvalue(), "growth help must include patch-apply")
+
+    preview_out = io.StringIO()
+    with contextlib.redirect_stdout(preview_out):
+        preview_rc = patch_apply_main(["--json"])
+    _require(preview_rc == 0, "patch-apply --json preview must return 0")
+    preview = json.loads(preview_out.getvalue())
+    validate_guarded_patch_receipt(preview)
+    _require(preview["status"] == "preview", "patch-apply default must preview only")
+    _require(preview["safety_metadata"]["writes"] == [], "patch-apply preview must not write")
+
+    denied_out = io.StringIO()
+    denied_err = io.StringIO()
+    with contextlib.redirect_stdout(denied_out), contextlib.redirect_stderr(denied_err):
+        denied_rc = patch_apply_main(["--write", "--json"])
+    _require(denied_rc != 0, "patch-apply --write without approval/workspace must fail closed")
+    _require("approval" in denied_err.getvalue().lower(), "patch-apply denied write must explain approval requirement")
+    _require(denied_out.getvalue() == "", "patch-apply denied write must not print receipt")
+
+    chain = collect_growth_planning_chain_preview()
+    patch_plan = chain["verified_patch_plan"]
+    patch_diff = chain["verified_patch_diff"]
+    gate_stack = pass_gate_stack(chain["execution_gate_stack_preview"])
+    approval = pass_approval(collect_execution_approval_checklist(chain), gate_stack)
+    evidence_contract = chain["execution_evidence_contract"]
+    workspace_boundary = collect_workspace_creator_runtime_boundary(chain)
+    workspace_runtime_plan = collect_workspace_creator_runtime_plan(chain)
+    boundary = collect_patch_applier_boundary(
+        patch_plan,
+        patch_diff,
+        gate_stack,
+        approval,
+        evidence_contract,
+        workspace_boundary,
+        workspace_runtime_plan,
+        planning_chain_id=chain["planning_chain_id"],
+    )
+
+    repo_file = ROOT / patch_plan["target_files"][0]
+    repo_before = repo_file.read_bytes() if repo_file.exists() else b""
+    with tempfile.TemporaryDirectory() as temp_root:
+        safe_plan = dict(workspace_runtime_plan)
+        safe_plan["plan_status"] = "pass"
+        safe_plan["recommended_next_action"] = "test-only approved temp workspace creation"
+        workspace_request = make_guarded_workspace_request(
+            safe_plan,
+            approved=True,
+            write=True,
+            workspace_root=temp_root,
+        )
+        workspace_receipt = create_guarded_workspace(workspace_request, safe_plan)
+        workspace_path = Path(workspace_receipt["workspace_path"])
+        first_target = workspace_path / patch_plan["target_files"][0]
+        first_target.parent.mkdir(parents=True, exist_ok=True)
+        first_target.write_text("original workspace content\n", encoding="utf-8")
+
+        request = make_guarded_patch_request(boundary, workspace_receipt, approved=True, write=True)
+        validate_guarded_patch_request(request, boundary, workspace_receipt)
+        receipt = apply_guarded_patch(
+            request,
+            boundary,
+            patch_plan,
+            patch_diff,
+            workspace_receipt,
+            workspace_receipt["workspace_manifest"],
+            approval,
+            gate_stack,
+            evidence_contract,
+        )
+        validate_guarded_patch_receipt(receipt, request, boundary, patch_plan, patch_diff, workspace_receipt)
+        _require(receipt["status"] == "applied", "guarded patch write must return applied receipt")
+        _require(receipt["applied_operations"], "guarded patch write must record applied operations")
+        _require(receipt["changed_files"], "guarded patch write must record changed files")
+        _require(receipt["before_file_hashes"], "guarded patch write must record before hashes")
+        _require(receipt["after_file_hashes"], "guarded patch write must record after hashes")
+        _require(receipt["safety_metadata"]["dry_run"] is False, "guarded patch applied receipt must not be dry run")
+        _require(receipt["safety_metadata"]["write_allowed"] is True, "guarded patch applied receipt must record write allowance")
+        _require(receipt["safety_metadata"]["automation_allowed"] is False, "guarded patch must keep automation disabled")
+        _require(receipt["safety_metadata"]["writes"] == receipt["changed_files"], "guarded patch writes must match changed files")
+        _require((workspace_path / "guarded_patch_receipt.json").exists(), "guarded patch write must create workspace-local receipt")
+        _require(b"Link guarded patch operation" in first_target.read_bytes(), "guarded patch must update workspace-local target")
+        _require(repo_file.read_bytes() == repo_before if repo_file.exists() else repo_before == b"", "guarded patch must not modify repo target file")
+
+        preview_request = make_guarded_patch_request(boundary, workspace_receipt, approved=False, write=False)
+        preview_receipt = preview_guarded_patch_application(
+            preview_request,
+            boundary,
+            patch_plan,
+            patch_diff,
+            workspace_receipt,
+            workspace_receipt["workspace_manifest"],
+            approval,
+            gate_stack,
+            evidence_contract,
+        )
+        validate_guarded_patch_receipt(preview_receipt, preview_request, boundary, patch_plan, patch_diff, workspace_receipt)
+        _require(preview_receipt["status"] == "preview", "guarded patch preview helper must stay preview")
+        _require(preview_receipt["applied_operations"] == [], "guarded patch preview must not apply operations")
+
+        bad_boundary = dict(boundary)
+        bad_boundary["allowed_target_files"] = [".agents/unsafe.json"]
+        try:
+            make_guarded_patch_request(bad_boundary, workspace_receipt, approved=True, write=True)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("guarded patch request must reject invalid boundary")
+
+        bad_plan = dict(patch_plan)
+        bad_operations = [dict(operation) for operation in patch_plan["patch_operations"]]
+        bad_operations[0]["operation_type"] = "create_file"
+        bad_plan["patch_operations"] = bad_operations
+        bad_boundary = collect_patch_applier_boundary(
+            bad_plan,
+            patch_diff,
+            gate_stack,
+            approval,
+            evidence_contract,
+            workspace_boundary,
+            workspace_runtime_plan,
+            planning_chain_id=chain["planning_chain_id"],
+        )
+        before_failure = first_target.read_text(encoding="utf-8")
+        bad_request = make_guarded_patch_request(bad_boundary, workspace_receipt, approved=True, write=True)
+        try:
+            apply_guarded_patch(
+                bad_request,
+                bad_boundary,
+                bad_plan,
+                patch_diff,
+                workspace_receipt,
+                workspace_receipt["workspace_manifest"],
+                approval,
+                gate_stack,
+                evidence_contract,
+            )
+        except FileExistsError:
+            pass
+        else:
+            raise AssertionError("guarded patch must fail closed on invalid create operation")
+        _require(first_target.read_text(encoding="utf-8") == before_failure,
+                 "guarded patch failure must restore workspace file content")
+
+    _require(repo_file.read_bytes() == repo_before if repo_file.exists() else repo_before == b"", "guarded patch tests must leave repo file unchanged")
+    print("guarded patch applier runtime component OK")
 
 
 # ---------------------------------------------------------------------------
@@ -9968,8 +10291,10 @@ def main() -> None:
     check_growth_execution_review_cli()
     check_workspace_creator_runtime_boundary_helper()
     check_growth_workspace_boundary_cli()
+    check_growth_patch_boundary_cli()
     check_workspace_creator_runtime_plan_helper()
     check_guarded_workspace_creator_runtime_component()
+    check_guarded_patch_applier_runtime_component()
     check_guarded_workspace_lifecycle_cleanup_abandon()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
