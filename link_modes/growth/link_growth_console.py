@@ -10226,6 +10226,79 @@ def patch_boundary_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+
+def collect_verification_boundary_preview_from_chain(chain: dict[str, Any]) -> dict[str, Any]:
+    """Collect the read-only verification runner boundary for a planning chain."""
+    patch_boundary = collect_patch_boundary_preview_from_chain(chain)
+    workspace_plan = collect_workspace_creator_runtime_plan(chain)
+    workspace_request = make_guarded_workspace_request(
+        workspace_plan,
+        approved=False,
+        write=False,
+        workspace_root="/tmp/link-verification-boundary-preview",
+    )
+    workspace_receipt = preview_guarded_workspace_creation(workspace_request, workspace_plan)
+    patch_request = make_guarded_patch_request(patch_boundary, workspace_receipt, approved=False, write=False)
+    approval = collect_execution_approval_checklist(chain)
+    execution_review = collect_execution_review(chain)
+    patch_receipt = preview_guarded_patch_application(
+        patch_request,
+        patch_boundary,
+        chain["verified_patch_plan"],
+        chain["verified_patch_diff"],
+        workspace_receipt,
+        workspace_receipt["workspace_manifest"],
+        approval,
+        chain["execution_gate_stack_preview"],
+        chain["execution_evidence_contract"],
+    )
+    boundary = collect_verification_runner_boundary(
+        patch_receipt,
+        patch_boundary,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        chain["execution_gate_stack_preview"],
+        approval,
+        chain["execution_preflight_checklist"],
+        execution_review,
+    )
+    validate_verification_runner_boundary(
+        boundary,
+        patch_receipt,
+        patch_boundary,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        chain["execution_gate_stack_preview"],
+        approval,
+        chain["execution_preflight_checklist"],
+        execution_review,
+    )
+    return boundary
+
+
+def verification_boundary_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth verification-boundary`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth verification-boundary: verification runner runtime boundary")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth verification-boundary")
+        print("  python3 link.py growth verification-boundary --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth verification-boundary is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    boundary = collect_verification_boundary_preview_from_chain(chain)
+    if "--json" in args:
+        print(stable_verification_runner_boundary_json(boundary), end="")
+        return 0
+    render_verification_boundary_plain(boundary)
+    return 0
+
 def _workspace_create_arg_value(args: list[str], name: str) -> str | None:
     if name not in args:
         return None
@@ -10568,6 +10641,36 @@ def render_patch_boundary_plain(boundary: dict[str, Any]) -> None:
     print(f"evidence_requirement_count: {evidence_count}")
     print("next_action: review patch boundary before enabling patch applier runtime")
 
+
+
+def render_verification_boundary_plain(boundary: dict[str, Any]) -> None:
+    validate_verification_runner_boundary(boundary)
+    evidence_count = (
+        len(boundary["required_command_evidence"])
+        + len(boundary["required_exit_code_evidence"])
+        + len(boundary["required_stdout_log_evidence"])
+        + len(boundary["required_stderr_log_evidence"])
+        + len(boundary["required_file_hash_evidence"])
+        + len(boundary["required_diff_hash_evidence"])
+        + len(boundary["required_journal_evidence"])
+        + (1 if boundary["required_reviewer_summary"] else 0)
+    )
+    print("Growth verification boundary")
+    print(f"verification_runner_boundary_id: {boundary['verification_runner_boundary_id']}")
+    print(f"planning_chain_id: {boundary['planning_chain_id']}")
+    print(f"execution_package_id: {boundary['execution_package_id']}")
+    print(f"patch_applier_boundary_id: {boundary['patch_applier_boundary_id']}")
+    print(f"guarded_patch_receipt_id: {boundary['guarded_patch_receipt_id']}")
+    print(f"workspace_id: {boundary['workspace_id']}")
+    print(f"required_verification_stage_count: {len(boundary['required_verification_actions'])}")
+    print(f"allowed_command_family_count: {len(boundary['allowed_command_families'])}")
+    print(f"forbidden_command_family_count: {len(boundary['forbidden_command_families'])}")
+    print(f"max_command_count: {boundary['max_command_count']}")
+    print(f"max_runtime_seconds: {boundary['max_runtime_seconds']}")
+    print(f"max_attempts: {boundary['max_attempts']}")
+    print(f"evidence_requirement_count: {evidence_count}")
+    print(f"rollback_trigger_count: {len(boundary['rollback_triggers'])}")
+    print("next_action: review verification boundary before enabling verification runner runtime")
 
 def render_workspace_creation_receipt_plain(receipt: dict[str, Any]) -> None:
     validate_workspace_creation_receipt(receipt)
@@ -16806,6 +16909,341 @@ def apply_guarded_patch(
         shutil.copytree(backup_path, workspace_path)
         shutil.rmtree(backup_path)
         raise
+
+
+
+VERIFICATION_RUNNER_BOUNDARY_VERSION = "link-verification-runner-boundary-v1"
+_ALLOWED_VERIFICATION_ACTIONS = ("compile", "tests", "healthcheck")
+_OPTIONAL_VERIFICATION_ACTIONS = ("quality_gate_review", "log_summarization")
+_FORBIDDEN_VERIFICATION_ACTIONS = ("git", "network", "package_install", "publish", "deploy", "branch", "worktree")
+_ALLOWED_COMMAND_FAMILIES = ("python3",)
+_FORBIDDEN_COMMAND_FAMILIES = ("bash", "bun", "curl", "git", "node", "npm", "npx", "sh", "wget")
+
+
+def make_verification_runner_boundary_id(
+    planning_chain_id: str,
+    execution_package_id: str,
+    patch_applier_boundary_id: str,
+    guarded_patch_receipt_id: str,
+    retry_policy_id: str,
+    evidence_contract_id: str,
+) -> str:
+    return _execution_readiness_id("verification-runner-boundary", {
+        "execution_evidence_contract_id": evidence_contract_id,
+        "execution_package_id": execution_package_id,
+        "guarded_patch_receipt_id": guarded_patch_receipt_id,
+        "patch_applier_boundary_id": patch_applier_boundary_id,
+        "planning_chain_id": planning_chain_id,
+        "retry_policy_id": retry_policy_id,
+        "version": VERIFICATION_RUNNER_BOUNDARY_VERSION,
+    })
+
+
+def _verification_boundary_command_patterns() -> list[str]:
+    return _normalize_patch_behavior_text_list([
+        "python3 -m py_compile <allowed files>",
+        "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_growth_pipeline.py",
+        "PYTHONDONTWRITEBYTECODE=1 python3 link_healthcheck.py",
+    ])
+
+
+def _verification_boundary_required_evidence(contract: dict[str, Any], evidence_type: str, required_field: str) -> list[str]:
+    refs: list[str] = []
+    for item in contract["evidence_items"]:
+        if item["evidence_type"] == evidence_type and required_field in item["required_fields"]:
+            refs.append(f"{item['evidence_id']}:{required_field}")
+    return _normalize_implementation_branch_refs(refs)
+
+
+def collect_verification_runner_boundary(
+    guarded_patch_receipt: dict[str, Any],
+    patch_applier_boundary: dict[str, Any],
+    execution_evidence_contract: dict[str, Any],
+    execution_retry_policy: dict[str, Any],
+    execution_gate_stack_preview: dict[str, Any],
+    execution_approval_checklist: dict[str, Any],
+    execution_preflight_checklist: dict[str, Any],
+    execution_review: dict[str, Any],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the read-only boundary for future verification execution."""
+    validate_guarded_patch_receipt(guarded_patch_receipt)
+    validate_patch_applier_boundary(patch_applier_boundary)
+    validate_execution_evidence_contract(execution_evidence_contract)
+    validate_execution_retry_policy(execution_retry_policy)
+    validate_execution_gate_stack_preview(execution_gate_stack_preview)
+    validate_execution_approval_checklist(execution_approval_checklist)
+    validate_execution_preflight_checklist(execution_preflight_checklist)
+    validate_execution_review(execution_review)
+    evidence_types = {item["evidence_type"] for item in execution_evidence_contract["evidence_items"]}
+    required_stages = _normalize_patch_behavior_text_list(["compile", "healthcheck", "tests"])
+    missing_stages = [stage for stage in required_stages if stage not in evidence_types]
+    if missing_stages:
+        raise ValueError(f"verification boundary missing evidence stages: {missing_stages}")
+    action_requires_review = _normalize_patch_behavior_text_list([
+        "any command outside allowlist requires human review",
+        "any retry after failure requires human review",
+        "any rollback trigger requires human review",
+    ])
+    fail_closed = _normalize_patch_behavior_text_list([
+        "approval checklist is not pass",
+        "command family is not allowlisted",
+        "evidence contract is missing command evidence",
+        "guarded patch receipt is not applied",
+        "preflight checklist is block",
+        "workspace path is inside repository root",
+    ])
+    rollback_triggers = _normalize_patch_behavior_text_list([
+        "compile command exits nonzero after patch application",
+        "healthcheck command exits nonzero after patch application",
+        "required evidence cannot be produced",
+        "test command exits nonzero after patch application",
+    ])
+    cleanup_triggers = _normalize_patch_behavior_text_list([
+        "verification boundary validation fails before command execution",
+        "workspace is abandoned before verification",
+    ])
+    escalation_conditions = _normalize_patch_behavior_text_list([
+        *execution_retry_policy["escalation_conditions"],
+        "verification command requests forbidden runtime family",
+    ])
+    boundary = {
+        "verification_runner_boundary_version": VERIFICATION_RUNNER_BOUNDARY_VERSION,
+        "verification_runner_boundary_id": make_verification_runner_boundary_id(
+            guarded_patch_receipt["request_id"].split("guarded-patch-request-", 1)[-1] if False else patch_applier_boundary["planning_chain_id"],
+            patch_applier_boundary["execution_package_id"],
+            patch_applier_boundary["patch_applier_boundary_id"],
+            guarded_patch_receipt["guarded_patch_receipt_id"],
+            execution_retry_policy["retry_policy_id"],
+            execution_evidence_contract["execution_evidence_contract_id"],
+        ),
+        "planning_chain_id": patch_applier_boundary["planning_chain_id"],
+        "execution_package_id": patch_applier_boundary["execution_package_id"],
+        "patch_applier_boundary_id": patch_applier_boundary["patch_applier_boundary_id"],
+        "guarded_patch_receipt_id": guarded_patch_receipt["guarded_patch_receipt_id"],
+        "workspace_id": guarded_patch_receipt["workspace_id"],
+        "workspace_path": guarded_patch_receipt["workspace_path"],
+        "execution_evidence_contract_id": execution_evidence_contract["execution_evidence_contract_id"],
+        "retry_policy_id": execution_retry_policy["retry_policy_id"],
+        "gate_stack_preview_id": execution_gate_stack_preview["gate_stack_preview_id"],
+        "approval_checklist_id": execution_approval_checklist["approval_checklist_id"],
+        "preflight_checklist_id": execution_preflight_checklist["preflight_checklist_id"],
+        "execution_review_id": execution_review["execution_review_id"],
+        "allowed_verification_actions": _normalize_patch_behavior_text_list(_ALLOWED_VERIFICATION_ACTIONS),
+        "required_verification_actions": required_stages,
+        "optional_verification_actions": _normalize_patch_behavior_text_list(_OPTIONAL_VERIFICATION_ACTIONS),
+        "forbidden_verification_actions": _normalize_patch_behavior_text_list(_FORBIDDEN_VERIFICATION_ACTIONS),
+        "action_requires_review": action_requires_review,
+        "allowed_command_families": _normalize_patch_behavior_text_list(_ALLOWED_COMMAND_FAMILIES),
+        "forbidden_command_families": _normalize_patch_behavior_text_list(_FORBIDDEN_COMMAND_FAMILIES),
+        "allowed_command_patterns": _verification_boundary_command_patterns(),
+        "forbidden_command_patterns": _normalize_patch_behavior_text_list([
+            "* && *",
+            "* | *",
+            "bash *",
+            "bun *",
+            "curl *",
+            "git *",
+            "node *",
+            "npm *",
+            "npx *",
+            "sh *",
+            "wget *",
+        ]),
+        "max_command_count": 3,
+        "max_runtime_seconds": 600,
+        "per_command_timeout_seconds": 240,
+        "required_command_evidence": _normalize_implementation_branch_refs(_verification_boundary_required_evidence(execution_evidence_contract, "compile", "command") + _verification_boundary_required_evidence(execution_evidence_contract, "tests", "command") + _verification_boundary_required_evidence(execution_evidence_contract, "healthcheck", "command")),
+        "required_exit_code_evidence": _normalize_implementation_branch_refs(_verification_boundary_required_evidence(execution_evidence_contract, "compile", "exit_code") + _verification_boundary_required_evidence(execution_evidence_contract, "tests", "exit_code") + _verification_boundary_required_evidence(execution_evidence_contract, "healthcheck", "exit_code")),
+        "required_stdout_log_evidence": _normalize_implementation_branch_refs(_verification_boundary_required_evidence(execution_evidence_contract, "compile", "stdout_log_ref") + _verification_boundary_required_evidence(execution_evidence_contract, "tests", "stdout_log_ref") + _verification_boundary_required_evidence(execution_evidence_contract, "healthcheck", "stdout_log_ref")),
+        "required_stderr_log_evidence": _normalize_implementation_branch_refs(_verification_boundary_required_evidence(execution_evidence_contract, "compile", "stderr_log_ref") + _verification_boundary_required_evidence(execution_evidence_contract, "tests", "stderr_log_ref") + _verification_boundary_required_evidence(execution_evidence_contract, "healthcheck", "stderr_log_ref")),
+        "required_file_hash_evidence": _verification_boundary_required_evidence(execution_evidence_contract, "patch_application", "changed_file_hashes"),
+        "required_diff_hash_evidence": _verification_boundary_required_evidence(execution_evidence_contract, "patch_application", "diff_hash"),
+        "required_journal_evidence": _normalize_implementation_branch_refs(_verification_boundary_required_evidence(execution_evidence_contract, "compile", "journal_entry_id") + _verification_boundary_required_evidence(execution_evidence_contract, "tests", "journal_entry_id") + _verification_boundary_required_evidence(execution_evidence_contract, "healthcheck", "journal_entry_id")),
+        "required_reviewer_summary": True,
+        "max_attempts": execution_retry_policy["max_attempts"],
+        "retryable_failure_types": _normalize_patch_behavior_text_list(execution_retry_policy["retryable_failures"]),
+        "non_retryable_failure_types": _normalize_patch_behavior_text_list(execution_retry_policy["non_retryable_failures"]),
+        "stop_conditions": _normalize_patch_behavior_text_list(execution_retry_policy["stop_conditions"]),
+        "fail_closed_conditions": fail_closed,
+        "rollback_triggers": rollback_triggers,
+        "cleanup_triggers": cleanup_triggers,
+        "escalation_required_conditions": escalation_conditions,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_verification_runner_boundary(
+        boundary,
+        guarded_patch_receipt,
+        patch_applier_boundary,
+        execution_evidence_contract,
+        execution_retry_policy,
+        execution_gate_stack_preview,
+        execution_approval_checklist,
+        execution_preflight_checklist,
+        execution_review,
+    )
+    return boundary
+
+
+def validate_verification_runner_boundary(
+    boundary: dict[str, Any],
+    guarded_patch_receipt: dict[str, Any] | None = None,
+    patch_applier_boundary: dict[str, Any] | None = None,
+    execution_evidence_contract: dict[str, Any] | None = None,
+    execution_retry_policy: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_approval_checklist: dict[str, Any] | None = None,
+    execution_preflight_checklist: dict[str, Any] | None = None,
+    execution_review: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "verification_runner_boundary_version", "verification_runner_boundary_id", "planning_chain_id",
+        "execution_package_id", "patch_applier_boundary_id", "guarded_patch_receipt_id",
+        "workspace_id", "workspace_path", "execution_evidence_contract_id", "retry_policy_id",
+        "gate_stack_preview_id", "approval_checklist_id", "preflight_checklist_id",
+        "execution_review_id", "allowed_verification_actions", "required_verification_actions",
+        "optional_verification_actions", "forbidden_verification_actions", "action_requires_review",
+        "allowed_command_families", "forbidden_command_families", "allowed_command_patterns",
+        "forbidden_command_patterns", "max_command_count", "max_runtime_seconds",
+        "per_command_timeout_seconds", "required_command_evidence", "required_exit_code_evidence",
+        "required_stdout_log_evidence", "required_stderr_log_evidence", "required_file_hash_evidence",
+        "required_diff_hash_evidence", "required_journal_evidence", "required_reviewer_summary",
+        "max_attempts", "retryable_failure_types", "non_retryable_failure_types", "stop_conditions",
+        "fail_closed_conditions", "rollback_triggers", "cleanup_triggers", "escalation_required_conditions",
+        "dry_run", "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in boundary]
+    if missing:
+        raise ValueError(f"verification runner boundary missing fields: {missing}")
+    if boundary["verification_runner_boundary_version"] != VERIFICATION_RUNNER_BOUNDARY_VERSION:
+        raise ValueError("unsupported verification runner boundary version")
+    _validate_execution_read_only(boundary, "verification runner boundary")
+    for field in (
+        "verification_runner_boundary_id", "planning_chain_id", "execution_package_id",
+        "patch_applier_boundary_id", "guarded_patch_receipt_id", "workspace_id", "workspace_path",
+        "execution_evidence_contract_id", "retry_policy_id", "gate_stack_preview_id",
+        "approval_checklist_id", "preflight_checklist_id", "execution_review_id",
+    ):
+        _validate_non_empty_string(boundary[field], field)
+    text_list_fields = (
+        "allowed_verification_actions", "required_verification_actions", "optional_verification_actions",
+        "forbidden_verification_actions", "action_requires_review", "allowed_command_families",
+        "forbidden_command_families", "allowed_command_patterns", "forbidden_command_patterns",
+        "required_command_evidence", "required_exit_code_evidence", "required_stdout_log_evidence",
+        "required_stderr_log_evidence", "required_file_hash_evidence", "required_diff_hash_evidence",
+        "required_journal_evidence", "retryable_failure_types", "non_retryable_failure_types",
+        "stop_conditions", "fail_closed_conditions", "rollback_triggers", "cleanup_triggers",
+        "escalation_required_conditions",
+    )
+    for field in text_list_fields:
+        values = boundary[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if set(boundary["allowed_verification_actions"]) & set(boundary["forbidden_verification_actions"]):
+        raise ValueError("verification actions overlap forbidden actions")
+    if not {"compile", "tests", "healthcheck"}.issubset(set(boundary["required_verification_actions"])):
+        raise ValueError("verification runner boundary must require compile/tests/healthcheck")
+    if set(boundary["allowed_command_families"]) & set(boundary["forbidden_command_families"]):
+        raise ValueError("allowed command families overlap forbidden command families")
+    if any(family in _FORBIDDEN_COMMAND_FAMILIES for family in boundary["allowed_command_families"]):
+        raise ValueError("allowed command families include forbidden family")
+    for family in _FORBIDDEN_COMMAND_FAMILIES:
+        if family not in boundary["forbidden_command_families"]:
+            raise ValueError("verification runner boundary missing forbidden command family")
+    for pattern in boundary["allowed_command_patterns"]:
+        if not pattern.startswith("PYTHONDONTWRITEBYTECODE=1 python3") and not pattern.startswith("python3"):
+            raise ValueError("allowed command pattern must use python3 family")
+        if "|" in pattern or "&&" in pattern or ";" in pattern:
+            raise ValueError("allowed command pattern must not chain commands")
+    for field in ("max_command_count", "max_runtime_seconds", "per_command_timeout_seconds", "max_attempts"):
+        if not isinstance(boundary[field], int) or boundary[field] < 1:
+            raise ValueError(f"{field} must be a positive integer")
+    if boundary["max_command_count"] < len(boundary["required_verification_actions"]):
+        raise ValueError("max_command_count must cover required verification actions")
+    if boundary["per_command_timeout_seconds"] > boundary["max_runtime_seconds"]:
+        raise ValueError("per-command timeout must not exceed max runtime")
+    if boundary["max_attempts"] > 5:
+        raise ValueError("max_attempts must not exceed retry policy cap")
+    if boundary["required_reviewer_summary"] is not True:
+        raise ValueError("verification runner boundary must require reviewer summary")
+    for required_item in ("guarded patch receipt is not applied", "command family is not allowlisted"):
+        if required_item not in boundary["fail_closed_conditions"]:
+            raise ValueError("verification runner boundary missing fail-closed condition")
+    for trigger in ("compile command exits nonzero after patch application", "test command exits nonzero after patch application", "healthcheck command exits nonzero after patch application"):
+        if trigger not in boundary["rollback_triggers"]:
+            raise ValueError("verification runner boundary missing rollback trigger")
+    expected_id = make_verification_runner_boundary_id(
+        boundary["planning_chain_id"],
+        boundary["execution_package_id"],
+        boundary["patch_applier_boundary_id"],
+        boundary["guarded_patch_receipt_id"],
+        boundary["retry_policy_id"],
+        boundary["execution_evidence_contract_id"],
+    )
+    if boundary["verification_runner_boundary_id"] != expected_id:
+        raise ValueError("verification runner boundary id does not match contents")
+    if guarded_patch_receipt is not None:
+        validate_guarded_patch_receipt(guarded_patch_receipt)
+        if boundary["guarded_patch_receipt_id"] != guarded_patch_receipt["guarded_patch_receipt_id"]:
+            raise ValueError("verification runner boundary patch receipt mismatch")
+        if boundary["workspace_id"] != guarded_patch_receipt["workspace_id"]:
+            raise ValueError("verification runner boundary workspace id mismatch")
+        if boundary["workspace_path"] != guarded_patch_receipt["workspace_path"]:
+            raise ValueError("verification runner boundary workspace path mismatch")
+    if patch_applier_boundary is not None:
+        validate_patch_applier_boundary(patch_applier_boundary)
+        expected = {
+            "planning_chain_id": patch_applier_boundary["planning_chain_id"],
+            "execution_package_id": patch_applier_boundary["execution_package_id"],
+            "patch_applier_boundary_id": patch_applier_boundary["patch_applier_boundary_id"],
+        }
+        for field, value in expected.items():
+            if boundary[field] != value:
+                raise ValueError(f"verification runner boundary {field} does not match patch boundary")
+    if execution_evidence_contract is not None:
+        validate_execution_evidence_contract(execution_evidence_contract)
+        if boundary["execution_evidence_contract_id"] != execution_evidence_contract["execution_evidence_contract_id"]:
+            raise ValueError("verification runner boundary evidence contract mismatch")
+    if execution_retry_policy is not None:
+        validate_execution_retry_policy(execution_retry_policy)
+        if boundary["retry_policy_id"] != execution_retry_policy["retry_policy_id"]:
+            raise ValueError("verification runner boundary retry policy mismatch")
+        if boundary["max_attempts"] != execution_retry_policy["max_attempts"]:
+            raise ValueError("verification runner boundary max attempts mismatch")
+    if execution_gate_stack_preview is not None:
+        validate_execution_gate_stack_preview(execution_gate_stack_preview)
+        if boundary["gate_stack_preview_id"] != execution_gate_stack_preview["gate_stack_preview_id"]:
+            raise ValueError("verification runner boundary gate stack mismatch")
+    if execution_approval_checklist is not None:
+        validate_execution_approval_checklist(execution_approval_checklist)
+        if boundary["approval_checklist_id"] != execution_approval_checklist["approval_checklist_id"]:
+            raise ValueError("verification runner boundary approval checklist mismatch")
+    if execution_preflight_checklist is not None:
+        validate_execution_preflight_checklist(execution_preflight_checklist)
+        if boundary["preflight_checklist_id"] != execution_preflight_checklist["preflight_checklist_id"]:
+            raise ValueError("verification runner boundary preflight mismatch")
+    if execution_review is not None:
+        validate_execution_review(execution_review)
+        if boundary["execution_review_id"] != execution_review["execution_review_id"]:
+            raise ValueError("verification runner boundary execution review mismatch")
+
+
+def stable_verification_runner_boundary_json(boundary: dict[str, Any]) -> str:
+    validate_verification_runner_boundary(boundary)
+    return _stable_ruflo_json(boundary, indent=2) + "\n"
+
+
+def parse_verification_runner_boundary_json(text: str) -> dict[str, Any]:
+    boundary = json.loads(text)
+    validate_verification_runner_boundary(boundary)
+    return boundary
 
 
 def validate_verified_patch_diff_entry(entry: dict[str, Any]) -> None:

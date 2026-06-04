@@ -6191,6 +6191,7 @@ def check_patch_applier_boundary_helper() -> None:
     """Patch applier boundary constrains future patch application read-only."""
     from link_modes.growth.link_growth_console import (
         collect_execution_approval_checklist,
+        collect_execution_review,
         collect_growth_planning_chain_preview,
         collect_patch_applier_boundary,
         collect_workspace_creator_runtime_boundary,
@@ -8365,6 +8366,312 @@ def check_guarded_patch_applier_runtime_component() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62c. Verification runner boundary helper
+# ---------------------------------------------------------------------------
+
+def check_verification_runner_boundary_helper() -> None:
+    """verification runner boundary stays read-only before command execution exists."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_approval_checklist,
+        collect_execution_review,
+        collect_growth_planning_chain_preview,
+        collect_patch_boundary_preview_from_chain,
+        collect_verification_runner_boundary,
+        collect_workspace_creator_runtime_plan,
+        make_guarded_patch_request,
+        make_guarded_workspace_request,
+        parse_verification_runner_boundary_json,
+        preview_guarded_patch_application,
+        preview_guarded_workspace_creation,
+        stable_verification_runner_boundary_json,
+        validate_verification_runner_boundary,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    patch_boundary = collect_patch_boundary_preview_from_chain(chain)
+    workspace_plan = collect_workspace_creator_runtime_plan(chain)
+    workspace_request = make_guarded_workspace_request(
+        workspace_plan,
+        approved=False,
+        write=False,
+        workspace_root="/tmp/link-verification-boundary-test",
+    )
+    workspace_receipt = preview_guarded_workspace_creation(workspace_request, workspace_plan)
+    patch_request = make_guarded_patch_request(patch_boundary, workspace_receipt, approved=False, write=False)
+    approval = collect_execution_approval_checklist(chain)
+    execution_review = collect_execution_review(chain)
+    patch_receipt = preview_guarded_patch_application(
+        patch_request,
+        patch_boundary,
+        chain["verified_patch_plan"],
+        chain["verified_patch_diff"],
+        workspace_receipt,
+        workspace_receipt["workspace_manifest"],
+        approval,
+        chain["execution_gate_stack_preview"],
+        chain["execution_evidence_contract"],
+    )
+    boundary = collect_verification_runner_boundary(
+        patch_receipt,
+        patch_boundary,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        chain["execution_gate_stack_preview"],
+        approval,
+        chain["execution_preflight_checklist"],
+        execution_review,
+        metadata={"suite": "growth"},
+    )
+    same = collect_verification_runner_boundary(
+        patch_receipt,
+        patch_boundary,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        chain["execution_gate_stack_preview"],
+        approval,
+        chain["execution_preflight_checklist"],
+        execution_review,
+        metadata={"suite": "growth"},
+    )
+    _require(boundary["verification_runner_boundary_id"] == same["verification_runner_boundary_id"],
+             "verification runner boundary id must be deterministic")
+    decoded = parse_verification_runner_boundary_json(stable_verification_runner_boundary_json(boundary))
+    _require(decoded == boundary, "verification runner boundary JSON must round trip")
+    validate_verification_runner_boundary(
+        boundary,
+        patch_receipt,
+        patch_boundary,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        chain["execution_gate_stack_preview"],
+        approval,
+        chain["execution_preflight_checklist"],
+        execution_review,
+    )
+    _require(boundary["planning_chain_id"] == chain["planning_chain_id"],
+             "verification runner boundary must reference planning chain")
+    _require(boundary["patch_applier_boundary_id"] == patch_boundary["patch_applier_boundary_id"],
+             "verification runner boundary must reference patch boundary")
+    _require(boundary["guarded_patch_receipt_id"] == patch_receipt["guarded_patch_receipt_id"],
+             "verification runner boundary must reference patch receipt")
+    _require(set(["compile", "tests", "healthcheck"]).issubset(boundary["required_verification_actions"]),
+             "verification runner boundary must require compile/tests/healthcheck")
+    _require(boundary["allowed_command_families"] == ["python3"],
+             "verification runner boundary must allow only python3 command family initially")
+    _require("git" in boundary["forbidden_command_families"],
+             "verification runner boundary must forbid git command family")
+    _require(boundary["max_command_count"] >= 3,
+             "verification runner boundary command cap must cover required stages")
+    _require(boundary["per_command_timeout_seconds"] <= boundary["max_runtime_seconds"],
+             "verification runner boundary timeout must fit max runtime")
+    _require(boundary["max_attempts"] == chain["execution_retry_policy"]["max_attempts"],
+             "verification runner boundary must preserve retry policy max attempts")
+    _require(boundary["required_command_evidence"] and boundary["required_exit_code_evidence"],
+             "verification runner boundary must require command and exit code evidence")
+    _require(boundary["required_stdout_log_evidence"] and boundary["required_stderr_log_evidence"],
+             "verification runner boundary must require stdout/stderr evidence")
+    _require(boundary["required_file_hash_evidence"] and boundary["required_diff_hash_evidence"],
+             "verification runner boundary must require file hash and diff hash evidence")
+    _require(boundary["required_journal_evidence"],
+             "verification runner boundary must require journal evidence")
+    _require(boundary["dry_run"] is True and boundary["write_allowed"] is False,
+             "verification runner boundary must remain read-only")
+    _require(boundary["automation_allowed"] is False and boundary["writes"] == [],
+             "verification runner boundary must not allow automation or writes")
+
+    bad_missing = dict(boundary)
+    bad_missing.pop("verification_runner_boundary_id")
+    try:
+        validate_verification_runner_boundary(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification runner boundary must reject missing id")
+
+    bad_family = dict(boundary)
+    bad_family["allowed_command_families"] = ["git", "python3"]
+    try:
+        validate_verification_runner_boundary(bad_family)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification runner boundary must reject forbidden allowed command family")
+
+    bad_forbidden = dict(boundary)
+    bad_forbidden["forbidden_command_families"] = [item for item in bad_forbidden["forbidden_command_families"] if item != "git"]
+    try:
+        validate_verification_runner_boundary(bad_forbidden)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification runner boundary must require forbidden git command family")
+
+    bad_pattern = dict(boundary)
+    bad_pattern["allowed_command_patterns"] = ["git status"]
+    try:
+        validate_verification_runner_boundary(bad_pattern)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification runner boundary must reject non-python allowed command pattern")
+
+    bad_timeout = dict(boundary)
+    bad_timeout["per_command_timeout_seconds"] = bad_timeout["max_runtime_seconds"] + 1
+    try:
+        validate_verification_runner_boundary(bad_timeout)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification runner boundary must reject invalid timeout")
+
+    bad_retry = dict(boundary)
+    bad_retry["max_attempts"] = 0
+    try:
+        validate_verification_runner_boundary(bad_retry)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification runner boundary must reject invalid retry max")
+
+    bad_rollback = dict(boundary)
+    bad_rollback["rollback_triggers"] = [item for item in bad_rollback["rollback_triggers"] if not item.startswith("compile command")]
+    try:
+        validate_verification_runner_boundary(bad_rollback)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification runner boundary must require rollback triggers")
+
+    bad_evidence = dict(boundary)
+    bad_evidence["required_command_evidence"] = []
+    try:
+        validate_verification_runner_boundary(bad_evidence)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("verification runner boundary must reject missing command evidence")
+
+    bad_writes = dict(boundary)
+    bad_writes["writes"] = ["tmp.txt"]
+    try:
+        validate_verification_runner_boundary(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("verification runner boundary must reject writes")
+
+    print("verification runner boundary helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 62d. Growth verification-boundary CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_verification_boundary_cli() -> None:
+    """verification-boundary exposes only the verification runner boundary."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_growth_planning_chain_preview,
+        collect_verification_boundary_preview_from_chain,
+        parse_verification_runner_boundary_json,
+        stable_verification_runner_boundary_json,
+        validate_verification_runner_boundary,
+        verification_boundary_main,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("verification-boundary" in help_out.getvalue(),
+             "growth help must include verification-boundary")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = verification_boundary_main(["--json"])
+    _require(json_rc == 0, "verification-boundary --json must return 0")
+    parsed = parse_verification_runner_boundary_json(json_out.getvalue())
+    validate_verification_runner_boundary(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected = collect_verification_boundary_preview_from_chain(chain)
+    _require(parsed["verification_runner_boundary_id"] == expected["verification_runner_boundary_id"],
+             "verification-boundary id must be deterministic")
+    _require(parsed == parse_verification_runner_boundary_json(stable_verification_runner_boundary_json(parsed)),
+             "verification-boundary JSON must round trip")
+    _require(parsed["planning_chain_id"] == chain["planning_chain_id"],
+             "verification-boundary must reference planning chain")
+    _require(parsed["execution_package_id"] == chain["autonomous_execution_package"]["execution_package_id"],
+             "verification-boundary must reference execution package")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "verification-boundary must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "verification-boundary must not allow automation or writes")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "verified_patch_plan",
+        "verified_patch_diff",
+        "execution_gate_stack_preview",
+        "execution_approval_checklist",
+        "execution_evidence_contract",
+        "execution_retry_policy",
+        "execution_review",
+        "patch_applier_boundary",
+        "guarded_patch_receipt",
+        "planning_chain_review_bundle",
+    ):
+        _require(full_chain_key not in parsed,
+                 "verification-boundary --json must output only boundary payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["verification-boundary", "--json"])
+    routed = parse_verification_runner_boundary_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth verification-boundary --json route must return 0")
+    _require(routed["verification_runner_boundary_id"] == parsed["verification_runner_boundary_id"],
+             "growth verification-boundary route must preserve deterministic boundary id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = verification_boundary_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "verification-boundary human mode must return 0")
+    for needle in (
+        "Growth verification boundary",
+        "verification_runner_boundary_id:",
+        "planning_chain_id:",
+        "execution_package_id:",
+        "patch_applier_boundary_id:",
+        "guarded_patch_receipt_id:",
+        "workspace_id:",
+        "required_verification_stage_count:",
+        "allowed_command_family_count:",
+        "forbidden_command_family_count:",
+        "max_command_count:",
+        "max_runtime_seconds:",
+        "max_attempts:",
+        "evidence_requirement_count:",
+        "rollback_trigger_count:",
+        "next_action:",
+    ):
+        _require(needle in human, f"verification-boundary human mode must include {needle}")
+    _require(len(human.splitlines()) <= 16,
+             "verification-boundary human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = verification_boundary_main(["--write"])
+    _require(write_rc != 0, "verification-boundary --write must be rejected")
+    _require("--write is not supported" in write_err.getvalue(),
+             "verification-boundary --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "verification-boundary --write must not print normal output")
+
+    print("growth verification-boundary CLI OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Guarded workspace cleanup / abandon lifecycle
 # ---------------------------------------------------------------------------
 
@@ -10295,6 +10602,8 @@ def main() -> None:
     check_workspace_creator_runtime_plan_helper()
     check_guarded_workspace_creator_runtime_component()
     check_guarded_patch_applier_runtime_component()
+    check_verification_runner_boundary_helper()
+    check_growth_verification_boundary_cli()
     check_guarded_workspace_lifecycle_cleanup_abandon()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
