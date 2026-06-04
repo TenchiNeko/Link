@@ -455,6 +455,14 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import workspace_create_main as _growth_workspace_create_main
 
         return _growth_workspace_create_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "workspace-cleanup":
+        from link_modes.growth.link_growth_console import workspace_cleanup_main as _growth_workspace_cleanup_main
+
+        return _growth_workspace_cleanup_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "workspace-abandon":
+        from link_modes.growth.link_growth_console import workspace_abandon_main as _growth_workspace_abandon_main
+
+        return _growth_workspace_abandon_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "run":
         from link_modes.growth.link_growth_console import run_main as _growth_run_main
 
@@ -488,6 +496,8 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  execution-review   Preview compact execution review")
         print("  workspace-boundary Preview workspace creator runtime boundary")
         print("  workspace-create   Create guarded temporary workspace with approval")
+        print("  workspace-cleanup  Cleanup guarded temporary workspace")
+        print("  workspace-abandon  Abandon guarded temporary workspace")
         print("  run                Guided Growth workflow dashboard")
         return 0
     print(f"growth: unknown subcommand: {subcommand}", file=sys.stderr)

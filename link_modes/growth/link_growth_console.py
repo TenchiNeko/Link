@@ -10240,6 +10240,65 @@ def workspace_create_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def workspace_cleanup_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth workspace-cleanup`` guarded lifecycle closure."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth workspace-cleanup: guarded workspace cleanup lifecycle")
+        print("Usage: python3 link.py growth workspace-cleanup [--json] [--write --workspace-path PATH --workspace-id ID]")
+        return 0
+    write = "--write" in args
+    try:
+        workspace_path = _workspace_create_arg_value(args, "--workspace-path")
+        workspace_id = _workspace_create_arg_value(args, "--workspace-id")
+        if write:
+            if not workspace_path or not workspace_id:
+                raise ValueError("--write requires --workspace-path and --workspace-id")
+            creation_receipt = _workspace_lifecycle_receipt_from_manifest(workspace_path, workspace_id)
+        else:
+            creation_receipt = _workspace_lifecycle_preview_receipt()
+        plan = collect_workspace_cleanup_plan(creation_receipt)
+        result = cleanup_guarded_workspace(plan) if write else plan
+    except (ValueError, FileNotFoundError, PermissionError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(_stable_ruflo_json(result, indent=2) + "\n", end="")
+        return 0
+    render_workspace_lifecycle_plain("cleanup", result)
+    return 0
+
+
+def workspace_abandon_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth workspace-abandon`` guarded lifecycle closure."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth workspace-abandon: guarded workspace abandon lifecycle")
+        print("Usage: python3 link.py growth workspace-abandon [--json] [--write --workspace-path PATH --workspace-id ID]")
+        return 0
+    write = "--write" in args
+    try:
+        workspace_path = _workspace_create_arg_value(args, "--workspace-path")
+        workspace_id = _workspace_create_arg_value(args, "--workspace-id")
+        reason = _workspace_create_arg_value(args, "--reason") or "blocked execution"
+        if write:
+            if not workspace_path or not workspace_id:
+                raise ValueError("--write requires --workspace-path and --workspace-id")
+            creation_receipt = _workspace_lifecycle_receipt_from_manifest(workspace_path, workspace_id)
+        else:
+            creation_receipt = _workspace_lifecycle_preview_receipt()
+        plan = collect_workspace_abandon_plan(creation_receipt, abandonment_reason=reason)
+        result = abandon_guarded_workspace(plan) if write else plan
+    except (ValueError, FileNotFoundError, PermissionError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(_stable_ruflo_json(result, indent=2) + "\n", end="")
+        return 0
+    render_workspace_lifecycle_plain("abandon", result)
+    return 0
+
+
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     validate_growth_planning_chain_preview(chain)
     gap_counts = chain["capability_gap_preview"]["counts"]
@@ -10367,6 +10426,17 @@ def render_workspace_creation_receipt_plain(receipt: dict[str, Any]) -> None:
     print(f"workspace_boundary_id: {receipt['workspace_boundary_id']}")
     print(f"manifest_hash: {receipt['manifest_hash']}")
     print(f"workspace_hash: {receipt['workspace_hash']}")
+
+
+def render_workspace_lifecycle_plain(label: str, payload: dict[str, Any]) -> None:
+    print(f"Growth workspace {label}")
+    for key in (
+        "cleanup_plan_id", "abandon_plan_id", "cleanup_receipt_id", "abandon_receipt_id",
+        "workspace_id", "workspace_path", "cleanup_status", "abandonment_status",
+        "cleanup_result", "abandonment_result",
+    ):
+        if key in payload:
+            print(f"{key}: {payload[key]}")
 
 
 VERIFIED_PATCH_PLAN_VERSION = "link-verified-patch-plan-v1"
@@ -14770,6 +14840,506 @@ def preview_guarded_workspace_creation(
     )
 
 
+WORKSPACE_CLEANUP_PLAN_VERSION = "link-workspace-cleanup-plan-v1"
+WORKSPACE_ABANDON_PLAN_VERSION = "link-workspace-abandon-plan-v1"
+WORKSPACE_CLEANUP_RECEIPT_VERSION = "link-workspace-cleanup-receipt-v1"
+WORKSPACE_ABANDON_RECEIPT_VERSION = "link-workspace-abandon-receipt-v1"
+
+
+def _workspace_manifest_id(receipt: dict[str, Any]) -> str:
+    return _execution_readiness_id("workspace-manifest", {
+        "manifest_hash": receipt["manifest_hash"],
+        "workspace_id": receipt["workspace_id"],
+    })
+
+
+def make_workspace_cleanup_plan_id(workspace_id: str, workspace_path: str, creation_receipt_id: str, cleanup_reason: str) -> str:
+    return _execution_readiness_id("workspace-cleanup-plan", {
+        "creation_receipt_id": creation_receipt_id,
+        "cleanup_reason": cleanup_reason,
+        "version": WORKSPACE_CLEANUP_PLAN_VERSION,
+        "workspace_id": workspace_id,
+        "workspace_path": workspace_path,
+    })
+
+
+def make_workspace_abandon_plan_id(workspace_id: str, workspace_path: str, creation_receipt_id: str, abandonment_reason: str, abandonment_category: str) -> str:
+    return _execution_readiness_id("workspace-abandon-plan", {
+        "abandonment_category": abandonment_category,
+        "abandonment_reason": abandonment_reason,
+        "creation_receipt_id": creation_receipt_id,
+        "version": WORKSPACE_ABANDON_PLAN_VERSION,
+        "workspace_id": workspace_id,
+        "workspace_path": workspace_path,
+    })
+
+
+def make_workspace_cleanup_receipt_id(cleanup_plan_id: str, workspace_id: str, cleanup_result: str, evidence_refs: list[str]) -> str:
+    return _execution_readiness_id("workspace-cleanup-receipt", {
+        "cleanup_plan_id": cleanup_plan_id,
+        "cleanup_result": cleanup_result,
+        "evidence_refs": evidence_refs,
+        "version": WORKSPACE_CLEANUP_RECEIPT_VERSION,
+        "workspace_id": workspace_id,
+    })
+
+
+def make_workspace_abandon_receipt_id(abandon_plan_id: str, workspace_id: str, abandonment_result: str, evidence_refs: list[str]) -> str:
+    return _execution_readiness_id("workspace-abandon-receipt", {
+        "abandon_plan_id": abandon_plan_id,
+        "abandonment_result": abandonment_result,
+        "evidence_refs": evidence_refs,
+        "version": WORKSPACE_ABANDON_RECEIPT_VERSION,
+        "workspace_id": workspace_id,
+    })
+
+
+def _validate_workspace_lifecycle_path(workspace_path: str, workspace_id: str | None = None) -> None:
+    from pathlib import Path
+
+    path = Path(workspace_path).expanduser().resolve(strict=False)
+    if path == Path.cwd().resolve(strict=False) or path == Path.cwd().resolve(strict=False).parent:
+        raise ValueError("workspace lifecycle path must not be the repository root")
+    if workspace_id:
+        manifest_path = path / "workspace_manifest.json"
+        if path.exists():
+            if not path.is_dir():
+                raise ValueError("workspace lifecycle path must be a directory")
+            if not manifest_path.exists():
+                raise ValueError("workspace lifecycle path missing guarded workspace manifest")
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise ValueError("workspace manifest must be readable JSON") from exc
+            if manifest.get("workspace_id") != workspace_id:
+                raise ValueError("workspace manifest workspace_id mismatch")
+            if manifest.get("no_repo_mutation") is not True:
+                raise ValueError("workspace manifest must record no_repo_mutation")
+
+
+def collect_workspace_cleanup_plan(
+    creation_receipt: dict[str, Any],
+    *,
+    cleanup_reason: str = "successful closure",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Plan cleanup of a guarded temporary workspace without removing it."""
+    validate_workspace_creation_receipt(creation_receipt)
+    workspace_id = creation_receipt["workspace_id"]
+    workspace_path = creation_receipt["workspace_path"]
+    manifest_id = _workspace_manifest_id(creation_receipt)
+    actions = _normalize_patch_behavior_text_list([
+        "remove guarded temporary workspace directory",
+        "remove workspace manifest inside guarded workspace",
+        "return cleanup receipt to caller",
+        "verify workspace path is not repository root",
+    ])
+    required_evidence = _normalize_implementation_branch_refs([
+        "creation_receipt_id",
+        "manifest_hash",
+        "workspace_hash",
+        "workspace_id",
+    ])
+    expected_outputs = _normalize_patch_behavior_text_list([
+        "cleanup receipt",
+        "workspace path absent after cleanup",
+    ])
+    cleanup_status = "eligible" if creation_receipt["status"] == "created" else "preview"
+    plan = {
+        "workspace_cleanup_plan_version": WORKSPACE_CLEANUP_PLAN_VERSION,
+        "cleanup_plan_id": make_workspace_cleanup_plan_id(
+            workspace_id,
+            workspace_path,
+            creation_receipt["creation_receipt_id"],
+            cleanup_reason,
+        ),
+        "workspace_id": workspace_id,
+        "workspace_path": workspace_path,
+        "manifest_id": manifest_id,
+        "creation_receipt_id": creation_receipt["creation_receipt_id"],
+        "cleanup_reason": cleanup_reason,
+        "cleanup_actions": actions,
+        "required_evidence": required_evidence,
+        "expected_cleanup_outputs": expected_outputs,
+        "cleanup_status": cleanup_status,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_workspace_cleanup_plan(plan, creation_receipt)
+    return plan
+
+
+def validate_workspace_cleanup_plan(plan: dict[str, Any], creation_receipt: dict[str, Any] | None = None) -> None:
+    required = (
+        "workspace_cleanup_plan_version", "cleanup_plan_id", "workspace_id", "workspace_path",
+        "manifest_id", "creation_receipt_id", "cleanup_reason", "cleanup_actions",
+        "required_evidence", "expected_cleanup_outputs", "cleanup_status", "dry_run",
+        "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in plan]
+    if missing:
+        raise ValueError(f"workspace cleanup plan missing fields: {missing}")
+    if plan["workspace_cleanup_plan_version"] != WORKSPACE_CLEANUP_PLAN_VERSION:
+        raise ValueError("unsupported workspace cleanup plan version")
+    _validate_execution_read_only(plan, "workspace cleanup plan")
+    for field in ("cleanup_plan_id", "workspace_id", "workspace_path", "manifest_id", "creation_receipt_id", "cleanup_reason", "cleanup_status"):
+        _validate_non_empty_string(plan[field], field)
+    if plan["cleanup_status"] not in {"eligible", "preview", "blocked"}:
+        raise ValueError("invalid workspace cleanup status")
+    for field in ("cleanup_actions", "expected_cleanup_outputs"):
+        values = plan[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    evidence = plan["required_evidence"]
+    if not isinstance(evidence, list) or not evidence:
+        raise TypeError("required_evidence must be a non-empty list")
+    if evidence != _normalize_implementation_branch_refs(evidence):
+        raise ValueError("required_evidence must be normalized and sorted")
+    if "remove guarded temporary workspace directory" not in plan["cleanup_actions"]:
+        raise ValueError("cleanup plan must remove only guarded temporary workspace")
+    expected_id = make_workspace_cleanup_plan_id(plan["workspace_id"], plan["workspace_path"], plan["creation_receipt_id"], plan["cleanup_reason"])
+    if plan["cleanup_plan_id"] != expected_id:
+        raise ValueError("workspace cleanup plan id does not match contents")
+    if creation_receipt is not None:
+        validate_workspace_creation_receipt(creation_receipt)
+        if plan["workspace_id"] != creation_receipt["workspace_id"]:
+            raise ValueError("workspace cleanup plan workspace_id mismatch")
+        if plan["workspace_path"] != creation_receipt["workspace_path"]:
+            raise ValueError("workspace cleanup plan workspace_path mismatch")
+        if plan["creation_receipt_id"] != creation_receipt["creation_receipt_id"]:
+            raise ValueError("workspace cleanup plan creation receipt mismatch")
+
+
+def stable_workspace_cleanup_plan_json(plan: dict[str, Any]) -> str:
+    validate_workspace_cleanup_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def parse_workspace_cleanup_plan_json(text: str) -> dict[str, Any]:
+    plan = json.loads(text)
+    validate_workspace_cleanup_plan(plan)
+    return plan
+
+
+def collect_workspace_abandon_plan(
+    creation_receipt: dict[str, Any],
+    *,
+    abandonment_reason: str = "blocked execution",
+    abandonment_category: str = "blocked",
+    blockers: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Plan abandonment of a guarded workspace without mutating it."""
+    validate_workspace_creation_receipt(creation_receipt)
+    if abandonment_category not in {"failed", "canceled", "blocked"}:
+        raise ValueError("invalid abandonment category")
+    workspace_id = creation_receipt["workspace_id"]
+    workspace_path = creation_receipt["workspace_path"]
+    normalized_blockers = _normalize_patch_behavior_text_list(blockers or [abandonment_reason])
+    required_evidence = _normalize_implementation_branch_refs([
+        "abandonment_reason",
+        "creation_receipt_id",
+        "workspace_id",
+    ])
+    status = "blocked" if normalized_blockers else "eligible"
+    plan = {
+        "workspace_abandon_plan_version": WORKSPACE_ABANDON_PLAN_VERSION,
+        "abandon_plan_id": make_workspace_abandon_plan_id(
+            workspace_id,
+            workspace_path,
+            creation_receipt["creation_receipt_id"],
+            abandonment_reason,
+            abandonment_category,
+        ),
+        "workspace_id": workspace_id,
+        "workspace_path": workspace_path,
+        "manifest_id": _workspace_manifest_id(creation_receipt),
+        "creation_receipt_id": creation_receipt["creation_receipt_id"],
+        "abandonment_reason": abandonment_reason,
+        "abandonment_category": abandonment_category,
+        "blockers": normalized_blockers,
+        "required_evidence": required_evidence,
+        "abandonment_status": status,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_workspace_abandon_plan(plan, creation_receipt)
+    return plan
+
+
+def validate_workspace_abandon_plan(plan: dict[str, Any], creation_receipt: dict[str, Any] | None = None) -> None:
+    required = (
+        "workspace_abandon_plan_version", "abandon_plan_id", "workspace_id", "workspace_path",
+        "manifest_id", "creation_receipt_id", "abandonment_reason", "abandonment_category",
+        "blockers", "required_evidence", "abandonment_status", "dry_run", "write_allowed",
+        "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in plan]
+    if missing:
+        raise ValueError(f"workspace abandon plan missing fields: {missing}")
+    if plan["workspace_abandon_plan_version"] != WORKSPACE_ABANDON_PLAN_VERSION:
+        raise ValueError("unsupported workspace abandon plan version")
+    _validate_execution_read_only(plan, "workspace abandon plan")
+    for field in ("abandon_plan_id", "workspace_id", "workspace_path", "manifest_id", "creation_receipt_id", "abandonment_reason", "abandonment_category", "abandonment_status"):
+        _validate_non_empty_string(plan[field], field)
+    if plan["abandonment_category"] not in {"failed", "canceled", "blocked"}:
+        raise ValueError("invalid abandonment category")
+    if plan["abandonment_status"] not in {"eligible", "blocked"}:
+        raise ValueError("invalid abandonment status")
+    blockers = plan["blockers"]
+    if not isinstance(blockers, list):
+        raise TypeError("blockers must be a list")
+    if blockers != _normalize_patch_behavior_text_list(blockers):
+        raise ValueError("blockers must be normalized and sorted")
+    evidence = plan["required_evidence"]
+    if not isinstance(evidence, list) or not evidence:
+        raise TypeError("required_evidence must be a non-empty list")
+    if evidence != _normalize_implementation_branch_refs(evidence):
+        raise ValueError("required_evidence must be normalized and sorted")
+    if plan["blockers"] and plan["abandonment_status"] != "blocked":
+        raise ValueError("abandonment blockers must produce blocked status")
+    expected_id = make_workspace_abandon_plan_id(
+        plan["workspace_id"], plan["workspace_path"], plan["creation_receipt_id"],
+        plan["abandonment_reason"], plan["abandonment_category"],
+    )
+    if plan["abandon_plan_id"] != expected_id:
+        raise ValueError("workspace abandon plan id does not match contents")
+    if creation_receipt is not None:
+        validate_workspace_creation_receipt(creation_receipt)
+        if plan["workspace_id"] != creation_receipt["workspace_id"]:
+            raise ValueError("workspace abandon plan workspace_id mismatch")
+        if plan["workspace_path"] != creation_receipt["workspace_path"]:
+            raise ValueError("workspace abandon plan workspace_path mismatch")
+        if plan["creation_receipt_id"] != creation_receipt["creation_receipt_id"]:
+            raise ValueError("workspace abandon plan creation receipt mismatch")
+
+
+def stable_workspace_abandon_plan_json(plan: dict[str, Any]) -> str:
+    validate_workspace_abandon_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def parse_workspace_abandon_plan_json(text: str) -> dict[str, Any]:
+    plan = json.loads(text)
+    validate_workspace_abandon_plan(plan)
+    return plan
+
+
+def collect_workspace_cleanup_receipt(
+    cleanup_plan: dict[str, Any],
+    *,
+    cleanup_result: str,
+    evidence_refs: list[str] | None = None,
+    cleanup_timestamp: str = "preview-only",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    validate_workspace_cleanup_plan(cleanup_plan)
+    evidence = _normalize_implementation_branch_refs(evidence_refs or cleanup_plan["required_evidence"])
+    receipt = {
+        "workspace_cleanup_receipt_version": WORKSPACE_CLEANUP_RECEIPT_VERSION,
+        "cleanup_receipt_id": make_workspace_cleanup_receipt_id(cleanup_plan["cleanup_plan_id"], cleanup_plan["workspace_id"], cleanup_result, evidence),
+        "cleanup_plan_id": cleanup_plan["cleanup_plan_id"],
+        "workspace_id": cleanup_plan["workspace_id"],
+        "workspace_path": cleanup_plan["workspace_path"],
+        "cleanup_timestamp": cleanup_timestamp,
+        "cleanup_result": cleanup_result,
+        "evidence_refs": evidence,
+        "metadata": dict(metadata or {}),
+    }
+    validate_workspace_cleanup_receipt(receipt, cleanup_plan)
+    return receipt
+
+
+def validate_workspace_cleanup_receipt(receipt: dict[str, Any], cleanup_plan: dict[str, Any] | None = None) -> None:
+    required = ("workspace_cleanup_receipt_version", "cleanup_receipt_id", "cleanup_plan_id", "workspace_id", "workspace_path", "cleanup_timestamp", "cleanup_result", "evidence_refs", "metadata")
+    missing = [field for field in required if field not in receipt]
+    if missing:
+        raise ValueError(f"workspace cleanup receipt missing fields: {missing}")
+    if receipt["workspace_cleanup_receipt_version"] != WORKSPACE_CLEANUP_RECEIPT_VERSION:
+        raise ValueError("unsupported workspace cleanup receipt version")
+    for field in ("cleanup_receipt_id", "cleanup_plan_id", "workspace_id", "workspace_path", "cleanup_timestamp", "cleanup_result"):
+        _validate_non_empty_string(receipt[field], field)
+    if receipt["cleanup_result"] not in {"preview", "cleaned", "failed"}:
+        raise ValueError("invalid workspace cleanup result")
+    evidence = receipt["evidence_refs"]
+    if not isinstance(evidence, list) or not evidence:
+        raise TypeError("evidence_refs must be a non-empty list")
+    if evidence != _normalize_implementation_branch_refs(evidence):
+        raise ValueError("evidence_refs must be normalized and sorted")
+    expected_id = make_workspace_cleanup_receipt_id(receipt["cleanup_plan_id"], receipt["workspace_id"], receipt["cleanup_result"], evidence)
+    if receipt["cleanup_receipt_id"] != expected_id:
+        raise ValueError("workspace cleanup receipt id does not match contents")
+    if cleanup_plan is not None:
+        validate_workspace_cleanup_plan(cleanup_plan)
+        for field in ("cleanup_plan_id", "workspace_id", "workspace_path"):
+            if receipt[field] != cleanup_plan[field]:
+                raise ValueError(f"workspace cleanup receipt {field} mismatch")
+
+
+def collect_workspace_abandon_receipt(
+    abandon_plan: dict[str, Any],
+    *,
+    abandonment_result: str,
+    evidence_refs: list[str] | None = None,
+    abandonment_timestamp: str = "preview-only",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    validate_workspace_abandon_plan(abandon_plan)
+    evidence = _normalize_implementation_branch_refs(evidence_refs or abandon_plan["required_evidence"])
+    receipt = {
+        "workspace_abandon_receipt_version": WORKSPACE_ABANDON_RECEIPT_VERSION,
+        "abandon_receipt_id": make_workspace_abandon_receipt_id(abandon_plan["abandon_plan_id"], abandon_plan["workspace_id"], abandonment_result, evidence),
+        "abandon_plan_id": abandon_plan["abandon_plan_id"],
+        "workspace_id": abandon_plan["workspace_id"],
+        "workspace_path": abandon_plan["workspace_path"],
+        "abandonment_timestamp": abandonment_timestamp,
+        "abandonment_result": abandonment_result,
+        "evidence_refs": evidence,
+        "metadata": dict(metadata or {}),
+    }
+    validate_workspace_abandon_receipt(receipt, abandon_plan)
+    return receipt
+
+
+def validate_workspace_abandon_receipt(receipt: dict[str, Any], abandon_plan: dict[str, Any] | None = None) -> None:
+    required = ("workspace_abandon_receipt_version", "abandon_receipt_id", "abandon_plan_id", "workspace_id", "workspace_path", "abandonment_timestamp", "abandonment_result", "evidence_refs", "metadata")
+    missing = [field for field in required if field not in receipt]
+    if missing:
+        raise ValueError(f"workspace abandon receipt missing fields: {missing}")
+    if receipt["workspace_abandon_receipt_version"] != WORKSPACE_ABANDON_RECEIPT_VERSION:
+        raise ValueError("unsupported workspace abandon receipt version")
+    for field in ("abandon_receipt_id", "abandon_plan_id", "workspace_id", "workspace_path", "abandonment_timestamp", "abandonment_result"):
+        _validate_non_empty_string(receipt[field], field)
+    if receipt["abandonment_result"] not in {"preview", "abandoned", "failed"}:
+        raise ValueError("invalid workspace abandonment result")
+    evidence = receipt["evidence_refs"]
+    if not isinstance(evidence, list) or not evidence:
+        raise TypeError("evidence_refs must be a non-empty list")
+    if evidence != _normalize_implementation_branch_refs(evidence):
+        raise ValueError("evidence_refs must be normalized and sorted")
+    expected_id = make_workspace_abandon_receipt_id(receipt["abandon_plan_id"], receipt["workspace_id"], receipt["abandonment_result"], evidence)
+    if receipt["abandon_receipt_id"] != expected_id:
+        raise ValueError("workspace abandon receipt id does not match contents")
+    if abandon_plan is not None:
+        validate_workspace_abandon_plan(abandon_plan)
+        expected = {
+            "abandon_plan_id": abandon_plan["abandon_plan_id"],
+            "workspace_id": abandon_plan["workspace_id"],
+            "workspace_path": abandon_plan["workspace_path"],
+        }
+        for field, value in expected.items():
+            if receipt[field] != value:
+                raise ValueError(f"workspace abandon receipt {field} mismatch")
+
+
+def _timestamp_now_utc() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def cleanup_guarded_workspace(cleanup_plan: dict[str, Any]) -> dict[str, Any]:
+    import shutil
+    from pathlib import Path
+
+    validate_workspace_cleanup_plan(cleanup_plan)
+    _validate_workspace_lifecycle_path(cleanup_plan["workspace_path"], cleanup_plan["workspace_id"])
+    path = Path(cleanup_plan["workspace_path"]).expanduser().resolve(strict=False)
+    if not path.exists():
+        raise FileNotFoundError("workspace path does not exist")
+    shutil.rmtree(path)
+    return collect_workspace_cleanup_receipt(
+        cleanup_plan,
+        cleanup_result="cleaned",
+        cleanup_timestamp=_timestamp_now_utc(),
+        evidence_refs=["creation_receipt_id", "manifest_hash", "workspace_removed", cleanup_plan["workspace_id"]],
+    )
+
+
+def abandon_guarded_workspace(abandon_plan: dict[str, Any]) -> dict[str, Any]:
+    from pathlib import Path
+
+    validate_workspace_abandon_plan(abandon_plan)
+    _validate_workspace_lifecycle_path(abandon_plan["workspace_path"], abandon_plan["workspace_id"])
+    path = Path(abandon_plan["workspace_path"]).expanduser().resolve(strict=False)
+    receipt = collect_workspace_abandon_receipt(
+        abandon_plan,
+        abandonment_result="abandoned",
+        abandonment_timestamp=_timestamp_now_utc(),
+        evidence_refs=["abandonment_reason", "creation_receipt_id", abandon_plan["workspace_id"]],
+    )
+    receipt_path = path / "workspace_abandon_receipt.json"
+    receipt_path.write_text(_stable_ruflo_json(receipt, indent=2) + "\n", encoding="utf-8")
+    return receipt
+
+
+def _workspace_lifecycle_preview_receipt() -> dict[str, Any]:
+    chain = collect_growth_planning_chain_preview()
+    runtime_plan = collect_workspace_creator_runtime_plan(chain)
+    request = make_guarded_workspace_request(runtime_plan, approved=False, write=False)
+    return preview_guarded_workspace_creation(request, runtime_plan)
+
+
+def _workspace_lifecycle_receipt_from_manifest(workspace_path: str, workspace_id: str) -> dict[str, Any]:
+    import hashlib
+    from pathlib import Path
+
+    _validate_workspace_lifecycle_path(workspace_path, workspace_id)
+    path = Path(workspace_path).expanduser().resolve(strict=False)
+    manifest_path = path / "workspace_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_text = _stable_ruflo_json(manifest, indent=2) + "\n"
+    manifest_hash = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
+    return {
+        "workspace_creation_receipt_version": WORKSPACE_CREATION_RECEIPT_VERSION,
+        "creation_receipt_id": make_workspace_creation_receipt_id(
+            f"manifest-request-{workspace_id}",
+            manifest["runtime_workspace_plan_id"],
+            workspace_id,
+            manifest_hash,
+        ),
+        "request_id": f"manifest-request-{workspace_id}",
+        "runtime_workspace_plan_id": manifest["runtime_workspace_plan_id"],
+        "planning_chain_id": manifest["planning_chain_id"],
+        "execution_package_id": manifest["execution_package_id"],
+        "workspace_boundary_id": manifest["workspace_boundary_id"],
+        "execution_review_id": "manifest-only-execution-review",
+        "gate_stack_preview_id": "manifest-only-gate-stack",
+        "approval_checklist_id": "manifest-only-approval-checklist",
+        "preflight_checklist_id": "manifest-only-preflight-checklist",
+        "workspace_id": workspace_id,
+        "workspace_path": str(path),
+        "creation_timestamp": manifest.get("created_at", "manifest-only"),
+        "workspace_manifest": manifest,
+        "manifest_hash": manifest_hash,
+        "workspace_hash": _workspace_hash(str(path)),
+        "status": "created",
+        "allowed_actions_performed": _normalize_patch_behavior_text_list([
+            "create metadata manifest",
+            "create temporary workspace directory",
+            "create workspace receipt",
+        ]),
+        "forbidden_actions_avoided": _normalize_patch_behavior_text_list([
+            "apply patches",
+            "create commits",
+            "create git branches",
+            "execute verification commands",
+            "merge changes",
+            "modify repository files",
+            "modify repository working tree",
+            "run network commands",
+        ]),
+        "metadata": {"source": "workspace_manifest"},
+    }
+
+
 def make_verified_patch_plan_id(work_package: dict[str, Any], operations: list[dict[str, Any]]) -> str:
     import hashlib
 
@@ -15150,6 +15720,365 @@ def parse_verified_patch_diff_json(text: str) -> dict[str, Any]:
     diff = _json.loads(text)
     validate_verified_patch_diff(diff)
     return diff
+
+
+PATCH_APPLIER_BOUNDARY_VERSION = "link-patch-applier-boundary-v1"
+PATCH_APPLIER_FORBIDDEN_PATH_PREFIXES = (".agents/", ".git/", ".link/", "research/")
+PATCH_APPLIER_FORBIDDEN_OPERATION_TYPES = ("execute_shell", "git_operation", "network_call", "run_verification")
+PATCH_APPLIER_RISKY_OPERATION_TYPES = ("create_file", "delete_file")
+
+
+def make_patch_applier_boundary_id(
+    planning_chain_id: str,
+    verified_patch_plan_id: str,
+    verified_patch_diff_id: str,
+    execution_package_id: str,
+    workspace_boundary_id: str,
+    runtime_workspace_plan_id: str,
+) -> str:
+    return _execution_readiness_id("patch-applier-boundary", {
+        "execution_package_id": execution_package_id,
+        "planning_chain_id": planning_chain_id,
+        "runtime_workspace_plan_id": runtime_workspace_plan_id,
+        "verified_patch_diff_id": verified_patch_diff_id,
+        "verified_patch_plan_id": verified_patch_plan_id,
+        "version": PATCH_APPLIER_BOUNDARY_VERSION,
+        "workspace_boundary_id": workspace_boundary_id,
+    })
+
+
+def _patch_applier_validate_target_path(path: str) -> None:
+    _validate_non_empty_string(path, "target path")
+    normalized = _normalize_implementation_branch_refs([path])
+    if normalized != [path]:
+        raise ValueError("patch target path must be normalized")
+    if path.startswith("/") or ".." in path.split("/"):
+        raise ValueError("patch target path must stay relative to the workspace")
+    for prefix in PATCH_APPLIER_FORBIDDEN_PATH_PREFIXES:
+        if path == prefix.rstrip("/") or path.startswith(prefix):
+            raise ValueError(f"patch target path uses forbidden prefix: {prefix}")
+
+
+def collect_patch_applier_boundary(
+    verified_patch_plan: dict[str, Any],
+    verified_patch_diff: dict[str, Any],
+    execution_gate_stack_preview: dict[str, Any],
+    execution_approval_checklist: dict[str, Any],
+    execution_evidence_contract: dict[str, Any],
+    workspace_creator_runtime_boundary: dict[str, Any],
+    workspace_runtime_plan: dict[str, Any],
+    *,
+    planning_chain_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a strict read-only boundary for future patch application."""
+    validate_verified_patch_plan(verified_patch_plan)
+    validate_verified_patch_diff(verified_patch_diff)
+    validate_execution_gate_stack_preview(execution_gate_stack_preview)
+    validate_execution_approval_checklist(execution_approval_checklist)
+    validate_execution_evidence_contract(execution_evidence_contract)
+    validate_workspace_creator_runtime_boundary(workspace_creator_runtime_boundary)
+    validate_workspace_creator_runtime_plan(workspace_runtime_plan, workspace_creator_runtime_boundary)
+    source_planning_chain_id = planning_chain_id or execution_gate_stack_preview["planning_chain_id"]
+    allowed_target_files = _normalize_implementation_branch_refs(verified_patch_plan["target_files"])
+    for target in allowed_target_files:
+        _patch_applier_validate_target_path(target)
+    operation_types = _normalize_patch_behavior_text_list([
+        operation["operation_type"] for operation in verified_patch_plan["patch_operations"]
+    ])
+    risky_present = _normalize_patch_behavior_text_list([
+        operation_type for operation_type in operation_types
+        if operation_type in PATCH_APPLIER_RISKY_OPERATION_TYPES
+    ])
+    operation_requires_review = _normalize_patch_behavior_text_list([
+        *risky_present,
+        *(["review_gate_status"] if execution_gate_stack_preview["review_count"] else []),
+        *(["approval_status"] if execution_approval_checklist["approval_status"] != "pass" else []),
+    ]) or ["human_patch_review"]
+    fail_closed = _normalize_patch_behavior_text_list([
+        "approval checklist is not pass",
+        "diff id does not match verified patch plan",
+        "evidence contract missing patch application evidence",
+        "gate stack contains block status",
+        "patch target path is outside allowed workspace files",
+        "workspace boundary is not pass",
+        "workspace runtime plan is not pass",
+    ])
+    rollback_triggers = _normalize_patch_behavior_text_list([
+        "applied patch differs from verified patch diff preview",
+        "file hash evidence cannot be produced",
+        "patch operation touches forbidden target path",
+        "reviewer rejects patch boundary",
+    ])
+    cleanup_triggers = _normalize_patch_behavior_text_list([
+        "patch boundary validation fails before application",
+        "workspace is abandoned before patch application",
+    ])
+    escalation_conditions = _normalize_patch_behavior_text_list([
+        "delete_file operation requested",
+        "gate stack review or block status present",
+        "human approval checklist not pass",
+        "required patch evidence missing",
+    ])
+    required_patch_evidence = _normalize_implementation_branch_refs([
+        "applied_patch_hash",
+        "patch_application_status",
+        "patch_operation_results",
+    ])
+    required_diff_evidence = _normalize_implementation_branch_refs([
+        "verified_patch_diff_id",
+        "diff_hash",
+        "diff_preview_reviewed",
+    ])
+    required_file_hash_evidence = _normalize_implementation_branch_refs([
+        "before_file_hashes",
+        "after_file_hashes",
+        "changed_file_refs",
+    ])
+    required_journal_evidence = _normalize_implementation_branch_refs([
+        "execution_journal_entry_id",
+        "patch_attempt_id",
+    ])
+    boundary = {
+        "patch_applier_boundary_version": PATCH_APPLIER_BOUNDARY_VERSION,
+        "patch_applier_boundary_id": make_patch_applier_boundary_id(
+            source_planning_chain_id,
+            verified_patch_plan["verified_patch_plan_id"],
+            verified_patch_diff["verified_patch_diff_id"],
+            workspace_runtime_plan["execution_package_id"],
+            workspace_creator_runtime_boundary["workspace_boundary_id"],
+            workspace_runtime_plan["runtime_workspace_plan_id"],
+        ),
+        "planning_chain_id": source_planning_chain_id,
+        "verified_patch_plan_id": verified_patch_plan["verified_patch_plan_id"],
+        "verified_patch_diff_id": verified_patch_diff["verified_patch_diff_id"],
+        "execution_package_id": workspace_runtime_plan["execution_package_id"],
+        "workspace_boundary_id": workspace_creator_runtime_boundary["workspace_boundary_id"],
+        "runtime_workspace_plan_id": workspace_runtime_plan["runtime_workspace_plan_id"],
+        "source_type": "verified_patch_plan_and_diff",
+        "allowed_source_ids": _normalize_implementation_branch_refs([
+            verified_patch_plan["verified_patch_plan_id"],
+            verified_patch_diff["verified_patch_diff_id"],
+        ]),
+        "required_source_evidence": _normalize_implementation_branch_refs([
+            "verified patch diff JSON reviewed",
+            "verified patch plan JSON reviewed",
+            "workspace creation receipt reviewed",
+        ]),
+        "forbidden_source_types": _normalize_patch_behavior_text_list([
+            "ad_hoc_shell_patch",
+            "generated_unreviewed_diff",
+            "network_downloaded_patch",
+            "research_archive_direct_copy",
+        ]),
+        "allowed_target_files": allowed_target_files,
+        "forbidden_target_paths": _normalize_implementation_branch_refs([
+            ".agents",
+            ".git",
+            ".link",
+            "research",
+        ]),
+        "forbidden_path_prefixes": list(PATCH_APPLIER_FORBIDDEN_PATH_PREFIXES),
+        "max_files_changed": verified_patch_plan["estimated_files_changed"],
+        "max_operations": len(verified_patch_plan["patch_operations"]),
+        "max_estimated_added_lines": verified_patch_diff["estimated_added_lines"],
+        "max_estimated_removed_lines": verified_patch_diff["estimated_removed_lines"],
+        "allowed_operation_types": _normalize_patch_behavior_text_list(VERIFIED_PATCH_OPERATION_TYPES),
+        "forbidden_operation_types": _normalize_patch_behavior_text_list(PATCH_APPLIER_FORBIDDEN_OPERATION_TYPES),
+        "risky_operation_types": _normalize_patch_behavior_text_list(PATCH_APPLIER_RISKY_OPERATION_TYPES),
+        "operation_requires_review": _normalize_patch_behavior_text_list([
+            *PATCH_APPLIER_RISKY_OPERATION_TYPES,
+            *operation_requires_review,
+        ]),
+        "quality_gate_required": True,
+        "approval_required": True,
+        "workspace_required": True,
+        "evidence_required": True,
+        "rollback_required": True,
+        "fail_closed_conditions": fail_closed,
+        "rollback_triggers": rollback_triggers,
+        "cleanup_triggers": cleanup_triggers,
+        "escalation_required_conditions": escalation_conditions,
+        "required_patch_evidence": required_patch_evidence,
+        "required_diff_evidence": required_diff_evidence,
+        "required_file_hash_evidence": required_file_hash_evidence,
+        "required_journal_evidence": required_journal_evidence,
+        "required_reviewer_summary": True,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_patch_applier_boundary(
+        boundary,
+        verified_patch_plan,
+        verified_patch_diff,
+        execution_gate_stack_preview,
+        execution_approval_checklist,
+        execution_evidence_contract,
+        workspace_creator_runtime_boundary,
+        workspace_runtime_plan,
+    )
+    return boundary
+
+
+def validate_patch_applier_boundary(
+    boundary: dict[str, Any],
+    verified_patch_plan: dict[str, Any] | None = None,
+    verified_patch_diff: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_approval_checklist: dict[str, Any] | None = None,
+    execution_evidence_contract: dict[str, Any] | None = None,
+    workspace_creator_runtime_boundary: dict[str, Any] | None = None,
+    workspace_runtime_plan: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "patch_applier_boundary_version", "patch_applier_boundary_id", "planning_chain_id",
+        "verified_patch_plan_id", "verified_patch_diff_id", "execution_package_id",
+        "workspace_boundary_id", "runtime_workspace_plan_id", "source_type",
+        "allowed_source_ids", "required_source_evidence", "forbidden_source_types",
+        "allowed_target_files", "forbidden_target_paths", "forbidden_path_prefixes",
+        "max_files_changed", "max_operations", "max_estimated_added_lines",
+        "max_estimated_removed_lines", "allowed_operation_types", "forbidden_operation_types",
+        "risky_operation_types", "operation_requires_review", "quality_gate_required",
+        "approval_required", "workspace_required", "evidence_required", "rollback_required",
+        "fail_closed_conditions", "rollback_triggers", "cleanup_triggers",
+        "escalation_required_conditions", "required_patch_evidence", "required_diff_evidence",
+        "required_file_hash_evidence", "required_journal_evidence", "required_reviewer_summary",
+        "dry_run", "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in boundary]
+    if missing:
+        raise ValueError(f"patch applier boundary missing fields: {missing}")
+    if boundary["patch_applier_boundary_version"] != PATCH_APPLIER_BOUNDARY_VERSION:
+        raise ValueError("unsupported patch applier boundary version")
+    _validate_execution_read_only(boundary, "patch applier boundary")
+    for field in (
+        "patch_applier_boundary_id", "planning_chain_id", "verified_patch_plan_id",
+        "verified_patch_diff_id", "execution_package_id", "workspace_boundary_id",
+        "runtime_workspace_plan_id", "source_type",
+    ):
+        _validate_non_empty_string(boundary[field], field)
+    if boundary["source_type"] != "verified_patch_plan_and_diff":
+        raise ValueError("patch source type must remain verified_patch_plan_and_diff")
+    for field in ("max_files_changed", "max_operations", "max_estimated_added_lines", "max_estimated_removed_lines"):
+        if not isinstance(boundary[field], int) or boundary[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    for field in ("quality_gate_required", "approval_required", "workspace_required", "evidence_required", "rollback_required", "required_reviewer_summary"):
+        if boundary[field] is not True:
+            raise ValueError(f"{field} must be true")
+    ref_lists = (
+        "allowed_source_ids", "allowed_target_files", "forbidden_target_paths",
+        "required_patch_evidence", "required_diff_evidence", "required_file_hash_evidence",
+        "required_journal_evidence", "required_source_evidence",
+    )
+    for field in ref_lists:
+        values = boundary[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_implementation_branch_refs(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    text_lists = (
+        "forbidden_source_types", "forbidden_path_prefixes", "allowed_operation_types",
+        "forbidden_operation_types", "risky_operation_types", "operation_requires_review",
+        "fail_closed_conditions", "rollback_triggers", "cleanup_triggers",
+        "escalation_required_conditions",
+    )
+    for field in text_lists:
+        values = boundary[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    for target in boundary["allowed_target_files"]:
+        _patch_applier_validate_target_path(target)
+    forbidden_prefixes = tuple(boundary["forbidden_path_prefixes"])
+    for target in boundary["allowed_target_files"]:
+        if any(target == prefix.rstrip("/") or target.startswith(prefix) for prefix in forbidden_prefixes):
+            raise ValueError("allowed target file overlaps forbidden path prefix")
+    if set(boundary["allowed_operation_types"]) & set(boundary["forbidden_operation_types"]):
+        raise ValueError("allowed operation types overlap forbidden operation types")
+    if not set(boundary["risky_operation_types"]).issubset(set(boundary["allowed_operation_types"])):
+        raise ValueError("risky operation types must be allowed operation types")
+    if not set(boundary["risky_operation_types"]).issubset(set(boundary["operation_requires_review"])):
+        raise ValueError("risky operation types must require review")
+    for required_item in (
+        "approval checklist is not pass",
+        "gate stack contains block status",
+        "patch target path is outside allowed workspace files",
+    ):
+        if required_item not in boundary["fail_closed_conditions"]:
+            raise ValueError("patch applier boundary missing required fail-closed condition")
+    expected_id = make_patch_applier_boundary_id(
+        boundary["planning_chain_id"],
+        boundary["verified_patch_plan_id"],
+        boundary["verified_patch_diff_id"],
+        boundary["execution_package_id"],
+        boundary["workspace_boundary_id"],
+        boundary["runtime_workspace_plan_id"],
+    )
+    if boundary["patch_applier_boundary_id"] != expected_id:
+        raise ValueError("patch applier boundary id does not match contents")
+    if verified_patch_plan is not None:
+        validate_verified_patch_plan(verified_patch_plan)
+        if boundary["verified_patch_plan_id"] != verified_patch_plan["verified_patch_plan_id"]:
+            raise ValueError("patch applier boundary patch plan id mismatch")
+        if boundary["allowed_target_files"] != verified_patch_plan["target_files"]:
+            raise ValueError("patch applier boundary target files mismatch")
+        if boundary["max_files_changed"] != verified_patch_plan["estimated_files_changed"]:
+            raise ValueError("patch applier boundary max files mismatch")
+        if boundary["max_operations"] != len(verified_patch_plan["patch_operations"]):
+            raise ValueError("patch applier boundary max operations mismatch")
+        operation_types = {operation["operation_type"] for operation in verified_patch_plan["patch_operations"]}
+        if not operation_types.issubset(set(boundary["allowed_operation_types"])):
+            raise ValueError("patch applier boundary missing allowed operation type")
+    if verified_patch_diff is not None:
+        validate_verified_patch_diff(verified_patch_diff)
+        if boundary["verified_patch_diff_id"] != verified_patch_diff["verified_patch_diff_id"]:
+            raise ValueError("patch applier boundary patch diff id mismatch")
+        if verified_patch_plan is not None and verified_patch_diff["verified_patch_plan_id"] != verified_patch_plan["verified_patch_plan_id"]:
+            raise ValueError("patch applier boundary diff does not match patch plan")
+        if boundary["max_estimated_added_lines"] != verified_patch_diff["estimated_added_lines"]:
+            raise ValueError("patch applier boundary added line limit mismatch")
+        if boundary["max_estimated_removed_lines"] != verified_patch_diff["estimated_removed_lines"]:
+            raise ValueError("patch applier boundary removed line limit mismatch")
+    if execution_gate_stack_preview is not None:
+        validate_execution_gate_stack_preview(execution_gate_stack_preview)
+        if boundary["planning_chain_id"] != execution_gate_stack_preview["planning_chain_id"]:
+            raise ValueError("patch applier boundary planning chain mismatch")
+        if boundary["execution_package_id"] != execution_gate_stack_preview["execution_package_id"]:
+            raise ValueError("patch applier boundary execution package mismatch")
+    if execution_approval_checklist is not None:
+        validate_execution_approval_checklist(execution_approval_checklist)
+        if boundary["execution_package_id"] != execution_approval_checklist["execution_package_id"]:
+            raise ValueError("patch applier boundary approval package mismatch")
+    if execution_evidence_contract is not None:
+        validate_execution_evidence_contract(execution_evidence_contract)
+        evidence_types = {item["evidence_type"] for item in execution_evidence_contract["evidence_items"]}
+        if "patch_application" not in evidence_types:
+            raise ValueError("patch applier boundary requires patch application evidence contract")
+    if workspace_creator_runtime_boundary is not None:
+        validate_workspace_creator_runtime_boundary(workspace_creator_runtime_boundary)
+        if boundary["workspace_boundary_id"] != workspace_creator_runtime_boundary["workspace_boundary_id"]:
+            raise ValueError("patch applier boundary workspace boundary mismatch")
+    if workspace_runtime_plan is not None:
+        validate_workspace_creator_runtime_plan(workspace_runtime_plan)
+        if boundary["runtime_workspace_plan_id"] != workspace_runtime_plan["runtime_workspace_plan_id"]:
+            raise ValueError("patch applier boundary workspace runtime plan mismatch")
+        if boundary["execution_package_id"] != workspace_runtime_plan["execution_package_id"]:
+            raise ValueError("patch applier boundary runtime execution package mismatch")
+
+
+def stable_patch_applier_boundary_json(boundary: dict[str, Any]) -> str:
+    validate_patch_applier_boundary(boundary)
+    return _stable_ruflo_json(boundary, indent=2) + "\n"
+
+
+def parse_patch_applier_boundary_json(text: str) -> dict[str, Any]:
+    boundary = json.loads(text)
+    validate_patch_applier_boundary(boundary)
+    return boundary
 
 
 def validate_verified_patch_diff_entry(entry: dict[str, Any]) -> None:

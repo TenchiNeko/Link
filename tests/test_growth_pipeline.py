@@ -6184,6 +6184,193 @@ def check_verified_patch_diff_helper() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 59. Patch applier boundary helper
+# ---------------------------------------------------------------------------
+
+def check_patch_applier_boundary_helper() -> None:
+    """Patch applier boundary constrains future patch application read-only."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_approval_checklist,
+        collect_growth_planning_chain_preview,
+        collect_patch_applier_boundary,
+        collect_workspace_creator_runtime_boundary,
+        collect_workspace_creator_runtime_plan,
+        parse_patch_applier_boundary_json,
+        stable_patch_applier_boundary_json,
+        validate_patch_applier_boundary,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    patch_plan = chain["verified_patch_plan"]
+    patch_diff = chain["verified_patch_diff"]
+    gate_stack = chain["execution_gate_stack_preview"]
+    approval = collect_execution_approval_checklist(chain)
+    evidence_contract = chain["execution_evidence_contract"]
+    workspace_boundary = collect_workspace_creator_runtime_boundary(chain)
+    workspace_plan = collect_workspace_creator_runtime_plan(chain)
+    boundary = collect_patch_applier_boundary(
+        patch_plan,
+        patch_diff,
+        gate_stack,
+        approval,
+        evidence_contract,
+        workspace_boundary,
+        workspace_plan,
+        planning_chain_id=chain["planning_chain_id"],
+        metadata={"suite": "growth"},
+    )
+    same = collect_patch_applier_boundary(
+        patch_plan,
+        patch_diff,
+        gate_stack,
+        approval,
+        evidence_contract,
+        workspace_boundary,
+        workspace_plan,
+        planning_chain_id=chain["planning_chain_id"],
+        metadata={"suite": "growth"},
+    )
+    _require(boundary["patch_applier_boundary_id"] == same["patch_applier_boundary_id"],
+             "patch applier boundary id must be deterministic")
+    decoded = parse_patch_applier_boundary_json(stable_patch_applier_boundary_json(boundary))
+    _require(decoded == boundary, "patch applier boundary JSON must round trip")
+    validate_patch_applier_boundary(
+        boundary,
+        patch_plan,
+        patch_diff,
+        gate_stack,
+        approval,
+        evidence_contract,
+        workspace_boundary,
+        workspace_plan,
+    )
+
+    _require(boundary["planning_chain_id"] == chain["planning_chain_id"],
+             "patch applier boundary must reference planning chain")
+    _require(boundary["verified_patch_plan_id"] == patch_plan["verified_patch_plan_id"],
+             "patch applier boundary must reference patch plan")
+    _require(boundary["verified_patch_diff_id"] == patch_diff["verified_patch_diff_id"],
+             "patch applier boundary must reference patch diff")
+    _require(boundary["execution_package_id"] == workspace_plan["execution_package_id"],
+             "patch applier boundary must reference execution package")
+    _require(boundary["workspace_boundary_id"] == workspace_boundary["workspace_boundary_id"],
+             "patch applier boundary must reference workspace boundary")
+    _require(boundary["runtime_workspace_plan_id"] == workspace_plan["runtime_workspace_plan_id"],
+             "patch applier boundary must reference runtime workspace plan")
+    _require(boundary["allowed_target_files"] == patch_plan["target_files"],
+             "patch applier boundary must preserve target files")
+    _require(boundary["max_files_changed"] == patch_plan["estimated_files_changed"],
+             "patch applier boundary must preserve file limit")
+    _require(boundary["max_operations"] == len(patch_plan["patch_operations"]),
+             "patch applier boundary must preserve operation limit")
+    _require(boundary["max_estimated_added_lines"] == patch_diff["estimated_added_lines"],
+             "patch applier boundary must preserve added line limit")
+    _require(boundary["max_estimated_removed_lines"] == patch_diff["estimated_removed_lines"],
+             "patch applier boundary must preserve removed line limit")
+    _require("modify_file" in boundary["allowed_operation_types"],
+             "patch applier boundary must allow verified modify operations")
+    _require("execute_shell" in boundary["forbidden_operation_types"],
+             "patch applier boundary must forbid shell execution operations")
+    _require(set(boundary["risky_operation_types"]).issubset(set(boundary["operation_requires_review"])),
+             "risky operations must require review")
+    for required in (
+        "approval checklist is not pass",
+        "gate stack contains block status",
+        "patch target path is outside allowed workspace files",
+    ):
+        _require(required in boundary["fail_closed_conditions"],
+                 "patch applier boundary must include fail-closed condition")
+    _require(boundary["required_patch_evidence"], "patch evidence must be required")
+    _require(boundary["required_diff_evidence"], "diff evidence must be required")
+    _require(boundary["required_file_hash_evidence"], "file hash evidence must be required")
+    _require(boundary["required_journal_evidence"], "journal evidence must be required")
+    _require(boundary["required_reviewer_summary"] is True,
+             "reviewer summary must be required")
+    _require(boundary["dry_run"] is True and boundary["write_allowed"] is False,
+             "patch applier boundary must remain read-only")
+    _require(boundary["automation_allowed"] is False and boundary["writes"] == [],
+             "patch applier boundary must not allow automation or writes")
+
+    bad_missing = dict(boundary)
+    bad_missing.pop("patch_applier_boundary_id")
+    try:
+        validate_patch_applier_boundary(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("patch applier boundary must reject missing id")
+
+    bad_target = dict(boundary)
+    bad_target["allowed_target_files"] = [".agents/runtime.json"]
+    try:
+        validate_patch_applier_boundary(bad_target)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("patch applier boundary must reject forbidden target paths")
+
+    bad_ops = dict(boundary)
+    bad_ops["allowed_operation_types"] = [*boundary["allowed_operation_types"], "execute_shell"]
+    bad_ops["allowed_operation_types"] = sorted(set(bad_ops["allowed_operation_types"]))
+    try:
+        validate_patch_applier_boundary(bad_ops)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("patch applier boundary must reject forbidden allowed operation")
+
+    bad_risky = dict(boundary)
+    bad_risky["operation_requires_review"] = [item for item in boundary["operation_requires_review"] if item != "delete_file"]
+    try:
+        validate_patch_applier_boundary(bad_risky)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("patch applier boundary must require review for risky operations")
+
+    bad_limit = dict(boundary)
+    bad_limit["max_operations"] = 999
+    try:
+        validate_patch_applier_boundary(bad_limit, patch_plan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("patch applier boundary must reject invalid operation limit")
+
+    bad_evidence = dict(boundary)
+    bad_evidence["required_patch_evidence"] = []
+    try:
+        validate_patch_applier_boundary(bad_evidence)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("patch applier boundary must require patch evidence")
+
+    bad_fail_closed = dict(boundary)
+    bad_fail_closed["fail_closed_conditions"] = [
+        item for item in boundary["fail_closed_conditions"]
+        if item != "gate stack contains block status"
+    ]
+    try:
+        validate_patch_applier_boundary(bad_fail_closed)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("patch applier boundary must require fail-closed gate condition")
+
+    bad_writes = dict(boundary)
+    bad_writes["writes"] = ["link_modes/growth/link_growth_console.py"]
+    try:
+        validate_patch_applier_boundary(bad_writes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("patch applier boundary must reject writes")
+
+    print("patch applier boundary helper OK")
+
+
+# ---------------------------------------------------------------------------
 # 59. Patch behavior quality gate helpers
 # ---------------------------------------------------------------------------
 
@@ -7852,6 +8039,149 @@ def check_guarded_workspace_creator_runtime_component() -> None:
             raise AssertionError("guarded workspace request must require approval for writes")
 
     print("guarded workspace creator runtime component OK")
+
+
+# ---------------------------------------------------------------------------
+# 62. Guarded workspace cleanup / abandon lifecycle
+# ---------------------------------------------------------------------------
+
+def check_guarded_workspace_lifecycle_cleanup_abandon() -> None:
+    """guarded workspace cleanup and abandon close temp workspaces safely."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        abandon_guarded_workspace,
+        cleanup_guarded_workspace,
+        collect_growth_planning_chain_preview,
+        collect_workspace_abandon_plan,
+        collect_workspace_abandon_receipt,
+        collect_workspace_cleanup_plan,
+        collect_workspace_cleanup_receipt,
+        collect_workspace_creator_runtime_plan,
+        create_guarded_workspace,
+        make_guarded_workspace_request,
+        parse_workspace_abandon_plan_json,
+        parse_workspace_cleanup_plan_json,
+        stable_workspace_abandon_plan_json,
+        stable_workspace_cleanup_plan_json,
+        validate_workspace_abandon_plan,
+        validate_workspace_abandon_receipt,
+        validate_workspace_cleanup_plan,
+        validate_workspace_cleanup_receipt,
+        workspace_abandon_main,
+        workspace_cleanup_main,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("workspace-cleanup" in help_out.getvalue(), "growth help must include workspace-cleanup")
+    _require("workspace-abandon" in help_out.getvalue(), "growth help must include workspace-abandon")
+
+    cleanup_preview_out = io.StringIO()
+    with contextlib.redirect_stdout(cleanup_preview_out):
+        cleanup_preview_rc = workspace_cleanup_main(["--json"])
+    _require(cleanup_preview_rc == 0, "workspace-cleanup --json preview must return 0")
+    cleanup_preview = parse_workspace_cleanup_plan_json(cleanup_preview_out.getvalue())
+    _require(cleanup_preview["cleanup_status"] == "preview", "workspace cleanup default must preview")
+
+    abandon_preview_out = io.StringIO()
+    with contextlib.redirect_stdout(abandon_preview_out):
+        abandon_preview_rc = workspace_abandon_main(["--json"])
+    _require(abandon_preview_rc == 0, "workspace-abandon --json preview must return 0")
+    abandon_preview = parse_workspace_abandon_plan_json(abandon_preview_out.getvalue())
+    _require(abandon_preview["abandonment_status"] == "blocked", "workspace abandon default must preview blockers")
+
+    cleanup_denied = io.StringIO()
+    cleanup_err = io.StringIO()
+    with contextlib.redirect_stdout(cleanup_denied), contextlib.redirect_stderr(cleanup_err):
+        cleanup_denied_rc = workspace_cleanup_main(["--write", "--json"])
+    _require(cleanup_denied_rc != 0, "workspace-cleanup --write must require workspace args")
+    _require("--workspace-path" in cleanup_err.getvalue(), "workspace-cleanup --write must explain required args")
+
+    chain = collect_growth_planning_chain_preview()
+    plan = collect_workspace_creator_runtime_plan(chain)
+    safe_plan = dict(plan)
+    safe_plan["plan_status"] = "pass"
+    safe_plan["recommended_next_action"] = "test-only lifecycle temp workspace"
+
+    with tempfile.TemporaryDirectory() as temp_root:
+        request = make_guarded_workspace_request(safe_plan, approved=True, write=True, workspace_root=temp_root)
+        creation = create_guarded_workspace(request, safe_plan)
+        cleanup_plan = collect_workspace_cleanup_plan(creation, cleanup_reason="successful closure")
+        same_cleanup = collect_workspace_cleanup_plan(creation, cleanup_reason="successful closure")
+        _require(cleanup_plan["cleanup_plan_id"] == same_cleanup["cleanup_plan_id"],
+                 "workspace cleanup plan id must be deterministic")
+        _require(parse_workspace_cleanup_plan_json(stable_workspace_cleanup_plan_json(cleanup_plan)) == cleanup_plan,
+                 "workspace cleanup plan JSON must round trip")
+        validate_workspace_cleanup_plan(cleanup_plan, creation)
+        preview_receipt = collect_workspace_cleanup_receipt(cleanup_plan, cleanup_result="preview")
+        validate_workspace_cleanup_receipt(preview_receipt, cleanup_plan)
+        workspace_path = Path(creation["workspace_path"])
+        _require(workspace_path.exists(), "cleanup test workspace must exist before cleanup")
+        cleanup_receipt = cleanup_guarded_workspace(cleanup_plan)
+        validate_workspace_cleanup_receipt(cleanup_receipt, cleanup_plan)
+        _require(cleanup_receipt["cleanup_result"] == "cleaned", "cleanup receipt must report cleaned")
+        _require(not workspace_path.exists(), "cleanup must remove guarded temp workspace")
+        _require(not (ROOT / ".link/worktrees" / safe_plan["workspace_name"]).exists(),
+                 "cleanup test must not touch repo runtime workspace")
+
+    with tempfile.TemporaryDirectory() as temp_root:
+        request = make_guarded_workspace_request(safe_plan, approved=True, write=True, workspace_root=temp_root)
+        creation = create_guarded_workspace(request, safe_plan)
+        abandon_plan = collect_workspace_abandon_plan(
+            creation,
+            abandonment_reason="blocked execution",
+            abandonment_category="blocked",
+            blockers=["quality gate blocked"],
+        )
+        same_abandon = collect_workspace_abandon_plan(
+            creation,
+            abandonment_reason="blocked execution",
+            abandonment_category="blocked",
+            blockers=["quality gate blocked"],
+        )
+        _require(abandon_plan["abandon_plan_id"] == same_abandon["abandon_plan_id"],
+                 "workspace abandon plan id must be deterministic")
+        _require(parse_workspace_abandon_plan_json(stable_workspace_abandon_plan_json(abandon_plan)) == abandon_plan,
+                 "workspace abandon plan JSON must round trip")
+        validate_workspace_abandon_plan(abandon_plan, creation)
+        preview_abandon_receipt = collect_workspace_abandon_receipt(abandon_plan, abandonment_result="preview")
+        validate_workspace_abandon_receipt(preview_abandon_receipt, abandon_plan)
+        abandon_receipt = abandon_guarded_workspace(abandon_plan)
+        validate_workspace_abandon_receipt(abandon_receipt, abandon_plan)
+        abandon_path = Path(creation["workspace_path"]) / "workspace_abandon_receipt.json"
+        _require(abandon_path.exists(), "abandon must write receipt inside guarded temp workspace")
+        _require(json.loads(abandon_path.read_text(encoding="utf-8")) == abandon_receipt,
+                 "abandon receipt file must match returned receipt")
+        _require(Path(creation["workspace_path"]).exists(), "abandon must leave workspace for review")
+        cleanup_guarded_workspace(collect_workspace_cleanup_plan(creation, cleanup_reason="abandon test cleanup"))
+
+    bad_plan = dict(cleanup_preview)
+    bad_plan["workspace_path"] = str(ROOT)
+    try:
+        validate_workspace_cleanup_plan(bad_plan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("workspace cleanup plan must reject mutated deterministic id")
+
+    with tempfile.TemporaryDirectory() as temp_root:
+        bad_path = Path(temp_root) / "not-a-guarded-workspace"
+        bad_path.mkdir()
+        bad_out = io.StringIO()
+        bad_err = io.StringIO()
+        with contextlib.redirect_stdout(bad_out), contextlib.redirect_stderr(bad_err):
+            bad_rc = workspace_cleanup_main([
+                "--write", "--json",
+                "--workspace-path", str(bad_path),
+                "--workspace-id", "missing-workspace",
+            ])
+        _require(bad_rc != 0, "workspace-cleanup must reject invalid workspace")
+        _require("manifest" in bad_err.getvalue().lower(), "invalid workspace error must mention manifest")
+        _require(bad_path.exists(), "invalid workspace rejection must not remove directory")
+
+    print("guarded workspace cleanup/abandon lifecycle OK")
 
 
 # ---------------------------------------------------------------------------
@@ -9628,6 +9958,7 @@ def main() -> None:
     check_verification_plan_helper()
     check_verified_patch_plan_helper()
     check_verified_patch_diff_helper()
+    check_patch_applier_boundary_helper()
     check_patch_behavior_quality_gate_helper()
     check_autonomous_execution_package_helper()
     check_growth_planning_chain_cli()
@@ -9639,6 +9970,7 @@ def main() -> None:
     check_growth_workspace_boundary_cli()
     check_workspace_creator_runtime_plan_helper()
     check_guarded_workspace_creator_runtime_component()
+    check_guarded_workspace_lifecycle_cleanup_abandon()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
     check_execution_journal_schema_helper()
