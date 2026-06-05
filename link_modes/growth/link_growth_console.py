@@ -10276,6 +10276,121 @@ def collect_verification_boundary_preview_from_chain(chain: dict[str, Any]) -> d
     return boundary
 
 
+
+def collect_rollback_boundary_preview_from_chain(chain: dict[str, Any]) -> dict[str, Any]:
+    """Collect the read-only rollback runtime boundary for a planning chain."""
+    patch_boundary = collect_patch_boundary_preview_from_chain(chain)
+    workspace_plan = collect_workspace_creator_runtime_plan(chain)
+    workspace_request = make_guarded_workspace_request(
+        workspace_plan,
+        approved=False,
+        write=False,
+        workspace_root="/tmp/link-rollback-boundary-preview",
+    )
+    workspace_receipt = preview_guarded_workspace_creation(workspace_request, workspace_plan)
+    patch_request = make_guarded_patch_request(patch_boundary, workspace_receipt, approved=False, write=False)
+    approval = collect_execution_approval_checklist(chain)
+    execution_review = collect_execution_review(chain)
+    patch_receipt = preview_guarded_patch_application(
+        patch_request,
+        patch_boundary,
+        chain["verified_patch_plan"],
+        chain["verified_patch_diff"],
+        workspace_receipt,
+        workspace_receipt["workspace_manifest"],
+        approval,
+        chain["execution_gate_stack_preview"],
+        chain["execution_evidence_contract"],
+    )
+    verification_boundary = collect_verification_runner_boundary(
+        patch_receipt,
+        patch_boundary,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        chain["execution_gate_stack_preview"],
+        approval,
+        chain["execution_preflight_checklist"],
+        execution_review,
+    )
+    verification_request = make_guarded_verification_request(
+        verification_boundary,
+        commands=["python3 -c \"raise SystemExit(2)\""],
+        approved=False,
+        write=False,
+    )
+    command_hash = _guarded_verification_command_hash(verification_request["commands"][0])
+    verification_receipt = collect_guarded_verification_receipt(
+        verification_request,
+        verification_boundary,
+        patch_receipt,
+        workspace_receipt["workspace_manifest"],
+        workspace_receipt,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        executed_commands=[{
+            "sequence": 1,
+            "command": verification_request["commands"][0],
+            "command_hash": command_hash,
+            "exit_code": 2,
+            "stdout_ref": "verification_evidence/preview.stdout.log",
+            "stderr_ref": "verification_evidence/preview.stderr.log",
+            "evidence_ref": "verification_evidence/preview.evidence.json",
+            "status": "failed",
+        }],
+        receipt_timestamp="preview-only",
+        retry_count=0,
+    )
+    boundary = collect_rollback_runtime_boundary(
+        patch_receipt,
+        verification_receipt,
+        verification_boundary,
+        patch_boundary,
+        workspace_receipt["workspace_manifest"],
+        workspace_receipt,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        chain["execution_gate_stack_preview"],
+        execution_review,
+    )
+    validate_rollback_runtime_boundary(
+        boundary,
+        patch_receipt,
+        verification_receipt,
+        verification_boundary,
+        patch_boundary,
+        workspace_receipt["workspace_manifest"],
+        workspace_receipt,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        chain["execution_gate_stack_preview"],
+        execution_review,
+    )
+    return boundary
+
+
+def rollback_boundary_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth rollback-boundary`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth rollback-boundary: rollback runtime boundary")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth rollback-boundary")
+        print("  python3 link.py growth rollback-boundary --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth rollback-boundary is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    boundary = collect_rollback_boundary_preview_from_chain(chain)
+    if "--json" in args:
+        print(stable_rollback_runtime_boundary_json(boundary), end="")
+        return 0
+    render_rollback_boundary_plain(boundary)
+    return 0
+
 def verification_boundary_main(argv: list[str] | None = None) -> int:
     """Entry point for ``growth verification-boundary`` read-only preview."""
     args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
@@ -10671,6 +10786,26 @@ def render_verification_boundary_plain(boundary: dict[str, Any]) -> None:
     print(f"evidence_requirement_count: {evidence_count}")
     print(f"rollback_trigger_count: {len(boundary['rollback_triggers'])}")
     print("next_action: review verification boundary before enabling verification runner runtime")
+
+
+def render_rollback_boundary_plain(boundary: dict[str, Any]) -> None:
+    validate_rollback_runtime_boundary(boundary)
+    print("Growth rollback boundary")
+    print(f"rollback_runtime_boundary_id: {boundary['rollback_runtime_boundary_id']}")
+    print(f"planning_chain_id: {boundary['planning_chain_id']}")
+    print(f"execution_package_id: {boundary['execution_package_id']}")
+    print(f"workspace_id: {boundary['workspace_id']}")
+    print(f"guarded_patch_receipt_id: {boundary['guarded_patch_receipt_id']}")
+    print(f"verification_receipt_id: {boundary['verification_receipt_id']}")
+    print(f"patch_applier_boundary_id: {boundary['patch_applier_boundary_id']}")
+    print(f"verification_runner_boundary_id: {boundary['verification_runner_boundary_id']}")
+    print(f"rollback_trigger_count: {len(boundary['required_rollback_triggers'])}")
+    print(f"allowed_rollback_action_count: {len(boundary['allowed_rollback_actions'])}")
+    print(f"forbidden_rollback_action_count: {len(boundary['forbidden_rollback_actions'])}")
+    print(f"required_rollback_evidence_count: {len(boundary['required_rollback_evidence'])}")
+    print(f"fail_closed_condition_count: {len(boundary['fail_closed_conditions'])}")
+    print(f"escalation_condition_count: {len(boundary['escalation_required_conditions'])}")
+    print("next_action: review rollback boundary before enabling rollback executor runtime")
 
 def render_workspace_creation_receipt_plain(receipt: dict[str, Any]) -> None:
     validate_workspace_creation_receipt(receipt)
@@ -17745,6 +17880,358 @@ def run_guarded_verification(
     validate_guarded_verification_receipt(receipt, request, verification_runner_boundary, guarded_patch_receipt, workspace_creation_receipt, execution_evidence_contract, execution_retry_policy)
     receipt_path.write_text(_stable_ruflo_json(receipt, indent=2) + "\n", encoding="utf-8")
     return receipt
+
+
+
+ROLLBACK_RUNTIME_BOUNDARY_VERSION = "link-rollback-runtime-boundary-v1"
+_ALLOWED_ROLLBACK_ACTIONS = (
+    "create rollback receipt later",
+    "mark workspace abandoned",
+    "remove workspace-local generated evidence",
+    "restore before hashes",
+    "restore workspace-local file backups",
+)
+_FORBIDDEN_ROLLBACK_ACTIONS = (
+    "branch/worktree creation",
+    "commits/merges",
+    "git checkout",
+    "git clean",
+    "git reset",
+    "modify Link repo files",
+    "network calls",
+    "package install",
+    "patch application outside workspace",
+)
+
+
+def make_rollback_runtime_boundary_id(
+    planning_chain_id: str,
+    execution_package_id: str,
+    guarded_patch_receipt_id: str,
+    verification_receipt_id: str,
+    patch_applier_boundary_id: str,
+    verification_runner_boundary_id: str,
+) -> str:
+    return _execution_readiness_id("rollback-runtime-boundary", {
+        "execution_package_id": execution_package_id,
+        "guarded_patch_receipt_id": guarded_patch_receipt_id,
+        "patch_applier_boundary_id": patch_applier_boundary_id,
+        "planning_chain_id": planning_chain_id,
+        "verification_receipt_id": verification_receipt_id,
+        "verification_runner_boundary_id": verification_runner_boundary_id,
+        "version": ROLLBACK_RUNTIME_BOUNDARY_VERSION,
+    })
+
+
+def collect_rollback_runtime_boundary(
+    guarded_patch_receipt: dict[str, Any],
+    guarded_verification_receipt: dict[str, Any],
+    verification_runner_boundary: dict[str, Any],
+    patch_applier_boundary: dict[str, Any],
+    workspace_manifest: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+    execution_evidence_contract: dict[str, Any],
+    execution_retry_policy: dict[str, Any],
+    execution_gate_stack_preview: dict[str, Any],
+    execution_review: dict[str, Any],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the read-only boundary for future rollback execution."""
+    validate_guarded_patch_receipt(guarded_patch_receipt)
+    validate_guarded_verification_receipt(guarded_verification_receipt, None, verification_runner_boundary, guarded_patch_receipt, workspace_creation_receipt, execution_evidence_contract, execution_retry_policy)
+    validate_verification_runner_boundary(verification_runner_boundary, guarded_patch_receipt, patch_applier_boundary, execution_evidence_contract, execution_retry_policy, execution_gate_stack_preview, None, None, execution_review)
+    validate_patch_applier_boundary(patch_applier_boundary)
+    validate_workspace_creation_receipt(workspace_creation_receipt)
+    validate_execution_evidence_contract(execution_evidence_contract)
+    validate_execution_retry_policy(execution_retry_policy)
+    validate_execution_gate_stack_preview(execution_gate_stack_preview)
+    validate_execution_review(execution_review)
+    if workspace_manifest != workspace_creation_receipt["workspace_manifest"]:
+        raise ValueError("workspace manifest must match workspace creation receipt")
+    if guarded_patch_receipt["workspace_id"] != guarded_verification_receipt["workspace_id"]:
+        raise ValueError("rollback boundary patch and verification receipts must share workspace")
+    if guarded_patch_receipt["workspace_path"] != guarded_verification_receipt["workspace_path"]:
+        raise ValueError("rollback boundary patch and verification receipts must share workspace path")
+    changed_files = _normalize_implementation_branch_refs(guarded_patch_receipt["changed_files"])
+    required_triggers = _normalize_patch_behavior_text_list([
+        "guarded verification receipt rollback_triggered is true",
+        "verification result is failed",
+        *verification_runner_boundary["rollback_triggers"],
+    ])
+    if guarded_verification_receipt["rollback_triggered"] is False:
+        required_triggers = _normalize_patch_behavior_text_list([
+            "manual reviewer requests rollback after guarded verification",
+            "rollback boundary validation fails closed",
+        ])
+    optional_triggers = _normalize_patch_behavior_text_list([
+        "reviewer rejects verification evidence",
+        "workspace cleanup cannot complete safely",
+    ])
+    forbidden_triggers = _normalize_patch_behavior_text_list([
+        "rollback requested for repository root",
+        "rollback requested for git state mutation",
+        "rollback requested outside guarded workspace",
+    ])
+    evidence = _normalize_implementation_branch_refs([
+        "abandon_plan_reference",
+        "affected_files",
+        "cleanup_plan_reference",
+        "failed_command_evidence",
+        "guarded_patch_receipt.before_file_hashes",
+        "guarded_patch_receipt.after_file_hashes",
+        "reviewer_summary",
+        "rollback_reason",
+        "verification_receipt.verification_result",
+    ])
+    fail_closed = _normalize_patch_behavior_text_list([
+        "affected file is outside guarded workspace",
+        "before hash evidence is missing",
+        "guarded patch receipt is missing",
+        "rollback boundary validation fails",
+        "verification receipt is missing",
+        "workspace manifest does not match creation receipt",
+    ])
+    cleanup_triggers = _normalize_patch_behavior_text_list([
+        "rollback cannot restore workspace-local before state",
+        "workspace path fails safety validation",
+    ])
+    abandon_triggers = _normalize_patch_behavior_text_list([
+        "rollback is required after verification failure",
+        "rollback requires human review before execution",
+    ])
+    escalation = _normalize_patch_behavior_text_list([
+        *execution_retry_policy["escalation_conditions"],
+        "rollback would touch repository files",
+        "rollback would require git mutation",
+    ])
+    boundary = {
+        "rollback_runtime_boundary_version": ROLLBACK_RUNTIME_BOUNDARY_VERSION,
+        "rollback_runtime_boundary_id": make_rollback_runtime_boundary_id(
+            patch_applier_boundary["planning_chain_id"],
+            patch_applier_boundary["execution_package_id"],
+            guarded_patch_receipt["guarded_patch_receipt_id"],
+            guarded_verification_receipt["verification_receipt_id"],
+            patch_applier_boundary["patch_applier_boundary_id"],
+            verification_runner_boundary["verification_runner_boundary_id"],
+        ),
+        "planning_chain_id": patch_applier_boundary["planning_chain_id"],
+        "execution_package_id": patch_applier_boundary["execution_package_id"],
+        "workspace_id": guarded_patch_receipt["workspace_id"],
+        "workspace_path": guarded_patch_receipt["workspace_path"],
+        "guarded_patch_receipt_id": guarded_patch_receipt["guarded_patch_receipt_id"],
+        "verification_receipt_id": guarded_verification_receipt["verification_receipt_id"],
+        "patch_applier_boundary_id": patch_applier_boundary["patch_applier_boundary_id"],
+        "verification_runner_boundary_id": verification_runner_boundary["verification_runner_boundary_id"],
+        "execution_evidence_contract_id": execution_evidence_contract["execution_evidence_contract_id"],
+        "retry_policy_id": execution_retry_policy["retry_policy_id"],
+        "gate_stack_preview_id": execution_gate_stack_preview["gate_stack_preview_id"],
+        "execution_review_id": execution_review["execution_review_id"],
+        "required_rollback_triggers": required_triggers,
+        "optional_rollback_triggers": optional_triggers,
+        "forbidden_rollback_triggers": forbidden_triggers,
+        "trigger_requires_review": _normalize_patch_behavior_text_list([
+            "any rollback trigger requires human review",
+            "any missing rollback evidence requires human review",
+        ]),
+        "allowed_rollback_targets": changed_files or ["workspace-local generated evidence"],
+        "forbidden_rollback_targets": _normalize_implementation_branch_refs([
+            ".git/",
+            ".link/",
+            ".agents/",
+            "research/",
+            "repository root",
+        ]),
+        "workspace_only": True,
+        "repo_mutation_allowed": False,
+        "git_mutation_allowed": False,
+        "allowed_rollback_actions": _normalize_patch_behavior_text_list(_ALLOWED_ROLLBACK_ACTIONS),
+        "forbidden_rollback_actions": _normalize_patch_behavior_text_list(_FORBIDDEN_ROLLBACK_ACTIONS),
+        "required_rollback_evidence": evidence,
+        "fail_closed_conditions": fail_closed,
+        "cleanup_triggers": cleanup_triggers,
+        "abandon_triggers": abandon_triggers,
+        "escalation_required_conditions": escalation,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_rollback_runtime_boundary(
+        boundary,
+        guarded_patch_receipt,
+        guarded_verification_receipt,
+        verification_runner_boundary,
+        patch_applier_boundary,
+        workspace_manifest,
+        workspace_creation_receipt,
+        execution_evidence_contract,
+        execution_retry_policy,
+        execution_gate_stack_preview,
+        execution_review,
+    )
+    return boundary
+
+
+def validate_rollback_runtime_boundary(
+    boundary: dict[str, Any],
+    guarded_patch_receipt: dict[str, Any] | None = None,
+    guarded_verification_receipt: dict[str, Any] | None = None,
+    verification_runner_boundary: dict[str, Any] | None = None,
+    patch_applier_boundary: dict[str, Any] | None = None,
+    workspace_manifest: dict[str, Any] | None = None,
+    workspace_creation_receipt: dict[str, Any] | None = None,
+    execution_evidence_contract: dict[str, Any] | None = None,
+    execution_retry_policy: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_review: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "rollback_runtime_boundary_version", "rollback_runtime_boundary_id", "planning_chain_id",
+        "execution_package_id", "workspace_id", "workspace_path", "guarded_patch_receipt_id",
+        "verification_receipt_id", "patch_applier_boundary_id", "verification_runner_boundary_id",
+        "execution_evidence_contract_id", "retry_policy_id", "gate_stack_preview_id",
+        "execution_review_id", "required_rollback_triggers", "optional_rollback_triggers",
+        "forbidden_rollback_triggers", "trigger_requires_review", "allowed_rollback_targets",
+        "forbidden_rollback_targets", "workspace_only", "repo_mutation_allowed", "git_mutation_allowed",
+        "allowed_rollback_actions", "forbidden_rollback_actions", "required_rollback_evidence",
+        "fail_closed_conditions", "cleanup_triggers", "abandon_triggers", "escalation_required_conditions",
+        "dry_run", "write_allowed", "automation_allowed", "metadata", "writes",
+    )
+    missing = [field for field in required if field not in boundary]
+    if missing:
+        raise ValueError(f"rollback runtime boundary missing fields: {missing}")
+    if boundary["rollback_runtime_boundary_version"] != ROLLBACK_RUNTIME_BOUNDARY_VERSION:
+        raise ValueError("unsupported rollback runtime boundary version")
+    _validate_execution_read_only(boundary, "rollback runtime boundary")
+    for field in (
+        "rollback_runtime_boundary_id", "planning_chain_id", "execution_package_id", "workspace_id",
+        "workspace_path", "guarded_patch_receipt_id", "verification_receipt_id", "patch_applier_boundary_id",
+        "verification_runner_boundary_id", "execution_evidence_contract_id", "retry_policy_id",
+        "gate_stack_preview_id", "execution_review_id",
+    ):
+        _validate_non_empty_string(boundary[field], field)
+    _guarded_patch_workspace_path(boundary["workspace_path"])
+    if boundary["workspace_only"] is not True:
+        raise ValueError("rollback runtime boundary must be workspace-only")
+    if boundary["repo_mutation_allowed"] is not False:
+        raise ValueError("rollback runtime boundary must forbid repo mutation")
+    if boundary["git_mutation_allowed"] is not False:
+        raise ValueError("rollback runtime boundary must forbid git mutation")
+    text_list_fields = (
+        "required_rollback_triggers", "optional_rollback_triggers", "forbidden_rollback_triggers",
+        "trigger_requires_review", "allowed_rollback_actions", "forbidden_rollback_actions",
+        "fail_closed_conditions", "cleanup_triggers", "abandon_triggers", "escalation_required_conditions",
+    )
+    for field in text_list_fields:
+        values = boundary[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    ref_list_fields = ("allowed_rollback_targets", "forbidden_rollback_targets", "required_rollback_evidence")
+    for field in ref_list_fields:
+        values = boundary[field]
+        if not isinstance(values, list) or not values:
+            raise TypeError(f"{field} must be a non-empty list")
+        if values != _normalize_implementation_branch_refs(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if set(boundary["allowed_rollback_actions"]) & set(boundary["forbidden_rollback_actions"]):
+        raise ValueError("rollback allowed actions overlap forbidden actions")
+    for action in _FORBIDDEN_ROLLBACK_ACTIONS:
+        if action not in boundary["forbidden_rollback_actions"]:
+            raise ValueError("rollback runtime boundary missing forbidden rollback action")
+    for action in ("restore workspace-local file backups", "restore before hashes"):
+        if action not in boundary["allowed_rollback_actions"]:
+            raise ValueError("rollback runtime boundary missing allowed workspace restore action")
+    for trigger in ("verification result is failed", "guarded verification receipt rollback_triggered is true"):
+        if trigger not in boundary["required_rollback_triggers"] and "manual reviewer requests rollback after guarded verification" not in boundary["required_rollback_triggers"]:
+            raise ValueError("rollback runtime boundary missing rollback trigger rule")
+    for evidence in (
+        "guarded_patch_receipt.before_file_hashes", "guarded_patch_receipt.after_file_hashes",
+        "verification_receipt.verification_result", "failed_command_evidence", "rollback_reason",
+        "affected_files", "reviewer_summary", "cleanup_plan_reference", "abandon_plan_reference",
+    ):
+        if evidence not in boundary["required_rollback_evidence"]:
+            raise ValueError("rollback runtime boundary missing required evidence")
+    for condition in ("affected file is outside guarded workspace", "rollback boundary validation fails"):
+        if condition not in boundary["fail_closed_conditions"]:
+            raise ValueError("rollback runtime boundary missing fail-closed condition")
+    if not isinstance(boundary["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    expected_id = make_rollback_runtime_boundary_id(
+        boundary["planning_chain_id"],
+        boundary["execution_package_id"],
+        boundary["guarded_patch_receipt_id"],
+        boundary["verification_receipt_id"],
+        boundary["patch_applier_boundary_id"],
+        boundary["verification_runner_boundary_id"],
+    )
+    if boundary["rollback_runtime_boundary_id"] != expected_id:
+        raise ValueError("rollback runtime boundary id does not match contents")
+    if guarded_patch_receipt is not None:
+        validate_guarded_patch_receipt(guarded_patch_receipt)
+        if boundary["guarded_patch_receipt_id"] != guarded_patch_receipt["guarded_patch_receipt_id"]:
+            raise ValueError("rollback runtime boundary patch receipt mismatch")
+        if boundary["workspace_id"] != guarded_patch_receipt["workspace_id"]:
+            raise ValueError("rollback runtime boundary patch workspace mismatch")
+    if guarded_verification_receipt is not None:
+        validate_guarded_verification_receipt(guarded_verification_receipt)
+        if boundary["verification_receipt_id"] != guarded_verification_receipt["verification_receipt_id"]:
+            raise ValueError("rollback runtime boundary verification receipt mismatch")
+        if boundary["workspace_id"] != guarded_verification_receipt["workspace_id"]:
+            raise ValueError("rollback runtime boundary verification workspace mismatch")
+        if guarded_verification_receipt["rollback_triggered"] is True:
+            if "guarded verification receipt rollback_triggered is true" not in boundary["required_rollback_triggers"]:
+                raise ValueError("rollback runtime boundary must reflect rollback-triggered receipt")
+    if verification_runner_boundary is not None:
+        validate_verification_runner_boundary(verification_runner_boundary)
+        if boundary["verification_runner_boundary_id"] != verification_runner_boundary["verification_runner_boundary_id"]:
+            raise ValueError("rollback runtime boundary verification boundary mismatch")
+    if patch_applier_boundary is not None:
+        validate_patch_applier_boundary(patch_applier_boundary)
+        expected = {
+            "planning_chain_id": patch_applier_boundary["planning_chain_id"],
+            "execution_package_id": patch_applier_boundary["execution_package_id"],
+            "patch_applier_boundary_id": patch_applier_boundary["patch_applier_boundary_id"],
+        }
+        for field, value in expected.items():
+            if boundary[field] != value:
+                raise ValueError(f"rollback runtime boundary {field} does not match patch boundary")
+    if workspace_creation_receipt is not None:
+        validate_workspace_creation_receipt(workspace_creation_receipt)
+        if boundary["workspace_id"] != workspace_creation_receipt["workspace_id"]:
+            raise ValueError("rollback runtime boundary workspace creation mismatch")
+        if workspace_manifest is not None and workspace_manifest != workspace_creation_receipt["workspace_manifest"]:
+            raise ValueError("rollback runtime boundary manifest mismatch")
+    if execution_evidence_contract is not None:
+        validate_execution_evidence_contract(execution_evidence_contract)
+        if boundary["execution_evidence_contract_id"] != execution_evidence_contract["execution_evidence_contract_id"]:
+            raise ValueError("rollback runtime boundary evidence contract mismatch")
+    if execution_retry_policy is not None:
+        validate_execution_retry_policy(execution_retry_policy)
+        if boundary["retry_policy_id"] != execution_retry_policy["retry_policy_id"]:
+            raise ValueError("rollback runtime boundary retry policy mismatch")
+    if execution_gate_stack_preview is not None:
+        validate_execution_gate_stack_preview(execution_gate_stack_preview)
+        if boundary["gate_stack_preview_id"] != execution_gate_stack_preview["gate_stack_preview_id"]:
+            raise ValueError("rollback runtime boundary gate stack mismatch")
+    if execution_review is not None:
+        validate_execution_review(execution_review)
+        if boundary["execution_review_id"] != execution_review["execution_review_id"]:
+            raise ValueError("rollback runtime boundary execution review mismatch")
+
+
+def stable_rollback_runtime_boundary_json(boundary: dict[str, Any]) -> str:
+    validate_rollback_runtime_boundary(boundary)
+    return _stable_ruflo_json(boundary, indent=2) + "\n"
+
+
+def parse_rollback_runtime_boundary_json(text: str) -> dict[str, Any]:
+    boundary = json.loads(text)
+    validate_rollback_runtime_boundary(boundary)
+    return boundary
 
 
 def validate_verified_patch_diff_entry(entry: dict[str, Any]) -> None:

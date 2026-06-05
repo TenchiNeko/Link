@@ -459,6 +459,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import verification_boundary_main as _growth_verification_boundary_main
 
         return _growth_verification_boundary_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "rollback-boundary":
+        from link_modes.growth.link_growth_console import rollback_boundary_main as _growth_rollback_boundary_main
+
+        return _growth_rollback_boundary_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "patch-apply":
         from link_modes.growth.link_growth_console import patch_apply_main as _growth_patch_apply_main
 
@@ -509,6 +513,7 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  workspace-boundary Preview workspace creator runtime boundary")
         print("  patch-boundary     Preview patch applier runtime boundary")
         print("  verification-boundary Preview verification runner runtime boundary")
+        print("  rollback-boundary Preview rollback runtime boundary")
         print("  patch-apply        Apply guarded patch inside approved workspace")
         print("  workspace-create   Create guarded temporary workspace with approval")
         print("  workspace-cleanup  Cleanup guarded temporary workspace")

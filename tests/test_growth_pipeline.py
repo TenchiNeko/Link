@@ -8941,6 +8941,402 @@ def check_guarded_verification_runner_runtime_component() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62f. Rollback runtime boundary helper
+# ---------------------------------------------------------------------------
+
+def check_rollback_runtime_boundary_helper() -> None:
+    """rollback runtime boundary models rollback rules without executing rollback."""
+    from link_modes.growth.link_growth_console import (
+        apply_guarded_patch,
+        collect_execution_approval_checklist,
+        collect_execution_review,
+        collect_growth_planning_chain_preview,
+        collect_patch_applier_boundary,
+        collect_rollback_runtime_boundary,
+        collect_verification_runner_boundary,
+        collect_workspace_creator_runtime_boundary,
+        collect_workspace_creator_runtime_plan,
+        create_guarded_workspace,
+        make_execution_approval_checklist_id,
+        make_execution_gate_stack_preview_id,
+        make_guarded_patch_request,
+        make_guarded_verification_request,
+        make_guarded_workspace_request,
+        parse_rollback_runtime_boundary_json,
+        run_guarded_verification,
+        stable_rollback_runtime_boundary_json,
+        validate_rollback_runtime_boundary,
+    )
+
+    def pass_gate_stack(gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(gate_stack)
+        gates = []
+        for gate in gate_stack["gates"]:
+            clean_gate = dict(gate)
+            clean_gate["blockers"] = []
+            clean_gate["warnings"] = []
+            clean_gate["pass_status"] = "pass"
+            clean_gate["recommended_next_action"] = "test-only rollback boundary inputs approved"
+            gates.append(clean_gate)
+        passed["gates"] = gates
+        passed["pass_count"] = len(gates)
+        passed["review_count"] = 0
+        passed["block_count"] = 0
+        passed["gate_stack_preview_id"] = make_execution_gate_stack_preview_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            gates,
+        )
+        return passed
+
+    def pass_approval(checklist: dict[str, Any], gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(checklist)
+        passed["gate_stack_preview_id"] = gate_stack["gate_stack_preview_id"]
+        passed["approval_blockers"] = []
+        passed["approval_warnings"] = []
+        passed["approval_status"] = "pass"
+        passed["recommended_next_action"] = "test-only explicit approval supplied"
+        passed["approval_checklist_id"] = make_execution_approval_checklist_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            passed["human_approval_package_id"],
+            passed["gate_stack_preview_id"],
+            passed["required_approvals"],
+            passed["approval_blockers"],
+            passed["approval_warnings"],
+        )
+        return passed
+
+    chain = collect_growth_planning_chain_preview()
+    patch_plan = chain["verified_patch_plan"]
+    patch_diff = chain["verified_patch_diff"]
+    gate_stack = pass_gate_stack(chain["execution_gate_stack_preview"])
+    approval = pass_approval(collect_execution_approval_checklist(chain), gate_stack)
+    evidence_contract = chain["execution_evidence_contract"]
+    retry_policy = chain["execution_retry_policy"]
+    execution_review = collect_execution_review(chain)
+    workspace_boundary = collect_workspace_creator_runtime_boundary(chain)
+    workspace_runtime_plan = collect_workspace_creator_runtime_plan(chain)
+    patch_boundary = collect_patch_applier_boundary(
+        patch_plan,
+        patch_diff,
+        gate_stack,
+        approval,
+        evidence_contract,
+        workspace_boundary,
+        workspace_runtime_plan,
+        planning_chain_id=chain["planning_chain_id"],
+    )
+
+    with tempfile.TemporaryDirectory() as temp_root:
+        safe_plan = dict(workspace_runtime_plan)
+        safe_plan["plan_status"] = "pass"
+        safe_plan["recommended_next_action"] = "test-only approved temp workspace creation"
+        workspace_request = make_guarded_workspace_request(
+            safe_plan,
+            approved=True,
+            write=True,
+            workspace_root=temp_root,
+        )
+        workspace_receipt = create_guarded_workspace(workspace_request, safe_plan)
+        workspace_path = Path(workspace_receipt["workspace_path"])
+        first_target = workspace_path / patch_plan["target_files"][0]
+        first_target.parent.mkdir(parents=True, exist_ok=True)
+        first_target.write_text("original workspace content\n", encoding="utf-8")
+        patch_request = make_guarded_patch_request(patch_boundary, workspace_receipt, approved=True, write=True)
+        patch_receipt = apply_guarded_patch(
+            patch_request,
+            patch_boundary,
+            patch_plan,
+            patch_diff,
+            workspace_receipt,
+            workspace_receipt["workspace_manifest"],
+            approval,
+            gate_stack,
+            evidence_contract,
+        )
+        verification_boundary = collect_verification_runner_boundary(
+            patch_receipt,
+            patch_boundary,
+            evidence_contract,
+            retry_policy,
+            gate_stack,
+            approval,
+            chain["execution_preflight_checklist"],
+            execution_review,
+        )
+        fail_request = make_guarded_verification_request(
+            verification_boundary,
+            commands=["python3 -c \"raise SystemExit(2)\""],
+            approved=True,
+            write=True,
+        )
+        verification_receipt = run_guarded_verification(
+            fail_request,
+            verification_boundary,
+            patch_receipt,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+        )
+        boundary = collect_rollback_runtime_boundary(
+            patch_receipt,
+            verification_receipt,
+            verification_boundary,
+            patch_boundary,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+            gate_stack,
+            execution_review,
+            metadata={"suite": "growth"},
+        )
+        same = collect_rollback_runtime_boundary(
+            patch_receipt,
+            verification_receipt,
+            verification_boundary,
+            patch_boundary,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+            gate_stack,
+            execution_review,
+            metadata={"suite": "growth"},
+        )
+        _require(boundary["rollback_runtime_boundary_id"] == same["rollback_runtime_boundary_id"],
+                 "rollback runtime boundary id must be deterministic")
+        decoded = parse_rollback_runtime_boundary_json(stable_rollback_runtime_boundary_json(boundary))
+        _require(decoded == boundary, "rollback runtime boundary JSON must round trip")
+        validate_rollback_runtime_boundary(
+            boundary,
+            patch_receipt,
+            verification_receipt,
+            verification_boundary,
+            patch_boundary,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+            gate_stack,
+            execution_review,
+        )
+        _require(boundary["planning_chain_id"] == chain["planning_chain_id"],
+                 "rollback boundary must reference planning chain")
+        _require(boundary["guarded_patch_receipt_id"] == patch_receipt["guarded_patch_receipt_id"],
+                 "rollback boundary must reference patch receipt")
+        _require(boundary["verification_receipt_id"] == verification_receipt["verification_receipt_id"],
+                 "rollback boundary must reference verification receipt")
+        _require(boundary["patch_applier_boundary_id"] == patch_boundary["patch_applier_boundary_id"],
+                 "rollback boundary must reference patch boundary")
+        _require(boundary["verification_runner_boundary_id"] == verification_boundary["verification_runner_boundary_id"],
+                 "rollback boundary must reference verification boundary")
+        _require("guarded verification receipt rollback_triggered is true" in boundary["required_rollback_triggers"],
+                 "rollback boundary must require rollback for rollback-triggered verification")
+        _require(boundary["workspace_only"] is True, "rollback boundary must be workspace-only")
+        _require(boundary["repo_mutation_allowed"] is False, "rollback boundary must forbid repo mutation")
+        _require(boundary["git_mutation_allowed"] is False, "rollback boundary must forbid git mutation")
+        _require("git reset" in boundary["forbidden_rollback_actions"],
+                 "rollback boundary must forbid git reset")
+        _require("restore workspace-local file backups" in boundary["allowed_rollback_actions"],
+                 "rollback boundary must allow only workspace-local restore action")
+        for evidence in (
+            "guarded_patch_receipt.before_file_hashes",
+            "guarded_patch_receipt.after_file_hashes",
+            "verification_receipt.verification_result",
+            "failed_command_evidence",
+            "rollback_reason",
+            "affected_files",
+            "reviewer_summary",
+            "cleanup_plan_reference",
+            "abandon_plan_reference",
+        ):
+            _require(evidence in boundary["required_rollback_evidence"],
+                     f"rollback boundary must require evidence {evidence}")
+        _require(boundary["dry_run"] is True and boundary["write_allowed"] is False,
+                 "rollback boundary must remain read-only")
+        _require(boundary["automation_allowed"] is False and boundary["writes"] == [],
+                 "rollback boundary must not allow automation or writes")
+
+        bad_missing = dict(boundary)
+        bad_missing.pop("rollback_runtime_boundary_id")
+        try:
+            validate_rollback_runtime_boundary(bad_missing)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("rollback boundary must reject missing id")
+
+        bad_scope = dict(boundary)
+        bad_scope["workspace_only"] = False
+        try:
+            validate_rollback_runtime_boundary(bad_scope)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("rollback boundary must reject non-workspace scope")
+
+        bad_repo = dict(boundary)
+        bad_repo["repo_mutation_allowed"] = True
+        try:
+            validate_rollback_runtime_boundary(bad_repo)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("rollback boundary must reject repo mutation")
+
+        bad_action = dict(boundary)
+        bad_action["forbidden_rollback_actions"] = [item for item in bad_action["forbidden_rollback_actions"] if item != "git reset"]
+        try:
+            validate_rollback_runtime_boundary(bad_action)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("rollback boundary must require forbidden git reset action")
+
+        bad_evidence = dict(boundary)
+        bad_evidence["required_rollback_evidence"] = [item for item in bad_evidence["required_rollback_evidence"] if item != "rollback_reason"]
+        try:
+            validate_rollback_runtime_boundary(bad_evidence)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("rollback boundary must require rollback reason evidence")
+
+        bad_fail_closed = dict(boundary)
+        bad_fail_closed["fail_closed_conditions"] = [item for item in bad_fail_closed["fail_closed_conditions"] if item != "rollback boundary validation fails"]
+        try:
+            validate_rollback_runtime_boundary(bad_fail_closed)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("rollback boundary must require fail-closed validation condition")
+
+        bad_writes = dict(boundary)
+        bad_writes["writes"] = ["rollback.json"]
+        try:
+            validate_rollback_runtime_boundary(bad_writes)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("rollback boundary must reject writes")
+
+    print("rollback runtime boundary helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 62g. Growth rollback-boundary CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_rollback_boundary_cli() -> None:
+    """rollback-boundary exposes only the rollback runtime boundary."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_growth_planning_chain_preview,
+        collect_rollback_boundary_preview_from_chain,
+        parse_rollback_runtime_boundary_json,
+        rollback_boundary_main,
+        stable_rollback_runtime_boundary_json,
+        validate_rollback_runtime_boundary,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("rollback-boundary" in help_out.getvalue(),
+             "growth help must include rollback-boundary")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = rollback_boundary_main(["--json"])
+    _require(json_rc == 0, "rollback-boundary --json must return 0")
+    parsed = parse_rollback_runtime_boundary_json(json_out.getvalue())
+    validate_rollback_runtime_boundary(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected = collect_rollback_boundary_preview_from_chain(chain)
+    _require(parsed["rollback_runtime_boundary_id"] == expected["rollback_runtime_boundary_id"],
+             "rollback-boundary id must be deterministic")
+    _require(parsed == parse_rollback_runtime_boundary_json(stable_rollback_runtime_boundary_json(parsed)),
+             "rollback-boundary JSON must round trip")
+    _require(parsed["planning_chain_id"] == chain["planning_chain_id"],
+             "rollback-boundary must reference planning chain")
+    _require(parsed["execution_package_id"] == chain["autonomous_execution_package"]["execution_package_id"],
+             "rollback-boundary must reference execution package")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "rollback-boundary must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "rollback-boundary must not allow automation or writes")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "verified_patch_plan",
+        "verified_patch_diff",
+        "execution_gate_stack_preview",
+        "execution_approval_checklist",
+        "execution_evidence_contract",
+        "execution_retry_policy",
+        "execution_review",
+        "patch_applier_boundary",
+        "verification_runner_boundary",
+        "guarded_patch_receipt",
+        "guarded_verification_receipt",
+        "planning_chain_review_bundle",
+    ):
+        _require(full_chain_key not in parsed,
+                 "rollback-boundary --json must output only boundary payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["rollback-boundary", "--json"])
+    routed = parse_rollback_runtime_boundary_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth rollback-boundary --json route must return 0")
+    _require(routed["rollback_runtime_boundary_id"] == parsed["rollback_runtime_boundary_id"],
+             "growth rollback-boundary route must preserve deterministic boundary id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = rollback_boundary_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "rollback-boundary human mode must return 0")
+    for needle in (
+        "Growth rollback boundary",
+        "rollback_runtime_boundary_id:",
+        "planning_chain_id:",
+        "execution_package_id:",
+        "workspace_id:",
+        "guarded_patch_receipt_id:",
+        "verification_receipt_id:",
+        "patch_applier_boundary_id:",
+        "verification_runner_boundary_id:",
+        "rollback_trigger_count:",
+        "allowed_rollback_action_count:",
+        "forbidden_rollback_action_count:",
+        "required_rollback_evidence_count:",
+        "fail_closed_condition_count:",
+        "escalation_condition_count:",
+        "next_action:",
+    ):
+        _require(needle in human, f"rollback-boundary human mode must include {needle}")
+    _require(len(human.splitlines()) <= 16,
+             "rollback-boundary human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = rollback_boundary_main(["--write"])
+    _require(write_rc != 0, "rollback-boundary --write must be rejected")
+    _require("--write is not supported" in write_err.getvalue(),
+             "rollback-boundary --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "rollback-boundary --write must not print normal output")
+
+    print("growth rollback-boundary CLI OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Guarded workspace cleanup / abandon lifecycle
 # ---------------------------------------------------------------------------
 
@@ -10874,6 +11270,8 @@ def main() -> None:
     check_verification_runner_boundary_helper()
     check_growth_verification_boundary_cli()
     check_guarded_verification_runner_runtime_component()
+    check_rollback_runtime_boundary_helper()
+    check_growth_rollback_boundary_cli()
     check_guarded_workspace_lifecycle_cleanup_abandon()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
