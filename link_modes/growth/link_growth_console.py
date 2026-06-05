@@ -10814,6 +10814,43 @@ def evidence_collect_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+
+def render_supervised_execution_plain(plan: dict[str, Any]) -> None:
+    validate_supervised_execution_plan(plan)
+    print("Growth supervised execution preview")
+    print(f"supervised_execution_plan_id: {plan['supervised_execution_plan_id']}")
+    print(f"planning_chain_id: {plan['planning_chain_id']}")
+    print(f"execution_package_id: {plan['execution_package_id']}")
+    print(f"planned_step_count: {len(plan['lifecycle_steps'])}")
+    print(f"approval_required: {plan['approval_required']}")
+    print(f"write_required: {plan['write_required']}")
+    print(f"next_action: {plan['recommended_next_action']}")
+
+
+def supervised_execution_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth supervised-execution`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth supervised-execution: supervised execution plan preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth supervised-execution")
+        print("  python3 link.py growth supervised-execution --json")
+        print("")
+        print("Preview only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth supervised-execution is preview-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    plan = collect_supervised_execution_plan(chain)
+    validate_supervised_execution_plan(plan, chain)
+    if "--json" in args:
+        print(stable_supervised_execution_plan_json(plan), end="")
+        return 0
+    render_supervised_execution_plain(plan)
+    return 0
+
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     validate_growth_planning_chain_preview(chain)
     gap_counts = chain["capability_gap_preview"]["counts"]
@@ -19541,6 +19578,7 @@ def collect_supervised_execution_plan(
         "execution_evidence_bundle",
         "execution_evidence_receipt",
     ])
+    planned_steps = {step["stage"]: step for step in lifecycle_steps}
     plan = {
         "supervised_execution_plan_version": SUPERVISED_EXECUTION_PLAN_VERSION,
         "supervised_execution_plan_id": make_supervised_execution_plan_id(
@@ -19560,6 +19598,13 @@ def collect_supervised_execution_plan(
         "execution_retry_policy_id": chain["execution_retry_policy"]["retry_policy_id"],
         "execution_review_id": execution_review["execution_review_id"],
         "lifecycle_steps": lifecycle_steps,
+        "planned_workspace_step": planned_steps["workspace"],
+        "planned_patch_step": planned_steps["patch"],
+        "planned_verification_step": planned_steps["verify"],
+        "planned_rollback_step": planned_steps["rollback_if_needed"],
+        "planned_evidence_step": planned_steps["evidence"],
+        "approval_required": True,
+        "write_required": True,
         "verification_commands": commands,
         "success_criteria": _normalize_patch_behavior_text_list([
             "workspace receipt created",
@@ -19582,6 +19627,7 @@ def collect_supervised_execution_plan(
             "execution_evidence_bundle",
             "execution_evidence_receipt",
         ]),
+        "recommended_next_action": "review supervised execution plan before enabling --write",
         "dry_run": True,
         "write_allowed": False,
         "automation_allowed": False,
@@ -19600,9 +19646,11 @@ def validate_supervised_execution_plan(
         "supervised_execution_plan_version", "supervised_execution_plan_id", "planning_chain_id",
         "execution_package_id", "workspace_boundary_id", "runtime_workspace_plan_id",
         "patch_applier_boundary_id", "execution_evidence_contract_id", "execution_retry_policy_id",
-        "execution_review_id", "lifecycle_steps", "verification_commands", "success_criteria",
+        "execution_review_id", "lifecycle_steps", "planned_workspace_step", "planned_patch_step",
+        "planned_verification_step", "planned_rollback_step", "planned_evidence_step",
+        "approval_required", "write_required", "verification_commands", "success_criteria",
         "failure_criteria", "rollback_policy", "evidence_requirements", "review_package_requirements",
-        "dry_run", "write_allowed", "automation_allowed", "writes", "metadata",
+        "recommended_next_action", "dry_run", "write_allowed", "automation_allowed", "writes", "metadata",
     )
     missing = [field for field in required if field not in plan]
     if missing:
@@ -19628,6 +19676,20 @@ def validate_supervised_execution_plan(
         _validate_non_empty_string(step.get("description"), "lifecycle step description")
         if not isinstance(step.get("stop_on_failure"), bool):
             raise TypeError("lifecycle step stop_on_failure must be boolean")
+    planned_step_refs = {
+        "planned_workspace_step": "workspace",
+        "planned_patch_step": "patch",
+        "planned_verification_step": "verify",
+        "planned_rollback_step": "rollback_if_needed",
+        "planned_evidence_step": "evidence",
+    }
+    stage_to_step = {step["stage"]: step for step in steps}
+    for field, stage in planned_step_refs.items():
+        if plan[field] != stage_to_step[stage]:
+            raise ValueError(f"{field} must match lifecycle step {stage}")
+    if plan["approval_required"] is not True or plan["write_required"] is not True:
+        raise ValueError("supervised execution must require approval and write for runtime execution")
+    _validate_non_empty_string(plan["recommended_next_action"], "recommended_next_action")
     commands = plan["verification_commands"]
     if not isinstance(commands, list) or not commands:
         raise TypeError("verification_commands must be a non-empty list")

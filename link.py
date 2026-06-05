@@ -467,6 +467,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import evidence_collect_main as _growth_evidence_collect_main
 
         return _growth_evidence_collect_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "supervised-execution":
+        from link_modes.growth.link_growth_console import supervised_execution_main as _growth_supervised_execution_main
+
+        return _growth_supervised_execution_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "patch-apply":
         from link_modes.growth.link_growth_console import patch_apply_main as _growth_patch_apply_main
 
@@ -519,6 +523,7 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  verification-boundary Preview verification runner runtime boundary")
         print("  rollback-boundary Preview rollback runtime boundary")
         print("  evidence-collect  Collect workspace-local execution evidence")
+        print("  supervised-execution Preview supervised execution plan")
         print("  patch-apply        Apply guarded patch inside approved workspace")
         print("  workspace-create   Create guarded temporary workspace with approval")
         print("  workspace-cleanup  Cleanup guarded temporary workspace")

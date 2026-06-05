@@ -11961,6 +11961,108 @@ def check_fork_lineage_with_content_replacements() -> None:
 
 
 
+
+# ---------------------------------------------------------------------------
+# 62k. Growth supervised-execution CLI
+# ---------------------------------------------------------------------------
+
+def check_growth_supervised_execution_cli() -> None:
+    """supervised-execution exposes only the read-only supervised plan."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_growth_planning_chain_preview,
+        collect_supervised_execution_plan,
+        parse_supervised_execution_plan_json,
+        supervised_execution_main,
+        validate_supervised_execution_plan,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("supervised-execution" in help_out.getvalue(),
+             "growth help must include supervised-execution")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = supervised_execution_main(["--json"])
+    _require(json_rc == 0, "supervised-execution --json must return 0")
+    parsed = parse_supervised_execution_plan_json(json_out.getvalue())
+    validate_supervised_execution_plan(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected = collect_supervised_execution_plan(chain)
+    _require(parsed["supervised_execution_plan_id"] == expected["supervised_execution_plan_id"],
+             "supervised-execution plan id must be deterministic")
+    for field in (
+        "supervised_execution_plan_id",
+        "planning_chain_id",
+        "execution_package_id",
+        "planned_workspace_step",
+        "planned_patch_step",
+        "planned_verification_step",
+        "planned_rollback_step",
+        "planned_evidence_step",
+        "approval_required",
+        "write_required",
+        "recommended_next_action",
+    ):
+        _require(field in parsed, f"supervised-execution JSON must include {field}")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "supervised-execution JSON must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "supervised-execution JSON must not allow automation or writes")
+    _require(parsed["approval_required"] is True and parsed["write_required"] is True,
+             "supervised-execution plan must require approval and write for runtime")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_gate_stack_preview",
+        "execution_review",
+        "execution_evidence_contract",
+        "execution_evidence_bundle",
+    ):
+        _require(full_chain_key not in parsed,
+                 "supervised-execution --json must output only supervised plan payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["supervised-execution", "--json"])
+    routed = parse_supervised_execution_plan_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth supervised-execution --json route must return 0")
+    _require(routed["supervised_execution_plan_id"] == parsed["supervised_execution_plan_id"],
+             "growth supervised-execution route must preserve deterministic plan id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = supervised_execution_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "supervised-execution human mode must return 0")
+    for needle in (
+        "Growth supervised execution preview",
+        "supervised_execution_plan_id:",
+        "planning_chain_id:",
+        "execution_package_id:",
+        "planned_step_count:",
+        "approval_required:",
+        "write_required:",
+        "next_action:",
+    ):
+        _require(needle in human, f"supervised-execution human mode must include {needle}")
+    _require(len(human.splitlines()) <= 8,
+             "supervised-execution human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = supervised_execution_main(["--write", "--json"])
+    _require(write_rc != 0, "supervised-execution --write must be rejected")
+    _require("preview-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+             "supervised-execution --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "supervised-execution --write must not print normal output")
+    print("growth supervised-execution CLI OK")
+
 # ---------------------------------------------------------------------------
 # 62k. Supervised execution orchestrator runtime component
 # ---------------------------------------------------------------------------
@@ -12248,6 +12350,7 @@ def main() -> None:
     check_guarded_rollback_executor_runtime_component()
     check_execution_evidence_collector_runtime_component()
     check_growth_evidence_collect_cli()
+    check_growth_supervised_execution_cli()
     check_supervised_execution_orchestrator_runtime_component()
     check_guarded_workspace_lifecycle_cleanup_abandon()
     check_planning_chain_review_bundle_helper()
