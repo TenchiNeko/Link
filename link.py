@@ -463,6 +463,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import rollback_boundary_main as _growth_rollback_boundary_main
 
         return _growth_rollback_boundary_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "evidence-collect":
+        from link_modes.growth.link_growth_console import evidence_collect_main as _growth_evidence_collect_main
+
+        return _growth_evidence_collect_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "patch-apply":
         from link_modes.growth.link_growth_console import patch_apply_main as _growth_patch_apply_main
 
@@ -514,6 +518,7 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  patch-boundary     Preview patch applier runtime boundary")
         print("  verification-boundary Preview verification runner runtime boundary")
         print("  rollback-boundary Preview rollback runtime boundary")
+        print("  evidence-collect  Collect workspace-local execution evidence")
         print("  patch-apply        Apply guarded patch inside approved workspace")
         print("  workspace-create   Create guarded temporary workspace with approval")
         print("  workspace-cleanup  Cleanup guarded temporary workspace")

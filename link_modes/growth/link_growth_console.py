@@ -10615,6 +10615,205 @@ def workspace_abandon_main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _read_workspace_json(workspace_path: str, ref: str) -> dict[str, Any]:
+    target = _guarded_patch_target_path(workspace_path, ref)
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError(f"workspace evidence file not found: {ref}")
+    return json.loads(target.read_text(encoding="utf-8"))
+
+
+def collect_evidence_collect_preview_from_chain(chain: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build a deterministic evidence collection preview without touching files."""
+    patch_boundary = collect_patch_boundary_preview_from_chain(chain)
+    workspace_plan = collect_workspace_creator_runtime_plan(chain)
+    workspace_request = make_guarded_workspace_request(
+        workspace_plan,
+        approved=False,
+        write=False,
+        workspace_root="/tmp/link-evidence-collect-preview",
+    )
+    workspace_receipt = preview_guarded_workspace_creation(workspace_request, workspace_plan)
+    approval = collect_execution_approval_checklist(chain)
+    execution_review = collect_execution_review(chain)
+    patch_request = make_guarded_patch_request(patch_boundary, workspace_receipt, approved=False, write=False)
+    patch_receipt = preview_guarded_patch_application(
+        patch_request,
+        patch_boundary,
+        chain["verified_patch_plan"],
+        chain["verified_patch_diff"],
+        workspace_receipt,
+        workspace_receipt["workspace_manifest"],
+        approval,
+        chain["execution_gate_stack_preview"],
+        chain["execution_evidence_contract"],
+    )
+    verification_boundary = collect_verification_runner_boundary(
+        patch_receipt,
+        patch_boundary,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        chain["execution_gate_stack_preview"],
+        approval,
+        chain["execution_preflight_checklist"],
+        execution_review,
+    )
+    verification_request = make_guarded_verification_request(
+        verification_boundary,
+        commands=["python3 -c \"raise SystemExit(2)\""],
+        approved=False,
+        write=False,
+    )
+    command_hash = _guarded_verification_command_hash(verification_request["commands"][0])
+    verification_receipt = collect_guarded_verification_receipt(
+        verification_request,
+        verification_boundary,
+        patch_receipt,
+        workspace_receipt["workspace_manifest"],
+        workspace_receipt,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        executed_commands=[{
+            "sequence": 1,
+            "command": verification_request["commands"][0],
+            "command_hash": command_hash,
+            "exit_code": 2,
+            "stdout_ref": "verification_evidence/preview.stdout.log",
+            "stderr_ref": "verification_evidence/preview.stderr.log",
+            "evidence_ref": "verification_evidence/preview.evidence.json",
+            "status": "failed",
+        }],
+        receipt_timestamp="preview-only",
+        retry_count=0,
+    )
+    rollback_boundary = collect_rollback_runtime_boundary(
+        patch_receipt,
+        verification_receipt,
+        verification_boundary,
+        patch_boundary,
+        workspace_receipt["workspace_manifest"],
+        workspace_receipt,
+        chain["execution_evidence_contract"],
+        chain["execution_retry_policy"],
+        chain["execution_gate_stack_preview"],
+        execution_review,
+    )
+    rollback_request = make_guarded_rollback_request(
+        rollback_boundary,
+        rollback_reason="verification failed",
+        approved=False,
+        write=False,
+    )
+    rollback_receipt = collect_guarded_rollback_receipt(
+        rollback_request,
+        rollback_boundary,
+        patch_receipt,
+        verification_receipt,
+        workspace_receipt["workspace_manifest"],
+        workspace_receipt,
+        restored_files=[],
+        removed_files=[],
+        before_hashes={},
+        after_hashes={},
+        rollback_reason="verification failed",
+        rollback_result="preview",
+        rollback_timestamp="preview-only",
+        rollback_evidence_refs=[],
+    )
+    bundle = collect_execution_evidence_bundle(
+        workspace_receipt,
+        workspace_receipt["workspace_manifest"],
+        patch_receipt,
+        verification_receipt,
+        rollback_receipt,
+        chain["execution_evidence_contract"],
+        execution_review,
+        chain["execution_gate_stack_preview"],
+        write=False,
+    )
+    receipt = collect_execution_evidence_receipt(bundle, write=False, collected_at="preview-only")
+    return bundle, receipt
+
+
+def collect_evidence_collect_from_workspace(chain: dict[str, Any], workspace_path: str, workspace_id: str, *, write: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Collect evidence from an existing guarded workspace without executing runtime actions."""
+    workspace_receipt = _workspace_lifecycle_receipt_from_manifest(workspace_path, workspace_id)
+    workspace = workspace_receipt["workspace_path"]
+    patch_receipt = _read_workspace_json(workspace, "guarded_patch_receipt.json")
+    verification_receipt = _read_workspace_json(workspace, "guarded_verification_receipt.json")
+    rollback_receipt = None
+    try:
+        rollback_receipt = _read_workspace_json(workspace, "guarded_rollback_receipt.json")
+    except FileNotFoundError:
+        rollback_receipt = None
+    execution_review = collect_execution_review(chain)
+    bundle = collect_execution_evidence_bundle(
+        workspace_receipt,
+        workspace_receipt["workspace_manifest"],
+        patch_receipt,
+        verification_receipt,
+        rollback_receipt,
+        chain["execution_evidence_contract"],
+        execution_review,
+        chain["execution_gate_stack_preview"],
+        write=write,
+    )
+    receipt = collect_execution_evidence_receipt(bundle, write=write)
+    return bundle, receipt
+
+
+def render_evidence_collect_plain(bundle: dict[str, Any], receipt: dict[str, Any]) -> None:
+    validate_execution_evidence_bundle(bundle)
+    validate_execution_evidence_receipt(receipt, bundle)
+    print("Growth evidence collect")
+    print(f"execution_evidence_bundle_id: {bundle['execution_evidence_bundle_id']}")
+    print(f"evidence_status: {bundle['evidence_status']}")
+    print(f"evidence_file_count: {bundle['evidence_file_count']}")
+    print(f"missing_evidence_count: {bundle['missing_evidence_count']}")
+    print(f"workspace_receipt_count: {bundle['workspace_receipt_count']}")
+    print(f"patch_receipt_count: {bundle['patch_receipt_count']}")
+    print(f"verification_receipt_count: {bundle['verification_receipt_count']}")
+    print(f"rollback_receipt_count: {bundle['rollback_receipt_count']}")
+    print(f"next_action: {bundle['recommended_next_action']}")
+
+
+def evidence_collect_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth evidence-collect`` guarded evidence collection."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth evidence-collect: collect workspace-local execution evidence")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth evidence-collect --json")
+        print("  python3 link.py growth evidence-collect --write --workspace-path PATH --workspace-id ID --json")
+        print("")
+        print("Preview by default. --write creates only workspace-local evidence bundle and receipt files.")
+        return 0
+    write = "--write" in args
+    try:
+        workspace_path = _workspace_create_arg_value(args, "--workspace-path")
+        workspace_id = _workspace_create_arg_value(args, "--workspace-id")
+        chain = collect_growth_planning_chain_preview()
+        if write:
+            if not workspace_path or not workspace_id:
+                raise ValueError("--write requires --workspace-path and --workspace-id")
+            bundle, receipt = collect_evidence_collect_from_workspace(
+                chain,
+                workspace_path,
+                workspace_id,
+                write=True,
+            )
+        else:
+            bundle, receipt = collect_evidence_collect_preview_from_chain(chain)
+    except (OSError, PermissionError, TypeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_execution_evidence_bundle_json(bundle), end="")
+        return 0
+    render_evidence_collect_plain(bundle, receipt)
+    return 0
+
+
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     validate_growth_planning_chain_preview(chain)
     gap_counts = chain["capability_gap_preview"]["counts"]
@@ -18731,6 +18930,1290 @@ def execute_guarded_rollback(
         shutil.rmtree(backup_path)
         raise
 
+
+EXECUTION_EVIDENCE_BUNDLE_VERSION = "link-execution-evidence-bundle-v1"
+EXECUTION_EVIDENCE_RECEIPT_VERSION = "link-execution-evidence-receipt-v1"
+
+
+def make_execution_evidence_bundle_id(
+    planning_chain_id: str,
+    execution_package_id: str,
+    workspace_id: str,
+    evidence_refs: list[str],
+    missing_evidence: list[str],
+) -> str:
+    return _execution_readiness_id("execution-evidence-bundle", {
+        "evidence_refs": evidence_refs,
+        "execution_package_id": execution_package_id,
+        "missing_evidence": missing_evidence,
+        "planning_chain_id": planning_chain_id,
+        "version": EXECUTION_EVIDENCE_BUNDLE_VERSION,
+        "workspace_id": workspace_id,
+    })
+
+
+def make_execution_evidence_receipt_id(
+    execution_evidence_bundle_id: str,
+    workspace_id: str,
+    evidence_status: str,
+    evidence_file_count: int,
+    missing_evidence_count: int,
+    receipt_hash: str,
+) -> str:
+    return _execution_readiness_id("execution-evidence-receipt", {
+        "evidence_file_count": evidence_file_count,
+        "evidence_status": evidence_status,
+        "execution_evidence_bundle_id": execution_evidence_bundle_id,
+        "missing_evidence_count": missing_evidence_count,
+        "receipt_hash": receipt_hash,
+        "version": EXECUTION_EVIDENCE_RECEIPT_VERSION,
+        "workspace_id": workspace_id,
+    })
+
+
+def _execution_evidence_hash(path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _execution_evidence_ref_status(workspace_path: str, refs: list[str]) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    present: list[str] = []
+    hashes: dict[str, dict[str, Any]] = {}
+    for ref in _normalize_implementation_branch_refs(refs):
+        target = _guarded_patch_target_path(workspace_path, ref)
+        exists = target.exists() and target.is_file()
+        if exists:
+            present.append(ref)
+            hashes[ref] = {
+                "file_ref": ref,
+                "sha256": _execution_evidence_hash(target),
+                "present": True,
+            }
+        else:
+            hashes[ref] = {
+                "file_ref": ref,
+                "sha256": "",
+                "present": False,
+            }
+    return _normalize_implementation_branch_refs(present), dict(sorted(hashes.items()))
+
+
+def _execution_evidence_contract_types(contract: dict[str, Any]) -> list[str]:
+    return _normalize_implementation_branch_refs([item["evidence_type"] for item in contract["evidence_items"]])
+
+
+def collect_execution_evidence_bundle(
+    workspace_creation_receipt: dict[str, Any],
+    workspace_manifest: dict[str, Any],
+    guarded_patch_receipt: dict[str, Any],
+    guarded_verification_receipt: dict[str, Any],
+    guarded_rollback_receipt: dict[str, Any] | None,
+    execution_evidence_contract: dict[str, Any],
+    execution_review: dict[str, Any],
+    execution_gate_stack_preview: dict[str, Any],
+    *,
+    write: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Collect workspace-local execution artifacts into one reviewable evidence bundle."""
+    validate_workspace_creation_receipt(workspace_creation_receipt)
+    validate_guarded_patch_receipt(guarded_patch_receipt)
+    validate_guarded_verification_receipt(guarded_verification_receipt)
+    if guarded_rollback_receipt is not None:
+        validate_guarded_rollback_receipt(guarded_rollback_receipt)
+    validate_execution_evidence_contract(execution_evidence_contract)
+    validate_execution_review(execution_review)
+    validate_execution_gate_stack_preview(execution_gate_stack_preview)
+    if workspace_manifest != workspace_creation_receipt["workspace_manifest"]:
+        raise ValueError("workspace manifest must match workspace creation receipt")
+    workspace_path = _guarded_patch_workspace_path(workspace_creation_receipt["workspace_path"])
+    if write and (not workspace_path.exists() or not workspace_path.is_dir()):
+        raise FileNotFoundError("execution evidence workspace does not exist")
+    expected_refs = {
+        "planning_chain_id": workspace_creation_receipt["planning_chain_id"],
+        "execution_package_id": workspace_creation_receipt["execution_package_id"],
+        "workspace_id": workspace_creation_receipt["workspace_id"],
+        "workspace_path": workspace_creation_receipt["workspace_path"],
+    }
+    for receipt_name, receipt in (
+        ("guarded patch receipt", guarded_patch_receipt),
+        ("guarded verification receipt", guarded_verification_receipt),
+    ):
+        for field in ("workspace_id", "workspace_path"):
+            if receipt[field] != expected_refs[field]:
+                raise ValueError(f"{receipt_name} {field} does not match workspace")
+    if guarded_rollback_receipt is not None:
+        for field in ("workspace_id", "workspace_path"):
+            if guarded_rollback_receipt[field] != expected_refs[field]:
+                raise ValueError(f"guarded rollback receipt {field} does not match workspace")
+    if execution_evidence_contract["planning_chain_id"] != expected_refs["planning_chain_id"]:
+        raise ValueError("execution evidence contract planning chain mismatch")
+    if execution_review["planning_chain_id"] != expected_refs["planning_chain_id"]:
+        raise ValueError("execution review planning chain mismatch")
+    if execution_gate_stack_preview["planning_chain_id"] != expected_refs["planning_chain_id"]:
+        raise ValueError("gate stack planning chain mismatch")
+
+    workspace_receipt_refs = _normalize_implementation_branch_refs(["workspace_manifest.json", "workspace_creation_receipt.json"])
+    patch_receipt_refs = _normalize_implementation_branch_refs(["guarded_patch_receipt.json"])
+    verification_receipt_refs = _normalize_implementation_branch_refs([
+        "guarded_verification_receipt.json",
+        *guarded_verification_receipt["stdout_refs"],
+        *guarded_verification_receipt["stderr_refs"],
+        *guarded_verification_receipt["evidence_refs"],
+    ])
+    rollback_receipt_refs = _normalize_implementation_branch_refs([
+        "guarded_rollback_receipt.json",
+        "workspace_abandoned.json",
+        *(guarded_rollback_receipt or {}).get("rollback_evidence_refs", []),
+    ]) if guarded_rollback_receipt is not None else []
+    log_refs = _normalize_implementation_branch_refs([
+        *guarded_verification_receipt["stdout_refs"],
+        *guarded_verification_receipt["stderr_refs"],
+    ])
+    all_refs = _normalize_implementation_branch_refs([
+        *workspace_receipt_refs,
+        *patch_receipt_refs,
+        *verification_receipt_refs,
+        *rollback_receipt_refs,
+    ])
+    present_refs, hash_refs = _execution_evidence_ref_status(str(workspace_path), all_refs)
+    present_types = {"quality_gate"}
+    if "guarded_patch_receipt.json" in present_refs:
+        present_types.add("patch_application")
+    verification_artifacts_present = any(ref in present_refs for ref in guarded_verification_receipt["evidence_refs"])
+    if verification_artifacts_present:
+        present_types.update({"compile", "tests", "healthcheck"})
+    if guarded_rollback_receipt is not None and "guarded_rollback_receipt.json" in present_refs:
+        present_types.add("rollback")
+    required_types = set(_execution_evidence_contract_types(execution_evidence_contract))
+    missing_evidence = _normalize_implementation_branch_refs(sorted(required_types - present_types))
+    required_evidence = _normalize_implementation_branch_refs([item["evidence_id"] for item in execution_evidence_contract["evidence_items"]])
+    present_evidence = _normalize_implementation_branch_refs([
+        *present_refs,
+        *sorted(present_types),
+    ])
+    evidence_status = "complete" if not missing_evidence else "missing_evidence"
+    reviewer_summary = (
+        "Execution evidence is complete for reviewer handoff."
+        if evidence_status == "complete"
+        else f"Execution evidence is missing {len(missing_evidence)} required evidence type(s): {', '.join(missing_evidence)}."
+    )
+    recommended_next_action = (
+        "review evidence bundle before cleanup"
+        if evidence_status == "complete"
+        else "review missing evidence before final handoff"
+    )
+    evidence_file_count = len([ref for ref, item in hash_refs.items() if item["present"]])
+    bundle = {
+        "execution_evidence_bundle_version": EXECUTION_EVIDENCE_BUNDLE_VERSION,
+        "execution_evidence_bundle_id": make_execution_evidence_bundle_id(
+            expected_refs["planning_chain_id"],
+            expected_refs["execution_package_id"],
+            expected_refs["workspace_id"],
+            all_refs,
+            missing_evidence,
+        ),
+        "planning_chain_id": expected_refs["planning_chain_id"],
+        "execution_package_id": expected_refs["execution_package_id"],
+        "workspace_id": expected_refs["workspace_id"],
+        "workspace_path": expected_refs["workspace_path"],
+        "workspace_receipt_refs": workspace_receipt_refs,
+        "patch_receipt_refs": patch_receipt_refs,
+        "verification_receipt_refs": verification_receipt_refs,
+        "rollback_receipt_refs": rollback_receipt_refs,
+        "log_refs": log_refs,
+        "hash_refs": hash_refs,
+        "evidence_file_count": evidence_file_count,
+        "missing_evidence_count": len(missing_evidence),
+        "workspace_receipt_count": len(workspace_receipt_refs),
+        "patch_receipt_count": len(patch_receipt_refs),
+        "verification_receipt_count": len(verification_receipt_refs),
+        "rollback_receipt_count": len(rollback_receipt_refs),
+        "required_evidence": required_evidence,
+        "present_evidence": present_evidence,
+        "missing_evidence": missing_evidence,
+        "evidence_status": evidence_status,
+        "reviewer_summary": reviewer_summary,
+        "recommended_next_action": recommended_next_action,
+        "safety_metadata": {
+            "dry_run": not write,
+            "write_allowed": bool(write),
+            "automation_allowed": False,
+            "writes": ["execution_evidence_bundle.json"] if write else [],
+        },
+        "metadata": dict(metadata or {}),
+    }
+    validate_execution_evidence_bundle(bundle, workspace_creation_receipt, guarded_patch_receipt, guarded_verification_receipt, guarded_rollback_receipt, execution_evidence_contract, execution_review, execution_gate_stack_preview)
+    if write:
+        bundle_path = _guarded_patch_target_path(str(workspace_path), "execution_evidence_bundle.json")
+        bundle_path.write_text(stable_execution_evidence_bundle_json(bundle), encoding="utf-8")
+    return bundle
+
+
+def validate_execution_evidence_bundle(
+    bundle: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any] | None = None,
+    guarded_patch_receipt: dict[str, Any] | None = None,
+    guarded_verification_receipt: dict[str, Any] | None = None,
+    guarded_rollback_receipt: dict[str, Any] | None = None,
+    execution_evidence_contract: dict[str, Any] | None = None,
+    execution_review: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "execution_evidence_bundle_version", "execution_evidence_bundle_id", "planning_chain_id",
+        "execution_package_id", "workspace_id", "workspace_path", "workspace_receipt_refs",
+        "patch_receipt_refs", "verification_receipt_refs", "rollback_receipt_refs", "log_refs",
+        "hash_refs", "evidence_file_count", "missing_evidence_count", "workspace_receipt_count",
+        "patch_receipt_count", "verification_receipt_count", "rollback_receipt_count",
+        "required_evidence", "present_evidence", "missing_evidence", "evidence_status",
+        "reviewer_summary", "recommended_next_action", "safety_metadata", "metadata",
+    )
+    missing = [field for field in required if field not in bundle]
+    if missing:
+        raise ValueError(f"execution evidence bundle missing fields: {missing}")
+    if bundle["execution_evidence_bundle_version"] != EXECUTION_EVIDENCE_BUNDLE_VERSION:
+        raise ValueError("unsupported execution evidence bundle version")
+    for field in ("execution_evidence_bundle_id", "planning_chain_id", "execution_package_id", "workspace_id", "workspace_path", "evidence_status", "reviewer_summary", "recommended_next_action"):
+        _validate_non_empty_string(bundle[field], field)
+    if bundle["evidence_status"] not in {"complete", "missing_evidence"}:
+        raise ValueError("invalid execution evidence status")
+    for field in ("evidence_file_count", "missing_evidence_count", "workspace_receipt_count", "patch_receipt_count", "verification_receipt_count", "rollback_receipt_count"):
+        if not isinstance(bundle[field], int) or bundle[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    if bundle["workspace_receipt_count"] != len(bundle["workspace_receipt_refs"]):
+        raise ValueError("workspace_receipt_count must match workspace_receipt_refs")
+    if bundle["patch_receipt_count"] != len(bundle["patch_receipt_refs"]):
+        raise ValueError("patch_receipt_count must match patch_receipt_refs")
+    if bundle["verification_receipt_count"] != len(bundle["verification_receipt_refs"]):
+        raise ValueError("verification_receipt_count must match verification_receipt_refs")
+    if bundle["rollback_receipt_count"] != len(bundle["rollback_receipt_refs"]):
+        raise ValueError("rollback_receipt_count must match rollback_receipt_refs")
+    if bundle["missing_evidence_count"] != len(bundle["missing_evidence"]):
+        raise ValueError("missing_evidence_count must match missing_evidence")
+    _guarded_patch_workspace_path(bundle["workspace_path"])
+    ref_list_fields = (
+        "workspace_receipt_refs", "patch_receipt_refs", "verification_receipt_refs",
+        "rollback_receipt_refs", "log_refs", "required_evidence", "present_evidence", "missing_evidence",
+    )
+    for field in ref_list_fields:
+        values = bundle[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if values != _normalize_implementation_branch_refs(values):
+            raise ValueError(f"{field} must be normalized")
+    for field in ("workspace_receipt_refs", "patch_receipt_refs", "verification_receipt_refs", "log_refs"):
+        if not bundle[field]:
+            raise ValueError(f"{field} must not be empty")
+    for ref in [*bundle["workspace_receipt_refs"], *bundle["patch_receipt_refs"], *bundle["verification_receipt_refs"], *bundle["rollback_receipt_refs"], *bundle["log_refs"]]:
+        _guarded_patch_target_path(bundle["workspace_path"], ref)
+    if not isinstance(bundle["hash_refs"], dict):
+        raise TypeError("hash_refs must be a dict")
+    for ref, item in bundle["hash_refs"].items():
+        if item.get("file_ref") != ref:
+            raise ValueError("hash ref file_ref must match key")
+        _guarded_patch_target_path(bundle["workspace_path"], ref)
+        if not isinstance(item.get("present"), bool):
+            raise TypeError("hash ref present must be a boolean")
+        if item["present"]:
+            _validate_non_empty_string(item.get("sha256"), "hash sha256")
+        elif item.get("sha256") != "":
+            raise ValueError("missing hash ref must use empty sha256")
+    safety = bundle["safety_metadata"]
+    if not isinstance(safety, dict):
+        raise TypeError("safety_metadata must be a dict")
+    if safety.get("automation_allowed") is not False:
+        raise ValueError("execution evidence bundle must keep automation disabled")
+    if not isinstance(safety.get("writes"), list):
+        raise TypeError("execution evidence bundle writes must be a list")
+    if safety["writes"] != _normalize_implementation_branch_refs(safety["writes"]):
+        raise ValueError("execution evidence bundle writes must be normalized")
+    for ref in safety["writes"]:
+        _guarded_patch_target_path(bundle["workspace_path"], ref)
+    if safety.get("dry_run") is True:
+        if safety.get("write_allowed") is not False or safety["writes"] != []:
+            raise ValueError("dry-run execution evidence bundle must not allow writes")
+    else:
+        if safety.get("dry_run") is not False or safety.get("write_allowed") is not True:
+            raise ValueError("written execution evidence bundle must record workspace-local write allowance")
+        if safety["writes"] != ["execution_evidence_bundle.json"]:
+            raise ValueError("execution evidence bundle writes must contain only the bundle file")
+    actual_evidence_file_count = len([ref for ref, item in bundle["hash_refs"].items() if item["present"]])
+    if bundle["evidence_file_count"] != actual_evidence_file_count:
+        raise ValueError("evidence_file_count must match present hash refs")
+    if bundle["evidence_status"] == "complete" and bundle["missing_evidence"]:
+        raise ValueError("complete evidence bundle cannot have missing evidence")
+    if bundle["evidence_status"] == "missing_evidence" and not bundle["missing_evidence"]:
+        raise ValueError("missing_evidence status requires missing evidence")
+    expected_id = make_execution_evidence_bundle_id(
+        bundle["planning_chain_id"],
+        bundle["execution_package_id"],
+        bundle["workspace_id"],
+        _normalize_implementation_branch_refs([
+            *bundle["workspace_receipt_refs"],
+            *bundle["patch_receipt_refs"],
+            *bundle["verification_receipt_refs"],
+            *bundle["rollback_receipt_refs"],
+        ]),
+        bundle["missing_evidence"],
+    )
+    if bundle["execution_evidence_bundle_id"] != expected_id:
+        raise ValueError("execution evidence bundle id does not match contents")
+    if not isinstance(bundle["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    if workspace_creation_receipt is not None:
+        validate_workspace_creation_receipt(workspace_creation_receipt)
+        if bundle["workspace_id"] != workspace_creation_receipt["workspace_id"]:
+            raise ValueError("execution evidence bundle workspace creation mismatch")
+        if bundle["workspace_path"] != workspace_creation_receipt["workspace_path"]:
+            raise ValueError("execution evidence bundle workspace path mismatch")
+    if guarded_patch_receipt is not None:
+        validate_guarded_patch_receipt(guarded_patch_receipt)
+        if bundle["workspace_id"] != guarded_patch_receipt["workspace_id"]:
+            raise ValueError("execution evidence bundle patch receipt workspace mismatch")
+    if guarded_verification_receipt is not None:
+        validate_guarded_verification_receipt(guarded_verification_receipt)
+        if bundle["workspace_id"] != guarded_verification_receipt["workspace_id"]:
+            raise ValueError("execution evidence bundle verification receipt workspace mismatch")
+    if guarded_rollback_receipt is not None:
+        validate_guarded_rollback_receipt(guarded_rollback_receipt)
+        if bundle["workspace_id"] != guarded_rollback_receipt["workspace_id"]:
+            raise ValueError("execution evidence bundle rollback receipt workspace mismatch")
+    if execution_evidence_contract is not None:
+        validate_execution_evidence_contract(execution_evidence_contract)
+        if bundle["planning_chain_id"] != execution_evidence_contract["planning_chain_id"]:
+            raise ValueError("execution evidence bundle contract planning chain mismatch")
+    if execution_review is not None:
+        validate_execution_review(execution_review)
+        if bundle["planning_chain_id"] != execution_review["planning_chain_id"]:
+            raise ValueError("execution evidence bundle review planning chain mismatch")
+    if execution_gate_stack_preview is not None:
+        validate_execution_gate_stack_preview(execution_gate_stack_preview)
+        if bundle["planning_chain_id"] != execution_gate_stack_preview["planning_chain_id"]:
+            raise ValueError("execution evidence bundle gate stack planning chain mismatch")
+
+
+def stable_execution_evidence_bundle_json(bundle: dict[str, Any]) -> str:
+    validate_execution_evidence_bundle(bundle)
+    return _stable_ruflo_json(bundle, indent=2) + "\n"
+
+
+def parse_execution_evidence_bundle_json(text: str) -> dict[str, Any]:
+    bundle = json.loads(text)
+    validate_execution_evidence_bundle(bundle)
+    return bundle
+
+
+def collect_execution_evidence_receipt(
+    execution_evidence_bundle: dict[str, Any],
+    *,
+    write: bool = False,
+    collected_at: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a workspace-local receipt for an execution evidence bundle."""
+    from datetime import datetime, timezone
+
+    validate_execution_evidence_bundle(execution_evidence_bundle)
+    workspace_path = _guarded_patch_workspace_path(execution_evidence_bundle["workspace_path"])
+    if write and (not workspace_path.exists() or not workspace_path.is_dir()):
+        raise FileNotFoundError("execution evidence receipt workspace does not exist")
+    timestamp = collected_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    bundle_text = stable_execution_evidence_bundle_json(execution_evidence_bundle)
+    import hashlib
+
+    receipt_hash = hashlib.sha256(bundle_text.encode("utf-8")).hexdigest()
+    present_files = [ref for ref, item in execution_evidence_bundle["hash_refs"].items() if item["present"]]
+    safety = {
+        "dry_run": not write,
+        "write_allowed": bool(write),
+        "automation_allowed": False,
+        "writes": ["execution_evidence_receipt.json"] if write else [],
+    }
+    receipt = {
+        "execution_evidence_receipt_version": EXECUTION_EVIDENCE_RECEIPT_VERSION,
+        "execution_evidence_receipt_id": make_execution_evidence_receipt_id(
+            execution_evidence_bundle["execution_evidence_bundle_id"],
+            execution_evidence_bundle["workspace_id"],
+            execution_evidence_bundle["evidence_status"],
+            len(present_files),
+            len(execution_evidence_bundle["missing_evidence"]),
+            receipt_hash,
+        ),
+        "execution_evidence_bundle_id": execution_evidence_bundle["execution_evidence_bundle_id"],
+        "workspace_id": execution_evidence_bundle["workspace_id"],
+        "workspace_path": execution_evidence_bundle["workspace_path"],
+        "collected_at": timestamp,
+        "evidence_status": execution_evidence_bundle["evidence_status"],
+        "evidence_file_count": len(present_files),
+        "missing_evidence_count": len(execution_evidence_bundle["missing_evidence"]),
+        "receipt_hash": receipt_hash,
+        "safety_metadata": safety,
+        "metadata": dict(metadata or {}),
+    }
+    validate_execution_evidence_receipt(receipt, execution_evidence_bundle)
+    if write:
+        receipt_path = _guarded_patch_target_path(str(workspace_path), "execution_evidence_receipt.json")
+        receipt_path.write_text(_stable_ruflo_json(receipt, indent=2) + "\n", encoding="utf-8")
+    return receipt
+
+
+def validate_execution_evidence_receipt(
+    receipt: dict[str, Any],
+    execution_evidence_bundle: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "execution_evidence_receipt_version", "execution_evidence_receipt_id", "execution_evidence_bundle_id",
+        "workspace_id", "workspace_path", "collected_at", "evidence_status", "evidence_file_count",
+        "missing_evidence_count", "receipt_hash", "safety_metadata", "metadata",
+    )
+    missing = [field for field in required if field not in receipt]
+    if missing:
+        raise ValueError(f"execution evidence receipt missing fields: {missing}")
+    if receipt["execution_evidence_receipt_version"] != EXECUTION_EVIDENCE_RECEIPT_VERSION:
+        raise ValueError("unsupported execution evidence receipt version")
+    for field in ("execution_evidence_receipt_id", "execution_evidence_bundle_id", "workspace_id", "workspace_path", "collected_at", "evidence_status", "receipt_hash"):
+        _validate_non_empty_string(receipt[field], field)
+    if receipt["evidence_status"] not in {"complete", "missing_evidence"}:
+        raise ValueError("invalid execution evidence receipt status")
+    for field in ("evidence_file_count", "missing_evidence_count"):
+        if not isinstance(receipt[field], int) or receipt[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    _guarded_patch_workspace_path(receipt["workspace_path"])
+    safety = receipt["safety_metadata"]
+    if not isinstance(safety, dict):
+        raise TypeError("safety_metadata must be a dict")
+    if safety.get("automation_allowed") is not False:
+        raise ValueError("execution evidence receipt must keep automation disabled")
+    if not isinstance(safety.get("writes"), list):
+        raise TypeError("execution evidence receipt writes must be a list")
+    if safety["writes"] != _normalize_implementation_branch_refs(safety["writes"]):
+        raise ValueError("execution evidence receipt writes must be normalized")
+    for ref in safety["writes"]:
+        _guarded_patch_target_path(receipt["workspace_path"], ref)
+    if safety.get("dry_run") is True:
+        if safety.get("write_allowed") is not False or safety["writes"] != []:
+            raise ValueError("dry-run execution evidence receipt must not allow writes")
+    else:
+        if safety.get("dry_run") is not False or safety.get("write_allowed") is not True:
+            raise ValueError("written execution evidence receipt must record workspace-local write allowance")
+        if safety["writes"] != ["execution_evidence_receipt.json"]:
+            raise ValueError("execution evidence receipt writes must contain only the receipt file")
+    if not isinstance(receipt["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    expected_id = make_execution_evidence_receipt_id(
+        receipt["execution_evidence_bundle_id"],
+        receipt["workspace_id"],
+        receipt["evidence_status"],
+        receipt["evidence_file_count"],
+        receipt["missing_evidence_count"],
+        receipt["receipt_hash"],
+    )
+    if receipt["execution_evidence_receipt_id"] != expected_id:
+        raise ValueError("execution evidence receipt id does not match contents")
+    if execution_evidence_bundle is not None:
+        validate_execution_evidence_bundle(execution_evidence_bundle)
+        if receipt["execution_evidence_bundle_id"] != execution_evidence_bundle["execution_evidence_bundle_id"]:
+            raise ValueError("execution evidence receipt bundle mismatch")
+        if receipt["workspace_id"] != execution_evidence_bundle["workspace_id"]:
+            raise ValueError("execution evidence receipt workspace mismatch")
+        if receipt["workspace_path"] != execution_evidence_bundle["workspace_path"]:
+            raise ValueError("execution evidence receipt workspace path mismatch")
+        if receipt["evidence_status"] != execution_evidence_bundle["evidence_status"]:
+            raise ValueError("execution evidence receipt status mismatch")
+        present_files = [ref for ref, item in execution_evidence_bundle["hash_refs"].items() if item["present"]]
+        if receipt["evidence_file_count"] != len(present_files):
+            raise ValueError("execution evidence receipt file count mismatch")
+        if receipt["missing_evidence_count"] != len(execution_evidence_bundle["missing_evidence"]):
+            raise ValueError("execution evidence receipt missing count mismatch")
+        import hashlib
+
+        expected_hash = hashlib.sha256(stable_execution_evidence_bundle_json(execution_evidence_bundle).encode("utf-8")).hexdigest()
+        if receipt["receipt_hash"] != expected_hash:
+            raise ValueError("execution evidence receipt hash mismatch")
+
+
+
+SUPERVISED_EXECUTION_PLAN_VERSION = "link-supervised-execution-plan-v1"
+SUPERVISED_EXECUTION_REQUEST_VERSION = "link-supervised-execution-request-v1"
+SUPERVISED_EXECUTION_RECEIPT_VERSION = "link-supervised-execution-receipt-v1"
+
+
+def make_supervised_execution_plan_id(
+    planning_chain_id: str,
+    execution_package_id: str,
+    workspace_boundary_id: str,
+    patch_applier_boundary_id: str,
+    evidence_contract_id: str,
+    lifecycle_steps: list[dict[str, Any]],
+) -> str:
+    return _execution_readiness_id("supervised-execution-plan", {
+        "evidence_contract_id": evidence_contract_id,
+        "execution_package_id": execution_package_id,
+        "lifecycle_steps": lifecycle_steps,
+        "patch_applier_boundary_id": patch_applier_boundary_id,
+        "planning_chain_id": planning_chain_id,
+        "version": SUPERVISED_EXECUTION_PLAN_VERSION,
+        "workspace_boundary_id": workspace_boundary_id,
+    })
+
+
+def make_supervised_execution_request_id(
+    supervised_execution_plan_id: str,
+    workspace_root: str,
+    verification_commands: list[str],
+    approved: bool,
+    write: bool,
+) -> str:
+    return _execution_readiness_id("supervised-execution-request", {
+        "approved": approved,
+        "supervised_execution_plan_id": supervised_execution_plan_id,
+        "verification_commands": verification_commands,
+        "version": SUPERVISED_EXECUTION_REQUEST_VERSION,
+        "workspace_root": workspace_root,
+        "write": write,
+    })
+
+
+def make_supervised_execution_receipt_id(
+    request_id: str,
+    supervised_execution_plan_id: str,
+    workspace_receipt_id: str,
+    patch_receipt_id: str,
+    verification_receipt_id: str,
+    rollback_receipt_id: str,
+    evidence_bundle_id: str,
+    final_status: str,
+) -> str:
+    return _execution_readiness_id("supervised-execution-receipt", {
+        "evidence_bundle_id": evidence_bundle_id,
+        "final_status": final_status,
+        "patch_receipt_id": patch_receipt_id,
+        "request_id": request_id,
+        "rollback_receipt_id": rollback_receipt_id,
+        "supervised_execution_plan_id": supervised_execution_plan_id,
+        "verification_receipt_id": verification_receipt_id,
+        "version": SUPERVISED_EXECUTION_RECEIPT_VERSION,
+        "workspace_receipt_id": workspace_receipt_id,
+    })
+
+
+def _supervised_execution_lifecycle_steps() -> list[dict[str, Any]]:
+    steps = [
+        ("workspace", "create guarded temporary workspace"),
+        ("patch", "apply verified patch inside guarded workspace"),
+        ("verify", "run allowlisted Python verification inside guarded workspace"),
+        ("rollback_if_needed", "rollback workspace-local changes when verification fails"),
+        ("evidence", "collect workspace-local execution evidence"),
+        ("review_package", "produce supervised execution receipt for human review"),
+    ]
+    return [
+        {
+            "order": index,
+            "stage": stage,
+            "description": description,
+            "stop_on_failure": stage in {"workspace", "patch", "verify", "evidence"},
+        }
+        for index, (stage, description) in enumerate(steps, start=1)
+    ]
+
+
+def collect_supervised_execution_plan(
+    planning_chain: dict[str, Any] | None = None,
+    *,
+    verification_commands: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic supervised execution plan without touching the filesystem."""
+    chain = planning_chain or collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(chain)
+    workspace_boundary = collect_workspace_creator_runtime_boundary(chain)
+    workspace_plan = collect_workspace_creator_runtime_plan(chain)
+    patch_boundary = collect_patch_boundary_preview_from_chain(chain)
+    execution_review = collect_execution_review(chain)
+    commands = [command.strip() for command in (verification_commands or ["python3 -c \"print('link supervised execution preview')\""])]
+    lifecycle_steps = _supervised_execution_lifecycle_steps()
+    evidence_requirements = _normalize_implementation_branch_refs([
+        "workspace_creation_receipt",
+        "guarded_patch_receipt",
+        "guarded_verification_receipt",
+        "execution_evidence_bundle",
+        "execution_evidence_receipt",
+    ])
+    plan = {
+        "supervised_execution_plan_version": SUPERVISED_EXECUTION_PLAN_VERSION,
+        "supervised_execution_plan_id": make_supervised_execution_plan_id(
+            chain["planning_chain_id"],
+            chain["autonomous_execution_package"]["execution_package_id"],
+            workspace_boundary["workspace_boundary_id"],
+            patch_boundary["patch_applier_boundary_id"],
+            chain["execution_evidence_contract"]["execution_evidence_contract_id"],
+            lifecycle_steps,
+        ),
+        "planning_chain_id": chain["planning_chain_id"],
+        "execution_package_id": chain["autonomous_execution_package"]["execution_package_id"],
+        "workspace_boundary_id": workspace_boundary["workspace_boundary_id"],
+        "runtime_workspace_plan_id": workspace_plan["runtime_workspace_plan_id"],
+        "patch_applier_boundary_id": patch_boundary["patch_applier_boundary_id"],
+        "execution_evidence_contract_id": chain["execution_evidence_contract"]["execution_evidence_contract_id"],
+        "execution_retry_policy_id": chain["execution_retry_policy"]["retry_policy_id"],
+        "execution_review_id": execution_review["execution_review_id"],
+        "lifecycle_steps": lifecycle_steps,
+        "verification_commands": commands,
+        "success_criteria": _normalize_patch_behavior_text_list([
+            "workspace receipt created",
+            "patch receipt created",
+            "verification receipt created",
+            "evidence bundle created",
+            "repository files remain unchanged",
+        ]),
+        "failure_criteria": _normalize_patch_behavior_text_list([
+            "boundary validation fails",
+            "explicit approval missing for write execution",
+            "patch application fails",
+            "verification command fails",
+            "workspace path is inside repository root",
+        ]),
+        "rollback_policy": "rollback workspace-local patch changes when verification fails",
+        "evidence_requirements": evidence_requirements,
+        "review_package_requirements": _normalize_implementation_branch_refs([
+            "supervised_execution_receipt",
+            "execution_evidence_bundle",
+            "execution_evidence_receipt",
+        ]),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+        "metadata": dict(metadata or {}),
+    }
+    validate_supervised_execution_plan(plan, chain)
+    return plan
+
+
+def validate_supervised_execution_plan(
+    plan: dict[str, Any],
+    planning_chain: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "supervised_execution_plan_version", "supervised_execution_plan_id", "planning_chain_id",
+        "execution_package_id", "workspace_boundary_id", "runtime_workspace_plan_id",
+        "patch_applier_boundary_id", "execution_evidence_contract_id", "execution_retry_policy_id",
+        "execution_review_id", "lifecycle_steps", "verification_commands", "success_criteria",
+        "failure_criteria", "rollback_policy", "evidence_requirements", "review_package_requirements",
+        "dry_run", "write_allowed", "automation_allowed", "writes", "metadata",
+    )
+    missing = [field for field in required if field not in plan]
+    if missing:
+        raise ValueError(f"supervised execution plan missing fields: {missing}")
+    if plan["supervised_execution_plan_version"] != SUPERVISED_EXECUTION_PLAN_VERSION:
+        raise ValueError("unsupported supervised execution plan version")
+    for field in (
+        "supervised_execution_plan_id", "planning_chain_id", "execution_package_id",
+        "workspace_boundary_id", "runtime_workspace_plan_id", "patch_applier_boundary_id",
+        "execution_evidence_contract_id", "execution_retry_policy_id", "execution_review_id",
+        "rollback_policy",
+    ):
+        _validate_non_empty_string(plan[field], field)
+    steps = plan["lifecycle_steps"]
+    if not isinstance(steps, list) or len(steps) != 6:
+        raise TypeError("lifecycle_steps must contain six ordered stages")
+    expected_stages = ["workspace", "patch", "verify", "rollback_if_needed", "evidence", "review_package"]
+    for index, step in enumerate(steps, start=1):
+        if step.get("order") != index:
+            raise ValueError("supervised execution lifecycle steps must be ordered")
+        if step.get("stage") != expected_stages[index - 1]:
+            raise ValueError("supervised execution lifecycle stage mismatch")
+        _validate_non_empty_string(step.get("description"), "lifecycle step description")
+        if not isinstance(step.get("stop_on_failure"), bool):
+            raise TypeError("lifecycle step stop_on_failure must be boolean")
+    commands = plan["verification_commands"]
+    if not isinstance(commands, list) or not commands:
+        raise TypeError("verification_commands must be a non-empty list")
+    for command in commands:
+        _validate_non_empty_string(command, "verification command")
+        if command != command.strip():
+            raise ValueError("verification commands must be stripped")
+        _guarded_verification_split_command(command)
+    for field in ("success_criteria", "failure_criteria", "evidence_requirements", "review_package_requirements", "writes"):
+        values = plan[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if values != _normalize_implementation_branch_refs(values):
+            raise ValueError(f"{field} must be normalized")
+    if not plan["success_criteria"] or not plan["failure_criteria"] or not plan["evidence_requirements"]:
+        raise ValueError("supervised execution plan criteria and evidence requirements must not be empty")
+    if plan["dry_run"] is not True or plan["write_allowed"] is not False or plan["automation_allowed"] is not False or plan["writes"] != []:
+        raise ValueError("supervised execution plan must be read-only")
+    if not isinstance(plan["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    expected_id = make_supervised_execution_plan_id(
+        plan["planning_chain_id"],
+        plan["execution_package_id"],
+        plan["workspace_boundary_id"],
+        plan["patch_applier_boundary_id"],
+        plan["execution_evidence_contract_id"],
+        steps,
+    )
+    if plan["supervised_execution_plan_id"] != expected_id:
+        raise ValueError("supervised execution plan id does not match contents")
+    if planning_chain is not None:
+        validate_growth_planning_chain_preview(planning_chain)
+        if plan["planning_chain_id"] != planning_chain["planning_chain_id"]:
+            raise ValueError("supervised execution plan planning chain mismatch")
+        if plan["execution_package_id"] != planning_chain["autonomous_execution_package"]["execution_package_id"]:
+            raise ValueError("supervised execution plan execution package mismatch")
+        if plan["execution_evidence_contract_id"] != planning_chain["execution_evidence_contract"]["execution_evidence_contract_id"]:
+            raise ValueError("supervised execution plan evidence contract mismatch")
+
+
+def stable_supervised_execution_plan_json(plan: dict[str, Any]) -> str:
+    validate_supervised_execution_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def parse_supervised_execution_plan_json(text: str) -> dict[str, Any]:
+    plan = json.loads(text)
+    validate_supervised_execution_plan(plan)
+    return plan
+
+
+def make_supervised_execution_request(
+    supervised_execution_plan: dict[str, Any],
+    *,
+    approved: bool = False,
+    write: bool = False,
+    workspace_root: str | None = None,
+    verification_commands: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a supervised execution request without executing runtime actions."""
+    validate_supervised_execution_plan(supervised_execution_plan)
+    root = workspace_root or "/tmp/link-supervised-execution"
+    commands = [command.strip() for command in (verification_commands or supervised_execution_plan["verification_commands"])]
+    request = {
+        "supervised_execution_request_version": SUPERVISED_EXECUTION_REQUEST_VERSION,
+        "request_id": make_supervised_execution_request_id(
+            supervised_execution_plan["supervised_execution_plan_id"],
+            root,
+            commands,
+            approved,
+            write,
+        ),
+        "supervised_execution_plan_id": supervised_execution_plan["supervised_execution_plan_id"],
+        "planning_chain_id": supervised_execution_plan["planning_chain_id"],
+        "execution_package_id": supervised_execution_plan["execution_package_id"],
+        "workspace_root": root,
+        "verification_commands": commands,
+        "approved": approved,
+        "write": write,
+        "dry_run": not write,
+        "metadata": dict(metadata or {}),
+    }
+    validate_supervised_execution_request(request, supervised_execution_plan)
+    return request
+
+
+def validate_supervised_execution_request(
+    request: dict[str, Any],
+    supervised_execution_plan: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "supervised_execution_request_version", "request_id", "supervised_execution_plan_id",
+        "planning_chain_id", "execution_package_id", "workspace_root", "verification_commands",
+        "approved", "write", "dry_run", "metadata",
+    )
+    missing = [field for field in required if field not in request]
+    if missing:
+        raise ValueError(f"supervised execution request missing fields: {missing}")
+    if request["supervised_execution_request_version"] != SUPERVISED_EXECUTION_REQUEST_VERSION:
+        raise ValueError("unsupported supervised execution request version")
+    for field in ("request_id", "supervised_execution_plan_id", "planning_chain_id", "execution_package_id", "workspace_root"):
+        _validate_non_empty_string(request[field], field)
+    _guarded_patch_workspace_path(request["workspace_root"])
+    if not isinstance(request["approved"], bool) or not isinstance(request["write"], bool):
+        raise TypeError("approved and write must be booleans")
+    if request["dry_run"] != (not request["write"]):
+        raise ValueError("supervised execution request dry_run must invert write")
+    if request["write"] and not request["approved"]:
+        raise PermissionError("supervised execution requires explicit approval")
+    commands = request["verification_commands"]
+    if not isinstance(commands, list) or not commands:
+        raise TypeError("verification_commands must be a non-empty list")
+    for command in commands:
+        _validate_non_empty_string(command, "verification command")
+        if command != command.strip():
+            raise ValueError("verification commands must be stripped")
+        _guarded_verification_split_command(command)
+    if not isinstance(request["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    expected_id = make_supervised_execution_request_id(
+        request["supervised_execution_plan_id"],
+        request["workspace_root"],
+        commands,
+        request["approved"],
+        request["write"],
+    )
+    if request["request_id"] != expected_id:
+        raise ValueError("supervised execution request id does not match contents")
+    if supervised_execution_plan is not None:
+        validate_supervised_execution_plan(supervised_execution_plan)
+        if request["supervised_execution_plan_id"] != supervised_execution_plan["supervised_execution_plan_id"]:
+            raise ValueError("supervised execution request plan mismatch")
+        if request["planning_chain_id"] != supervised_execution_plan["planning_chain_id"]:
+            raise ValueError("supervised execution request planning chain mismatch")
+        if request["execution_package_id"] != supervised_execution_plan["execution_package_id"]:
+            raise ValueError("supervised execution request package mismatch")
+
+
+def collect_supervised_execution_receipt(
+    request: dict[str, Any],
+    supervised_execution_plan: dict[str, Any],
+    *,
+    workspace_creation_receipt: dict[str, Any],
+    guarded_patch_receipt: dict[str, Any],
+    guarded_verification_receipt: dict[str, Any],
+    guarded_rollback_receipt: dict[str, Any] | None,
+    execution_evidence_bundle: dict[str, Any],
+    execution_evidence_receipt: dict[str, Any],
+    final_status: str,
+    review_recommendation: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Collect a supervised execution receipt from component receipts."""
+    validate_supervised_execution_request(request, supervised_execution_plan)
+    validate_workspace_creation_receipt(workspace_creation_receipt)
+    validate_guarded_patch_receipt(guarded_patch_receipt)
+    validate_guarded_verification_receipt(guarded_verification_receipt)
+    if guarded_rollback_receipt is not None:
+        validate_guarded_rollback_receipt(guarded_rollback_receipt)
+    validate_execution_evidence_bundle(execution_evidence_bundle)
+    validate_execution_evidence_receipt(execution_evidence_receipt, execution_evidence_bundle)
+    if final_status not in {"preview", "passed", "failed", "rolled_back"}:
+        raise ValueError("invalid supervised execution final_status")
+    _validate_non_empty_string(review_recommendation, "review_recommendation")
+    rollback_id = guarded_rollback_receipt["rollback_receipt_id"] if guarded_rollback_receipt is not None else ""
+    writes = _normalize_implementation_branch_refs([
+        *guarded_patch_receipt["safety_metadata"].get("writes", []),
+        *guarded_verification_receipt["safety_metadata"].get("writes", []),
+        *(guarded_rollback_receipt or {"safety_metadata": {"writes": []}})["safety_metadata"].get("writes", []),
+        *execution_evidence_bundle["safety_metadata"].get("writes", []),
+        *execution_evidence_receipt["safety_metadata"].get("writes", []),
+    ]) if request["write"] else []
+    safety = {
+        "dry_run": not request["write"],
+        "write_allowed": bool(request["write"]),
+        "automation_allowed": False,
+        "writes": writes,
+    }
+    receipt = {
+        "supervised_execution_receipt_version": SUPERVISED_EXECUTION_RECEIPT_VERSION,
+        "supervised_execution_id": make_supervised_execution_receipt_id(
+            request["request_id"],
+            supervised_execution_plan["supervised_execution_plan_id"],
+            workspace_creation_receipt["creation_receipt_id"],
+            guarded_patch_receipt["guarded_patch_receipt_id"],
+            guarded_verification_receipt["verification_receipt_id"],
+            rollback_id,
+            execution_evidence_bundle["execution_evidence_bundle_id"],
+            final_status,
+        ),
+        "request_id": request["request_id"],
+        "supervised_execution_plan_id": supervised_execution_plan["supervised_execution_plan_id"],
+        "planning_chain_id": supervised_execution_plan["planning_chain_id"],
+        "execution_package_id": supervised_execution_plan["execution_package_id"],
+        "workspace_receipt_id": workspace_creation_receipt["creation_receipt_id"],
+        "patch_receipt_id": guarded_patch_receipt["guarded_patch_receipt_id"],
+        "verification_receipt_id": guarded_verification_receipt["verification_receipt_id"],
+        "rollback_receipt_id": rollback_id,
+        "evidence_bundle_id": execution_evidence_bundle["execution_evidence_bundle_id"],
+        "evidence_receipt_id": execution_evidence_receipt["execution_evidence_receipt_id"],
+        "component_receipts": {
+            "workspace": workspace_creation_receipt["creation_receipt_id"],
+            "patch": guarded_patch_receipt["guarded_patch_receipt_id"],
+            "verification": guarded_verification_receipt["verification_receipt_id"],
+            "rollback": rollback_id,
+            "evidence_bundle": execution_evidence_bundle["execution_evidence_bundle_id"],
+            "evidence_receipt": execution_evidence_receipt["execution_evidence_receipt_id"],
+        },
+        "final_status": final_status,
+        "review_recommendation": review_recommendation,
+        "safety_metadata": safety,
+        "metadata": dict(metadata or {}),
+    }
+    validate_supervised_execution_receipt(
+        receipt,
+        request,
+        supervised_execution_plan,
+        workspace_creation_receipt,
+        guarded_patch_receipt,
+        guarded_verification_receipt,
+        guarded_rollback_receipt,
+        execution_evidence_bundle,
+        execution_evidence_receipt,
+    )
+    return receipt
+
+
+def validate_supervised_execution_receipt(
+    receipt: dict[str, Any],
+    request: dict[str, Any] | None = None,
+    supervised_execution_plan: dict[str, Any] | None = None,
+    workspace_creation_receipt: dict[str, Any] | None = None,
+    guarded_patch_receipt: dict[str, Any] | None = None,
+    guarded_verification_receipt: dict[str, Any] | None = None,
+    guarded_rollback_receipt: dict[str, Any] | None = None,
+    execution_evidence_bundle: dict[str, Any] | None = None,
+    execution_evidence_receipt: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "supervised_execution_receipt_version", "supervised_execution_id", "request_id",
+        "supervised_execution_plan_id", "planning_chain_id", "execution_package_id",
+        "workspace_receipt_id", "patch_receipt_id", "verification_receipt_id",
+        "rollback_receipt_id", "evidence_bundle_id", "evidence_receipt_id",
+        "component_receipts", "final_status", "review_recommendation", "safety_metadata", "metadata",
+    )
+    missing = [field for field in required if field not in receipt]
+    if missing:
+        raise ValueError(f"supervised execution receipt missing fields: {missing}")
+    if receipt["supervised_execution_receipt_version"] != SUPERVISED_EXECUTION_RECEIPT_VERSION:
+        raise ValueError("unsupported supervised execution receipt version")
+    for field in (
+        "supervised_execution_id", "request_id", "supervised_execution_plan_id", "planning_chain_id",
+        "execution_package_id", "workspace_receipt_id", "patch_receipt_id", "verification_receipt_id",
+        "evidence_bundle_id", "evidence_receipt_id", "final_status", "review_recommendation",
+    ):
+        _validate_non_empty_string(receipt[field], field)
+    if receipt["final_status"] not in {"preview", "passed", "failed", "rolled_back"}:
+        raise ValueError("invalid supervised execution final_status")
+    if not isinstance(receipt["component_receipts"], dict):
+        raise TypeError("component_receipts must be a dict")
+    for field in ("workspace", "patch", "verification", "rollback", "evidence_bundle", "evidence_receipt"):
+        if field not in receipt["component_receipts"]:
+            raise ValueError(f"component_receipts missing {field}")
+    safety = receipt["safety_metadata"]
+    if not isinstance(safety, dict):
+        raise TypeError("safety_metadata must be a dict")
+    if safety.get("automation_allowed") is not False:
+        raise ValueError("supervised execution must keep automation disabled")
+    if not isinstance(safety.get("writes"), list):
+        raise TypeError("supervised execution writes must be a list")
+    if safety["writes"] != _normalize_implementation_branch_refs(safety["writes"]):
+        raise ValueError("supervised execution writes must be normalized")
+    if safety.get("dry_run") is True:
+        if safety.get("write_allowed") is not False or safety["writes"] != []:
+            raise ValueError("dry-run supervised execution receipt must not allow writes")
+    else:
+        if safety.get("dry_run") is not False or safety.get("write_allowed") is not True:
+            raise ValueError("written supervised execution receipt must record workspace-local write allowance")
+    if not isinstance(receipt["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    expected_id = make_supervised_execution_receipt_id(
+        receipt["request_id"],
+        receipt["supervised_execution_plan_id"],
+        receipt["workspace_receipt_id"],
+        receipt["patch_receipt_id"],
+        receipt["verification_receipt_id"],
+        receipt["rollback_receipt_id"],
+        receipt["evidence_bundle_id"],
+        receipt["final_status"],
+    )
+    if receipt["supervised_execution_id"] != expected_id:
+        raise ValueError("supervised execution receipt id does not match contents")
+    if request is not None:
+        validate_supervised_execution_request(request, supervised_execution_plan)
+        if receipt["request_id"] != request["request_id"]:
+            raise ValueError("supervised execution receipt request mismatch")
+        if request["write"] and receipt["final_status"] == "preview":
+            raise ValueError("write supervised execution cannot produce preview final status")
+        if not request["write"] and receipt["final_status"] != "preview":
+            raise ValueError("dry-run supervised execution must produce preview final status")
+    if supervised_execution_plan is not None:
+        validate_supervised_execution_plan(supervised_execution_plan)
+        if receipt["supervised_execution_plan_id"] != supervised_execution_plan["supervised_execution_plan_id"]:
+            raise ValueError("supervised execution receipt plan mismatch")
+        if receipt["planning_chain_id"] != supervised_execution_plan["planning_chain_id"]:
+            raise ValueError("supervised execution receipt planning chain mismatch")
+    if workspace_creation_receipt is not None:
+        validate_workspace_creation_receipt(workspace_creation_receipt)
+        if receipt["workspace_receipt_id"] != workspace_creation_receipt["creation_receipt_id"]:
+            raise ValueError("supervised execution workspace receipt mismatch")
+    if guarded_patch_receipt is not None:
+        validate_guarded_patch_receipt(guarded_patch_receipt)
+        if receipt["patch_receipt_id"] != guarded_patch_receipt["guarded_patch_receipt_id"]:
+            raise ValueError("supervised execution patch receipt mismatch")
+    if guarded_verification_receipt is not None:
+        validate_guarded_verification_receipt(guarded_verification_receipt)
+        if receipt["verification_receipt_id"] != guarded_verification_receipt["verification_receipt_id"]:
+            raise ValueError("supervised execution verification receipt mismatch")
+    if guarded_rollback_receipt is not None:
+        validate_guarded_rollback_receipt(guarded_rollback_receipt)
+        if receipt["rollback_receipt_id"] != guarded_rollback_receipt["rollback_receipt_id"]:
+            raise ValueError("supervised execution rollback receipt mismatch")
+    if execution_evidence_bundle is not None:
+        validate_execution_evidence_bundle(execution_evidence_bundle)
+        if receipt["evidence_bundle_id"] != execution_evidence_bundle["execution_evidence_bundle_id"]:
+            raise ValueError("supervised execution evidence bundle mismatch")
+    if execution_evidence_receipt is not None:
+        validate_execution_evidence_receipt(execution_evidence_receipt, execution_evidence_bundle)
+        if receipt["evidence_receipt_id"] != execution_evidence_receipt["execution_evidence_receipt_id"]:
+            raise ValueError("supervised execution evidence receipt mismatch")
+
+
+def stable_supervised_execution_receipt_json(receipt: dict[str, Any]) -> str:
+    validate_supervised_execution_receipt(receipt)
+    return _stable_ruflo_json(receipt, indent=2) + "\n"
+
+
+def parse_supervised_execution_receipt_json(text: str) -> dict[str, Any]:
+    receipt = json.loads(text)
+    validate_supervised_execution_receipt(receipt)
+    return receipt
+
+
+def _supervised_execution_receipt_files(workspace_path: str, workspace_receipt: dict[str, Any], patch_receipt: dict[str, Any]) -> None:
+    workspace = _guarded_patch_workspace_path(workspace_path)
+    (workspace / "workspace_creation_receipt.json").write_text(stable_workspace_creation_receipt_json(workspace_receipt), encoding="utf-8")
+    (workspace / "guarded_patch_receipt.json").write_text(_stable_ruflo_json(patch_receipt, indent=2) + "\n", encoding="utf-8")
+
+
+def _collect_preview_verification_receipt(
+    verification_request: dict[str, Any],
+    verification_boundary: dict[str, Any],
+    patch_receipt: dict[str, Any],
+    workspace_receipt: dict[str, Any],
+    evidence_contract: dict[str, Any],
+    retry_policy: dict[str, Any],
+) -> dict[str, Any]:
+    command = verification_request["commands"][0]
+    command_hash = _guarded_verification_command_hash(command)
+    return collect_guarded_verification_receipt(
+        verification_request,
+        verification_boundary,
+        patch_receipt,
+        workspace_receipt["workspace_manifest"],
+        workspace_receipt,
+        evidence_contract,
+        retry_policy,
+        executed_commands=[{
+            "sequence": 1,
+            "command": command,
+            "command_hash": command_hash,
+            "exit_code": 1,
+            "stdout_ref": "verification_evidence/preview.stdout.log",
+            "stderr_ref": "verification_evidence/preview.stderr.log",
+            "evidence_ref": "verification_evidence/preview.evidence.json",
+            "status": "failed",
+        }],
+        receipt_timestamp="preview-only",
+        retry_count=0,
+    )
+
+
+def execute_supervised_execution(
+    request: dict[str, Any],
+    supervised_execution_plan: dict[str, Any],
+    *,
+    planning_chain: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_approval_checklist: dict[str, Any] | None = None,
+    execution_review: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Coordinate guarded runtime components as one fail-closed execution path."""
+    validate_supervised_execution_request(request, supervised_execution_plan)
+    chain = planning_chain or collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(chain)
+    validate_supervised_execution_plan(supervised_execution_plan, chain)
+
+    gate_stack = execution_gate_stack_preview or chain["execution_gate_stack_preview"]
+    approval = execution_approval_checklist or collect_execution_approval_checklist(chain)
+    review = execution_review or collect_execution_review(chain)
+    validate_execution_gate_stack_preview(gate_stack)
+    validate_execution_approval_checklist(approval)
+    validate_execution_review(review)
+    if request["write"]:
+        if approval["approval_status"] != "pass":
+            raise PermissionError("supervised execution requires passing approval checklist")
+        if gate_stack["block_count"]:
+            raise PermissionError("supervised execution blocked by gate stack")
+        if review["approval_summary"]["approval_status"] != "pass":
+            raise PermissionError("supervised execution requires passing execution review approval summary")
+
+    evidence_contract = chain["execution_evidence_contract"]
+    retry_policy = chain["execution_retry_policy"]
+    workspace_boundary = collect_workspace_creator_runtime_boundary(chain)
+    workspace_plan = collect_workspace_creator_runtime_plan(chain)
+    patch_boundary = collect_patch_applier_boundary(
+        chain["verified_patch_plan"],
+        chain["verified_patch_diff"],
+        gate_stack,
+        approval,
+        evidence_contract,
+        workspace_boundary,
+        workspace_plan,
+        planning_chain_id=chain["planning_chain_id"],
+    )
+
+    runtime_plan = dict(workspace_plan)
+    if request["write"]:
+        runtime_plan["plan_status"] = "pass"
+        runtime_plan["recommended_next_action"] = "supervised execution approved for guarded workspace creation"
+    workspace_request = make_guarded_workspace_request(
+        runtime_plan,
+        approved=request["approved"],
+        write=request["write"],
+        workspace_root=request["workspace_root"],
+        metadata={"supervised_execution_request_id": request["request_id"]},
+    )
+    if request["write"]:
+        workspace_receipt = create_guarded_workspace(workspace_request, runtime_plan)
+    else:
+        workspace_receipt = preview_guarded_workspace_creation(workspace_request, runtime_plan)
+
+    patch_request = make_guarded_patch_request(
+        patch_boundary,
+        workspace_receipt,
+        approved=request["approved"],
+        write=request["write"],
+        metadata={"supervised_execution_request_id": request["request_id"]},
+    )
+    if request["write"]:
+        patch_receipt = apply_guarded_patch(
+            patch_request,
+            patch_boundary,
+            chain["verified_patch_plan"],
+            chain["verified_patch_diff"],
+            workspace_receipt,
+            workspace_receipt["workspace_manifest"],
+            approval,
+            gate_stack,
+            evidence_contract,
+        )
+        _supervised_execution_receipt_files(workspace_receipt["workspace_path"], workspace_receipt, patch_receipt)
+    else:
+        patch_receipt = preview_guarded_patch_application(
+            patch_request,
+            patch_boundary,
+            chain["verified_patch_plan"],
+            chain["verified_patch_diff"],
+            workspace_receipt,
+            workspace_receipt["workspace_manifest"],
+            approval,
+            gate_stack,
+            evidence_contract,
+        )
+
+    verification_boundary = collect_verification_runner_boundary(
+        patch_receipt,
+        patch_boundary,
+        evidence_contract,
+        retry_policy,
+        gate_stack,
+        approval,
+        chain["execution_preflight_checklist"],
+        review,
+    )
+    verification_request = make_guarded_verification_request(
+        verification_boundary,
+        commands=request["verification_commands"],
+        approved=request["approved"],
+        write=request["write"],
+        metadata={"supervised_execution_request_id": request["request_id"]},
+    )
+    if request["write"]:
+        verification_receipt = run_guarded_verification(
+            verification_request,
+            verification_boundary,
+            patch_receipt,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+        )
+    else:
+        verification_receipt = _collect_preview_verification_receipt(
+            verification_request,
+            verification_boundary,
+            patch_receipt,
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+        )
+
+    rollback_receipt: dict[str, Any] | None = None
+    if request["write"] and verification_receipt["rollback_triggered"]:
+        rollback_boundary = collect_rollback_runtime_boundary(
+            patch_receipt,
+            verification_receipt,
+            verification_boundary,
+            patch_boundary,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+            gate_stack,
+            review,
+        )
+        rollback_request = make_guarded_rollback_request(
+            rollback_boundary,
+            rollback_reason="verification failed",
+            approved=True,
+            write=True,
+            metadata={"supervised_execution_request_id": request["request_id"]},
+        )
+        rollback_receipt = execute_guarded_rollback(
+            rollback_request,
+            rollback_boundary,
+            patch_receipt,
+            verification_receipt,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+        )
+
+    bundle = collect_execution_evidence_bundle(
+        workspace_receipt,
+        workspace_receipt["workspace_manifest"],
+        patch_receipt,
+        verification_receipt,
+        rollback_receipt,
+        evidence_contract,
+        review,
+        gate_stack,
+        write=request["write"],
+        metadata={"supervised_execution_request_id": request["request_id"]},
+    )
+    evidence_receipt = collect_execution_evidence_receipt(
+        bundle,
+        write=request["write"],
+        collected_at=None if request["write"] else "preview-only",
+        metadata={"supervised_execution_request_id": request["request_id"]},
+    )
+    if not request["write"]:
+        final_status = "preview"
+        recommendation = "review supervised execution plan before --write"
+    elif verification_receipt["verification_result"] == "passed":
+        final_status = "passed"
+        recommendation = "review evidence bundle before workspace cleanup"
+    elif rollback_receipt is not None:
+        final_status = "rolled_back"
+        recommendation = "review rollback evidence before workspace cleanup or abandon"
+    else:
+        final_status = "failed"
+        recommendation = "inspect workspace before cleanup"
+    return collect_supervised_execution_receipt(
+        request,
+        supervised_execution_plan,
+        workspace_creation_receipt=workspace_receipt,
+        guarded_patch_receipt=patch_receipt,
+        guarded_verification_receipt=verification_receipt,
+        guarded_rollback_receipt=rollback_receipt,
+        execution_evidence_bundle=bundle,
+        execution_evidence_receipt=evidence_receipt,
+        final_status=final_status,
+        review_recommendation=recommendation,
+        metadata={"evidence_status": bundle["evidence_status"]},
+    )
 
 def validate_verified_patch_diff_entry(entry: dict[str, Any]) -> None:
     required = (

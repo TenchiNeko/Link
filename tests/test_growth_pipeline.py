@@ -9601,6 +9601,524 @@ def check_guarded_rollback_executor_runtime_component() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62i. Execution evidence collector runtime component
+# ---------------------------------------------------------------------------
+
+def check_execution_evidence_collector_runtime_component() -> None:
+    """execution evidence collector aggregates only workspace-local artifacts."""
+    from link_modes.growth.link_growth_console import (
+        apply_guarded_patch,
+        collect_execution_approval_checklist,
+        collect_execution_evidence_bundle,
+        collect_execution_evidence_receipt,
+        collect_execution_review,
+        collect_growth_planning_chain_preview,
+        collect_patch_applier_boundary,
+        collect_rollback_runtime_boundary,
+        collect_verification_runner_boundary,
+        collect_workspace_creator_runtime_boundary,
+        collect_workspace_creator_runtime_plan,
+        create_guarded_workspace,
+        execute_guarded_rollback,
+        make_execution_approval_checklist_id,
+        make_execution_gate_stack_preview_id,
+        make_guarded_patch_request,
+        make_guarded_rollback_request,
+        make_guarded_verification_request,
+        make_guarded_workspace_request,
+        parse_execution_evidence_bundle_json,
+        run_guarded_verification,
+        stable_execution_evidence_bundle_json,
+        validate_execution_evidence_bundle,
+        validate_execution_evidence_receipt,
+    )
+
+    def pass_gate_stack(gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(gate_stack)
+        gates = []
+        for gate in gate_stack["gates"]:
+            clean_gate = dict(gate)
+            clean_gate["blockers"] = []
+            clean_gate["warnings"] = []
+            clean_gate["pass_status"] = "pass"
+            clean_gate["recommended_next_action"] = "test-only evidence collection approval"
+            gates.append(clean_gate)
+        passed["gates"] = gates
+        passed["pass_count"] = len(gates)
+        passed["review_count"] = 0
+        passed["block_count"] = 0
+        passed["gate_stack_preview_id"] = make_execution_gate_stack_preview_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            gates,
+        )
+        return passed
+
+    def pass_approval(checklist: dict[str, Any], gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(checklist)
+        passed["gate_stack_preview_id"] = gate_stack["gate_stack_preview_id"]
+        passed["approval_blockers"] = []
+        passed["approval_warnings"] = []
+        passed["approval_status"] = "pass"
+        passed["recommended_next_action"] = "test-only explicit approval supplied"
+        passed["approval_checklist_id"] = make_execution_approval_checklist_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            passed["human_approval_package_id"],
+            passed["gate_stack_preview_id"],
+            passed["required_approvals"],
+            passed["approval_blockers"],
+            passed["approval_warnings"],
+        )
+        return passed
+
+    chain = collect_growth_planning_chain_preview()
+    patch_plan = chain["verified_patch_plan"]
+    patch_diff = chain["verified_patch_diff"]
+    gate_stack = pass_gate_stack(chain["execution_gate_stack_preview"])
+    approval = pass_approval(collect_execution_approval_checklist(chain), gate_stack)
+    evidence_contract = chain["execution_evidence_contract"]
+    retry_policy = chain["execution_retry_policy"]
+    execution_review = collect_execution_review(chain)
+    workspace_boundary = collect_workspace_creator_runtime_boundary(chain)
+    workspace_runtime_plan = collect_workspace_creator_runtime_plan(chain)
+    patch_boundary = collect_patch_applier_boundary(
+        patch_plan,
+        patch_diff,
+        gate_stack,
+        approval,
+        evidence_contract,
+        workspace_boundary,
+        workspace_runtime_plan,
+        planning_chain_id=chain["planning_chain_id"],
+    )
+
+    repo_file = ROOT / patch_plan["target_files"][0]
+    repo_before = repo_file.read_bytes() if repo_file.exists() else b""
+    with tempfile.TemporaryDirectory() as temp_root:
+        safe_plan = dict(workspace_runtime_plan)
+        safe_plan["plan_status"] = "pass"
+        safe_plan["recommended_next_action"] = "test-only approved temp workspace creation"
+        workspace_request = make_guarded_workspace_request(
+            safe_plan,
+            approved=True,
+            write=True,
+            workspace_root=temp_root,
+        )
+        workspace_receipt = create_guarded_workspace(workspace_request, safe_plan)
+        workspace_path = Path(workspace_receipt["workspace_path"])
+        first_target = workspace_path / patch_plan["target_files"][0]
+        first_target.parent.mkdir(parents=True, exist_ok=True)
+        first_target.write_text("original workspace content\n", encoding="utf-8")
+        patch_request = make_guarded_patch_request(patch_boundary, workspace_receipt, approved=True, write=True)
+        patch_receipt = apply_guarded_patch(
+            patch_request,
+            patch_boundary,
+            patch_plan,
+            patch_diff,
+            workspace_receipt,
+            workspace_receipt["workspace_manifest"],
+            approval,
+            gate_stack,
+            evidence_contract,
+        )
+        verification_boundary = collect_verification_runner_boundary(
+            patch_receipt,
+            patch_boundary,
+            evidence_contract,
+            retry_policy,
+            gate_stack,
+            approval,
+            chain["execution_preflight_checklist"],
+            execution_review,
+        )
+        verification_request = make_guarded_verification_request(
+            verification_boundary,
+            commands=["python3 -c \"raise SystemExit(2)\""],
+            approved=True,
+            write=True,
+        )
+        verification_receipt = run_guarded_verification(
+            verification_request,
+            verification_boundary,
+            patch_receipt,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+        )
+        rollback_boundary = collect_rollback_runtime_boundary(
+            patch_receipt,
+            verification_receipt,
+            verification_boundary,
+            patch_boundary,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+            gate_stack,
+            execution_review,
+        )
+        rollback_request = make_guarded_rollback_request(
+            rollback_boundary,
+            rollback_reason="verification failed",
+            approved=True,
+            write=True,
+        )
+        rollback_receipt = execute_guarded_rollback(
+            rollback_request,
+            rollback_boundary,
+            patch_receipt,
+            verification_receipt,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+        )
+        bundle = collect_execution_evidence_bundle(
+            workspace_receipt,
+            workspace_receipt["workspace_manifest"],
+            patch_receipt,
+            verification_receipt,
+            rollback_receipt,
+            evidence_contract,
+            execution_review,
+            gate_stack,
+            write=True,
+            metadata={"suite": "growth"},
+        )
+        validate_execution_evidence_bundle(
+            bundle,
+            workspace_receipt,
+            patch_receipt,
+            verification_receipt,
+            rollback_receipt,
+            evidence_contract,
+            execution_review,
+            gate_stack,
+        )
+        decoded = parse_execution_evidence_bundle_json(stable_execution_evidence_bundle_json(bundle))
+        _require(decoded == bundle, "execution evidence bundle JSON must round trip")
+        _require((workspace_path / "execution_evidence_bundle.json").exists(),
+                 "evidence collector must write workspace-local bundle")
+        _require(bundle["workspace_id"] == workspace_receipt["workspace_id"],
+                 "evidence bundle must preserve workspace id")
+        _require(bundle["workspace_path"] == workspace_receipt["workspace_path"],
+                 "evidence bundle must preserve workspace path")
+        _require("guarded_patch_receipt.json" in bundle["patch_receipt_refs"],
+                 "evidence bundle must reference patch receipt")
+        _require("guarded_verification_receipt.json" in bundle["verification_receipt_refs"],
+                 "evidence bundle must reference verification receipt")
+        _require("guarded_rollback_receipt.json" in bundle["rollback_receipt_refs"],
+                 "evidence bundle must reference rollback receipt")
+        _require(bundle["log_refs"] == sorted(bundle["log_refs"]),
+                 "evidence bundle log refs must be deterministic")
+        _require(bundle["missing_evidence"],
+                 "evidence bundle must detect missing verification evidence after rollback cleanup")
+        _require(bundle["evidence_status"] == "missing_evidence",
+                 "evidence bundle status must reflect missing evidence")
+        _require(bundle["hash_refs"]["guarded_patch_receipt.json"]["present"] is True,
+                 "evidence bundle must hash existing patch receipt")
+        _require(bundle["hash_refs"]["guarded_rollback_receipt.json"]["present"] is True,
+                 "evidence bundle must hash existing rollback receipt")
+        _require(bundle["hash_refs"]["guarded_verification_receipt.json"]["present"] is False,
+                 "evidence bundle must mark removed verification receipt missing")
+        _require(bundle["safety_metadata"]["writes"] == ["execution_evidence_bundle.json"],
+                 "evidence bundle writes must be limited to bundle file")
+        receipt = collect_execution_evidence_receipt(bundle, write=True)
+        validate_execution_evidence_receipt(receipt, bundle)
+        _require((workspace_path / "execution_evidence_receipt.json").exists(),
+                 "evidence collector must write workspace-local receipt")
+        _require(receipt["execution_evidence_bundle_id"] == bundle["execution_evidence_bundle_id"],
+                 "evidence receipt must reference bundle")
+        _require(receipt["missing_evidence_count"] == len(bundle["missing_evidence"]),
+                 "evidence receipt must count missing evidence")
+        _require(receipt["evidence_file_count"] >= 3,
+                 "evidence receipt must count hashed workspace-local files")
+        _require(receipt["safety_metadata"]["writes"] == ["execution_evidence_receipt.json"],
+                 "evidence receipt writes must be limited to receipt file")
+
+        bad_bundle = dict(bundle)
+        bad_bundle.pop("execution_evidence_bundle_id")
+        try:
+            validate_execution_evidence_bundle(bad_bundle)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("evidence bundle validation must reject missing id")
+
+        bad_receipt = dict(receipt)
+        bad_receipt["receipt_hash"] = "wrong"
+        try:
+            validate_execution_evidence_receipt(bad_receipt, bundle)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("evidence receipt validation must reject invalid hash")
+
+        bad_workspace = dict(bundle)
+        bad_workspace["workspace_path"] = str(ROOT)
+        try:
+            validate_execution_evidence_bundle(bad_workspace)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("evidence bundle validation must reject repo workspace path")
+
+    _require(repo_file.read_bytes() == repo_before if repo_file.exists() else repo_before == b"",
+             "evidence collector tests must leave repo file unchanged")
+    print("execution evidence collector runtime component OK")
+
+
+# ---------------------------------------------------------------------------
+# 62j. Growth evidence-collect CLI
+# ---------------------------------------------------------------------------
+
+def check_growth_evidence_collect_cli() -> None:
+    """evidence-collect exposes only the execution evidence bundle."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        apply_guarded_patch,
+        collect_evidence_collect_preview_from_chain,
+        collect_execution_approval_checklist,
+        collect_execution_review,
+        collect_growth_planning_chain_preview,
+        collect_patch_applier_boundary,
+        collect_verification_runner_boundary,
+        collect_workspace_creator_runtime_boundary,
+        collect_workspace_creator_runtime_plan,
+        create_guarded_workspace,
+        evidence_collect_main,
+        make_execution_approval_checklist_id,
+        make_execution_gate_stack_preview_id,
+        make_guarded_patch_request,
+        make_guarded_verification_request,
+        make_guarded_workspace_request,
+        parse_execution_evidence_bundle_json,
+        run_guarded_verification,
+        validate_execution_evidence_bundle,
+    )
+
+    def pass_gate_stack(gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(gate_stack)
+        gates = []
+        for gate in gate_stack["gates"]:
+            clean_gate = dict(gate)
+            clean_gate["blockers"] = []
+            clean_gate["warnings"] = []
+            clean_gate["pass_status"] = "pass"
+            clean_gate["recommended_next_action"] = "test-only evidence CLI approval"
+            gates.append(clean_gate)
+        passed["gates"] = gates
+        passed["pass_count"] = len(gates)
+        passed["review_count"] = 0
+        passed["block_count"] = 0
+        passed["gate_stack_preview_id"] = make_execution_gate_stack_preview_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            gates,
+        )
+        return passed
+
+    def pass_approval(checklist: dict[str, Any], gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(checklist)
+        passed["gate_stack_preview_id"] = gate_stack["gate_stack_preview_id"]
+        passed["approval_blockers"] = []
+        passed["approval_warnings"] = []
+        passed["approval_status"] = "pass"
+        passed["recommended_next_action"] = "test-only explicit approval supplied"
+        passed["approval_checklist_id"] = make_execution_approval_checklist_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            passed["human_approval_package_id"],
+            passed["gate_stack_preview_id"],
+            passed["required_approvals"],
+            passed["approval_blockers"],
+            passed["approval_warnings"],
+        )
+        return passed
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("evidence-collect" in help_out.getvalue(),
+             "growth help must include evidence-collect")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = evidence_collect_main(["--json"])
+    _require(json_rc == 0, "evidence-collect --json preview must return 0")
+    parsed = parse_execution_evidence_bundle_json(json_out.getvalue())
+    validate_execution_evidence_bundle(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected, _ = collect_evidence_collect_preview_from_chain(chain)
+    _require(parsed["execution_evidence_bundle_id"] == expected["execution_evidence_bundle_id"],
+             "evidence-collect bundle id must be deterministic")
+    _require(parsed["safety_metadata"]["dry_run"] is True,
+             "evidence-collect preview must be dry run")
+    _require(parsed["safety_metadata"]["write_allowed"] is False,
+             "evidence-collect preview must not allow writes")
+    _require(parsed["safety_metadata"]["writes"] == [],
+             "evidence-collect preview must not write")
+    for field in (
+        "evidence_file_count",
+        "missing_evidence_count",
+        "workspace_receipt_count",
+        "patch_receipt_count",
+        "verification_receipt_count",
+        "rollback_receipt_count",
+        "recommended_next_action",
+    ):
+        _require(field in parsed, f"evidence-collect JSON must include {field}")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_gate_stack_preview",
+        "execution_review",
+        "execution_evidence_contract",
+    ):
+        _require(full_chain_key not in parsed,
+                 "evidence-collect --json must output only evidence bundle payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["evidence-collect", "--json"])
+    routed = parse_execution_evidence_bundle_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth evidence-collect --json route must return 0")
+    _require(routed["execution_evidence_bundle_id"] == parsed["execution_evidence_bundle_id"],
+             "growth evidence-collect route must preserve deterministic bundle id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = evidence_collect_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "evidence-collect human mode must return 0")
+    for needle in (
+        "Growth evidence collect",
+        "execution_evidence_bundle_id:",
+        "evidence_status:",
+        "evidence_file_count:",
+        "missing_evidence_count:",
+        "workspace_receipt_count:",
+        "patch_receipt_count:",
+        "verification_receipt_count:",
+        "rollback_receipt_count:",
+        "next_action:",
+    ):
+        _require(needle in human, f"evidence-collect human mode must include {needle}")
+    _require(len(human.splitlines()) <= 10,
+             "evidence-collect human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = evidence_collect_main(["--write", "--json"])
+    _require(write_rc != 0, "evidence-collect --write without workspace must fail")
+    _require("--write requires --workspace-path and --workspace-id" in write_err.getvalue(),
+             "evidence-collect --write must explain required workspace args")
+
+    patch_plan = chain["verified_patch_plan"]
+    patch_diff = chain["verified_patch_diff"]
+    gate_stack = pass_gate_stack(chain["execution_gate_stack_preview"])
+    approval = pass_approval(collect_execution_approval_checklist(chain), gate_stack)
+    evidence_contract = chain["execution_evidence_contract"]
+    retry_policy = chain["execution_retry_policy"]
+    execution_review = collect_execution_review(chain)
+    workspace_boundary = collect_workspace_creator_runtime_boundary(chain)
+    workspace_runtime_plan = collect_workspace_creator_runtime_plan(chain)
+    patch_boundary = collect_patch_applier_boundary(
+        patch_plan,
+        patch_diff,
+        gate_stack,
+        approval,
+        evidence_contract,
+        workspace_boundary,
+        workspace_runtime_plan,
+        planning_chain_id=chain["planning_chain_id"],
+    )
+    repo_file = ROOT / patch_plan["target_files"][0]
+    repo_before = repo_file.read_bytes() if repo_file.exists() else b""
+    with tempfile.TemporaryDirectory() as temp_root:
+        safe_plan = dict(workspace_runtime_plan)
+        safe_plan["plan_status"] = "pass"
+        safe_plan["recommended_next_action"] = "test-only approved temp workspace creation"
+        workspace_request = make_guarded_workspace_request(
+            safe_plan,
+            approved=True,
+            write=True,
+            workspace_root=temp_root,
+        )
+        workspace_receipt = create_guarded_workspace(workspace_request, safe_plan)
+        workspace_path = Path(workspace_receipt["workspace_path"])
+        first_target = workspace_path / patch_plan["target_files"][0]
+        first_target.parent.mkdir(parents=True, exist_ok=True)
+        first_target.write_text("original workspace content\n", encoding="utf-8")
+        patch_request = make_guarded_patch_request(patch_boundary, workspace_receipt, approved=True, write=True)
+        patch_receipt = apply_guarded_patch(
+            patch_request,
+            patch_boundary,
+            patch_plan,
+            patch_diff,
+            workspace_receipt,
+            workspace_receipt["workspace_manifest"],
+            approval,
+            gate_stack,
+            evidence_contract,
+        )
+        verification_boundary = collect_verification_runner_boundary(
+            patch_receipt,
+            patch_boundary,
+            evidence_contract,
+            retry_policy,
+            gate_stack,
+            approval,
+            chain["execution_preflight_checklist"],
+            execution_review,
+        )
+        verification_request = make_guarded_verification_request(
+            verification_boundary,
+            commands=["python3 -c \"print('evidence cli ok')\""],
+            approved=True,
+            write=True,
+        )
+        run_guarded_verification(
+            verification_request,
+            verification_boundary,
+            patch_receipt,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+        )
+        write_json_out = io.StringIO()
+        with contextlib.redirect_stdout(write_json_out):
+            write_json_rc = evidence_collect_main([
+                "--write",
+                "--workspace-path", str(workspace_path),
+                "--workspace-id", workspace_receipt["workspace_id"],
+                "--json",
+            ])
+        _require(write_json_rc == 0, "evidence-collect --write --json must return 0 for guarded workspace")
+        written = parse_execution_evidence_bundle_json(write_json_out.getvalue())
+        validate_execution_evidence_bundle(written)
+        _require(written["safety_metadata"]["dry_run"] is False,
+                 "evidence-collect write bundle must not be dry run")
+        _require(written["safety_metadata"]["write_allowed"] is True,
+                 "evidence-collect write bundle must record write allowance")
+        _require(written["safety_metadata"]["writes"] == ["execution_evidence_bundle.json"],
+                 "evidence-collect write must be limited to bundle file")
+        _require((workspace_path / "execution_evidence_bundle.json").exists(),
+                 "evidence-collect write must create workspace-local bundle")
+        _require((workspace_path / "execution_evidence_receipt.json").exists(),
+                 "evidence-collect write must create workspace-local receipt")
+        _require(written["evidence_file_count"] >= 4,
+                 "evidence-collect write must count workspace-local evidence files")
+        _require(repo_file.read_bytes() == repo_before if repo_file.exists() else repo_before == b"",
+                 "evidence-collect write must not modify repo target file")
+
+    print("growth evidence-collect CLI OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Guarded workspace cleanup / abandon lifecycle
 # ---------------------------------------------------------------------------
 
@@ -11442,6 +11960,197 @@ def check_fork_lineage_with_content_replacements() -> None:
     print("fork lineage with content replacements OK")
 
 
+
+# ---------------------------------------------------------------------------
+# 62k. Supervised execution orchestrator runtime component
+# ---------------------------------------------------------------------------
+
+def check_supervised_execution_orchestrator_runtime_component() -> None:
+    """supervised execution coordinates guarded runtimes without repo mutation."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_approval_checklist,
+        collect_execution_review,
+        collect_growth_planning_chain_preview,
+        collect_supervised_execution_plan,
+        execute_supervised_execution,
+        make_execution_approval_checklist_id,
+        make_execution_gate_stack_preview_id,
+        make_execution_review_id,
+        make_supervised_execution_request,
+        parse_supervised_execution_plan_json,
+        parse_supervised_execution_receipt_json,
+        stable_supervised_execution_plan_json,
+        stable_supervised_execution_receipt_json,
+        validate_supervised_execution_plan,
+        validate_supervised_execution_receipt,
+        validate_supervised_execution_request,
+    )
+
+    def pass_gate_stack(gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(gate_stack)
+        gates = []
+        for gate in gate_stack["gates"]:
+            clean_gate = dict(gate)
+            clean_gate["blockers"] = []
+            clean_gate["warnings"] = []
+            clean_gate["pass_status"] = "pass"
+            clean_gate["recommended_next_action"] = "test-only supervised execution approval"
+            gates.append(clean_gate)
+        passed["gates"] = gates
+        passed["pass_count"] = len(gates)
+        passed["review_count"] = 0
+        passed["block_count"] = 0
+        passed["gate_stack_preview_id"] = make_execution_gate_stack_preview_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            gates,
+        )
+        return passed
+
+    def pass_approval(checklist: dict[str, Any], gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(checklist)
+        passed["gate_stack_preview_id"] = gate_stack["gate_stack_preview_id"]
+        passed["approval_blockers"] = []
+        passed["approval_warnings"] = []
+        passed["approval_status"] = "pass"
+        passed["recommended_next_action"] = "test-only explicit approval supplied"
+        passed["approval_checklist_id"] = make_execution_approval_checklist_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            passed["human_approval_package_id"],
+            passed["gate_stack_preview_id"],
+            passed["required_approvals"],
+            passed["approval_blockers"],
+            passed["approval_warnings"],
+        )
+        return passed
+
+    def pass_review(review: dict[str, Any], gate_stack: dict[str, Any], approval: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(review)
+        passed["gate_stack_preview_id"] = gate_stack["gate_stack_preview_id"]
+        passed["approval_checklist_id"] = approval["approval_checklist_id"]
+        passed["readiness_summary"] = dict(review["readiness_summary"])
+        passed["readiness_summary"]["readiness_status"] = "ready_for_review"
+        passed["readiness_summary"]["preflight_status"] = "pass"
+        passed["readiness_summary"]["quality_gate_status"] = "pass"
+        passed["gate_summary"] = {
+            "gate_count": gate_stack["gate_count"],
+            "pass_count": gate_stack["pass_count"],
+            "review_count": gate_stack["review_count"],
+            "block_count": gate_stack["block_count"],
+        }
+        passed["approval_summary"] = dict(review["approval_summary"])
+        passed["approval_summary"]["approval_status"] = "pass"
+        passed["approval_summary"]["required_approval_count"] = len(approval["required_approvals"])
+        passed["blocker_summary"] = {"blocker_count": 0, "top_blockers": []}
+        passed["warning_summary"] = {"warning_count": 0, "top_warnings": []}
+        passed["recommended_next_action"] = "test-only supervised execution review approval"
+        passed["execution_review_id"] = make_execution_review_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            passed["dashboard_summary_id"],
+            passed["gate_stack_preview_id"],
+            passed["approval_checklist_id"],
+        )
+        return passed
+
+    chain = collect_growth_planning_chain_preview()
+    plan = collect_supervised_execution_plan(chain)
+    validate_supervised_execution_plan(plan, chain)
+    decoded_plan = parse_supervised_execution_plan_json(stable_supervised_execution_plan_json(plan))
+    _require(decoded_plan == plan, "supervised execution plan JSON must round trip")
+    _require(plan["supervised_execution_plan_id"] == collect_supervised_execution_plan(chain)["supervised_execution_plan_id"],
+             "supervised execution plan id must be deterministic")
+    _require([step["stage"] for step in plan["lifecycle_steps"]] == [
+        "workspace", "patch", "verify", "rollback_if_needed", "evidence", "review_package",
+    ], "supervised execution plan must preserve lifecycle order")
+    _require(plan["dry_run"] is True and plan["write_allowed"] is False and plan["writes"] == [],
+             "supervised execution plan must be read-only")
+
+    preview_request = make_supervised_execution_request(plan, approved=False, write=False)
+    validate_supervised_execution_request(preview_request, plan)
+    preview_receipt = execute_supervised_execution(preview_request, plan, planning_chain=chain)
+    validate_supervised_execution_receipt(preview_receipt, preview_request, plan)
+    _require(preview_receipt["final_status"] == "preview",
+             "dry-run supervised execution must return preview status")
+    _require(preview_receipt["safety_metadata"]["writes"] == [],
+             "dry-run supervised execution must not write")
+    decoded_receipt = parse_supervised_execution_receipt_json(stable_supervised_execution_receipt_json(preview_receipt))
+    _require(decoded_receipt == preview_receipt,
+             "supervised execution receipt JSON must round trip")
+
+    try:
+        make_supervised_execution_request(plan, approved=False, write=True)
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("supervised execution write request must require approval")
+
+    patch_plan = chain["verified_patch_plan"]
+    repo_file = ROOT / patch_plan["target_files"][0]
+    repo_before = repo_file.read_bytes() if repo_file.exists() else b""
+    gate_stack = pass_gate_stack(chain["execution_gate_stack_preview"])
+    approval = pass_approval(collect_execution_approval_checklist(chain), gate_stack)
+    review = pass_review(collect_execution_review(chain), gate_stack, approval)
+
+    with tempfile.TemporaryDirectory() as temp_root:
+        success_request = make_supervised_execution_request(
+            plan,
+            approved=True,
+            write=True,
+            workspace_root=temp_root,
+            verification_commands=["python3 -c \"print('supervised ok')\""],
+        )
+        success_receipt = execute_supervised_execution(
+            success_request,
+            plan,
+            planning_chain=chain,
+            execution_gate_stack_preview=gate_stack,
+            execution_approval_checklist=approval,
+            execution_review=review,
+        )
+        validate_supervised_execution_receipt(success_receipt, success_request, plan)
+        _require(success_receipt["final_status"] == "passed",
+                 "supervised execution must pass when verification passes")
+        _require(success_receipt["rollback_receipt_id"] == "",
+                 "successful supervised execution must not rollback")
+        _require(success_receipt["evidence_bundle_id"],
+                 "supervised execution must aggregate evidence")
+        _require(success_receipt["safety_metadata"]["write_allowed"] is True,
+                 "write supervised execution must record workspace-local write allowance")
+        _require("execution_evidence_bundle.json" in success_receipt["safety_metadata"]["writes"],
+                 "supervised execution must include evidence bundle write")
+
+    with tempfile.TemporaryDirectory() as temp_root:
+        fail_request = make_supervised_execution_request(
+            plan,
+            approved=True,
+            write=True,
+            workspace_root=temp_root,
+            verification_commands=["python3 -c \"raise SystemExit(2)\""],
+        )
+        fail_receipt = execute_supervised_execution(
+            fail_request,
+            plan,
+            planning_chain=chain,
+            execution_gate_stack_preview=gate_stack,
+            execution_approval_checklist=approval,
+            execution_review=review,
+        )
+        validate_supervised_execution_receipt(fail_receipt, fail_request, plan)
+        _require(fail_receipt["final_status"] == "rolled_back",
+                 "supervised execution must rollback failed verification")
+        _require(fail_receipt["rollback_receipt_id"],
+                 "rollback path must include rollback receipt id")
+        _require("guarded_rollback_receipt.json" in fail_receipt["safety_metadata"]["writes"],
+                 "rollback path must record rollback receipt write")
+        _require(fail_receipt["metadata"]["evidence_status"] in {"complete", "missing_evidence"},
+                 "supervised execution must expose evidence status")
+
+    _require(repo_file.read_bytes() == repo_before if repo_file.exists() else repo_before == b"",
+             "supervised execution tests must leave repo file unchanged")
+    print("supervised execution orchestrator runtime component OK")
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -11537,6 +12246,9 @@ def main() -> None:
     check_rollback_runtime_boundary_helper()
     check_growth_rollback_boundary_cli()
     check_guarded_rollback_executor_runtime_component()
+    check_execution_evidence_collector_runtime_component()
+    check_growth_evidence_collect_cli()
+    check_supervised_execution_orchestrator_runtime_component()
     check_guarded_workspace_lifecycle_cleanup_abandon()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()
