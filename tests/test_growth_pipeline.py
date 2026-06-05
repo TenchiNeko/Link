@@ -9337,6 +9337,270 @@ def check_growth_rollback_boundary_cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62h. Guarded rollback executor runtime component
+# ---------------------------------------------------------------------------
+
+def check_guarded_rollback_executor_runtime_component() -> None:
+    """guarded rollback restores only workspace-local patch and verification changes."""
+    from link_modes.growth.link_growth_console import (
+        apply_guarded_patch,
+        collect_execution_approval_checklist,
+        collect_execution_review,
+        collect_growth_planning_chain_preview,
+        collect_patch_applier_boundary,
+        collect_rollback_runtime_boundary,
+        collect_verification_runner_boundary,
+        collect_workspace_creator_runtime_boundary,
+        collect_workspace_creator_runtime_plan,
+        create_guarded_workspace,
+        execute_guarded_rollback,
+        make_execution_approval_checklist_id,
+        make_execution_gate_stack_preview_id,
+        make_guarded_patch_request,
+        make_guarded_rollback_request,
+        make_guarded_verification_request,
+        make_guarded_workspace_request,
+        run_guarded_verification,
+        validate_guarded_rollback_receipt,
+        validate_guarded_rollback_request,
+        validate_rollback_runtime_boundary,
+    )
+
+    def pass_gate_stack(gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(gate_stack)
+        gates = []
+        for gate in gate_stack["gates"]:
+            clean_gate = dict(gate)
+            clean_gate["blockers"] = []
+            clean_gate["warnings"] = []
+            clean_gate["pass_status"] = "pass"
+            clean_gate["recommended_next_action"] = "test-only rollback runtime approval"
+            gates.append(clean_gate)
+        passed["gates"] = gates
+        passed["pass_count"] = len(gates)
+        passed["review_count"] = 0
+        passed["block_count"] = 0
+        passed["gate_stack_preview_id"] = make_execution_gate_stack_preview_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            gates,
+        )
+        return passed
+
+    def pass_approval(checklist: dict[str, Any], gate_stack: dict[str, Any]) -> dict[str, Any]:
+        passed = dict(checklist)
+        passed["gate_stack_preview_id"] = gate_stack["gate_stack_preview_id"]
+        passed["approval_blockers"] = []
+        passed["approval_warnings"] = []
+        passed["approval_status"] = "pass"
+        passed["recommended_next_action"] = "test-only explicit approval supplied"
+        passed["approval_checklist_id"] = make_execution_approval_checklist_id(
+            passed["planning_chain_id"],
+            passed["execution_package_id"],
+            passed["human_approval_package_id"],
+            passed["gate_stack_preview_id"],
+            passed["required_approvals"],
+            passed["approval_blockers"],
+            passed["approval_warnings"],
+        )
+        return passed
+
+    chain = collect_growth_planning_chain_preview()
+    patch_plan = chain["verified_patch_plan"]
+    patch_diff = chain["verified_patch_diff"]
+    gate_stack = pass_gate_stack(chain["execution_gate_stack_preview"])
+    approval = pass_approval(collect_execution_approval_checklist(chain), gate_stack)
+    evidence_contract = chain["execution_evidence_contract"]
+    retry_policy = chain["execution_retry_policy"]
+    execution_review = collect_execution_review(chain)
+    workspace_boundary = collect_workspace_creator_runtime_boundary(chain)
+    workspace_runtime_plan = collect_workspace_creator_runtime_plan(chain)
+    patch_boundary = collect_patch_applier_boundary(
+        patch_plan,
+        patch_diff,
+        gate_stack,
+        approval,
+        evidence_contract,
+        workspace_boundary,
+        workspace_runtime_plan,
+        planning_chain_id=chain["planning_chain_id"],
+    )
+
+    repo_file = ROOT / patch_plan["target_files"][0]
+    repo_before = repo_file.read_bytes() if repo_file.exists() else b""
+    with tempfile.TemporaryDirectory() as temp_root:
+        safe_plan = dict(workspace_runtime_plan)
+        safe_plan["plan_status"] = "pass"
+        safe_plan["recommended_next_action"] = "test-only approved temp workspace creation"
+        workspace_request = make_guarded_workspace_request(
+            safe_plan,
+            approved=True,
+            write=True,
+            workspace_root=temp_root,
+        )
+        workspace_receipt = create_guarded_workspace(workspace_request, safe_plan)
+        workspace_path = Path(workspace_receipt["workspace_path"])
+        first_target_ref = patch_plan["target_files"][0]
+        first_target = workspace_path / first_target_ref
+        first_target.parent.mkdir(parents=True, exist_ok=True)
+        original_content = "original workspace content\n"
+        first_target.write_text(original_content, encoding="utf-8")
+
+        patch_request = make_guarded_patch_request(patch_boundary, workspace_receipt, approved=True, write=True)
+        patch_receipt = apply_guarded_patch(
+            patch_request,
+            patch_boundary,
+            patch_plan,
+            patch_diff,
+            workspace_receipt,
+            workspace_receipt["workspace_manifest"],
+            approval,
+            gate_stack,
+            evidence_contract,
+        )
+        _require("Link guarded patch operation" in first_target.read_text(encoding="utf-8"),
+                 "rollback setup must apply workspace-local patch")
+        verification_boundary = collect_verification_runner_boundary(
+            patch_receipt,
+            patch_boundary,
+            evidence_contract,
+            retry_policy,
+            gate_stack,
+            approval,
+            chain["execution_preflight_checklist"],
+            execution_review,
+        )
+        verification_request = make_guarded_verification_request(
+            verification_boundary,
+            commands=["python3 -c \"raise SystemExit(2)\""],
+            approved=True,
+            write=True,
+        )
+        verification_receipt = run_guarded_verification(
+            verification_request,
+            verification_boundary,
+            patch_receipt,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+        )
+        _require(verification_receipt["rollback_triggered"] is True,
+                 "rollback setup must produce rollback-triggered verification receipt")
+        evidence_paths = [workspace_path / ref for ref in verification_receipt["evidence_refs"]]
+        _require(all(path.exists() for path in evidence_paths),
+                 "rollback setup must write verification evidence")
+
+        rollback_boundary = collect_rollback_runtime_boundary(
+            patch_receipt,
+            verification_receipt,
+            verification_boundary,
+            patch_boundary,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+            evidence_contract,
+            retry_policy,
+            gate_stack,
+            execution_review,
+        )
+        request = make_guarded_rollback_request(
+            rollback_boundary,
+            rollback_reason="verification failed",
+            approved=True,
+            write=True,
+        )
+        validate_guarded_rollback_request(request, rollback_boundary)
+        receipt = execute_guarded_rollback(
+            request,
+            rollback_boundary,
+            patch_receipt,
+            verification_receipt,
+            workspace_receipt["workspace_manifest"],
+            workspace_receipt,
+        )
+        validate_guarded_rollback_receipt(
+            receipt,
+            request,
+            rollback_boundary,
+            patch_receipt,
+            verification_receipt,
+            workspace_receipt,
+        )
+        _require(receipt["rollback_result"] == "rolled_back",
+                 "guarded rollback must return rolled_back receipt")
+        _require(first_target.read_text(encoding="utf-8") == original_content,
+                 "guarded rollback must restore original workspace file content")
+        _require(receipt["after_hashes"][first_target_ref] == patch_receipt["before_file_hashes"][first_target_ref],
+                 "guarded rollback must restore before hash")
+        _require(first_target_ref in receipt["restored_files"],
+                 "guarded rollback receipt must list restored target file")
+        _require(receipt["removed_files"], "guarded rollback receipt must list removed verification artifacts")
+        _require(all(not path.exists() for path in evidence_paths),
+                 "guarded rollback must remove failed verification evidence")
+        _require((workspace_path / "guarded_rollback_receipt.json").exists(),
+                 "guarded rollback must write workspace-local receipt")
+        _require((workspace_path / "rollback_evidence" / "rollback_evidence.json").exists(),
+                 "guarded rollback must write workspace-local rollback evidence")
+        _require((workspace_path / "workspace_abandoned.json").exists(),
+                 "guarded rollback must mark workspace abandoned")
+        _require(receipt["safety_metadata"]["dry_run"] is False,
+                 "guarded rollback receipt must not be dry run")
+        _require(receipt["safety_metadata"]["write_allowed"] is True,
+                 "guarded rollback receipt must record workspace-local write allowance")
+        _require(receipt["safety_metadata"]["automation_allowed"] is False,
+                 "guarded rollback must keep automation disabled")
+        for required_write in (
+            "guarded_rollback_receipt.json",
+            "rollback_evidence/rollback_evidence.json",
+            "workspace_abandoned.json",
+        ):
+            _require(required_write in receipt["safety_metadata"]["writes"],
+                     f"guarded rollback writes must include {required_write}")
+
+        no_write_request = make_guarded_rollback_request(
+            rollback_boundary,
+            rollback_reason="verification failed",
+            approved=False,
+            write=False,
+        )
+        try:
+            execute_guarded_rollback(
+                no_write_request,
+                rollback_boundary,
+                patch_receipt,
+                verification_receipt,
+                workspace_receipt["workspace_manifest"],
+                workspace_receipt,
+            )
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("guarded rollback runtime must require --write")
+
+        bad_request = dict(request)
+        bad_request["workspace_path"] = str(ROOT)
+        try:
+            validate_guarded_rollback_request(bad_request)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("guarded rollback request must reject repo workspace path")
+
+        bad_boundary = dict(rollback_boundary)
+        bad_boundary["allowed_rollback_targets"] = ["../escape.py"]
+        try:
+            validate_rollback_runtime_boundary(bad_boundary)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("rollback runtime boundary must reject forbidden rollback target path")
+
+    _require(repo_file.read_bytes() == repo_before if repo_file.exists() else repo_before == b"",
+             "guarded rollback tests must leave repo file unchanged")
+    print("guarded rollback executor runtime component OK")
+
+
+# ---------------------------------------------------------------------------
 # 62. Guarded workspace cleanup / abandon lifecycle
 # ---------------------------------------------------------------------------
 
@@ -11272,6 +11536,7 @@ def main() -> None:
     check_guarded_verification_runner_runtime_component()
     check_rollback_runtime_boundary_helper()
     check_growth_rollback_boundary_cli()
+    check_guarded_rollback_executor_runtime_component()
     check_guarded_workspace_lifecycle_cleanup_abandon()
     check_planning_chain_review_bundle_helper()
     check_execution_readiness_stack_helper()

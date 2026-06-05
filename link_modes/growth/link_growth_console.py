@@ -18137,6 +18137,9 @@ def validate_rollback_runtime_boundary(
             raise TypeError(f"{field} must be a non-empty list")
         if values != _normalize_implementation_branch_refs(values):
             raise ValueError(f"{field} must be normalized and sorted")
+    for target in boundary["allowed_rollback_targets"]:
+        if target != "workspace-local generated evidence":
+            _patch_applier_validate_target_path(target)
     if set(boundary["allowed_rollback_actions"]) & set(boundary["forbidden_rollback_actions"]):
         raise ValueError("rollback allowed actions overlap forbidden actions")
     for action in _FORBIDDEN_ROLLBACK_ACTIONS:
@@ -18232,6 +18235,501 @@ def parse_rollback_runtime_boundary_json(text: str) -> dict[str, Any]:
     boundary = json.loads(text)
     validate_rollback_runtime_boundary(boundary)
     return boundary
+
+
+GUARDED_ROLLBACK_EXECUTOR_VERSION = "link-guarded-rollback-executor-v1"
+GUARDED_ROLLBACK_RECEIPT_VERSION = "link-guarded-rollback-receipt-v1"
+
+
+def make_guarded_rollback_request_id(
+    rollback_runtime_boundary_id: str,
+    workspace_id: str,
+    rollback_reason: str,
+    approved: bool,
+    write: bool,
+) -> str:
+    return _execution_readiness_id("guarded-rollback-request", {
+        "approved": approved,
+        "rollback_reason": rollback_reason,
+        "rollback_runtime_boundary_id": rollback_runtime_boundary_id,
+        "version": GUARDED_ROLLBACK_EXECUTOR_VERSION,
+        "workspace_id": workspace_id,
+        "write": write,
+    })
+
+
+def make_guarded_rollback_receipt_id(
+    request_id: str,
+    rollback_runtime_boundary_id: str,
+    workspace_id: str,
+    restored_files: list[str],
+    removed_files: list[str],
+    rollback_result: str,
+) -> str:
+    return _execution_readiness_id("guarded-rollback-receipt", {
+        "removed_files": removed_files,
+        "request_id": request_id,
+        "restored_files": restored_files,
+        "rollback_result": rollback_result,
+        "rollback_runtime_boundary_id": rollback_runtime_boundary_id,
+        "version": GUARDED_ROLLBACK_RECEIPT_VERSION,
+        "workspace_id": workspace_id,
+    })
+
+
+def make_guarded_rollback_request(
+    rollback_runtime_boundary: dict[str, Any],
+    *,
+    rollback_reason: str = "verification failed",
+    approved: bool = False,
+    write: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a guarded rollback request without touching files."""
+    validate_rollback_runtime_boundary(rollback_runtime_boundary)
+    _validate_non_empty_string(rollback_reason, "rollback_reason")
+    reason = rollback_reason.strip()
+    request = {
+        "guarded_rollback_executor_version": GUARDED_ROLLBACK_EXECUTOR_VERSION,
+        "request_id": make_guarded_rollback_request_id(
+            rollback_runtime_boundary["rollback_runtime_boundary_id"],
+            rollback_runtime_boundary["workspace_id"],
+            reason,
+            approved,
+            write,
+        ),
+        "rollback_runtime_boundary_id": rollback_runtime_boundary["rollback_runtime_boundary_id"],
+        "planning_chain_id": rollback_runtime_boundary["planning_chain_id"],
+        "execution_package_id": rollback_runtime_boundary["execution_package_id"],
+        "workspace_id": rollback_runtime_boundary["workspace_id"],
+        "workspace_path": rollback_runtime_boundary["workspace_path"],
+        "guarded_patch_receipt_id": rollback_runtime_boundary["guarded_patch_receipt_id"],
+        "verification_receipt_id": rollback_runtime_boundary["verification_receipt_id"],
+        "rollback_reason": reason,
+        "approved": approved,
+        "write": write,
+        "dry_run": not write,
+        "metadata": dict(metadata or {}),
+    }
+    validate_guarded_rollback_request(request, rollback_runtime_boundary)
+    return request
+
+
+def validate_guarded_rollback_request(
+    request: dict[str, Any],
+    rollback_runtime_boundary: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "guarded_rollback_executor_version", "request_id", "rollback_runtime_boundary_id",
+        "planning_chain_id", "execution_package_id", "workspace_id", "workspace_path",
+        "guarded_patch_receipt_id", "verification_receipt_id", "rollback_reason",
+        "approved", "write", "dry_run", "metadata",
+    )
+    missing = [field for field in required if field not in request]
+    if missing:
+        raise ValueError(f"guarded rollback request missing fields: {missing}")
+    if request["guarded_rollback_executor_version"] != GUARDED_ROLLBACK_EXECUTOR_VERSION:
+        raise ValueError("unsupported guarded rollback executor version")
+    for field in (
+        "request_id", "rollback_runtime_boundary_id", "planning_chain_id", "execution_package_id",
+        "workspace_id", "workspace_path", "guarded_patch_receipt_id", "verification_receipt_id", "rollback_reason",
+    ):
+        _validate_non_empty_string(request[field], field)
+    if not isinstance(request["approved"], bool) or not isinstance(request["write"], bool):
+        raise TypeError("approved and write must be booleans")
+    if request["dry_run"] != (not request["write"]):
+        raise ValueError("guarded rollback request dry_run must invert write")
+    if request["rollback_reason"] != request["rollback_reason"].strip():
+        raise ValueError("rollback_reason must be stripped")
+    if not isinstance(request["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    _guarded_patch_workspace_path(request["workspace_path"])
+    if request["write"] and not request["approved"]:
+        raise PermissionError("guarded rollback requires explicit approval")
+    expected_id = make_guarded_rollback_request_id(
+        request["rollback_runtime_boundary_id"],
+        request["workspace_id"],
+        request["rollback_reason"],
+        request["approved"],
+        request["write"],
+    )
+    if request["request_id"] != expected_id:
+        raise ValueError("guarded rollback request id does not match contents")
+    if rollback_runtime_boundary is not None:
+        validate_rollback_runtime_boundary(rollback_runtime_boundary)
+        expected_refs = {
+            "rollback_runtime_boundary_id": rollback_runtime_boundary["rollback_runtime_boundary_id"],
+            "planning_chain_id": rollback_runtime_boundary["planning_chain_id"],
+            "execution_package_id": rollback_runtime_boundary["execution_package_id"],
+            "workspace_id": rollback_runtime_boundary["workspace_id"],
+            "workspace_path": rollback_runtime_boundary["workspace_path"],
+            "guarded_patch_receipt_id": rollback_runtime_boundary["guarded_patch_receipt_id"],
+            "verification_receipt_id": rollback_runtime_boundary["verification_receipt_id"],
+        }
+        for field, value in expected_refs.items():
+            if request[field] != value:
+                raise ValueError(f"guarded rollback request {field} does not match boundary")
+
+
+def _rollback_generated_refs(receipt: dict[str, Any]) -> list[str]:
+    refs = [
+        *receipt.get("stdout_refs", []),
+        *receipt.get("stderr_refs", []),
+        *receipt.get("evidence_refs", []),
+        "guarded_verification_receipt.json",
+    ]
+    return _normalize_implementation_branch_refs(refs)
+
+
+def _restore_guarded_patch_operation(workspace_path: str, operation: dict[str, Any]) -> dict[str, Any]:
+    target = _guarded_patch_target_path(workspace_path, operation["file_path"])
+    before_hash = operation.get("before_hash", "")
+    before_rollback_hash = _guarded_patch_file_hash(target)
+    status = operation.get("status")
+    if status == "created" or before_hash == "":
+        if target.exists():
+            target.unlink()
+    elif status == "modified":
+        if not target.exists():
+            raise FileNotFoundError("guarded rollback cannot restore missing modified file")
+        text = target.read_text(encoding="utf-8")
+        if "expected_result" in operation:
+            marker = _guarded_patch_operation_text(operation)
+            if not text.endswith(marker):
+                raise ValueError("guarded rollback cannot restore modified file without matching patch marker")
+            restored_text = text[:-len(marker)]
+        elif operation["file_path"].lower().endswith((".md", ".rst", ".txt")):
+            marker_start = f"\n<!-- Link guarded patch operation: {operation['operation_id']} -->\n<!-- Expected result: "
+            index = text.rfind(marker_start)
+            if index < 0:
+                raise ValueError("guarded rollback cannot find patch marker by operation id")
+            restored_text = text[:index]
+        else:
+            marker_start = f"\n# Link guarded patch operation: {operation['operation_id']}\n# Expected result: "
+            index = text.rfind(marker_start)
+            if index < 0:
+                raise ValueError("guarded rollback cannot find patch marker by operation id")
+            restored_text = text[:index]
+        target.write_text(restored_text, encoding="utf-8")
+    elif status == "deleted":
+        raise ValueError("guarded rollback cannot restore deleted file without content snapshot")
+    else:
+        raise ValueError("guarded rollback received unsupported applied operation status")
+    after_rollback_hash = _guarded_patch_file_hash(target)
+    if after_rollback_hash != before_hash:
+        raise ValueError("guarded rollback restored hash does not match patch before hash")
+    return {
+        "file_path": operation["file_path"],
+        "before_rollback_hash": before_rollback_hash,
+        "after_rollback_hash": after_rollback_hash,
+        "expected_before_hash": before_hash,
+    }
+
+
+def collect_guarded_rollback_receipt(
+    request: dict[str, Any],
+    rollback_runtime_boundary: dict[str, Any],
+    guarded_patch_receipt: dict[str, Any],
+    guarded_verification_receipt: dict[str, Any],
+    workspace_manifest: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+    *,
+    restored_files: list[str],
+    removed_files: list[str],
+    before_hashes: dict[str, str],
+    after_hashes: dict[str, str],
+    rollback_reason: str,
+    rollback_result: str,
+    rollback_timestamp: str,
+    rollback_evidence_refs: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Collect a guarded rollback receipt for workspace-local rollback actions."""
+    validate_guarded_rollback_request(request, rollback_runtime_boundary)
+    validate_rollback_runtime_boundary(rollback_runtime_boundary, guarded_patch_receipt, guarded_verification_receipt)
+    validate_guarded_patch_receipt(guarded_patch_receipt)
+    validate_guarded_verification_receipt(guarded_verification_receipt)
+    validate_workspace_creation_receipt(workspace_creation_receipt)
+    if workspace_manifest != workspace_creation_receipt["workspace_manifest"]:
+        raise ValueError("workspace manifest must match workspace creation receipt")
+    restored = _normalize_implementation_branch_refs(restored_files)
+    removed = _normalize_implementation_branch_refs(removed_files)
+    evidence = _normalize_implementation_branch_refs(rollback_evidence_refs or [])
+    writes = _normalize_implementation_branch_refs([
+        *restored,
+        *removed,
+        *evidence,
+        "guarded_rollback_receipt.json",
+        "rollback_evidence/rollback_evidence.json",
+        "workspace_abandoned.json",
+    ]) if request["write"] else []
+    safety = {
+        "dry_run": not request["write"],
+        "write_allowed": bool(request["write"]),
+        "automation_allowed": False,
+        "writes": writes,
+    }
+    receipt = {
+        "guarded_rollback_receipt_version": GUARDED_ROLLBACK_RECEIPT_VERSION,
+        "rollback_receipt_id": make_guarded_rollback_receipt_id(
+            request["request_id"],
+            rollback_runtime_boundary["rollback_runtime_boundary_id"],
+            request["workspace_id"],
+            restored,
+            removed,
+            rollback_result,
+        ),
+        "request_id": request["request_id"],
+        "workspace_id": request["workspace_id"],
+        "workspace_path": request["workspace_path"],
+        "rollback_boundary_id": rollback_runtime_boundary["rollback_runtime_boundary_id"],
+        "guarded_patch_receipt_id": guarded_patch_receipt["guarded_patch_receipt_id"],
+        "verification_receipt_id": guarded_verification_receipt["verification_receipt_id"],
+        "restored_files": restored,
+        "removed_files": removed,
+        "before_hashes": dict(sorted(before_hashes.items())),
+        "after_hashes": dict(sorted(after_hashes.items())),
+        "rollback_reason": rollback_reason.strip(),
+        "rollback_result": rollback_result,
+        "rollback_timestamp": rollback_timestamp,
+        "rollback_evidence_refs": evidence,
+        "safety_metadata": safety,
+        "metadata": dict(metadata or {}),
+    }
+    validate_guarded_rollback_receipt(receipt, request, rollback_runtime_boundary, guarded_patch_receipt, guarded_verification_receipt, workspace_creation_receipt)
+    return receipt
+
+
+def validate_guarded_rollback_receipt(
+    receipt: dict[str, Any],
+    request: dict[str, Any] | None = None,
+    rollback_runtime_boundary: dict[str, Any] | None = None,
+    guarded_patch_receipt: dict[str, Any] | None = None,
+    guarded_verification_receipt: dict[str, Any] | None = None,
+    workspace_creation_receipt: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "guarded_rollback_receipt_version", "rollback_receipt_id", "request_id", "workspace_id",
+        "workspace_path", "rollback_boundary_id", "guarded_patch_receipt_id", "verification_receipt_id",
+        "restored_files", "removed_files", "before_hashes", "after_hashes", "rollback_reason",
+        "rollback_result", "rollback_timestamp", "rollback_evidence_refs", "safety_metadata", "metadata",
+    )
+    missing = [field for field in required if field not in receipt]
+    if missing:
+        raise ValueError(f"guarded rollback receipt missing fields: {missing}")
+    if receipt["guarded_rollback_receipt_version"] != GUARDED_ROLLBACK_RECEIPT_VERSION:
+        raise ValueError("unsupported guarded rollback receipt version")
+    for field in (
+        "rollback_receipt_id", "request_id", "workspace_id", "workspace_path", "rollback_boundary_id",
+        "guarded_patch_receipt_id", "verification_receipt_id", "rollback_reason", "rollback_result", "rollback_timestamp",
+    ):
+        _validate_non_empty_string(receipt[field], field)
+    if receipt["rollback_result"] not in {"preview", "rolled_back", "failed"}:
+        raise ValueError("invalid rollback_result")
+    _guarded_patch_workspace_path(receipt["workspace_path"])
+    for field in ("restored_files", "removed_files", "rollback_evidence_refs"):
+        values = receipt[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if values != _normalize_implementation_branch_refs(values):
+            raise ValueError(f"{field} must be normalized")
+        for value in values:
+            _guarded_patch_target_path(receipt["workspace_path"], value)
+    for field in ("before_hashes", "after_hashes", "safety_metadata", "metadata"):
+        if not isinstance(receipt[field], dict):
+            raise TypeError(f"{field} must be a dict")
+    safety = receipt["safety_metadata"]
+    if safety.get("automation_allowed") is not False:
+        raise ValueError("guarded rollback must keep automation disabled")
+    if not isinstance(safety.get("writes"), list):
+        raise TypeError("guarded rollback safety writes must be a list")
+    if safety["writes"] != _normalize_implementation_branch_refs(safety["writes"]):
+        raise ValueError("guarded rollback safety writes must be normalized")
+    for value in safety["writes"]:
+        _guarded_patch_target_path(receipt["workspace_path"], value)
+    if receipt["rollback_result"] == "preview":
+        if safety.get("dry_run") is not True or safety.get("write_allowed") is not False or safety["writes"] != []:
+            raise ValueError("guarded rollback preview receipt must be read-only")
+    if receipt["rollback_result"] == "rolled_back":
+        if safety.get("dry_run") is not False or safety.get("write_allowed") is not True:
+            raise ValueError("guarded rollback receipt must record workspace-local write allowance")
+        for required_write in ("guarded_rollback_receipt.json", "rollback_evidence/rollback_evidence.json", "workspace_abandoned.json"):
+            if required_write not in safety["writes"]:
+                raise ValueError("guarded rollback receipt missing required workspace-local write")
+    expected_id = make_guarded_rollback_receipt_id(
+        receipt["request_id"],
+        receipt["rollback_boundary_id"],
+        receipt["workspace_id"],
+        receipt["restored_files"],
+        receipt["removed_files"],
+        receipt["rollback_result"],
+    )
+    if receipt["rollback_receipt_id"] != expected_id:
+        raise ValueError("guarded rollback receipt id does not match contents")
+    if request is not None:
+        validate_guarded_rollback_request(request, rollback_runtime_boundary)
+        if receipt["request_id"] != request["request_id"]:
+            raise ValueError("guarded rollback receipt request mismatch")
+        if receipt["rollback_result"] == "rolled_back" and not request["write"]:
+            raise ValueError("rolled-back rollback receipt requires write request")
+    if rollback_runtime_boundary is not None:
+        validate_rollback_runtime_boundary(rollback_runtime_boundary)
+        if receipt["rollback_boundary_id"] != rollback_runtime_boundary["rollback_runtime_boundary_id"]:
+            raise ValueError("guarded rollback receipt boundary mismatch")
+        if receipt["workspace_id"] != rollback_runtime_boundary["workspace_id"]:
+            raise ValueError("guarded rollback receipt workspace mismatch")
+    if guarded_patch_receipt is not None:
+        validate_guarded_patch_receipt(guarded_patch_receipt)
+        if receipt["guarded_patch_receipt_id"] != guarded_patch_receipt["guarded_patch_receipt_id"]:
+            raise ValueError("guarded rollback receipt patch receipt mismatch")
+        for restored_file in receipt["restored_files"]:
+            expected_hash = guarded_patch_receipt["before_file_hashes"].get(restored_file, "")
+            if receipt["after_hashes"].get(restored_file, "") != expected_hash:
+                raise ValueError("guarded rollback after hash must match patch before hash")
+    if guarded_verification_receipt is not None:
+        validate_guarded_verification_receipt(guarded_verification_receipt)
+        if receipt["verification_receipt_id"] != guarded_verification_receipt["verification_receipt_id"]:
+            raise ValueError("guarded rollback receipt verification receipt mismatch")
+    if workspace_creation_receipt is not None:
+        validate_workspace_creation_receipt(workspace_creation_receipt)
+        if receipt["workspace_id"] != workspace_creation_receipt["workspace_id"]:
+            raise ValueError("guarded rollback receipt workspace creation mismatch")
+        if receipt["workspace_path"] != workspace_creation_receipt["workspace_path"]:
+            raise ValueError("guarded rollback receipt workspace path mismatch")
+
+
+def _validate_guarded_rollback_runtime_inputs(
+    request: dict[str, Any],
+    rollback_runtime_boundary: dict[str, Any],
+    guarded_patch_receipt: dict[str, Any],
+    guarded_verification_receipt: dict[str, Any],
+    workspace_manifest: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+) -> None:
+    validate_guarded_rollback_request(request, rollback_runtime_boundary)
+    validate_rollback_runtime_boundary(rollback_runtime_boundary, guarded_patch_receipt, guarded_verification_receipt)
+    validate_guarded_patch_receipt(guarded_patch_receipt)
+    validate_guarded_verification_receipt(guarded_verification_receipt)
+    validate_workspace_creation_receipt(workspace_creation_receipt)
+    if workspace_manifest != workspace_creation_receipt["workspace_manifest"]:
+        raise ValueError("workspace manifest must match workspace creation receipt")
+    if request["workspace_id"] != workspace_creation_receipt["workspace_id"]:
+        raise ValueError("guarded rollback request workspace must match creation receipt")
+    if request["workspace_path"] != workspace_creation_receipt["workspace_path"]:
+        raise ValueError("guarded rollback request workspace path must match creation receipt")
+    if guarded_patch_receipt["workspace_id"] != workspace_creation_receipt["workspace_id"]:
+        raise ValueError("guarded rollback patch receipt workspace mismatch")
+    if guarded_verification_receipt["workspace_id"] != workspace_creation_receipt["workspace_id"]:
+        raise ValueError("guarded rollback verification receipt workspace mismatch")
+    if guarded_verification_receipt["rollback_triggered"] is not True:
+        raise PermissionError("guarded rollback requires rollback-triggered verification receipt")
+    workspace_path = _guarded_patch_workspace_path(workspace_creation_receipt["workspace_path"])
+    if request["write"]:
+        if workspace_creation_receipt["status"] != "created":
+            raise PermissionError("guarded rollback requires a created workspace")
+        if not workspace_path.exists() or not workspace_path.is_dir():
+            raise FileNotFoundError("guarded rollback workspace does not exist")
+        manifest_path = workspace_path / "workspace_manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError("guarded rollback workspace manifest is missing")
+        on_disk_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if on_disk_manifest != workspace_manifest:
+            raise ValueError("on-disk workspace manifest does not match receipt")
+
+
+def execute_guarded_rollback(
+    request: dict[str, Any],
+    rollback_runtime_boundary: dict[str, Any],
+    guarded_patch_receipt: dict[str, Any],
+    guarded_verification_receipt: dict[str, Any],
+    workspace_manifest: dict[str, Any],
+    workspace_creation_receipt: dict[str, Any],
+) -> dict[str, Any]:
+    """Rollback workspace-local patch and verification artifacts inside a guarded workspace."""
+    import shutil
+    from datetime import datetime, timezone
+
+    _validate_guarded_rollback_runtime_inputs(
+        request,
+        rollback_runtime_boundary,
+        guarded_patch_receipt,
+        guarded_verification_receipt,
+        workspace_manifest,
+        workspace_creation_receipt,
+    )
+    if not request["write"]:
+        raise PermissionError("guarded rollback requires --write")
+    if not request["approved"]:
+        raise PermissionError("guarded rollback requires explicit approval")
+    workspace_path = _guarded_patch_workspace_path(workspace_creation_receipt["workspace_path"])
+    backup_path = workspace_path.parent / f".{workspace_path.name}.rollback-backup-{request['request_id']}"
+    if backup_path.exists():
+        shutil.rmtree(backup_path)
+    shutil.copytree(workspace_path, backup_path)
+    try:
+        restored_records = [_restore_guarded_patch_operation(str(workspace_path), operation) for operation in guarded_patch_receipt["applied_operations"]]
+        restored_files = _normalize_implementation_branch_refs([record["file_path"] for record in restored_records])
+        removed_files: list[str] = []
+        before_hashes = {record["file_path"]: record["before_rollback_hash"] for record in restored_records}
+        after_hashes = {record["file_path"]: record["after_rollback_hash"] for record in restored_records}
+        for ref in _rollback_generated_refs(guarded_verification_receipt):
+            target = _guarded_patch_target_path(str(workspace_path), ref)
+            if target.exists():
+                before_hashes[ref] = _guarded_patch_file_hash(target)
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+                after_hashes[ref] = ""
+                removed_files.append(ref)
+        rollback_evidence_ref = "rollback_evidence/rollback_evidence.json"
+        rollback_evidence_path = _guarded_patch_target_path(str(workspace_path), rollback_evidence_ref)
+        rollback_evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        evidence_payload = {
+            "rollback_reason": request["rollback_reason"],
+            "restored_files": restored_files,
+            "removed_files": _normalize_implementation_branch_refs(removed_files),
+            "guarded_patch_receipt_id": guarded_patch_receipt["guarded_patch_receipt_id"],
+            "verification_receipt_id": guarded_verification_receipt["verification_receipt_id"],
+            "timestamp": timestamp,
+        }
+        rollback_evidence_path.write_text(_stable_ruflo_json(evidence_payload, indent=2) + "\n", encoding="utf-8")
+        abandoned_ref = "workspace_abandoned.json"
+        abandoned_path = _guarded_patch_target_path(str(workspace_path), abandoned_ref)
+        abandoned_payload = {
+            "workspace_id": workspace_creation_receipt["workspace_id"],
+            "abandonment_reason": request["rollback_reason"],
+            "rollback_required": True,
+            "timestamp": timestamp,
+        }
+        abandoned_path.write_text(_stable_ruflo_json(abandoned_payload, indent=2) + "\n", encoding="utf-8")
+        receipt = collect_guarded_rollback_receipt(
+            request,
+            rollback_runtime_boundary,
+            guarded_patch_receipt,
+            guarded_verification_receipt,
+            workspace_manifest,
+            workspace_creation_receipt,
+            restored_files=restored_files,
+            removed_files=_normalize_implementation_branch_refs(removed_files),
+            before_hashes=before_hashes,
+            after_hashes=after_hashes,
+            rollback_reason=request["rollback_reason"],
+            rollback_result="rolled_back",
+            rollback_timestamp=timestamp,
+            rollback_evidence_refs=[rollback_evidence_ref],
+        )
+        receipt_path = _guarded_patch_target_path(str(workspace_path), "guarded_rollback_receipt.json")
+        receipt_path.write_text(_stable_ruflo_json(receipt, indent=2) + "\n", encoding="utf-8")
+        shutil.rmtree(backup_path)
+        return receipt
+    except Exception:
+        if workspace_path.exists():
+            shutil.rmtree(workspace_path)
+        shutil.copytree(backup_path, workspace_path)
+        shutil.rmtree(backup_path)
+        raise
 
 
 def validate_verified_patch_diff_entry(entry: dict[str, Any]) -> None:
