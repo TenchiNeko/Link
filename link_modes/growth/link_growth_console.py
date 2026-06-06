@@ -10829,6 +10829,10 @@ BUSINESS_DEVELOPMENT_INTAKE_PREVIEW_VERSION = "link-business-development-intake-
 BUSINESS_DEVELOPMENT_EVIDENCE_CONTRACT_VERSION = "link-business-development-evidence-contract-v1"
 BUSINESS_DEVELOPMENT_APPROVAL_CHECKLIST_VERSION = "link-business-development-approval-checklist-v1"
 BUSINESS_DEVELOPMENT_REVIEW_PACKAGE_VERSION = "link-business-development-review-package-v1"
+BUSINESS_DEVELOPMENT_SOURCE_BOUNDARY_VERSION = "link-business-development-source-boundary-v1"
+BUSINESS_DEVELOPMENT_SOURCE_EVIDENCE_CONTRACT_VERSION = "link-business-development-source-evidence-contract-v1"
+BUSINESS_DEVELOPMENT_SOURCE_REVIEW_PACKAGE_VERSION = "link-business-development-source-review-package-v1"
+LINK_SHARED_SERVICES_REGISTRY_VERSION = "link-shared-services-registry-v1"
 BUSINESS_DEVELOPMENT_CLAIM_TYPES = (
     "supplier_availability",
     "sourcing_cost",
@@ -10858,6 +10862,62 @@ BUSINESS_DEVELOPMENT_BLOCKED_ACTIONS = (
 BUSINESS_DEVELOPMENT_STATUSES = ("pass", "review", "block")
 BUSINESS_DEVELOPMENT_READINESS_STATUSES = ("ready_for_review", "blocked")
 BUSINESS_DEVELOPMENT_RECOMMENDATIONS = ("do_not_execute", "review_before_action", "ready_for_review")
+BUSINESS_DEVELOPMENT_ALLOWED_SOURCE_FAMILIES = (
+    "public documentation",
+    "public websites",
+    "public pricing pages",
+    "public product catalogs",
+    "public competitor information",
+    "public search results",
+    "public reports",
+)
+BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_FAMILIES = (
+    "credentials",
+    "private accounts",
+    "purchased datasets",
+    "customer data",
+    "bypassed paywalls",
+    "authenticated scraping",
+    "anti-bot bypass",
+    "proxy evasion",
+)
+BUSINESS_DEVELOPMENT_ALLOWED_COLLECTION_METHODS = (
+    "manual source review",
+    "read-only public page inspection",
+    "read-only public report review",
+    "read-only public catalog review",
+    "read-only public search result review",
+)
+BUSINESS_DEVELOPMENT_BLOCKED_COLLECTION_METHODS = (
+    "scraping",
+    "crawling",
+    "browser automation",
+    "authenticated scraping",
+    "anti-bot bypass",
+    "proxy evasion",
+    "lead enrichment",
+    "CRM writes",
+    "ecommerce writes",
+    "outbound messaging",
+)
+BUSINESS_DEVELOPMENT_SOURCE_PROVENANCE_REQUIREMENTS = (
+    "source_url",
+    "collection_method",
+    "collection_timestamp",
+    "source_family",
+    "source_hash",
+    "reviewer",
+)
+LINK_SHARED_SERVICE_IDS_V2 = (
+    "memory",
+    "evidence",
+    "approvals",
+    "reviews",
+    "receipts",
+    "dashboards",
+    "queues",
+    "source governance",
+)
 
 
 def make_business_development_intake_preview_id(
@@ -11433,6 +11493,481 @@ def parse_business_development_review_package_json(text: str) -> dict[str, Any]:
     package = _json.loads(text)
     validate_business_development_review_package(package)
     return package
+
+
+def make_business_development_source_boundary_id() -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "allowed_collection_methods": list(BUSINESS_DEVELOPMENT_ALLOWED_COLLECTION_METHODS),
+        "allowed_source_families": list(BUSINESS_DEVELOPMENT_ALLOWED_SOURCE_FAMILIES),
+        "blocked_collection_methods": list(BUSINESS_DEVELOPMENT_BLOCKED_COLLECTION_METHODS),
+        "blocked_source_families": list(BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_FAMILIES),
+        "version": BUSINESS_DEVELOPMENT_SOURCE_BOUNDARY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-source-boundary-{digest}"
+
+
+def collect_business_development_source_boundary(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Define source governance before any Business Development data collection runtime exists."""
+    requires_human_approval = _normalize_implementation_branch_refs([
+        "approve source domains before collection",
+        "approve robots and terms review before collection",
+        "approve paid API use before collection",
+        "approve authenticated source access before use",
+        "approve customer or lead data handling before storage",
+    ])
+    requires_evidence = _normalize_implementation_branch_refs([
+        "allowed source family classification",
+        "collection method classification",
+        "robots policy review",
+        "terms or acceptable-use review",
+        "rate limit policy",
+        "source provenance record",
+        "reviewer summary",
+    ])
+    boundary = {
+        "business_development_source_boundary_version": BUSINESS_DEVELOPMENT_SOURCE_BOUNDARY_VERSION,
+        "source_boundary_id": make_business_development_source_boundary_id(),
+        "allowed_source_families": list(BUSINESS_DEVELOPMENT_ALLOWED_SOURCE_FAMILIES),
+        "blocked_source_families": list(BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_FAMILIES),
+        "allowed_collection_methods": list(BUSINESS_DEVELOPMENT_ALLOWED_COLLECTION_METHODS),
+        "blocked_collection_methods": list(BUSINESS_DEVELOPMENT_BLOCKED_COLLECTION_METHODS),
+        "requires_human_approval": requires_human_approval,
+        "requires_evidence": requires_evidence,
+        "source_provenance_requirements": list(BUSINESS_DEVELOPMENT_SOURCE_PROVENANCE_REQUIREMENTS),
+        "rate_limit_requirements": _normalize_implementation_branch_refs([
+            "per-source request limit defined",
+            "per-source cooldown defined",
+            "retry policy defined",
+            "rate-limit evidence captured",
+        ]),
+        "robots_requirements": _normalize_implementation_branch_refs([
+            "robots policy checked before collection",
+            "terms or acceptable-use reviewed before collection",
+            "disallowed robots paths remain blocked",
+        ]),
+        "recommended_next_action": "Review source boundary before defining any collection plan or runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_source_boundary(boundary)
+    return boundary
+
+
+def validate_business_development_source_boundary(boundary: dict[str, Any]) -> None:
+    required = (
+        "business_development_source_boundary_version", "source_boundary_id",
+        "allowed_source_families", "blocked_source_families", "allowed_collection_methods",
+        "blocked_collection_methods", "requires_human_approval", "requires_evidence",
+        "source_provenance_requirements", "rate_limit_requirements", "robots_requirements",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in boundary:
+            raise ValueError(f"business development source boundary missing required field: {key}")
+    if boundary["business_development_source_boundary_version"] != BUSINESS_DEVELOPMENT_SOURCE_BOUNDARY_VERSION:
+        raise ValueError("invalid business development source boundary version")
+    if boundary["source_boundary_id"] != make_business_development_source_boundary_id():
+        raise ValueError("business development source boundary id is not deterministic")
+    if boundary["allowed_source_families"] != list(BUSINESS_DEVELOPMENT_ALLOWED_SOURCE_FAMILIES):
+        raise ValueError("business development source boundary allowed source families mismatch")
+    if boundary["blocked_source_families"] != list(BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_FAMILIES):
+        raise ValueError("business development source boundary blocked source families mismatch")
+    if boundary["allowed_collection_methods"] != list(BUSINESS_DEVELOPMENT_ALLOWED_COLLECTION_METHODS):
+        raise ValueError("business development source boundary allowed collection methods mismatch")
+    if boundary["blocked_collection_methods"] != list(BUSINESS_DEVELOPMENT_BLOCKED_COLLECTION_METHODS):
+        raise ValueError("business development source boundary blocked collection methods mismatch")
+    if set(boundary["allowed_source_families"]) & set(boundary["blocked_source_families"]):
+        raise ValueError("business development source boundary source families overlap")
+    if set(boundary["allowed_collection_methods"]) & set(boundary["blocked_collection_methods"]):
+        raise ValueError("business development source boundary collection methods overlap")
+    for field in ("requires_human_approval", "requires_evidence", "rate_limit_requirements", "robots_requirements"):
+        normalized = _normalize_implementation_branch_refs(boundary[field])
+        if not normalized or normalized != boundary[field]:
+            raise ValueError(f"business development source boundary {field} must be normalized and non-empty")
+    if boundary["source_provenance_requirements"] != list(BUSINESS_DEVELOPMENT_SOURCE_PROVENANCE_REQUIREMENTS):
+        raise ValueError("business development source boundary provenance requirements mismatch")
+    if "source_url" not in boundary["source_provenance_requirements"] or "source_hash" not in boundary["source_provenance_requirements"]:
+        raise ValueError("business development source boundary must require source URL and hash provenance")
+    if not isinstance(boundary["recommended_next_action"], str) or not boundary["recommended_next_action"].strip():
+        raise ValueError("business development source boundary recommended_next_action must be non-empty")
+    if boundary["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development source boundary safety metadata mismatch")
+    if boundary["dry_run"] is not True or boundary["write_allowed"] is not False:
+        raise ValueError("business development source boundary must be read-only")
+    if boundary["automation_allowed"] is not False or boundary["writes"] != []:
+        raise ValueError("business development source boundary must not allow automation or writes")
+
+
+def stable_business_development_source_boundary_json(boundary: dict[str, Any]) -> str:
+    validate_business_development_source_boundary(boundary)
+    return _stable_ruflo_json(boundary, indent=2) + "\n"
+
+
+def parse_business_development_source_boundary_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    boundary = _json.loads(text)
+    validate_business_development_source_boundary(boundary)
+    return boundary
+
+
+def make_business_development_source_evidence_contract_id(source_boundary: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "source_boundary_id": source_boundary["source_boundary_id"],
+        "version": BUSINESS_DEVELOPMENT_SOURCE_EVIDENCE_CONTRACT_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-source-evidence-contract-{digest}"
+
+
+def collect_business_development_source_evidence_contract(
+    business_development_source_boundary: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Require provenance before source-derived information becomes business evidence."""
+    boundary = business_development_source_boundary or collect_business_development_source_boundary()
+    validate_business_development_source_boundary(boundary)
+    required_metadata = _normalize_implementation_branch_refs([
+        "access method",
+        "allowed source family",
+        "auth requirement",
+        "coverage summary",
+        "data quality warning",
+        "domain",
+        "license or terms note",
+        "rate limit policy",
+        "robots policy status",
+        "source owner or publisher",
+    ])
+    contract = {
+        "business_development_source_evidence_contract_version": BUSINESS_DEVELOPMENT_SOURCE_EVIDENCE_CONTRACT_VERSION,
+        "source_evidence_contract_id": make_business_development_source_evidence_contract_id(boundary),
+        "source_boundary_id": boundary["source_boundary_id"],
+        "required_provenance_fields": list(BUSINESS_DEVELOPMENT_SOURCE_PROVENANCE_REQUIREMENTS),
+        "required_source_metadata": required_metadata,
+        "required_hash_fields": ["raw_source_hash", "normalized_source_hash", "provenance_record_hash"],
+        "required_review_fields": _normalize_implementation_branch_refs([
+            "compliance reviewer",
+            "data quality summary",
+            "evidence reviewer",
+            "missing evidence summary",
+            "source risk summary",
+        ]),
+        "missing_evidence": _normalize_implementation_branch_refs([
+            "approved source card",
+            "robots policy evidence",
+            "source provenance record",
+            "terms or acceptable-use evidence",
+        ]),
+        "blocked_actions": list(BUSINESS_DEVELOPMENT_BLOCKED_COLLECTION_METHODS),
+        "recommended_next_action": "Complete source provenance and review evidence before using collected information in Business Development decisions.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_source_evidence_contract(contract, boundary)
+    return contract
+
+
+def validate_business_development_source_evidence_contract(
+    contract: dict[str, Any],
+    business_development_source_boundary: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_development_source_evidence_contract_version", "source_evidence_contract_id",
+        "source_boundary_id", "required_provenance_fields", "required_source_metadata",
+        "required_hash_fields", "required_review_fields", "missing_evidence", "blocked_actions",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in contract:
+            raise ValueError(f"business development source evidence contract missing required field: {key}")
+    if contract["business_development_source_evidence_contract_version"] != BUSINESS_DEVELOPMENT_SOURCE_EVIDENCE_CONTRACT_VERSION:
+        raise ValueError("invalid business development source evidence contract version")
+    if not isinstance(contract["source_evidence_contract_id"], str) or not contract["source_evidence_contract_id"].startswith("business-development-source-evidence-contract-"):
+        raise ValueError("invalid business development source evidence contract id")
+    if not isinstance(contract["source_boundary_id"], str) or not contract["source_boundary_id"].startswith("business-development-source-boundary-"):
+        raise ValueError("invalid source boundary id in source evidence contract")
+    if contract["required_provenance_fields"] != list(BUSINESS_DEVELOPMENT_SOURCE_PROVENANCE_REQUIREMENTS):
+        raise ValueError("business development source evidence contract provenance fields mismatch")
+    for field in ("required_source_metadata", "required_review_fields", "missing_evidence"):
+        normalized = _normalize_implementation_branch_refs(contract[field])
+        if not normalized or normalized != contract[field]:
+            raise ValueError(f"business development source evidence contract {field} must be normalized and non-empty")
+    if contract["required_hash_fields"] != ["raw_source_hash", "normalized_source_hash", "provenance_record_hash"]:
+        raise ValueError("business development source evidence contract hash fields mismatch")
+    if contract["blocked_actions"] != list(BUSINESS_DEVELOPMENT_BLOCKED_COLLECTION_METHODS):
+        raise ValueError("business development source evidence contract blocked actions mismatch")
+    if contract["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development source evidence contract safety metadata mismatch")
+    if contract["dry_run"] is not True or contract["write_allowed"] is not False:
+        raise ValueError("business development source evidence contract must be read-only")
+    if contract["automation_allowed"] is not False or contract["writes"] != []:
+        raise ValueError("business development source evidence contract must not allow automation or writes")
+    if business_development_source_boundary is not None:
+        validate_business_development_source_boundary(business_development_source_boundary)
+        if contract["source_boundary_id"] != business_development_source_boundary["source_boundary_id"]:
+            raise ValueError("business development source evidence contract boundary id mismatch")
+        expected_id = make_business_development_source_evidence_contract_id(business_development_source_boundary)
+        if contract["source_evidence_contract_id"] != expected_id:
+            raise ValueError("business development source evidence contract id is not deterministic")
+
+
+def stable_business_development_source_evidence_contract_json(contract: dict[str, Any]) -> str:
+    validate_business_development_source_evidence_contract(contract)
+    return _stable_ruflo_json(contract, indent=2) + "\n"
+
+
+def parse_business_development_source_evidence_contract_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    contract = _json.loads(text)
+    validate_business_development_source_evidence_contract(contract)
+    return contract
+
+
+def make_business_development_source_review_package_id(source_boundary: dict[str, Any], source_evidence_contract: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "source_boundary_id": source_boundary["source_boundary_id"],
+        "source_evidence_contract_id": source_evidence_contract["source_evidence_contract_id"],
+        "version": BUSINESS_DEVELOPMENT_SOURCE_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-source-review-package-{digest}"
+
+
+def collect_business_development_source_review_package(
+    business_development_source_boundary: dict[str, Any] | None = None,
+    business_development_source_evidence_contract: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize Business Development source governance for reviewer decision."""
+    boundary = business_development_source_boundary or collect_business_development_source_boundary()
+    validate_business_development_source_boundary(boundary)
+    contract = business_development_source_evidence_contract or collect_business_development_source_evidence_contract(boundary)
+    validate_business_development_source_evidence_contract(contract, boundary)
+    blockers = _normalize_implementation_branch_refs(
+        [f"blocked collection method: {item}" for item in contract["blocked_actions"]]
+        + [f"missing source evidence: {item}" for item in contract["missing_evidence"]]
+    )
+    warnings = _normalize_implementation_branch_refs(
+        [f"blocked source family remains unavailable: {item}" for item in boundary["blocked_source_families"]]
+    )
+    required_actions = _normalize_implementation_branch_refs(list(boundary["requires_human_approval"]))
+    evidence_status = "block" if contract["missing_evidence"] else "pass"
+    approval_status = "review" if required_actions else "pass"
+    risk_status = "review" if boundary["blocked_source_families"] or contract["blocked_actions"] else "pass"
+    readiness_status = "blocked" if blockers or evidence_status == "block" else "ready_for_review"
+    package = {
+        "business_development_source_review_package_version": BUSINESS_DEVELOPMENT_SOURCE_REVIEW_PACKAGE_VERSION,
+        "source_review_package_id": make_business_development_source_review_package_id(boundary, contract),
+        "source_boundary_id": boundary["source_boundary_id"],
+        "source_evidence_contract_id": contract["source_evidence_contract_id"],
+        "source_status": "review",
+        "evidence_status": evidence_status,
+        "approval_status": approval_status,
+        "risk_status": risk_status,
+        "readiness_status": readiness_status,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": required_actions,
+        "review_recommendation": "do_not_collect" if readiness_status == "blocked" else "review_before_collection",
+        "recommended_next_action": "Resolve source governance blockers before any scraping, crawling, monitoring, or source ingestion runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_source_review_package(package, boundary, contract)
+    return package
+
+
+def validate_business_development_source_review_package(
+    package: dict[str, Any],
+    business_development_source_boundary: dict[str, Any] | None = None,
+    business_development_source_evidence_contract: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_development_source_review_package_version", "source_review_package_id",
+        "source_boundary_id", "source_evidence_contract_id", "source_status", "evidence_status",
+        "approval_status", "risk_status", "readiness_status", "blockers", "warnings",
+        "required_human_actions", "review_recommendation", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"business development source review package missing required field: {key}")
+    if package["business_development_source_review_package_version"] != BUSINESS_DEVELOPMENT_SOURCE_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid business development source review package version")
+    if not isinstance(package["source_review_package_id"], str) or not package["source_review_package_id"].startswith("business-development-source-review-package-"):
+        raise ValueError("invalid business development source review package id")
+    if not isinstance(package["source_boundary_id"], str) or not package["source_boundary_id"].startswith("business-development-source-boundary-"):
+        raise ValueError("invalid source boundary id in source review package")
+    if not isinstance(package["source_evidence_contract_id"], str) or not package["source_evidence_contract_id"].startswith("business-development-source-evidence-contract-"):
+        raise ValueError("invalid source evidence contract id in source review package")
+    for field in ("source_status", "evidence_status", "approval_status", "risk_status"):
+        if package[field] not in BUSINESS_DEVELOPMENT_STATUSES:
+            raise ValueError(f"invalid business development source review {field}")
+    if package["readiness_status"] not in BUSINESS_DEVELOPMENT_READINESS_STATUSES:
+        raise ValueError("invalid business development source review readiness_status")
+    if package["review_recommendation"] not in {"do_not_collect", "review_before_collection"}:
+        raise ValueError("invalid business development source review recommendation")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"business development source review package {field} must be normalized and sorted")
+    if package["readiness_status"] == "blocked" and not package["blockers"]:
+        raise ValueError("blocked business development source review package must include blockers")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development source review package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("business development source review package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("business development source review package must not allow automation or writes")
+    if business_development_source_boundary is not None:
+        validate_business_development_source_boundary(business_development_source_boundary)
+        if package["source_boundary_id"] != business_development_source_boundary["source_boundary_id"]:
+            raise ValueError("business development source review package boundary id mismatch")
+    if business_development_source_evidence_contract is not None:
+        validate_business_development_source_evidence_contract(business_development_source_evidence_contract, business_development_source_boundary)
+        if package["source_evidence_contract_id"] != business_development_source_evidence_contract["source_evidence_contract_id"]:
+            raise ValueError("business development source review package evidence contract id mismatch")
+    if business_development_source_boundary is not None and business_development_source_evidence_contract is not None:
+        expected_id = make_business_development_source_review_package_id(business_development_source_boundary, business_development_source_evidence_contract)
+        if package["source_review_package_id"] != expected_id:
+            raise ValueError("business development source review package id is not deterministic")
+
+
+def stable_business_development_source_review_package_json(package: dict[str, Any]) -> str:
+    validate_business_development_source_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_business_development_source_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_business_development_source_review_package(package)
+    return package
+
+
+def make_link_shared_services_registry_id() -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "service_ids": list(LINK_SHARED_SERVICE_IDS_V2),
+        "version": LINK_SHARED_SERVICES_REGISTRY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"link-shared-services-registry-{digest}"
+
+
+def collect_link_shared_services_registry(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Define shared Link services consumed through contracts by governed modules."""
+    services = [
+        {"service_id": "memory", "contract": "Shared memory requires retention, redaction, and module-scope review."},
+        {"service_id": "evidence", "contract": "Evidence must preserve source refs, hashes, missing evidence, and reviewer summaries."},
+        {"service_id": "approvals", "contract": "External effects require explicit human approval before execution."},
+        {"service_id": "reviews", "contract": "Reviewer-facing packages summarize blockers, warnings, and next actions."},
+        {"service_id": "receipts", "contract": "Runtime actions must emit receipts only inside approved runtime boundaries."},
+        {"service_id": "dashboards", "contract": "Dashboards render state without mutating repositories or external systems."},
+        {"service_id": "queues", "contract": "Queues hold planned work and must not execute without approval gates."},
+        {"service_id": "source governance", "contract": "Sources require Link-owned boundaries, provenance, approvals, and evidence contracts."},
+    ]
+    registry = {
+        "link_shared_services_registry_version": LINK_SHARED_SERVICES_REGISTRY_VERSION,
+        "shared_services_registry_id": make_link_shared_services_registry_id(),
+        "parent_architecture": "link_core",
+        "consumer_modules": list(LINK_MODULE_IDS),
+        "services": services,
+        "cross_module_contract": "Engineering, Growth, Business Development, and Business Operations consume shared services only through Link-level contracts.",
+        "blocked_bypass_actions": _normalize_implementation_branch_refs([
+            "module direct source collection without Link boundary",
+            "module direct external writes without Link approval",
+            "module direct customer data storage without Link evidence contract",
+            "module direct receipt creation outside approved runtime",
+        ]),
+        "recommended_next_action": "Use this registry when adding shared service dependencies to module governance objects.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_link_shared_services_registry(registry)
+    return registry
+
+
+def validate_link_shared_services_registry(registry: dict[str, Any]) -> None:
+    required = (
+        "link_shared_services_registry_version", "shared_services_registry_id",
+        "parent_architecture", "consumer_modules", "services", "cross_module_contract",
+        "blocked_bypass_actions", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in registry:
+            raise ValueError(f"link shared services registry missing required field: {key}")
+    if registry["link_shared_services_registry_version"] != LINK_SHARED_SERVICES_REGISTRY_VERSION:
+        raise ValueError("invalid link shared services registry version")
+    if registry["shared_services_registry_id"] != make_link_shared_services_registry_id():
+        raise ValueError("link shared services registry id is not deterministic")
+    if registry["parent_architecture"] != "link_core":
+        raise ValueError("link shared services registry parent architecture mismatch")
+    if registry["consumer_modules"] != list(LINK_MODULE_IDS):
+        raise ValueError("link shared services registry consumer modules mismatch")
+    services = registry["services"]
+    if not isinstance(services, list) or [item.get("service_id") for item in services] != list(LINK_SHARED_SERVICE_IDS_V2):
+        raise ValueError("link shared services registry service ids mismatch")
+    for service in services:
+        if not isinstance(service.get("contract"), str) or not service["contract"].strip():
+            raise ValueError("link shared services registry service contract must be non-empty")
+    normalized = _normalize_implementation_branch_refs(registry["blocked_bypass_actions"])
+    if not normalized or normalized != registry["blocked_bypass_actions"]:
+        raise ValueError("link shared services registry blocked bypass actions must be normalized and non-empty")
+    if not isinstance(registry["cross_module_contract"], str) or not registry["cross_module_contract"].strip():
+        raise ValueError("link shared services registry cross module contract must be non-empty")
+    if registry["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("link shared services registry safety metadata mismatch")
+    if registry["dry_run"] is not True or registry["write_allowed"] is not False:
+        raise ValueError("link shared services registry must be read-only")
+    if registry["automation_allowed"] is not False or registry["writes"] != []:
+        raise ValueError("link shared services registry must not allow automation or writes")
+
+
+def stable_link_shared_services_registry_json(registry: dict[str, Any]) -> str:
+    validate_link_shared_services_registry(registry)
+    return _stable_ruflo_json(registry, indent=2) + "\n"
+
+
+def parse_link_shared_services_registry_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    registry = _json.loads(text)
+    validate_link_shared_services_registry(registry)
+    return registry
+
 
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
@@ -13504,6 +14039,121 @@ def campaign_review_main(argv: list[str] | None = None) -> int:
     render_campaign_review_plain(package)
     return 0
 
+
+
+def render_business_development_source_boundary_plain(boundary: dict[str, Any]) -> None:
+    validate_business_development_source_boundary(boundary)
+    print("Business Development source boundary")
+    print(f"source_boundary_id: {boundary['source_boundary_id']}")
+    print(f"allowed_source_family_count: {len(boundary['allowed_source_families'])}")
+    print(f"blocked_source_family_count: {len(boundary['blocked_source_families'])}")
+    print(f"allowed_collection_method_count: {len(boundary['allowed_collection_methods'])}")
+    print(f"blocked_collection_method_count: {len(boundary['blocked_collection_methods'])}")
+    print(f"required_approval_count: {len(boundary['requires_human_approval'])}")
+    print(f"required_evidence_count: {len(boundary['requires_evidence'])}")
+    print(f"provenance_requirement_count: {len(boundary['source_provenance_requirements'])}")
+    print(f"next_action: {boundary['recommended_next_action']}")
+
+
+def business_development_source_boundary_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Development source-boundary: source governance boundary preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-development source-boundary")
+        print("  python3 link.py business-development source-boundary --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-development source-boundary is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    boundary = collect_business_development_source_boundary()
+    validate_business_development_source_boundary(boundary)
+    if "--json" in args:
+        print(stable_business_development_source_boundary_json(boundary), end="")
+        return 0
+    render_business_development_source_boundary_plain(boundary)
+    return 0
+
+
+def render_business_development_source_evidence_contract_plain(contract: dict[str, Any]) -> None:
+    validate_business_development_source_evidence_contract(contract)
+    print("Business Development source evidence contract")
+    print(f"source_evidence_contract_id: {contract['source_evidence_contract_id']}")
+    print(f"source_boundary_id: {contract['source_boundary_id']}")
+    print(f"required_provenance_field_count: {len(contract['required_provenance_fields'])}")
+    print(f"required_source_metadata_count: {len(contract['required_source_metadata'])}")
+    print(f"required_hash_field_count: {len(contract['required_hash_fields'])}")
+    print(f"required_review_field_count: {len(contract['required_review_fields'])}")
+    print(f"missing_evidence_count: {len(contract['missing_evidence'])}")
+    print(f"blocked_action_count: {len(contract['blocked_actions'])}")
+    print(f"next_action: {contract['recommended_next_action']}")
+
+
+def business_development_source_evidence_contract_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Development source-evidence-contract: source evidence contract preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-development source-evidence-contract")
+        print("  python3 link.py business-development source-evidence-contract --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-development source-evidence-contract is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    contract = collect_business_development_source_evidence_contract()
+    validate_business_development_source_evidence_contract(contract)
+    if "--json" in args:
+        print(stable_business_development_source_evidence_contract_json(contract), end="")
+        return 0
+    render_business_development_source_evidence_contract_plain(contract)
+    return 0
+
+
+def render_business_development_source_review_plain(package: dict[str, Any]) -> None:
+    validate_business_development_source_review_package(package)
+    print("Business Development source review")
+    print(f"source_review_package_id: {package['source_review_package_id']}")
+    print(f"source_boundary_id: {package['source_boundary_id']}")
+    print(f"source_evidence_contract_id: {package['source_evidence_contract_id']}")
+    print(f"source_status: {package['source_status']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"approval_status: {package['approval_status']}")
+    print(f"risk_status: {package['risk_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def business_development_source_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Development source-review: source review package preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-development source-review")
+        print("  python3 link.py business-development source-review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-development source-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_business_development_source_review_package()
+    validate_business_development_source_review_package(package)
+    if "--json" in args:
+        print(stable_business_development_source_review_package_json(package), end="")
+        return 0
+    render_business_development_source_review_plain(package)
+    return 0
 
 
 def render_business_development_intake_preview_plain(preview: dict[str, Any]) -> None:

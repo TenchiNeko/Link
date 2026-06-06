@@ -176,12 +176,27 @@ def _cmd_business_development(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import business_development_review_main as _bd_review_main
 
         return _bd_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-boundary":
+        from link_modes.growth.link_growth_console import business_development_source_boundary_main as _bd_source_boundary_main
+
+        return _bd_source_boundary_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-evidence-contract":
+        from link_modes.growth.link_growth_console import business_development_source_evidence_contract_main as _bd_source_evidence_contract_main
+
+        return _bd_source_evidence_contract_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-review":
+        from link_modes.growth.link_growth_console import business_development_source_review_main as _bd_source_review_main
+
+        return _bd_source_review_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Business Development commands:")
-        print("  intake-preview      Preview Business Development intake")
-        print("  evidence-contract   Preview Business Development evidence contract")
-        print("  approval-checklist  Preview Business Development approval checklist")
-        print("  review              Preview Business Development review package")
+        print("  intake-preview              Preview Business Development intake")
+        print("  evidence-contract           Preview Business Development evidence contract")
+        print("  approval-checklist          Preview Business Development approval checklist")
+        print("  review                      Preview Business Development review package")
+        print("  source-boundary             Preview Business Development source boundary")
+        print("  source-evidence-contract    Preview Business Development source evidence contract")
+        print("  source-review               Preview Business Development source review package")
         return 0
     print(f"business-development: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py business-development --help' for subcommands.", file=sys.stderr)

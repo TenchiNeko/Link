@@ -13159,6 +13159,222 @@ def check_business_development_intake_governance_clis() -> None:
     print("business development intake governance CLIs OK")
 
 # ---------------------------------------------------------------------------
+# 62k. Business Development source governance helpers and CLI
+# ---------------------------------------------------------------------------
+
+def check_business_development_source_governance_helpers() -> None:
+    """Source governance remains read-only and blocks collection by default."""
+    from link_modes.growth.link_growth_console import (
+        BUSINESS_DEVELOPMENT_ALLOWED_COLLECTION_METHODS,
+        BUSINESS_DEVELOPMENT_ALLOWED_SOURCE_FAMILIES,
+        BUSINESS_DEVELOPMENT_BLOCKED_COLLECTION_METHODS,
+        BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_FAMILIES,
+        BUSINESS_DEVELOPMENT_SOURCE_PROVENANCE_REQUIREMENTS,
+        LINK_SHARED_SERVICE_IDS_V2,
+        collect_business_development_source_boundary,
+        collect_business_development_source_evidence_contract,
+        collect_business_development_source_review_package,
+        collect_link_shared_services_registry,
+        parse_business_development_source_boundary_json,
+        parse_business_development_source_evidence_contract_json,
+        parse_business_development_source_review_package_json,
+        parse_link_shared_services_registry_json,
+        stable_business_development_source_boundary_json,
+        stable_business_development_source_evidence_contract_json,
+        stable_business_development_source_review_package_json,
+        stable_link_shared_services_registry_json,
+        validate_business_development_source_boundary,
+        validate_business_development_source_evidence_contract,
+        validate_business_development_source_review_package,
+        validate_link_shared_services_registry,
+    )
+
+    boundary = collect_business_development_source_boundary()
+    same_boundary = collect_business_development_source_boundary()
+    validate_business_development_source_boundary(boundary)
+    _require(boundary["source_boundary_id"] == same_boundary["source_boundary_id"],
+             "Business Development source boundary id must be deterministic")
+    _require(boundary["allowed_source_families"] == list(BUSINESS_DEVELOPMENT_ALLOWED_SOURCE_FAMILIES),
+             "Business Development source boundary must include allowed source families")
+    _require(boundary["blocked_source_families"] == list(BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_FAMILIES),
+             "Business Development source boundary must include blocked source families")
+    _require(boundary["allowed_collection_methods"] == list(BUSINESS_DEVELOPMENT_ALLOWED_COLLECTION_METHODS),
+             "Business Development source boundary must include allowed collection methods")
+    _require(boundary["blocked_collection_methods"] == list(BUSINESS_DEVELOPMENT_BLOCKED_COLLECTION_METHODS),
+             "Business Development source boundary must include blocked collection methods")
+    _require("source_url" in boundary["source_provenance_requirements"],
+             "Business Development source boundary must require source URL provenance")
+    _require("source_hash" in boundary["source_provenance_requirements"],
+             "Business Development source boundary must require source hash provenance")
+    _require(boundary["source_provenance_requirements"] == list(BUSINESS_DEVELOPMENT_SOURCE_PROVENANCE_REQUIREMENTS),
+             "Business Development source boundary provenance requirements must be deterministic")
+    _require(parse_business_development_source_boundary_json(stable_business_development_source_boundary_json(boundary)) == boundary,
+             "Business Development source boundary JSON must round trip")
+
+    contract = collect_business_development_source_evidence_contract(boundary)
+    same_contract = collect_business_development_source_evidence_contract(boundary)
+    validate_business_development_source_evidence_contract(contract, boundary)
+    _require(contract["source_evidence_contract_id"] == same_contract["source_evidence_contract_id"],
+             "Business Development source evidence contract id must be deterministic")
+    _require(contract["source_boundary_id"] == boundary["source_boundary_id"],
+             "Business Development source evidence contract must preserve boundary id")
+    _require(contract["required_provenance_fields"] == list(BUSINESS_DEVELOPMENT_SOURCE_PROVENANCE_REQUIREMENTS),
+             "Business Development source evidence contract must preserve provenance fields")
+    _require(contract["required_hash_fields"] == ["raw_source_hash", "normalized_source_hash", "provenance_record_hash"],
+             "Business Development source evidence contract must include hash fields")
+    _require(contract["missing_evidence"], "Business Development source evidence contract must include missing evidence")
+    _require(contract["blocked_actions"] == list(BUSINESS_DEVELOPMENT_BLOCKED_COLLECTION_METHODS),
+             "Business Development source evidence contract must block collection methods")
+    _require(parse_business_development_source_evidence_contract_json(stable_business_development_source_evidence_contract_json(contract)) == contract,
+             "Business Development source evidence contract JSON must round trip")
+
+    review = collect_business_development_source_review_package(boundary, contract)
+    same_review = collect_business_development_source_review_package(boundary, contract)
+    validate_business_development_source_review_package(review, boundary, contract)
+    _require(review["source_review_package_id"] == same_review["source_review_package_id"],
+             "Business Development source review id must be deterministic")
+    _require(review["source_boundary_id"] == boundary["source_boundary_id"],
+             "Business Development source review must preserve boundary id")
+    _require(review["source_evidence_contract_id"] == contract["source_evidence_contract_id"],
+             "Business Development source review must preserve contract id")
+    _require(review["readiness_status"] == "blocked", "Business Development source review must block by default")
+    _require(review["review_recommendation"] == "do_not_collect",
+             "blocked Business Development source review must recommend no collection")
+    _require(review["blockers"], "Business Development source review must include blockers")
+    _require(review["required_human_actions"], "Business Development source review must include human actions")
+    _require(parse_business_development_source_review_package_json(stable_business_development_source_review_package_json(review)) == review,
+             "Business Development source review JSON must round trip")
+
+    services = collect_link_shared_services_registry()
+    same_services = collect_link_shared_services_registry()
+    validate_link_shared_services_registry(services)
+    _require(services["shared_services_registry_id"] == same_services["shared_services_registry_id"],
+             "Link shared services registry id must be deterministic")
+    _require([item["service_id"] for item in services["services"]] == list(LINK_SHARED_SERVICE_IDS_V2),
+             "Link shared services registry must include expected services")
+    _require("source governance" in [item["service_id"] for item in services["services"]],
+             "Link shared services registry must include source governance")
+    _require(parse_link_shared_services_registry_json(stable_link_shared_services_registry_json(services)) == services,
+             "Link shared services registry JSON must round trip")
+
+    for payload in (boundary, contract, review, services):
+        _require(payload["dry_run"] is True and payload["write_allowed"] is False,
+                 "source governance payloads must be read-only")
+        _require(payload["automation_allowed"] is False and payload["writes"] == [],
+                 "source governance payloads must not allow automation or writes")
+        _require(payload["safety_metadata"] == {
+            "dry_run": True, "write_allowed": False, "automation_allowed": False, "writes": [],
+        }, "source governance payloads must include safety metadata")
+
+    bad_boundary = dict(boundary)
+    bad_boundary["blocked_source_families"] = list(boundary["blocked_source_families"]) + ["public reports"]
+    try:
+        validate_business_development_source_boundary(bad_boundary)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development source boundary validation must reject source family mismatch")
+
+    bad_contract = dict(contract)
+    bad_contract["required_provenance_fields"] = ["source_url"]
+    try:
+        validate_business_development_source_evidence_contract(bad_contract)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development source evidence validation must reject missing provenance")
+
+    bad_review = dict(review)
+    bad_review["readiness_status"] = "ready"
+    try:
+        validate_business_development_source_review_package(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development source review validation must reject invalid readiness")
+
+    bad_services = dict(services)
+    bad_services["services"] = []
+    try:
+        validate_link_shared_services_registry(bad_services)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Link shared services registry validation must reject missing services")
+    print("business development source governance helpers OK")
+
+
+def check_business_development_source_governance_clis() -> None:
+    """Business Development source governance CLIs expose only their payloads."""
+    from link import _cmd_business_development
+    from link_modes.growth.link_growth_console import (
+        business_development_source_boundary_main,
+        business_development_source_evidence_contract_main,
+        business_development_source_review_main,
+        parse_business_development_source_boundary_json,
+        parse_business_development_source_evidence_contract_json,
+        parse_business_development_source_review_package_json,
+    )
+
+    expected = [
+        ("source-boundary", business_development_source_boundary_main, parse_business_development_source_boundary_json,
+         "source_boundary_id", "Business Development source boundary"),
+        ("source-evidence-contract", business_development_source_evidence_contract_main, parse_business_development_source_evidence_contract_json,
+         "source_evidence_contract_id", "Business Development source evidence contract"),
+        ("source-review", business_development_source_review_main, parse_business_development_source_review_package_json,
+         "source_review_package_id", "Business Development source review"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_business_development(["--help"])
+    _require(help_rc == 0, "business-development --help must return 0 for source governance")
+    for command, main_func, parse_func, id_key, title in expected:
+        _require(command in help_out.getvalue(), f"business-development help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"business-development {command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"business-development {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"business-development {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"business-development {command} must not allow automation or writes")
+        for full_payload_key in (
+            "business_development_source_boundary",
+            "business_development_source_evidence_contract",
+            "business_development_source_review_package",
+            "business_development_review_package",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"business-development {command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_business_development([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"business-development {command} route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"business-development {command} route must preserve id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"business-development {command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"business-development {command} human mode must include title and id")
+        _require(len(human.splitlines()) <= 15, f"business-development {command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"business-development {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"business-development {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"business-development {command} --write must not print normal output")
+    print("business development source governance CLIs OK")
+
+# ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
 
@@ -14179,6 +14395,8 @@ def main() -> None:
     check_growth_campaign_governance_clis()
     check_business_development_intake_governance_helpers()
     check_business_development_intake_governance_clis()
+    check_business_development_source_governance_helpers()
+    check_business_development_source_governance_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()
