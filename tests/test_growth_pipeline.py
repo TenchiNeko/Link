@@ -11962,6 +11962,207 @@ def check_fork_lineage_with_content_replacements() -> None:
 
 
 
+
+# ---------------------------------------------------------------------------
+# 62k. Supervised execution write boundary helper
+# ---------------------------------------------------------------------------
+
+def check_supervised_execution_write_boundary_helper() -> None:
+    """supervised execution write boundary denies unsafe whole-pipeline writes."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_approval_checklist,
+        collect_growth_planning_chain_preview,
+        collect_supervised_execution_plan,
+        collect_supervised_execution_write_boundary,
+        parse_supervised_execution_write_boundary_json,
+        stable_supervised_execution_write_boundary_json,
+        validate_supervised_execution_write_boundary,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    plan = collect_supervised_execution_plan(chain)
+    boundary = collect_supervised_execution_write_boundary(chain, supervised_execution_plan=plan)
+    validate_supervised_execution_write_boundary(boundary, planning_chain=chain, supervised_execution_plan=plan)
+    same = collect_supervised_execution_write_boundary(chain, supervised_execution_plan=plan)
+    _require(boundary["supervised_execution_write_boundary_id"] == same["supervised_execution_write_boundary_id"],
+             "supervised execution write boundary id must be deterministic")
+    decoded = parse_supervised_execution_write_boundary_json(stable_supervised_execution_write_boundary_json(boundary))
+    _require(decoded == boundary, "supervised execution write boundary JSON must round trip")
+    _require(boundary["supervised_execution_plan_id"] == plan["supervised_execution_plan_id"],
+             "write boundary must reference supervised execution plan")
+    _require(boundary["approval_status"] in {"pass", "review", "block"},
+             "write boundary must expose approval status")
+    _require(boundary["gate_status"] in {"pass", "review", "block"},
+             "write boundary must expose gate status")
+    _require(boundary["evidence_status"] == "pass",
+             "write boundary evidence status must pass when contract defines required evidence")
+    _require(boundary["write_authorization_status"] == "denied",
+             "default write boundary must deny supervised execution until blockers are resolved")
+    _require(boundary["blockers"], "denied write boundary must include blockers")
+    _require(boundary["required_human_actions"],
+             "write boundary must include required human actions")
+    _require(boundary["dry_run"] is True and boundary["write_allowed"] is False,
+             "write boundary must be read-only")
+    _require(boundary["automation_allowed"] is False and boundary["writes"] == [],
+             "write boundary must not allow automation or writes")
+
+    bad = dict(boundary)
+    bad["write_authorization_status"] = "allowed"
+    try:
+        validate_supervised_execution_write_boundary(bad)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("write boundary validation must reject allowed status with blockers")
+
+    bad_status = dict(boundary)
+    bad_status["approval_status"] = "maybe"
+    try:
+        validate_supervised_execution_write_boundary(bad_status)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("write boundary validation must reject invalid approval status")
+
+    bad_safety = dict(boundary)
+    bad_safety["write_allowed"] = True
+    try:
+        validate_supervised_execution_write_boundary(bad_safety)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("write boundary validation must reject unsafe write metadata")
+
+    approval = collect_execution_approval_checklist(chain)
+    mismatch = dict(boundary)
+    mismatch["approval_checklist_id"] = "approval-checklist-wrong"
+    try:
+        validate_supervised_execution_write_boundary(mismatch, execution_approval_checklist=approval)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("write boundary validation must reject approval checklist mismatch")
+
+    missing = dict(boundary)
+    missing.pop("supervised_execution_write_boundary_id")
+    try:
+        validate_supervised_execution_write_boundary(missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("write boundary validation must reject missing id")
+    print("supervised execution write boundary helper OK")
+
+
+# ---------------------------------------------------------------------------
+# 62k. Growth supervised-execution-boundary CLI
+# ---------------------------------------------------------------------------
+
+def check_growth_supervised_execution_boundary_cli() -> None:
+    """supervised-execution-boundary exposes only the write authorization boundary."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_growth_planning_chain_preview,
+        collect_supervised_execution_write_boundary,
+        parse_supervised_execution_write_boundary_json,
+        supervised_execution_boundary_main,
+        validate_supervised_execution_write_boundary,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("supervised-execution-boundary" in help_out.getvalue(),
+             "growth help must include supervised-execution-boundary")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = supervised_execution_boundary_main(["--json"])
+    _require(json_rc == 0, "supervised-execution-boundary --json must return 0")
+    parsed = parse_supervised_execution_write_boundary_json(json_out.getvalue())
+    validate_supervised_execution_write_boundary(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected = collect_supervised_execution_write_boundary(chain)
+    _require(parsed["supervised_execution_write_boundary_id"] == expected["supervised_execution_write_boundary_id"],
+             "supervised-execution-boundary id must be deterministic")
+    for field in (
+        "supervised_execution_write_boundary_id",
+        "supervised_execution_plan_id",
+        "approval_status",
+        "gate_status",
+        "evidence_status",
+        "workspace_status",
+        "patch_status",
+        "verification_status",
+        "rollback_status",
+        "write_authorization_status",
+        "blockers",
+        "warnings",
+        "required_human_actions",
+        "recommended_next_action",
+    ):
+        _require(field in parsed, f"supervised-execution-boundary JSON must include {field}")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "supervised-execution-boundary must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "supervised-execution-boundary must not allow automation or writes")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_gate_stack_preview",
+        "execution_review",
+        "execution_evidence_contract",
+        "supervised_execution_plan",
+    ):
+        _require(full_chain_key not in parsed,
+                 "supervised-execution-boundary --json must output only boundary payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["supervised-execution-boundary", "--json"])
+    routed = parse_supervised_execution_write_boundary_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth supervised-execution-boundary --json route must return 0")
+    _require(routed["supervised_execution_write_boundary_id"] == parsed["supervised_execution_write_boundary_id"],
+             "growth supervised-execution-boundary route must preserve deterministic boundary id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = supervised_execution_boundary_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "supervised-execution-boundary human mode must return 0")
+    for needle in (
+        "Growth supervised execution boundary",
+        "supervised_execution_write_boundary_id:",
+        "supervised_execution_plan_id:",
+        "approval_status:",
+        "gate_status:",
+        "evidence_status:",
+        "workspace_status:",
+        "patch_status:",
+        "verification_status:",
+        "rollback_status:",
+        "write_authorization_status:",
+        "blocker_count:",
+        "warning_count:",
+        "required_human_action_count:",
+        "next_action:",
+    ):
+        _require(needle in human, f"supervised-execution-boundary human mode must include {needle}")
+    _require(len(human.splitlines()) <= 15,
+             "supervised-execution-boundary human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = supervised_execution_boundary_main(["--write", "--json"])
+    _require(write_rc != 0, "supervised-execution-boundary --write must be rejected")
+    _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+             "supervised-execution-boundary --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "supervised-execution-boundary --write must not print normal output")
+    print("growth supervised-execution-boundary CLI OK")
+
 # ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution CLI
 # ---------------------------------------------------------------------------
@@ -12350,6 +12551,8 @@ def main() -> None:
     check_guarded_rollback_executor_runtime_component()
     check_execution_evidence_collector_runtime_component()
     check_growth_evidence_collect_cli()
+    check_supervised_execution_write_boundary_helper()
+    check_growth_supervised_execution_boundary_cli()
     check_growth_supervised_execution_cli()
     check_supervised_execution_orchestrator_runtime_component()
     check_guarded_workspace_lifecycle_cleanup_abandon()

@@ -10851,6 +10851,50 @@ def supervised_execution_main(argv: list[str] | None = None) -> int:
     render_supervised_execution_plain(plan)
     return 0
 
+
+def render_supervised_execution_boundary_plain(boundary: dict[str, Any]) -> None:
+    validate_supervised_execution_write_boundary(boundary)
+    print("Growth supervised execution boundary")
+    print(f"supervised_execution_write_boundary_id: {boundary['supervised_execution_write_boundary_id']}")
+    print(f"supervised_execution_plan_id: {boundary['supervised_execution_plan_id']}")
+    print(f"approval_status: {boundary['approval_status']}")
+    print(f"gate_status: {boundary['gate_status']}")
+    print(f"evidence_status: {boundary['evidence_status']}")
+    print(f"workspace_status: {boundary['workspace_status']}")
+    print(f"patch_status: {boundary['patch_status']}")
+    print(f"verification_status: {boundary['verification_status']}")
+    print(f"rollback_status: {boundary['rollback_status']}")
+    print(f"write_authorization_status: {boundary['write_authorization_status']}")
+    print(f"blocker_count: {len(boundary['blockers'])}")
+    print(f"warning_count: {len(boundary['warnings'])}")
+    print(f"required_human_action_count: {len(boundary['required_human_actions'])}")
+    print(f"next_action: {boundary['recommended_next_action']}")
+
+
+def supervised_execution_boundary_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth supervised-execution-boundary`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth supervised-execution-boundary: supervised execution write boundary")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth supervised-execution-boundary")
+        print("  python3 link.py growth supervised-execution-boundary --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth supervised-execution-boundary is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    boundary = collect_supervised_execution_write_boundary(chain)
+    validate_supervised_execution_write_boundary(boundary, planning_chain=chain)
+    if "--json" in args:
+        print(stable_supervised_execution_write_boundary_json(boundary), end="")
+        return 0
+    render_supervised_execution_boundary_plain(boundary)
+    return 0
+
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     validate_growth_planning_chain_preview(chain)
     gap_counts = chain["capability_gap_preview"]["counts"]
@@ -19740,6 +19784,339 @@ def parse_supervised_execution_plan_json(text: str) -> dict[str, Any]:
     validate_supervised_execution_plan(plan)
     return plan
 
+
+
+SUPERVISED_EXECUTION_WRITE_BOUNDARY_VERSION = "link-supervised-execution-write-boundary-v1"
+
+
+def make_supervised_execution_write_boundary_id(
+    supervised_execution_plan_id: str,
+    approval_status: str,
+    gate_status: str,
+    evidence_status: str,
+    workspace_status: str,
+    patch_status: str,
+    verification_status: str,
+    rollback_status: str,
+    blockers: list[str],
+    warnings: list[str],
+) -> str:
+    return _execution_readiness_id("supervised-execution-write-boundary", {
+        "approval_status": approval_status,
+        "blockers": blockers,
+        "evidence_status": evidence_status,
+        "gate_status": gate_status,
+        "patch_status": patch_status,
+        "rollback_status": rollback_status,
+        "supervised_execution_plan_id": supervised_execution_plan_id,
+        "verification_status": verification_status,
+        "version": SUPERVISED_EXECUTION_WRITE_BOUNDARY_VERSION,
+        "warnings": warnings,
+        "workspace_status": workspace_status,
+    })
+
+
+def _supervised_boundary_status_from_gate_stack(gate_stack: dict[str, Any]) -> str:
+    if gate_stack["block_count"]:
+        return "block"
+    if gate_stack["review_count"]:
+        return "review"
+    return "pass"
+
+
+def _supervised_boundary_contract_status(contract: dict[str, Any]) -> tuple[str, list[str]]:
+    required_types = {"compile", "healthcheck", "patch_application", "quality_gate", "rollback", "tests"}
+    present_types = {item["evidence_type"] for item in contract["evidence_items"]}
+    missing = _normalize_implementation_branch_refs(sorted(required_types - present_types))
+    return ("block" if missing else "pass", missing)
+
+
+def collect_supervised_execution_write_boundary(
+    planning_chain: dict[str, Any] | None = None,
+    *,
+    supervised_execution_plan: dict[str, Any] | None = None,
+    execution_review: dict[str, Any] | None = None,
+    execution_approval_checklist: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_evidence_contract: dict[str, Any] | None = None,
+    workspace_boundary: dict[str, Any] | None = None,
+    patch_boundary: dict[str, Any] | None = None,
+    verification_boundary: dict[str, Any] | None = None,
+    rollback_boundary: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the read-only authorization boundary for future supervised --write."""
+    chain = planning_chain or collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(chain)
+    plan = supervised_execution_plan or collect_supervised_execution_plan(chain)
+    review = execution_review or collect_execution_review(chain)
+    approval = execution_approval_checklist or collect_execution_approval_checklist(chain)
+    gate_stack = execution_gate_stack_preview or chain["execution_gate_stack_preview"]
+    evidence_contract = execution_evidence_contract or chain["execution_evidence_contract"]
+    workspace = workspace_boundary or collect_workspace_creator_runtime_boundary(chain)
+    patch = patch_boundary or collect_patch_boundary_preview_from_chain(chain)
+    verification = verification_boundary or collect_verification_boundary_preview_from_chain(chain)
+    rollback = rollback_boundary or collect_rollback_boundary_preview_from_chain(chain)
+
+    validate_supervised_execution_plan(plan, chain)
+    validate_execution_review(review)
+    validate_execution_approval_checklist(approval)
+    validate_execution_gate_stack_preview(gate_stack)
+    validate_execution_evidence_contract(evidence_contract)
+    validate_workspace_creator_runtime_boundary(workspace)
+    validate_patch_applier_boundary(patch)
+    validate_verification_runner_boundary(verification)
+    validate_rollback_runtime_boundary(rollback)
+
+    approval_status = approval["approval_status"]
+    gate_status = _supervised_boundary_status_from_gate_stack(gate_stack)
+    evidence_status, missing_evidence = _supervised_boundary_contract_status(evidence_contract)
+    workspace_status = workspace["boundary_status"]
+    patch_status = "pass"
+    verification_status = "pass"
+    rollback_status = "pass"
+    blockers: list[str] = []
+    warnings: list[str] = []
+    required_actions: list[str] = [
+        "human reviewer must explicitly approve supervised execution before --write",
+        *approval["required_approvals"],
+    ]
+    if approval_status != "pass":
+        blockers.append(f"approval checklist status is {approval_status}")
+    if gate_status != "pass":
+        blockers.append(f"execution gate stack status is {gate_status}")
+    if evidence_status != "pass":
+        blockers.append("execution evidence contract is missing required evidence definitions")
+    if workspace_status != "pass":
+        blockers.append(f"workspace boundary status is {workspace_status}")
+    for label, status in (
+        ("patch boundary", patch_status),
+        ("verification boundary", verification_status),
+        ("rollback boundary", rollback_status),
+    ):
+        if status != "pass":
+            blockers.append(f"{label} status is {status}")
+    warnings.extend(approval["approval_warnings"])
+    warnings.extend(gate.get("warnings", []) for gate in gate_stack["gates"])
+    flattened_warnings: list[str] = []
+    for item in warnings:
+        if isinstance(item, list):
+            flattened_warnings.extend(item)
+        else:
+            flattened_warnings.append(item)
+    warnings = flattened_warnings
+    if workspace["warning_count"]:
+        warnings.append(f"workspace boundary has {workspace['warning_count']} warning(s)")
+    blockers = _normalize_patch_behavior_text_list(blockers)
+    warnings = _normalize_patch_behavior_text_list(warnings)
+    required_actions = _normalize_patch_behavior_text_list(required_actions)
+    authorization = "allowed" if not blockers else "denied"
+    if authorization == "allowed":
+        next_action = "Supervised execution write boundary is clear; require explicit human approval before --write."
+    else:
+        next_action = "Resolve supervised execution write blockers before exposing or running --write."
+    boundary = {
+        "supervised_execution_write_boundary_version": SUPERVISED_EXECUTION_WRITE_BOUNDARY_VERSION,
+        "supervised_execution_write_boundary_id": make_supervised_execution_write_boundary_id(
+            plan["supervised_execution_plan_id"],
+            approval_status,
+            gate_status,
+            evidence_status,
+            workspace_status,
+            patch_status,
+            verification_status,
+            rollback_status,
+            blockers,
+            warnings,
+        ),
+        "planning_chain_id": chain["planning_chain_id"],
+        "execution_package_id": plan["execution_package_id"],
+        "supervised_execution_plan_id": plan["supervised_execution_plan_id"],
+        "execution_review_id": review["execution_review_id"],
+        "approval_checklist_id": approval["approval_checklist_id"],
+        "gate_stack_preview_id": gate_stack["gate_stack_preview_id"],
+        "execution_evidence_contract_id": evidence_contract["execution_evidence_contract_id"],
+        "workspace_boundary_id": workspace["workspace_boundary_id"],
+        "patch_applier_boundary_id": patch["patch_applier_boundary_id"],
+        "verification_runner_boundary_id": verification["verification_runner_boundary_id"],
+        "rollback_runtime_boundary_id": rollback["rollback_runtime_boundary_id"],
+        "approval_status": approval_status,
+        "gate_status": gate_status,
+        "evidence_status": evidence_status,
+        "workspace_status": workspace_status,
+        "patch_status": patch_status,
+        "verification_status": verification_status,
+        "rollback_status": rollback_status,
+        "write_authorization_status": authorization,
+        "missing_evidence": missing_evidence,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": required_actions,
+        "recommended_next_action": next_action,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+        "metadata": dict(metadata or {}),
+    }
+    validate_supervised_execution_write_boundary(
+        boundary,
+        planning_chain=chain,
+        supervised_execution_plan=plan,
+        execution_review=review,
+        execution_approval_checklist=approval,
+        execution_gate_stack_preview=gate_stack,
+        execution_evidence_contract=evidence_contract,
+        workspace_boundary=workspace,
+        patch_boundary=patch,
+        verification_boundary=verification,
+        rollback_boundary=rollback,
+    )
+    return boundary
+
+
+def validate_supervised_execution_write_boundary(
+    boundary: dict[str, Any],
+    *,
+    planning_chain: dict[str, Any] | None = None,
+    supervised_execution_plan: dict[str, Any] | None = None,
+    execution_review: dict[str, Any] | None = None,
+    execution_approval_checklist: dict[str, Any] | None = None,
+    execution_gate_stack_preview: dict[str, Any] | None = None,
+    execution_evidence_contract: dict[str, Any] | None = None,
+    workspace_boundary: dict[str, Any] | None = None,
+    patch_boundary: dict[str, Any] | None = None,
+    verification_boundary: dict[str, Any] | None = None,
+    rollback_boundary: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "supervised_execution_write_boundary_version", "supervised_execution_write_boundary_id",
+        "planning_chain_id", "execution_package_id", "supervised_execution_plan_id",
+        "execution_review_id", "approval_checklist_id", "gate_stack_preview_id",
+        "execution_evidence_contract_id", "workspace_boundary_id", "patch_applier_boundary_id",
+        "verification_runner_boundary_id", "rollback_runtime_boundary_id", "approval_status",
+        "gate_status", "evidence_status", "workspace_status", "patch_status", "verification_status",
+        "rollback_status", "write_authorization_status", "missing_evidence", "blockers", "warnings",
+        "required_human_actions", "recommended_next_action", "dry_run", "write_allowed",
+        "automation_allowed", "writes", "metadata",
+    )
+    missing = [field for field in required if field not in boundary]
+    if missing:
+        raise ValueError(f"supervised execution write boundary missing fields: {missing}")
+    if boundary["supervised_execution_write_boundary_version"] != SUPERVISED_EXECUTION_WRITE_BOUNDARY_VERSION:
+        raise ValueError("unsupported supervised execution write boundary version")
+    for field in (
+        "supervised_execution_write_boundary_id", "planning_chain_id", "execution_package_id",
+        "supervised_execution_plan_id", "execution_review_id", "approval_checklist_id",
+        "gate_stack_preview_id", "execution_evidence_contract_id", "workspace_boundary_id",
+        "patch_applier_boundary_id", "verification_runner_boundary_id", "rollback_runtime_boundary_id",
+        "approval_status", "gate_status", "evidence_status", "workspace_status", "patch_status",
+        "verification_status", "rollback_status", "write_authorization_status", "recommended_next_action",
+    ):
+        _validate_non_empty_string(boundary[field], field)
+    for field in ("approval_status", "gate_status", "evidence_status", "workspace_status", "patch_status", "verification_status", "rollback_status"):
+        if boundary[field] not in {"pass", "review", "block"}:
+            raise ValueError(f"invalid {field}")
+    if boundary["write_authorization_status"] not in {"allowed", "denied"}:
+        raise ValueError("invalid write_authorization_status")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        values = boundary[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if field == "required_human_actions" and not values:
+            raise ValueError("required_human_actions must not be empty")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if boundary["missing_evidence"] != _normalize_implementation_branch_refs(boundary["missing_evidence"]):
+        raise ValueError("missing_evidence must be normalized and sorted")
+    if boundary["blockers"] and boundary["write_authorization_status"] != "denied":
+        raise ValueError("write authorization must be denied when blockers exist")
+    if not boundary["blockers"] and boundary["write_authorization_status"] != "allowed":
+        raise ValueError("write authorization may be allowed only without blockers")
+    if boundary["write_authorization_status"] == "allowed":
+        for field in ("approval_status", "gate_status", "evidence_status", "workspace_status", "patch_status", "verification_status", "rollback_status"):
+            if boundary[field] != "pass":
+                raise ValueError("allowed write authorization requires every status to pass")
+    if boundary["dry_run"] is not True or boundary["write_allowed"] is not False or boundary["automation_allowed"] is not False or boundary["writes"] != []:
+        raise ValueError("supervised execution write boundary must be read-only")
+    if not isinstance(boundary["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    expected_id = make_supervised_execution_write_boundary_id(
+        boundary["supervised_execution_plan_id"],
+        boundary["approval_status"],
+        boundary["gate_status"],
+        boundary["evidence_status"],
+        boundary["workspace_status"],
+        boundary["patch_status"],
+        boundary["verification_status"],
+        boundary["rollback_status"],
+        boundary["blockers"],
+        boundary["warnings"],
+    )
+    if boundary["supervised_execution_write_boundary_id"] != expected_id:
+        raise ValueError("supervised execution write boundary id does not match contents")
+    if planning_chain is not None:
+        validate_growth_planning_chain_preview(planning_chain)
+        if boundary["planning_chain_id"] != planning_chain["planning_chain_id"]:
+            raise ValueError("write boundary planning chain mismatch")
+        if boundary["execution_package_id"] != planning_chain["autonomous_execution_package"]["execution_package_id"]:
+            raise ValueError("write boundary execution package mismatch")
+    if supervised_execution_plan is not None:
+        validate_supervised_execution_plan(supervised_execution_plan)
+        if boundary["supervised_execution_plan_id"] != supervised_execution_plan["supervised_execution_plan_id"]:
+            raise ValueError("write boundary supervised plan mismatch")
+    if execution_review is not None:
+        validate_execution_review(execution_review)
+        if boundary["execution_review_id"] != execution_review["execution_review_id"]:
+            raise ValueError("write boundary execution review mismatch")
+    if execution_approval_checklist is not None:
+        validate_execution_approval_checklist(execution_approval_checklist)
+        if boundary["approval_checklist_id"] != execution_approval_checklist["approval_checklist_id"]:
+            raise ValueError("write boundary approval checklist mismatch")
+        if boundary["approval_status"] != execution_approval_checklist["approval_status"]:
+            raise ValueError("write boundary approval status mismatch")
+    if execution_gate_stack_preview is not None:
+        validate_execution_gate_stack_preview(execution_gate_stack_preview)
+        if boundary["gate_stack_preview_id"] != execution_gate_stack_preview["gate_stack_preview_id"]:
+            raise ValueError("write boundary gate stack mismatch")
+        if boundary["gate_status"] != _supervised_boundary_status_from_gate_stack(execution_gate_stack_preview):
+            raise ValueError("write boundary gate status mismatch")
+    if execution_evidence_contract is not None:
+        validate_execution_evidence_contract(execution_evidence_contract)
+        if boundary["execution_evidence_contract_id"] != execution_evidence_contract["execution_evidence_contract_id"]:
+            raise ValueError("write boundary evidence contract mismatch")
+        expected_status, expected_missing = _supervised_boundary_contract_status(execution_evidence_contract)
+        if boundary["evidence_status"] != expected_status or boundary["missing_evidence"] != expected_missing:
+            raise ValueError("write boundary evidence status mismatch")
+    if workspace_boundary is not None:
+        validate_workspace_creator_runtime_boundary(workspace_boundary)
+        if boundary["workspace_boundary_id"] != workspace_boundary["workspace_boundary_id"]:
+            raise ValueError("write boundary workspace boundary mismatch")
+        if boundary["workspace_status"] != workspace_boundary["boundary_status"]:
+            raise ValueError("write boundary workspace status mismatch")
+    if patch_boundary is not None:
+        validate_patch_applier_boundary(patch_boundary)
+        if boundary["patch_applier_boundary_id"] != patch_boundary["patch_applier_boundary_id"]:
+            raise ValueError("write boundary patch boundary mismatch")
+    if verification_boundary is not None:
+        validate_verification_runner_boundary(verification_boundary)
+        if boundary["verification_runner_boundary_id"] != verification_boundary["verification_runner_boundary_id"]:
+            raise ValueError("write boundary verification boundary mismatch")
+    if rollback_boundary is not None:
+        validate_rollback_runtime_boundary(rollback_boundary)
+        if boundary["rollback_runtime_boundary_id"] != rollback_boundary["rollback_runtime_boundary_id"]:
+            raise ValueError("write boundary rollback boundary mismatch")
+
+
+def stable_supervised_execution_write_boundary_json(boundary: dict[str, Any]) -> str:
+    validate_supervised_execution_write_boundary(boundary)
+    return _stable_ruflo_json(boundary, indent=2) + "\n"
+
+
+def parse_supervised_execution_write_boundary_json(text: str) -> dict[str, Any]:
+    boundary = json.loads(text)
+    validate_supervised_execution_write_boundary(boundary)
+    return boundary
 
 def make_supervised_execution_request(
     supervised_execution_plan: dict[str, Any],
