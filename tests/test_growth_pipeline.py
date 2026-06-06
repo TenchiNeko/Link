@@ -13375,6 +13375,233 @@ def check_business_development_source_governance_clis() -> None:
     print("business development source governance CLIs OK")
 
 # ---------------------------------------------------------------------------
+# 62l. Business Development collection planning governance helpers and CLI
+# ---------------------------------------------------------------------------
+
+def check_business_development_collection_planning_helpers() -> None:
+    """Collection planning objects preserve source governance ID flow read-only."""
+    from link_modes.growth.link_growth_console import (
+        BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_CARD_IDS,
+        BUSINESS_DEVELOPMENT_SOURCE_CARD_IDS,
+        collect_business_development_collection_approval_checklist,
+        collect_business_development_collection_plan_preview,
+        collect_business_development_collection_review_package,
+        collect_business_development_source_boundary,
+        collect_business_development_source_card_registry,
+        collect_business_development_source_evidence_contract,
+        parse_business_development_collection_approval_checklist_json,
+        parse_business_development_collection_plan_preview_json,
+        parse_business_development_collection_review_package_json,
+        parse_business_development_source_card_registry_json,
+        stable_business_development_collection_approval_checklist_json,
+        stable_business_development_collection_plan_preview_json,
+        stable_business_development_collection_review_package_json,
+        stable_business_development_source_card_registry_json,
+        validate_business_development_collection_approval_checklist,
+        validate_business_development_collection_plan_preview,
+        validate_business_development_collection_review_package,
+        validate_business_development_source_card_registry,
+    )
+
+    boundary = collect_business_development_source_boundary()
+    evidence = collect_business_development_source_evidence_contract(boundary)
+    source_cards = collect_business_development_source_card_registry(boundary)
+    same_source_cards = collect_business_development_source_card_registry(boundary)
+    validate_business_development_source_card_registry(source_cards, boundary)
+    _require(source_cards["source_card_registry_id"] == same_source_cards["source_card_registry_id"],
+             "Business Development source card registry id must be deterministic")
+    _require(source_cards["source_boundary_id"] == boundary["source_boundary_id"],
+             "Business Development source card registry must preserve boundary id")
+    _require([card["source_card_id"] for card in source_cards["source_cards"]] == list(BUSINESS_DEVELOPMENT_SOURCE_CARD_IDS),
+             "Business Development source card registry must preserve source card ids")
+    _require([card["source_card_id"] for card in source_cards["blocked_source_cards"]] == list(BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_CARD_IDS),
+             "Business Development source card registry must preserve blocked source card ids")
+    for card in source_cards["source_cards"]:
+        _require(card["auth_required"] is False, "Business Development source cards must not require auth")
+        _require(card["robots_policy_required"] is True, "Business Development source cards must require robots review")
+        _require(card["rate_limit_required"] is True, "Business Development source cards must require rate limits")
+        _require(card["provenance_required"] is True, "Business Development source cards must require provenance")
+    _require(parse_business_development_source_card_registry_json(stable_business_development_source_card_registry_json(source_cards)) == source_cards,
+             "Business Development source card registry JSON must round trip")
+
+    plan = collect_business_development_collection_plan_preview(source_cards, boundary, evidence)
+    same_plan = collect_business_development_collection_plan_preview(source_cards, boundary, evidence)
+    validate_business_development_collection_plan_preview(plan, source_cards, boundary, evidence)
+    _require(plan["collection_plan_preview_id"] == same_plan["collection_plan_preview_id"],
+             "Business Development collection plan id must be deterministic")
+    _require(plan["source_card_registry_id"] == source_cards["source_card_registry_id"],
+             "Business Development collection plan must preserve source card registry id")
+    _require(plan["source_boundary_id"] == boundary["source_boundary_id"],
+             "Business Development collection plan must preserve source boundary id")
+    _require(plan["source_evidence_contract_id"] == evidence["source_evidence_contract_id"],
+             "Business Development collection plan must preserve evidence contract id")
+    _require([item["source_card_id"] for item in plan["planned_collections"]] == list(BUSINESS_DEVELOPMENT_SOURCE_CARD_IDS),
+             "Business Development collection plan must include planned collections")
+    _require([item["source_card_id"] for item in plan["blocked_collections"]] == list(BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_CARD_IDS),
+             "Business Development collection plan must include blocked collections")
+    for item in plan["planned_collections"]:
+        _require(item["execution_allowed"] is False, "Business Development planned collections must not allow execution")
+        _require(item["review_required"] is True, "Business Development planned collections must require review")
+    _require(plan["blockers"], "Business Development collection plan must include blockers")
+    _require(parse_business_development_collection_plan_preview_json(stable_business_development_collection_plan_preview_json(plan)) == plan,
+             "Business Development collection plan JSON must round trip")
+
+    approval = collect_business_development_collection_approval_checklist(plan, source_cards, evidence)
+    same_approval = collect_business_development_collection_approval_checklist(plan, source_cards, evidence)
+    validate_business_development_collection_approval_checklist(approval, plan, source_cards, evidence)
+    _require(approval["collection_approval_checklist_id"] == same_approval["collection_approval_checklist_id"],
+             "Business Development collection approval id must be deterministic")
+    _require(approval["collection_plan_preview_id"] == plan["collection_plan_preview_id"],
+             "Business Development collection approval must preserve plan id")
+    _require(approval["approval_status"] == "block", "Business Development collection approval must block by default")
+    _require(approval["required_approvals"], "Business Development collection approval must include approvals")
+    _require(approval["blockers"], "Business Development collection approval must include blockers")
+    _require(parse_business_development_collection_approval_checklist_json(stable_business_development_collection_approval_checklist_json(approval)) == approval,
+             "Business Development collection approval JSON must round trip")
+
+    review = collect_business_development_collection_review_package(plan, source_cards, boundary, evidence, approval)
+    same_review = collect_business_development_collection_review_package(plan, source_cards, boundary, evidence, approval)
+    validate_business_development_collection_review_package(review, plan, source_cards, boundary, evidence, approval)
+    _require(review["collection_review_package_id"] == same_review["collection_review_package_id"],
+             "Business Development collection review id must be deterministic")
+    _require(review["collection_plan_preview_id"] == plan["collection_plan_preview_id"],
+             "Business Development collection review must preserve plan id")
+    _require(review["source_card_registry_id"] == source_cards["source_card_registry_id"],
+             "Business Development collection review must preserve source card registry id")
+    _require(review["source_boundary_id"] == boundary["source_boundary_id"],
+             "Business Development collection review must preserve source boundary id")
+    _require(review["source_evidence_contract_id"] == evidence["source_evidence_contract_id"],
+             "Business Development collection review must preserve evidence id")
+    _require(review["collection_approval_checklist_id"] == approval["collection_approval_checklist_id"],
+             "Business Development collection review must preserve approval id")
+    _require(review["readiness_status"] == "blocked", "Business Development collection review must block by default")
+    _require(review["review_recommendation"] == "do_not_collect",
+             "Business Development collection review must recommend no collection by default")
+    _require(parse_business_development_collection_review_package_json(stable_business_development_collection_review_package_json(review)) == review,
+             "Business Development collection review JSON must round trip")
+
+    for payload in (source_cards, plan, approval, review):
+        _require(payload["dry_run"] is True and payload["write_allowed"] is False,
+                 "Business Development collection planning payloads must be read-only")
+        _require(payload["automation_allowed"] is False and payload["writes"] == [],
+                 "Business Development collection planning payloads must not allow automation or writes")
+        _require(payload["safety_metadata"] == {
+            "dry_run": True, "write_allowed": False, "automation_allowed": False, "writes": [],
+        }, "Business Development collection planning payloads must include safety metadata")
+
+    bad_cards = dict(source_cards)
+    bad_cards["source_cards"] = []
+    try:
+        validate_business_development_source_card_registry(bad_cards)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development source card registry validation must reject missing cards")
+
+    bad_plan = dict(plan)
+    bad_plan["planned_collections"] = []
+    try:
+        validate_business_development_collection_plan_preview(bad_plan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development collection plan validation must reject missing planned collections")
+
+    bad_approval = dict(approval)
+    bad_approval["approval_status"] = "approved"
+    try:
+        validate_business_development_collection_approval_checklist(bad_approval)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development collection approval validation must reject invalid status")
+
+    bad_review = dict(review)
+    bad_review["readiness_status"] = "ready"
+    try:
+        validate_business_development_collection_review_package(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development collection review validation must reject invalid readiness")
+    print("business development collection planning helpers OK")
+
+
+def check_business_development_collection_planning_clis() -> None:
+    """Collection planning CLIs expose only object payloads and reject writes."""
+    from link import _cmd_business_development
+    from link_modes.growth.link_growth_console import (
+        business_development_collection_approval_checklist_main,
+        business_development_collection_plan_preview_main,
+        business_development_collection_review_main,
+        business_development_source_cards_main,
+        parse_business_development_collection_approval_checklist_json,
+        parse_business_development_collection_plan_preview_json,
+        parse_business_development_collection_review_package_json,
+        parse_business_development_source_card_registry_json,
+    )
+
+    expected = [
+        ("source-cards", business_development_source_cards_main, parse_business_development_source_card_registry_json,
+         "source_card_registry_id", "Business Development source cards"),
+        ("collection-plan-preview", business_development_collection_plan_preview_main, parse_business_development_collection_plan_preview_json,
+         "collection_plan_preview_id", "Business Development collection plan preview"),
+        ("collection-approval-checklist", business_development_collection_approval_checklist_main, parse_business_development_collection_approval_checklist_json,
+         "collection_approval_checklist_id", "Business Development collection approval checklist"),
+        ("collection-review", business_development_collection_review_main, parse_business_development_collection_review_package_json,
+         "collection_review_package_id", "Business Development collection review"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_business_development(["--help"])
+    _require(help_rc == 0, "business-development --help must return 0 for collection planning")
+    for command, main_func, parse_func, id_key, title in expected:
+        _require(command in help_out.getvalue(), f"business-development help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"business-development {command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"business-development {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"business-development {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"business-development {command} must not allow automation or writes")
+        for full_payload_key in (
+            "business_development_source_card_registry",
+            "business_development_collection_plan_preview",
+            "business_development_collection_approval_checklist",
+            "business_development_collection_review_package",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"business-development {command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_business_development([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"business-development {command} route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"business-development {command} route must preserve id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"business-development {command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"business-development {command} human mode must include title and id")
+        _require(len(human.splitlines()) <= 18, f"business-development {command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"business-development {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"business-development {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"business-development {command} --write must not print normal output")
+    print("business development collection planning CLIs OK")
+
+# ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
 
@@ -14397,6 +14624,8 @@ def main() -> None:
     check_business_development_intake_governance_clis()
     check_business_development_source_governance_helpers()
     check_business_development_source_governance_clis()
+    check_business_development_collection_planning_helpers()
+    check_business_development_collection_planning_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

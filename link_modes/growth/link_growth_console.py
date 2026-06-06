@@ -10832,6 +10832,10 @@ BUSINESS_DEVELOPMENT_REVIEW_PACKAGE_VERSION = "link-business-development-review-
 BUSINESS_DEVELOPMENT_SOURCE_BOUNDARY_VERSION = "link-business-development-source-boundary-v1"
 BUSINESS_DEVELOPMENT_SOURCE_EVIDENCE_CONTRACT_VERSION = "link-business-development-source-evidence-contract-v1"
 BUSINESS_DEVELOPMENT_SOURCE_REVIEW_PACKAGE_VERSION = "link-business-development-source-review-package-v1"
+BUSINESS_DEVELOPMENT_SOURCE_CARD_REGISTRY_VERSION = "link-business-development-source-card-registry-v1"
+BUSINESS_DEVELOPMENT_COLLECTION_PLAN_PREVIEW_VERSION = "link-business-development-collection-plan-preview-v1"
+BUSINESS_DEVELOPMENT_COLLECTION_APPROVAL_CHECKLIST_VERSION = "link-business-development-collection-approval-checklist-v1"
+BUSINESS_DEVELOPMENT_COLLECTION_REVIEW_PACKAGE_VERSION = "link-business-development-collection-review-package-v1"
 LINK_SHARED_SERVICES_REGISTRY_VERSION = "link-shared-services-registry-v1"
 BUSINESS_DEVELOPMENT_CLAIM_TYPES = (
     "supplier_availability",
@@ -10918,6 +10922,21 @@ LINK_SHARED_SERVICE_IDS_V2 = (
     "queues",
     "source governance",
 )
+BUSINESS_DEVELOPMENT_SOURCE_CARD_IDS = (
+    "public-documentation-source-card",
+    "public-pricing-page-source-card",
+    "public-product-catalog-source-card",
+    "public-competitor-info-source-card",
+    "public-report-source-card",
+)
+BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_CARD_IDS = (
+    "credentials-source-card",
+    "private-account-source-card",
+    "customer-data-source-card",
+    "anti-bot-bypass-source-card",
+    "proxy-evasion-source-card",
+)
+BUSINESS_DEVELOPMENT_COLLECTION_RECOMMENDATIONS = ("do_not_collect", "review_before_collection")
 
 
 def make_business_development_intake_preview_id(
@@ -11868,6 +11887,675 @@ def parse_business_development_source_review_package_json(text: str) -> dict[str
 
     package = _json.loads(text)
     validate_business_development_source_review_package(package)
+    return package
+
+
+def _business_development_default_source_cards() -> list[dict[str, Any]]:
+    return [
+        {
+            "source_card_id": "public-documentation-source-card",
+            "source_family": "public documentation",
+            "source_name": "Public documentation",
+            "access_method": "manual source review",
+            "auth_required": False,
+            "allowed_use": "Review public documentation for source-backed business assumptions.",
+            "blocked_use": "No scraping, crawling, credentialed access, or automated extraction.",
+            "robots_policy_required": True,
+            "rate_limit_required": True,
+            "provenance_required": True,
+            "data_quality_notes": "Confirm publisher, freshness, and whether documentation is marketing or technical material.",
+            "legal_notes": "Use only public pages with acceptable-use and robots review before future collection.",
+            "risk_level": "low",
+        },
+        {
+            "source_card_id": "public-pricing-page-source-card",
+            "source_family": "public pricing pages",
+            "source_name": "Public pricing pages",
+            "access_method": "read-only public page inspection",
+            "auth_required": False,
+            "allowed_use": "Review publicly visible prices, fees, and plan limits for pricing assumptions.",
+            "blocked_use": "No checkout automation, account login, paid service access, or price scraping runtime.",
+            "robots_policy_required": True,
+            "rate_limit_required": True,
+            "provenance_required": True,
+            "data_quality_notes": "Capture currency, timestamp, region, package, and promotional context before using claims.",
+            "legal_notes": "Pricing claims require source URL, observed timestamp, and reviewer confirmation.",
+            "risk_level": "medium",
+        },
+        {
+            "source_card_id": "public-product-catalog-source-card",
+            "source_family": "public product catalogs",
+            "source_name": "Public product catalogs",
+            "access_method": "read-only public catalog review",
+            "auth_required": False,
+            "allowed_use": "Review public catalog entries for product, feature, supplier, and assortment assumptions.",
+            "blocked_use": "No cart actions, inventory holds, account access, or automated catalog crawling.",
+            "robots_policy_required": True,
+            "rate_limit_required": True,
+            "provenance_required": True,
+            "data_quality_notes": "Record availability, region, SKU context, and page freshness warnings.",
+            "legal_notes": "Do not infer supplier permission or inventory commitment from public catalog presence.",
+            "risk_level": "medium",
+        },
+        {
+            "source_card_id": "public-competitor-info-source-card",
+            "source_family": "public competitor information",
+            "source_name": "Public competitor information",
+            "access_method": "read-only public page inspection",
+            "auth_required": False,
+            "allowed_use": "Review public competitor positioning, feature claims, pricing, and visible proof points.",
+            "blocked_use": "No impersonation, private account access, anti-bot bypass, or automated monitoring.",
+            "robots_policy_required": True,
+            "rate_limit_required": True,
+            "provenance_required": True,
+            "data_quality_notes": "Separate observed facts from interpretation and capture claim context.",
+            "legal_notes": "Competitor claims require reviewer summary and source refs before business use.",
+            "risk_level": "medium",
+        },
+        {
+            "source_card_id": "public-report-source-card",
+            "source_family": "public reports",
+            "source_name": "Public reports",
+            "access_method": "read-only public report review",
+            "auth_required": False,
+            "allowed_use": "Review public market, SEO, policy, or industry reports for directional evidence.",
+            "blocked_use": "No purchased datasets, paywall bypass, private report ingestion, or unsourced revenue claims.",
+            "robots_policy_required": True,
+            "rate_limit_required": True,
+            "provenance_required": True,
+            "data_quality_notes": "Capture publisher, date, methodology, sample, and uncertainty warnings.",
+            "legal_notes": "Respect report license, citation rules, and copying limits.",
+            "risk_level": "medium",
+        },
+    ]
+
+
+def make_business_development_source_card_registry_id(source_boundary: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "source_boundary_id": source_boundary["source_boundary_id"],
+        "source_card_ids": list(BUSINESS_DEVELOPMENT_SOURCE_CARD_IDS),
+        "version": BUSINESS_DEVELOPMENT_SOURCE_CARD_REGISTRY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-source-card-registry-{digest}"
+
+
+def collect_business_development_source_card_registry(
+    business_development_source_boundary: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    boundary = business_development_source_boundary or collect_business_development_source_boundary()
+    validate_business_development_source_boundary(boundary)
+    registry = {
+        "business_development_source_card_registry_version": BUSINESS_DEVELOPMENT_SOURCE_CARD_REGISTRY_VERSION,
+        "source_card_registry_id": make_business_development_source_card_registry_id(boundary),
+        "source_boundary_id": boundary["source_boundary_id"],
+        "source_cards": _business_development_default_source_cards(),
+        "blocked_source_cards": [
+            {
+                "source_card_id": card_id,
+                "blocked_reason": "Blocked by Business Development source boundary.",
+                "review_required": True,
+            }
+            for card_id in BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_CARD_IDS
+        ],
+        "required_review_fields": _normalize_implementation_branch_refs([
+            "allowed use review",
+            "data quality notes",
+            "legal notes",
+            "rate limit review",
+            "robots policy review",
+            "source family review",
+        ]),
+        "recommended_next_action": "Review source cards before planning any collection activity.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_source_card_registry(registry, boundary)
+    return registry
+
+
+def validate_business_development_source_card_registry(
+    registry: dict[str, Any],
+    business_development_source_boundary: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_development_source_card_registry_version", "source_card_registry_id",
+        "source_boundary_id", "source_cards", "blocked_source_cards", "required_review_fields",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in registry:
+            raise ValueError(f"business development source card registry missing required field: {key}")
+    if registry["business_development_source_card_registry_version"] != BUSINESS_DEVELOPMENT_SOURCE_CARD_REGISTRY_VERSION:
+        raise ValueError("invalid business development source card registry version")
+    if not isinstance(registry["source_card_registry_id"], str) or not registry["source_card_registry_id"].startswith("business-development-source-card-registry-"):
+        raise ValueError("invalid business development source card registry id")
+    if not isinstance(registry["source_boundary_id"], str) or not registry["source_boundary_id"].startswith("business-development-source-boundary-"):
+        raise ValueError("invalid source boundary id in source card registry")
+    cards = registry["source_cards"]
+    if not isinstance(cards, list) or [card.get("source_card_id") for card in cards] != list(BUSINESS_DEVELOPMENT_SOURCE_CARD_IDS):
+        raise ValueError("business development source card ids mismatch")
+    allowed_families = set(BUSINESS_DEVELOPMENT_ALLOWED_SOURCE_FAMILIES)
+    for card in cards:
+        for field in (
+            "source_card_id", "source_family", "source_name", "access_method", "auth_required",
+            "allowed_use", "blocked_use", "robots_policy_required", "rate_limit_required",
+            "provenance_required", "data_quality_notes", "legal_notes", "risk_level",
+        ):
+            if field not in card:
+                raise ValueError(f"business development source card missing {field}")
+        if card["source_family"] not in allowed_families:
+            raise ValueError("business development source card source family is not allowed")
+        if card["access_method"] not in BUSINESS_DEVELOPMENT_ALLOWED_COLLECTION_METHODS:
+            raise ValueError("business development source card collection method is not allowed")
+        if card["auth_required"] is not False:
+            raise ValueError("business development source cards must not require auth in this planning layer")
+        for bool_field in ("robots_policy_required", "rate_limit_required", "provenance_required"):
+            if card[bool_field] is not True:
+                raise ValueError(f"business development source card must require {bool_field}")
+        if card["risk_level"] not in {"low", "medium", "high"}:
+            raise ValueError("invalid business development source card risk level")
+    blocked = registry["blocked_source_cards"]
+    if not isinstance(blocked, list) or [item.get("source_card_id") for item in blocked] != list(BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_CARD_IDS):
+        raise ValueError("business development blocked source card ids mismatch")
+    for item in blocked:
+        if item.get("review_required") is not True or not isinstance(item.get("blocked_reason"), str):
+            raise ValueError("business development blocked source cards must require review and reason")
+    normalized = _normalize_implementation_branch_refs(registry["required_review_fields"])
+    if not normalized or normalized != registry["required_review_fields"]:
+        raise ValueError("business development source card registry review fields must be normalized and non-empty")
+    if registry["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development source card registry safety metadata mismatch")
+    if registry["dry_run"] is not True or registry["write_allowed"] is not False:
+        raise ValueError("business development source card registry must be read-only")
+    if registry["automation_allowed"] is not False or registry["writes"] != []:
+        raise ValueError("business development source card registry must not allow automation or writes")
+    if business_development_source_boundary is not None:
+        validate_business_development_source_boundary(business_development_source_boundary)
+        if registry["source_boundary_id"] != business_development_source_boundary["source_boundary_id"]:
+            raise ValueError("business development source card registry boundary id mismatch")
+        expected_id = make_business_development_source_card_registry_id(business_development_source_boundary)
+        if registry["source_card_registry_id"] != expected_id:
+            raise ValueError("business development source card registry id is not deterministic")
+
+
+def stable_business_development_source_card_registry_json(registry: dict[str, Any]) -> str:
+    validate_business_development_source_card_registry(registry)
+    return _stable_ruflo_json(registry, indent=2) + "\n"
+
+
+def parse_business_development_source_card_registry_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    registry = _json.loads(text)
+    validate_business_development_source_card_registry(registry)
+    return registry
+
+
+def make_business_development_collection_plan_preview_id(
+    source_card_registry: dict[str, Any],
+    source_evidence_contract: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "source_card_registry_id": source_card_registry["source_card_registry_id"],
+        "source_evidence_contract_id": source_evidence_contract["source_evidence_contract_id"],
+        "version": BUSINESS_DEVELOPMENT_COLLECTION_PLAN_PREVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-collection-plan-preview-{digest}"
+
+
+def collect_business_development_collection_plan_preview(
+    business_development_source_card_registry: dict[str, Any] | None = None,
+    business_development_source_boundary: dict[str, Any] | None = None,
+    business_development_source_evidence_contract: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    boundary = business_development_source_boundary or collect_business_development_source_boundary()
+    validate_business_development_source_boundary(boundary)
+    source_cards = business_development_source_card_registry or collect_business_development_source_card_registry(boundary)
+    validate_business_development_source_card_registry(source_cards, boundary)
+    evidence = business_development_source_evidence_contract or collect_business_development_source_evidence_contract(boundary)
+    validate_business_development_source_evidence_contract(evidence, boundary)
+    planned = []
+    for index, card in enumerate(source_cards["source_cards"], start=1):
+        planned.append({
+            "collection_id": f"business-development-planned-collection-{index:02d}",
+            "source_card_id": card["source_card_id"],
+            "collection_purpose": f"Collect reviewed evidence from {card['source_name']} for Business Development intake claims.",
+            "allowed_method": card["access_method"],
+            "expected_fields": _normalize_implementation_branch_refs([
+                "business claim",
+                "observed value",
+                "source URL",
+                "source family",
+                "collection timestamp",
+            ]),
+            "provenance_fields": list(evidence["required_provenance_fields"]),
+            "rate_limit_policy": "required before runtime",
+            "robots_policy": "required before runtime",
+            "review_required": True,
+            "execution_allowed": False,
+        })
+    blocked = [
+        {
+            "collection_id": f"blocked-{item['source_card_id']}",
+            "source_card_id": item["source_card_id"],
+            "blocked_reason": item["blocked_reason"],
+            "execution_allowed": False,
+        }
+        for item in source_cards["blocked_source_cards"]
+    ]
+    blockers = _normalize_implementation_branch_refs(
+        [f"blocked source card: {item['source_card_id']}" for item in source_cards["blocked_source_cards"]]
+        + [f"missing source evidence: {item}" for item in evidence["missing_evidence"]]
+    )
+    preview = {
+        "business_development_collection_plan_preview_version": BUSINESS_DEVELOPMENT_COLLECTION_PLAN_PREVIEW_VERSION,
+        "collection_plan_preview_id": make_business_development_collection_plan_preview_id(source_cards, evidence),
+        "source_card_registry_id": source_cards["source_card_registry_id"],
+        "source_boundary_id": boundary["source_boundary_id"],
+        "source_evidence_contract_id": evidence["source_evidence_contract_id"],
+        "planned_collections": planned,
+        "blocked_collections": blocked,
+        "expected_evidence": _normalize_implementation_branch_refs(list(evidence["required_provenance_fields"]) + list(evidence["required_hash_fields"])),
+        "required_approvals": list(boundary["requires_human_approval"]),
+        "blockers": blockers,
+        "warnings": _normalize_implementation_branch_refs([
+            "collection runtime is not implemented",
+            "execution remains disabled until approval and source evidence are complete",
+        ]),
+        "recommended_next_action": "Review collection plan preview before adding any source collection runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_collection_plan_preview(preview, source_cards, boundary, evidence)
+    return preview
+
+
+def validate_business_development_collection_plan_preview(
+    preview: dict[str, Any],
+    business_development_source_card_registry: dict[str, Any] | None = None,
+    business_development_source_boundary: dict[str, Any] | None = None,
+    business_development_source_evidence_contract: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_development_collection_plan_preview_version", "collection_plan_preview_id",
+        "source_card_registry_id", "source_boundary_id", "source_evidence_contract_id",
+        "planned_collections", "blocked_collections", "expected_evidence", "required_approvals",
+        "blockers", "warnings", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in preview:
+            raise ValueError(f"business development collection plan preview missing required field: {key}")
+    if preview["business_development_collection_plan_preview_version"] != BUSINESS_DEVELOPMENT_COLLECTION_PLAN_PREVIEW_VERSION:
+        raise ValueError("invalid business development collection plan preview version")
+    if not isinstance(preview["collection_plan_preview_id"], str) or not preview["collection_plan_preview_id"].startswith("business-development-collection-plan-preview-"):
+        raise ValueError("invalid business development collection plan preview id")
+    for id_field, prefix in (
+        ("source_card_registry_id", "business-development-source-card-registry-"),
+        ("source_boundary_id", "business-development-source-boundary-"),
+        ("source_evidence_contract_id", "business-development-source-evidence-contract-"),
+    ):
+        if not isinstance(preview[id_field], str) or not preview[id_field].startswith(prefix):
+            raise ValueError(f"invalid {id_field} in collection plan preview")
+    planned = preview["planned_collections"]
+    if not isinstance(planned, list) or [item.get("source_card_id") for item in planned] != list(BUSINESS_DEVELOPMENT_SOURCE_CARD_IDS):
+        raise ValueError("business development collection plan planned collections mismatch")
+    for item in planned:
+        for field in ("collection_id", "source_card_id", "collection_purpose", "allowed_method", "expected_fields", "provenance_fields", "rate_limit_policy", "robots_policy", "review_required", "execution_allowed"):
+            if field not in item:
+                raise ValueError(f"business development planned collection missing {field}")
+        if item["allowed_method"] not in BUSINESS_DEVELOPMENT_ALLOWED_COLLECTION_METHODS:
+            raise ValueError("business development planned collection method is not allowed")
+        if item["provenance_fields"] != list(BUSINESS_DEVELOPMENT_SOURCE_PROVENANCE_REQUIREMENTS):
+            raise ValueError("business development planned collection provenance mismatch")
+        if item["review_required"] is not True or item["execution_allowed"] is not False:
+            raise ValueError("business development planned collection must require review and disable execution")
+        if _normalize_implementation_branch_refs(item["expected_fields"]) != item["expected_fields"]:
+            raise ValueError("business development planned collection expected fields must be normalized")
+    blocked = preview["blocked_collections"]
+    if not isinstance(blocked, list) or [item.get("source_card_id") for item in blocked] != list(BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_CARD_IDS):
+        raise ValueError("business development collection plan blocked collections mismatch")
+    for item in blocked:
+        if item.get("execution_allowed") is not False or not isinstance(item.get("blocked_reason"), str):
+            raise ValueError("business development blocked collections must disable execution and include reason")
+    for field in ("expected_evidence", "required_approvals", "blockers", "warnings"):
+        normalized = _normalize_implementation_branch_refs(preview[field])
+        if normalized != preview[field]:
+            raise ValueError(f"business development collection plan preview {field} must be normalized and sorted")
+    if not preview["expected_evidence"] or not preview["required_approvals"] or not preview["blockers"]:
+        raise ValueError("business development collection plan preview must include evidence, approvals, and blockers")
+    if preview["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development collection plan preview safety metadata mismatch")
+    if preview["dry_run"] is not True or preview["write_allowed"] is not False:
+        raise ValueError("business development collection plan preview must be read-only")
+    if preview["automation_allowed"] is not False or preview["writes"] != []:
+        raise ValueError("business development collection plan preview must not allow automation or writes")
+    if business_development_source_card_registry is not None:
+        validate_business_development_source_card_registry(business_development_source_card_registry, business_development_source_boundary)
+        if preview["source_card_registry_id"] != business_development_source_card_registry["source_card_registry_id"]:
+            raise ValueError("business development collection plan source card registry id mismatch")
+    if business_development_source_boundary is not None:
+        validate_business_development_source_boundary(business_development_source_boundary)
+        if preview["source_boundary_id"] != business_development_source_boundary["source_boundary_id"]:
+            raise ValueError("business development collection plan boundary id mismatch")
+    if business_development_source_evidence_contract is not None:
+        validate_business_development_source_evidence_contract(business_development_source_evidence_contract, business_development_source_boundary)
+        if preview["source_evidence_contract_id"] != business_development_source_evidence_contract["source_evidence_contract_id"]:
+            raise ValueError("business development collection plan evidence contract id mismatch")
+    if business_development_source_card_registry is not None and business_development_source_evidence_contract is not None:
+        expected_id = make_business_development_collection_plan_preview_id(business_development_source_card_registry, business_development_source_evidence_contract)
+        if preview["collection_plan_preview_id"] != expected_id:
+            raise ValueError("business development collection plan preview id is not deterministic")
+
+
+def stable_business_development_collection_plan_preview_json(preview: dict[str, Any]) -> str:
+    validate_business_development_collection_plan_preview(preview)
+    return _stable_ruflo_json(preview, indent=2) + "\n"
+
+
+def parse_business_development_collection_plan_preview_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    preview = _json.loads(text)
+    validate_business_development_collection_plan_preview(preview)
+    return preview
+
+
+def make_business_development_collection_approval_checklist_id(
+    collection_plan_preview: dict[str, Any],
+    source_card_registry: dict[str, Any],
+    source_evidence_contract: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "collection_plan_preview_id": collection_plan_preview["collection_plan_preview_id"],
+        "source_card_registry_id": source_card_registry["source_card_registry_id"],
+        "source_evidence_contract_id": source_evidence_contract["source_evidence_contract_id"],
+        "version": BUSINESS_DEVELOPMENT_COLLECTION_APPROVAL_CHECKLIST_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-collection-approval-checklist-{digest}"
+
+
+def collect_business_development_collection_approval_checklist(
+    business_development_collection_plan_preview: dict[str, Any] | None = None,
+    business_development_source_card_registry: dict[str, Any] | None = None,
+    business_development_source_evidence_contract: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    source_cards = business_development_source_card_registry or collect_business_development_source_card_registry()
+    validate_business_development_source_card_registry(source_cards)
+    evidence = business_development_source_evidence_contract or collect_business_development_source_evidence_contract()
+    validate_business_development_source_evidence_contract(evidence)
+    preview = business_development_collection_plan_preview or collect_business_development_collection_plan_preview(source_cards, business_development_source_evidence_contract=evidence)
+    validate_business_development_collection_plan_preview(preview, source_cards, business_development_source_evidence_contract=evidence)
+    required = _normalize_implementation_branch_refs(list(preview["required_approvals"]) + [
+        "approve collection plan before runtime implementation",
+        "approve source card registry before runtime implementation",
+    ])
+    blockers = _normalize_implementation_branch_refs(list(preview["blockers"]) + [
+        "collection runtime is not implemented",
+        "collection execution remains disabled",
+    ])
+    checklist = {
+        "business_development_collection_approval_checklist_version": BUSINESS_DEVELOPMENT_COLLECTION_APPROVAL_CHECKLIST_VERSION,
+        "collection_approval_checklist_id": make_business_development_collection_approval_checklist_id(preview, source_cards, evidence),
+        "collection_plan_preview_id": preview["collection_plan_preview_id"],
+        "source_card_registry_id": source_cards["source_card_registry_id"],
+        "source_evidence_contract_id": evidence["source_evidence_contract_id"],
+        "required_approvals": required,
+        "approval_status": "block" if blockers else "pass",
+        "blockers": blockers,
+        "required_human_actions": required,
+        "recommended_next_action": "Complete collection approvals before implementing any source collection runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_collection_approval_checklist(checklist, preview, source_cards, evidence)
+    return checklist
+
+
+def validate_business_development_collection_approval_checklist(
+    checklist: dict[str, Any],
+    business_development_collection_plan_preview: dict[str, Any] | None = None,
+    business_development_source_card_registry: dict[str, Any] | None = None,
+    business_development_source_evidence_contract: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_development_collection_approval_checklist_version", "collection_approval_checklist_id",
+        "collection_plan_preview_id", "source_card_registry_id", "source_evidence_contract_id",
+        "required_approvals", "approval_status", "blockers", "required_human_actions",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in checklist:
+            raise ValueError(f"business development collection approval checklist missing required field: {key}")
+    if checklist["business_development_collection_approval_checklist_version"] != BUSINESS_DEVELOPMENT_COLLECTION_APPROVAL_CHECKLIST_VERSION:
+        raise ValueError("invalid business development collection approval checklist version")
+    if not isinstance(checklist["collection_approval_checklist_id"], str) or not checklist["collection_approval_checklist_id"].startswith("business-development-collection-approval-checklist-"):
+        raise ValueError("invalid business development collection approval checklist id")
+    if checklist["approval_status"] not in BUSINESS_DEVELOPMENT_STATUSES:
+        raise ValueError("invalid business development collection approval status")
+    for field in ("required_approvals", "blockers", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(checklist[field])
+        if normalized != checklist[field]:
+            raise ValueError(f"business development collection approval checklist {field} must be normalized and sorted")
+    if checklist["approval_status"] == "block" and not checklist["blockers"]:
+        raise ValueError("blocked business development collection approval must include blockers")
+    if checklist["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development collection approval checklist safety metadata mismatch")
+    if checklist["dry_run"] is not True or checklist["write_allowed"] is not False:
+        raise ValueError("business development collection approval checklist must be read-only")
+    if checklist["automation_allowed"] is not False or checklist["writes"] != []:
+        raise ValueError("business development collection approval checklist must not allow automation or writes")
+    if business_development_collection_plan_preview is not None:
+        validate_business_development_collection_plan_preview(business_development_collection_plan_preview, business_development_source_card_registry, business_development_source_evidence_contract=business_development_source_evidence_contract)
+        if checklist["collection_plan_preview_id"] != business_development_collection_plan_preview["collection_plan_preview_id"]:
+            raise ValueError("business development collection approval checklist plan id mismatch")
+    if business_development_source_card_registry is not None:
+        validate_business_development_source_card_registry(business_development_source_card_registry)
+        if checklist["source_card_registry_id"] != business_development_source_card_registry["source_card_registry_id"]:
+            raise ValueError("business development collection approval checklist source card registry id mismatch")
+    if business_development_source_evidence_contract is not None:
+        validate_business_development_source_evidence_contract(business_development_source_evidence_contract)
+        if checklist["source_evidence_contract_id"] != business_development_source_evidence_contract["source_evidence_contract_id"]:
+            raise ValueError("business development collection approval checklist source evidence id mismatch")
+    if business_development_collection_plan_preview is not None and business_development_source_card_registry is not None and business_development_source_evidence_contract is not None:
+        expected_id = make_business_development_collection_approval_checklist_id(business_development_collection_plan_preview, business_development_source_card_registry, business_development_source_evidence_contract)
+        if checklist["collection_approval_checklist_id"] != expected_id:
+            raise ValueError("business development collection approval checklist id is not deterministic")
+
+
+def stable_business_development_collection_approval_checklist_json(checklist: dict[str, Any]) -> str:
+    validate_business_development_collection_approval_checklist(checklist)
+    return _stable_ruflo_json(checklist, indent=2) + "\n"
+
+
+def parse_business_development_collection_approval_checklist_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    checklist = _json.loads(text)
+    validate_business_development_collection_approval_checklist(checklist)
+    return checklist
+
+
+def make_business_development_collection_review_package_id(
+    collection_plan_preview: dict[str, Any],
+    source_card_registry: dict[str, Any],
+    source_evidence_contract: dict[str, Any],
+    collection_approval_checklist: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "collection_approval_checklist_id": collection_approval_checklist["collection_approval_checklist_id"],
+        "collection_plan_preview_id": collection_plan_preview["collection_plan_preview_id"],
+        "source_card_registry_id": source_card_registry["source_card_registry_id"],
+        "source_evidence_contract_id": source_evidence_contract["source_evidence_contract_id"],
+        "version": BUSINESS_DEVELOPMENT_COLLECTION_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-collection-review-package-{digest}"
+
+
+def collect_business_development_collection_review_package(
+    business_development_collection_plan_preview: dict[str, Any] | None = None,
+    business_development_source_card_registry: dict[str, Any] | None = None,
+    business_development_source_boundary: dict[str, Any] | None = None,
+    business_development_source_evidence_contract: dict[str, Any] | None = None,
+    business_development_collection_approval_checklist: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    boundary = business_development_source_boundary or collect_business_development_source_boundary()
+    validate_business_development_source_boundary(boundary)
+    source_cards = business_development_source_card_registry or collect_business_development_source_card_registry(boundary)
+    validate_business_development_source_card_registry(source_cards, boundary)
+    evidence = business_development_source_evidence_contract or collect_business_development_source_evidence_contract(boundary)
+    validate_business_development_source_evidence_contract(evidence, boundary)
+    preview = business_development_collection_plan_preview or collect_business_development_collection_plan_preview(source_cards, boundary, evidence)
+    validate_business_development_collection_plan_preview(preview, source_cards, boundary, evidence)
+    approval = business_development_collection_approval_checklist or collect_business_development_collection_approval_checklist(preview, source_cards, evidence)
+    validate_business_development_collection_approval_checklist(approval, preview, source_cards, evidence)
+    blockers = _normalize_implementation_branch_refs(list(preview["blockers"]) + list(approval["blockers"]))
+    warnings = _normalize_implementation_branch_refs(list(preview["warnings"]))
+    evidence_status = "block" if evidence["missing_evidence"] else "pass"
+    approval_status = approval["approval_status"]
+    risk_status = "review" if preview["blocked_collections"] else "pass"
+    readiness_status = "blocked" if blockers or evidence_status == "block" or approval_status == "block" else "ready_for_review"
+    package = {
+        "business_development_collection_review_package_version": BUSINESS_DEVELOPMENT_COLLECTION_REVIEW_PACKAGE_VERSION,
+        "collection_review_package_id": make_business_development_collection_review_package_id(preview, source_cards, evidence, approval),
+        "collection_plan_preview_id": preview["collection_plan_preview_id"],
+        "source_card_registry_id": source_cards["source_card_registry_id"],
+        "source_boundary_id": boundary["source_boundary_id"],
+        "source_evidence_contract_id": evidence["source_evidence_contract_id"],
+        "collection_approval_checklist_id": approval["collection_approval_checklist_id"],
+        "source_status": "review",
+        "evidence_status": evidence_status,
+        "approval_status": approval_status,
+        "risk_status": risk_status,
+        "readiness_status": readiness_status,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": list(approval["required_human_actions"]),
+        "review_recommendation": "do_not_collect" if readiness_status == "blocked" else "review_before_collection",
+        "recommended_next_action": "Resolve collection planning blockers before adding any Business Development collection runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_collection_review_package(package, preview, source_cards, boundary, evidence, approval)
+    return package
+
+
+def validate_business_development_collection_review_package(
+    package: dict[str, Any],
+    business_development_collection_plan_preview: dict[str, Any] | None = None,
+    business_development_source_card_registry: dict[str, Any] | None = None,
+    business_development_source_boundary: dict[str, Any] | None = None,
+    business_development_source_evidence_contract: dict[str, Any] | None = None,
+    business_development_collection_approval_checklist: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_development_collection_review_package_version", "collection_review_package_id",
+        "collection_plan_preview_id", "source_card_registry_id", "source_boundary_id",
+        "source_evidence_contract_id", "collection_approval_checklist_id", "source_status",
+        "evidence_status", "approval_status", "risk_status", "readiness_status", "blockers",
+        "warnings", "required_human_actions", "review_recommendation", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"business development collection review package missing required field: {key}")
+    if package["business_development_collection_review_package_version"] != BUSINESS_DEVELOPMENT_COLLECTION_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid business development collection review package version")
+    if not isinstance(package["collection_review_package_id"], str) or not package["collection_review_package_id"].startswith("business-development-collection-review-package-"):
+        raise ValueError("invalid business development collection review package id")
+    for field in ("source_status", "evidence_status", "approval_status", "risk_status"):
+        if package[field] not in BUSINESS_DEVELOPMENT_STATUSES:
+            raise ValueError(f"invalid business development collection review {field}")
+    if package["readiness_status"] not in BUSINESS_DEVELOPMENT_READINESS_STATUSES:
+        raise ValueError("invalid business development collection review readiness status")
+    if package["review_recommendation"] not in BUSINESS_DEVELOPMENT_COLLECTION_RECOMMENDATIONS:
+        raise ValueError("invalid business development collection review recommendation")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"business development collection review package {field} must be normalized and sorted")
+    if package["readiness_status"] == "blocked" and not package["blockers"]:
+        raise ValueError("blocked business development collection review package must include blockers")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development collection review package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("business development collection review package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("business development collection review package must not allow automation or writes")
+    if business_development_collection_plan_preview is not None:
+        validate_business_development_collection_plan_preview(business_development_collection_plan_preview, business_development_source_card_registry, business_development_source_boundary, business_development_source_evidence_contract)
+        if package["collection_plan_preview_id"] != business_development_collection_plan_preview["collection_plan_preview_id"]:
+            raise ValueError("business development collection review package plan id mismatch")
+    if business_development_source_card_registry is not None:
+        validate_business_development_source_card_registry(business_development_source_card_registry, business_development_source_boundary)
+        if package["source_card_registry_id"] != business_development_source_card_registry["source_card_registry_id"]:
+            raise ValueError("business development collection review package source card registry id mismatch")
+    if business_development_source_boundary is not None:
+        validate_business_development_source_boundary(business_development_source_boundary)
+        if package["source_boundary_id"] != business_development_source_boundary["source_boundary_id"]:
+            raise ValueError("business development collection review package boundary id mismatch")
+    if business_development_source_evidence_contract is not None:
+        validate_business_development_source_evidence_contract(business_development_source_evidence_contract, business_development_source_boundary)
+        if package["source_evidence_contract_id"] != business_development_source_evidence_contract["source_evidence_contract_id"]:
+            raise ValueError("business development collection review package evidence id mismatch")
+    if business_development_collection_approval_checklist is not None:
+        validate_business_development_collection_approval_checklist(business_development_collection_approval_checklist, business_development_collection_plan_preview, business_development_source_card_registry, business_development_source_evidence_contract)
+        if package["collection_approval_checklist_id"] != business_development_collection_approval_checklist["collection_approval_checklist_id"]:
+            raise ValueError("business development collection review package approval id mismatch")
+    if all(item is not None for item in (business_development_collection_plan_preview, business_development_source_card_registry, business_development_source_evidence_contract, business_development_collection_approval_checklist)):
+        expected_id = make_business_development_collection_review_package_id(business_development_collection_plan_preview, business_development_source_card_registry, business_development_source_evidence_contract, business_development_collection_approval_checklist)
+        if package["collection_review_package_id"] != expected_id:
+            raise ValueError("business development collection review package id is not deterministic")
+
+
+def stable_business_development_collection_review_package_json(package: dict[str, Any]) -> str:
+    validate_business_development_collection_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_business_development_collection_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_business_development_collection_review_package(package)
     return package
 
 
@@ -14039,6 +14727,160 @@ def campaign_review_main(argv: list[str] | None = None) -> int:
     render_campaign_review_plain(package)
     return 0
 
+
+
+def render_business_development_source_card_registry_plain(registry: dict[str, Any]) -> None:
+    validate_business_development_source_card_registry(registry)
+    print("Business Development source cards")
+    print(f"source_card_registry_id: {registry['source_card_registry_id']}")
+    print(f"source_boundary_id: {registry['source_boundary_id']}")
+    print(f"source_card_count: {len(registry['source_cards'])}")
+    print(f"blocked_source_card_count: {len(registry['blocked_source_cards'])}")
+    print(f"required_review_field_count: {len(registry['required_review_fields'])}")
+    print(f"next_action: {registry['recommended_next_action']}")
+
+
+def business_development_source_cards_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Development source-cards: source card registry preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-development source-cards")
+        print("  python3 link.py business-development source-cards --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-development source-cards is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    registry = collect_business_development_source_card_registry()
+    validate_business_development_source_card_registry(registry)
+    if "--json" in args:
+        print(stable_business_development_source_card_registry_json(registry), end="")
+        return 0
+    render_business_development_source_card_registry_plain(registry)
+    return 0
+
+
+def render_business_development_collection_plan_preview_plain(preview: dict[str, Any]) -> None:
+    validate_business_development_collection_plan_preview(preview)
+    print("Business Development collection plan preview")
+    print(f"collection_plan_preview_id: {preview['collection_plan_preview_id']}")
+    print(f"source_card_registry_id: {preview['source_card_registry_id']}")
+    print(f"source_boundary_id: {preview['source_boundary_id']}")
+    print(f"source_evidence_contract_id: {preview['source_evidence_contract_id']}")
+    print(f"planned_collection_count: {len(preview['planned_collections'])}")
+    print(f"blocked_collection_count: {len(preview['blocked_collections'])}")
+    print(f"expected_evidence_count: {len(preview['expected_evidence'])}")
+    print(f"required_approval_count: {len(preview['required_approvals'])}")
+    print(f"blocker_count: {len(preview['blockers'])}")
+    print(f"warning_count: {len(preview['warnings'])}")
+    print(f"next_action: {preview['recommended_next_action']}")
+
+
+def business_development_collection_plan_preview_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Development collection-plan-preview: collection plan preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-development collection-plan-preview")
+        print("  python3 link.py business-development collection-plan-preview --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-development collection-plan-preview is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    preview = collect_business_development_collection_plan_preview()
+    validate_business_development_collection_plan_preview(preview)
+    if "--json" in args:
+        print(stable_business_development_collection_plan_preview_json(preview), end="")
+        return 0
+    render_business_development_collection_plan_preview_plain(preview)
+    return 0
+
+
+def render_business_development_collection_approval_checklist_plain(checklist: dict[str, Any]) -> None:
+    validate_business_development_collection_approval_checklist(checklist)
+    print("Business Development collection approval checklist")
+    print(f"collection_approval_checklist_id: {checklist['collection_approval_checklist_id']}")
+    print(f"collection_plan_preview_id: {checklist['collection_plan_preview_id']}")
+    print(f"source_card_registry_id: {checklist['source_card_registry_id']}")
+    print(f"source_evidence_contract_id: {checklist['source_evidence_contract_id']}")
+    print(f"approval_status: {checklist['approval_status']}")
+    print(f"required_approval_count: {len(checklist['required_approvals'])}")
+    print(f"blocker_count: {len(checklist['blockers'])}")
+    print(f"required_human_action_count: {len(checklist['required_human_actions'])}")
+    print(f"next_action: {checklist['recommended_next_action']}")
+
+
+def business_development_collection_approval_checklist_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Development collection-approval-checklist: collection approval checklist preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-development collection-approval-checklist")
+        print("  python3 link.py business-development collection-approval-checklist --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-development collection-approval-checklist is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    checklist = collect_business_development_collection_approval_checklist()
+    validate_business_development_collection_approval_checklist(checklist)
+    if "--json" in args:
+        print(stable_business_development_collection_approval_checklist_json(checklist), end="")
+        return 0
+    render_business_development_collection_approval_checklist_plain(checklist)
+    return 0
+
+
+def render_business_development_collection_review_plain(package: dict[str, Any]) -> None:
+    validate_business_development_collection_review_package(package)
+    print("Business Development collection review")
+    print(f"collection_review_package_id: {package['collection_review_package_id']}")
+    print(f"collection_plan_preview_id: {package['collection_plan_preview_id']}")
+    print(f"source_card_registry_id: {package['source_card_registry_id']}")
+    print(f"source_boundary_id: {package['source_boundary_id']}")
+    print(f"source_evidence_contract_id: {package['source_evidence_contract_id']}")
+    print(f"collection_approval_checklist_id: {package['collection_approval_checklist_id']}")
+    print(f"source_status: {package['source_status']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"approval_status: {package['approval_status']}")
+    print(f"risk_status: {package['risk_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def business_development_collection_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Development collection-review: collection review package preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-development collection-review")
+        print("  python3 link.py business-development collection-review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-development collection-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_business_development_collection_review_package()
+    validate_business_development_collection_review_package(package)
+    if "--json" in args:
+        print(stable_business_development_collection_review_package_json(package), end="")
+        return 0
+    render_business_development_collection_review_plain(package)
+    return 0
 
 
 def render_business_development_source_boundary_plain(boundary: dict[str, Any]) -> None:

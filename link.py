@@ -188,15 +188,35 @@ def _cmd_business_development(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import business_development_source_review_main as _bd_source_review_main
 
         return _bd_source_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-cards":
+        from link_modes.growth.link_growth_console import business_development_source_cards_main as _bd_source_cards_main
+
+        return _bd_source_cards_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "collection-plan-preview":
+        from link_modes.growth.link_growth_console import business_development_collection_plan_preview_main as _bd_collection_plan_preview_main
+
+        return _bd_collection_plan_preview_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "collection-approval-checklist":
+        from link_modes.growth.link_growth_console import business_development_collection_approval_checklist_main as _bd_collection_approval_checklist_main
+
+        return _bd_collection_approval_checklist_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "collection-review":
+        from link_modes.growth.link_growth_console import business_development_collection_review_main as _bd_collection_review_main
+
+        return _bd_collection_review_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Business Development commands:")
-        print("  intake-preview              Preview Business Development intake")
-        print("  evidence-contract           Preview Business Development evidence contract")
-        print("  approval-checklist          Preview Business Development approval checklist")
-        print("  review                      Preview Business Development review package")
-        print("  source-boundary             Preview Business Development source boundary")
-        print("  source-evidence-contract    Preview Business Development source evidence contract")
-        print("  source-review               Preview Business Development source review package")
+        print("  intake-preview                  Preview Business Development intake")
+        print("  evidence-contract               Preview Business Development evidence contract")
+        print("  approval-checklist              Preview Business Development approval checklist")
+        print("  review                          Preview Business Development review package")
+        print("  source-boundary                 Preview Business Development source boundary")
+        print("  source-evidence-contract        Preview Business Development source evidence contract")
+        print("  source-review                   Preview Business Development source review package")
+        print("  source-cards                    Preview Business Development source card registry")
+        print("  collection-plan-preview         Preview Business Development collection plan")
+        print("  collection-approval-checklist   Preview Business Development collection approvals")
+        print("  collection-review               Preview Business Development collection review")
         return 0
     print(f"business-development: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py business-development --help' for subcommands.", file=sys.stderr)
