@@ -9715,6 +9715,1115 @@ def parse_growth_business_evidence_contract_json(text: str) -> dict[str, Any]:
     return contract
 
 
+GROWTH_OPPORTUNITY_REVIEW_PACKAGE_VERSION = "link-growth-opportunity-review-package-v1"
+GROWTH_OPPORTUNITY_REVIEW_STATUSES = ("pass", "review", "block")
+GROWTH_OPPORTUNITY_READINESS_STATUSES = ("ready_for_review", "blocked")
+GROWTH_OPPORTUNITY_RECOMMENDATIONS = ("do_not_execute", "review_before_action", "ready_for_review")
+
+
+def make_growth_opportunity_review_package_id(
+    opportunity_scan: dict[str, Any],
+    evidence_contract: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "growth_business_evidence_contract_id": evidence_contract["growth_business_evidence_contract_id"],
+        "growth_business_opportunity_scan_id": opportunity_scan["growth_business_opportunity_scan_id"],
+        "version": GROWTH_OPPORTUNITY_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"growth-opportunity-review-package-{digest}"
+
+
+def collect_growth_opportunity_review_package(
+    opportunity_scan: dict[str, Any] | None = None,
+    evidence_contract: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize Growth opportunity readiness for human review without action."""
+    scan = opportunity_scan if opportunity_scan is not None else collect_growth_business_opportunity_scan()
+    validate_growth_business_opportunity_scan(scan)
+    contract = evidence_contract if evidence_contract is not None else collect_growth_business_evidence_contract(scan)
+    validate_growth_business_evidence_contract(contract, scan)
+
+    opportunities = scan["opportunities"]
+    thresholds = contract["confidence_thresholds"]
+    max_risk = max((int(item["risk_score"]) for item in opportunities), default=0)
+    low_confidence = [
+        item["title"] for item in opportunities
+        if int(item["confidence_score"]) < int(thresholds["minimum_confidence_score"])
+    ]
+    low_evidence = [
+        item["title"] for item in opportunities
+        if int(item["evidence_strength"]) < int(thresholds["minimum_evidence_strength"])
+    ]
+    high_risk = [
+        item["title"] for item in opportunities
+        if int(item["risk_score"]) > int(thresholds["maximum_risk_score_without_review"])
+    ]
+
+    opportunity_status = "pass" if opportunities else "block"
+    evidence_status = "block" if contract["missing_evidence"] else "pass"
+    if evidence_status == "pass" and (low_confidence or low_evidence):
+        evidence_status = "review"
+    approval_status = "review" if contract["approval_requirements"] else "pass"
+    risk_status = "block" if max_risk >= 70 else "review" if high_risk or contract["blocked_actions"] else "pass"
+
+    blockers = []
+    if not opportunities:
+        blockers.append("no business opportunities available for review")
+    blockers.extend(f"missing evidence: {item}" for item in contract["missing_evidence"])
+    blockers.extend(f"blocked action until evidence review: {item}" for item in contract["blocked_actions"])
+    blockers = _normalize_implementation_branch_refs(blockers)
+
+    warnings = []
+    warnings.extend(f"low confidence opportunity: {title}" for title in low_confidence)
+    warnings.extend(f"low evidence opportunity: {title}" for title in low_evidence)
+    warnings.extend(f"risk review required: {title}" for title in high_risk)
+    warnings = _normalize_implementation_branch_refs(warnings or [
+        "business opportunity review remains advisory until evidence is complete"
+    ])
+
+    required_human_actions = _normalize_implementation_branch_refs(
+        list(contract["approval_requirements"]) + list(contract["review_requirements"])
+    )
+    readiness_status = "blocked" if blockers or evidence_status == "block" else "ready_for_review"
+    review_recommendation = "do_not_execute" if readiness_status == "blocked" else "review_before_action"
+    package = {
+        "growth_opportunity_review_package_version": GROWTH_OPPORTUNITY_REVIEW_PACKAGE_VERSION,
+        "growth_opportunity_review_package_id": make_growth_opportunity_review_package_id(scan, contract),
+        "growth_business_opportunity_scan_id": scan["growth_business_opportunity_scan_id"],
+        "growth_business_evidence_contract_id": contract["growth_business_evidence_contract_id"],
+        "opportunity_status": opportunity_status,
+        "evidence_status": evidence_status,
+        "approval_status": approval_status,
+        "risk_status": risk_status,
+        "readiness_status": readiness_status,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": required_human_actions,
+        "review_recommendation": review_recommendation,
+        "recommended_next_action": "Resolve Growth opportunity evidence blockers before business action.",
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_opportunity_review_package(package, scan, contract)
+    return package
+
+
+def validate_growth_opportunity_review_package(
+    package: dict[str, Any],
+    opportunity_scan: dict[str, Any] | None = None,
+    evidence_contract: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "growth_opportunity_review_package_version", "growth_opportunity_review_package_id",
+        "growth_business_opportunity_scan_id", "growth_business_evidence_contract_id",
+        "opportunity_status", "evidence_status", "approval_status", "risk_status",
+        "readiness_status", "blockers", "warnings", "required_human_actions",
+        "review_recommendation", "recommended_next_action", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"growth opportunity review package missing required field: {key}")
+    if package["growth_opportunity_review_package_version"] != GROWTH_OPPORTUNITY_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid growth opportunity review package version")
+    if not isinstance(package["growth_opportunity_review_package_id"], str) or not package["growth_opportunity_review_package_id"].startswith("growth-opportunity-review-package-"):
+        raise ValueError("invalid growth opportunity review package id")
+    if not isinstance(package["growth_business_opportunity_scan_id"], str) or not package["growth_business_opportunity_scan_id"].startswith("growth-business-opportunity-scan-"):
+        raise ValueError("invalid growth opportunity review package scan id")
+    if not isinstance(package["growth_business_evidence_contract_id"], str) or not package["growth_business_evidence_contract_id"].startswith("growth-business-evidence-contract-"):
+        raise ValueError("invalid growth opportunity review package evidence contract id")
+    for field in ("opportunity_status", "evidence_status", "approval_status", "risk_status"):
+        if package[field] not in GROWTH_OPPORTUNITY_REVIEW_STATUSES:
+            raise ValueError(f"invalid growth opportunity review {field}: {package[field]}")
+    if package["readiness_status"] not in GROWTH_OPPORTUNITY_READINESS_STATUSES:
+        raise ValueError("invalid growth opportunity review readiness_status")
+    if package["review_recommendation"] not in GROWTH_OPPORTUNITY_RECOMMENDATIONS:
+        raise ValueError("invalid growth opportunity review recommendation")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"growth opportunity review package {field} must be normalized and sorted")
+    if package["readiness_status"] == "blocked" and not package["blockers"]:
+        raise ValueError("blocked growth opportunity review package must include blockers")
+    if package["readiness_status"] == "ready_for_review" and package["blockers"]:
+        raise ValueError("ready growth opportunity review package cannot include blockers")
+    if package["evidence_status"] == "block" and not package["blockers"]:
+        raise ValueError("blocked evidence status must include blockers")
+    if package["approval_status"] in {"review", "block"} and not package["required_human_actions"]:
+        raise ValueError("approval review status must include required human actions")
+    if package["risk_status"] in {"review", "block"} and not package["warnings"]:
+        raise ValueError("risk review status must include warnings")
+    if package["review_recommendation"] == "ready_for_review" and package["readiness_status"] != "ready_for_review":
+        raise ValueError("ready recommendation requires ready readiness status")
+    if not isinstance(package["recommended_next_action"], str) or not package["recommended_next_action"].strip():
+        raise ValueError("growth opportunity review package recommended_next_action must be non-empty")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("growth opportunity review package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("growth opportunity review package must not allow automation or writes")
+    if opportunity_scan is not None:
+        validate_growth_business_opportunity_scan(opportunity_scan)
+        if package["growth_business_opportunity_scan_id"] != opportunity_scan["growth_business_opportunity_scan_id"]:
+            raise ValueError("growth opportunity review package scan id mismatch")
+    if evidence_contract is not None:
+        validate_growth_business_evidence_contract(evidence_contract, opportunity_scan)
+        if package["growth_business_evidence_contract_id"] != evidence_contract["growth_business_evidence_contract_id"]:
+            raise ValueError("growth opportunity review package evidence contract id mismatch")
+    if opportunity_scan is not None and evidence_contract is not None:
+        expected_id = make_growth_opportunity_review_package_id(opportunity_scan, evidence_contract)
+        if package["growth_opportunity_review_package_id"] != expected_id:
+            raise ValueError("growth opportunity review package id is not deterministic")
+
+
+def stable_growth_opportunity_review_package_json(package: dict[str, Any]) -> str:
+    validate_growth_opportunity_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_growth_opportunity_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_growth_opportunity_review_package(package)
+    return package
+
+
+
+GROWTH_CAMPAIGN_PLAN_PREVIEW_VERSION = "link-growth-campaign-plan-preview-v1"
+GROWTH_CAMPAIGN_TYPES = (
+    "content_marketing",
+    "lead_generation",
+    "product_validation",
+    "research_report",
+    "internal_automation",
+)
+GROWTH_TARGET_CHANNELS = (
+    "Content",
+    "SEO",
+    "Outbound",
+    "Marketplace",
+    "Internal Dashboard",
+    "Research",
+)
+
+
+def make_growth_campaign_plan_preview_id(
+    opportunity_review_package: dict[str, Any],
+    opportunity_id: str,
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "growth_opportunity_review_package_id": opportunity_review_package["growth_opportunity_review_package_id"],
+        "opportunity_id": opportunity_id,
+        "version": GROWTH_CAMPAIGN_PLAN_PREVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"growth-campaign-plan-preview-{digest}"
+
+
+def _growth_campaign_type_for_opportunity(opportunity: dict[str, Any]) -> str:
+    category = opportunity.get("category", "")
+    channel = opportunity.get("growth_channel", "")
+    if category == "Lead Generation":
+        return "lead_generation"
+    if category in {"SaaS", "AI Tools", "Ecommerce"}:
+        return "product_validation"
+    if category in {"Research Products", "Services"}:
+        return "research_report"
+    if category == "Internal Automation" or channel == "Internal Dashboard":
+        return "internal_automation"
+    return "content_marketing"
+
+
+def collect_growth_campaign_plan_preview(
+    opportunity_scan: dict[str, Any] | None = None,
+    evidence_contract: dict[str, Any] | None = None,
+    opportunity_review_package: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Preview the next Growth campaign plan without creating any campaign."""
+    scan = opportunity_scan if opportunity_scan is not None else collect_growth_business_opportunity_scan()
+    validate_growth_business_opportunity_scan(scan)
+    contract = evidence_contract if evidence_contract is not None else collect_growth_business_evidence_contract(scan)
+    validate_growth_business_evidence_contract(contract, scan)
+    review = opportunity_review_package if opportunity_review_package is not None else collect_growth_opportunity_review_package(scan, contract)
+    validate_growth_opportunity_review_package(review, scan, contract)
+
+    opportunities = list(scan["opportunities"])
+    if not opportunities:
+        raise ValueError("growth campaign plan preview requires at least one opportunity")
+    top = opportunities[0]
+    required_evidence = _normalize_implementation_branch_refs(
+        list(top.get("missing_evidence", [])) + list(contract["missing_evidence"])
+    )
+    required_approvals = _normalize_implementation_branch_refs(
+        list(top.get("required_approvals", [])) + list(contract["approval_requirements"])
+    )
+    blocked_actions = list(contract["blocked_actions"])
+    preview = {
+        "growth_campaign_plan_preview_version": GROWTH_CAMPAIGN_PLAN_PREVIEW_VERSION,
+        "campaign_plan_preview_id": make_growth_campaign_plan_preview_id(review, top["opportunity_id"]),
+        "growth_opportunity_review_package_id": review["growth_opportunity_review_package_id"],
+        "growth_business_opportunity_scan_id": scan["growth_business_opportunity_scan_id"],
+        "growth_business_evidence_contract_id": contract["growth_business_evidence_contract_id"],
+        "opportunity_id": top["opportunity_id"],
+        "opportunity_title": top["title"],
+        "campaign_type": _growth_campaign_type_for_opportunity(top),
+        "target_channel": top["growth_channel"],
+        "required_evidence": required_evidence,
+        "required_approvals": required_approvals,
+        "blocked_actions": blocked_actions,
+        "next_action": "Review evidence and approvals before creating any campaign.",
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_campaign_plan_preview(preview, scan, contract, review)
+    return preview
+
+
+def validate_growth_campaign_plan_preview(
+    preview: dict[str, Any],
+    opportunity_scan: dict[str, Any] | None = None,
+    evidence_contract: dict[str, Any] | None = None,
+    opportunity_review_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "growth_campaign_plan_preview_version", "campaign_plan_preview_id",
+        "growth_opportunity_review_package_id", "growth_business_opportunity_scan_id",
+        "growth_business_evidence_contract_id", "opportunity_id", "opportunity_title",
+        "campaign_type", "target_channel", "required_evidence", "required_approvals",
+        "blocked_actions", "next_action", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in preview:
+            raise ValueError(f"growth campaign plan preview missing required field: {key}")
+    if preview["growth_campaign_plan_preview_version"] != GROWTH_CAMPAIGN_PLAN_PREVIEW_VERSION:
+        raise ValueError("invalid growth campaign plan preview version")
+    if not isinstance(preview["campaign_plan_preview_id"], str) or not preview["campaign_plan_preview_id"].startswith("growth-campaign-plan-preview-"):
+        raise ValueError("invalid growth campaign plan preview id")
+    if not isinstance(preview["growth_opportunity_review_package_id"], str) or not preview["growth_opportunity_review_package_id"].startswith("growth-opportunity-review-package-"):
+        raise ValueError("invalid growth campaign plan preview review package id")
+    if not isinstance(preview["growth_business_opportunity_scan_id"], str) or not preview["growth_business_opportunity_scan_id"].startswith("growth-business-opportunity-scan-"):
+        raise ValueError("invalid growth campaign plan preview scan id")
+    if not isinstance(preview["growth_business_evidence_contract_id"], str) or not preview["growth_business_evidence_contract_id"].startswith("growth-business-evidence-contract-"):
+        raise ValueError("invalid growth campaign plan preview evidence contract id")
+    if not isinstance(preview["opportunity_id"], str) or not preview["opportunity_id"].startswith("growth-business-opportunity-"):
+        raise ValueError("invalid growth campaign plan preview opportunity id")
+    if not isinstance(preview["opportunity_title"], str) or not preview["opportunity_title"].strip():
+        raise ValueError("growth campaign plan preview opportunity title must be non-empty")
+    if preview["campaign_type"] not in GROWTH_CAMPAIGN_TYPES:
+        raise ValueError("invalid growth campaign plan preview campaign type")
+    if not isinstance(preview["target_channel"], str) or not preview["target_channel"].strip():
+        raise ValueError("growth campaign plan preview target channel must be non-empty")
+    for field in ("required_evidence", "required_approvals"):
+        normalized = _normalize_implementation_branch_refs(preview[field])
+        if normalized != preview[field]:
+            raise ValueError(f"growth campaign plan preview {field} must be normalized and sorted")
+    if not isinstance(preview["blocked_actions"], list):
+        raise TypeError("growth campaign plan preview blocked_actions must be a list")
+    if not preview["required_evidence"]:
+        raise ValueError("growth campaign plan preview must include required evidence")
+    if not preview["required_approvals"]:
+        raise ValueError("growth campaign plan preview must include required approvals")
+    if preview["blocked_actions"] != list(GROWTH_BUSINESS_BLOCKED_ACTIONS):
+        raise ValueError("growth campaign plan preview blocked actions mismatch")
+    if not isinstance(preview["next_action"], str) or not preview["next_action"].strip():
+        raise ValueError("growth campaign plan preview next_action must be non-empty")
+    if preview["dry_run"] is not True or preview["write_allowed"] is not False:
+        raise ValueError("growth campaign plan preview must be read-only")
+    if preview["automation_allowed"] is not False or preview["writes"] != []:
+        raise ValueError("growth campaign plan preview must not allow automation or writes")
+    if opportunity_scan is not None:
+        validate_growth_business_opportunity_scan(opportunity_scan)
+        if preview["growth_business_opportunity_scan_id"] != opportunity_scan["growth_business_opportunity_scan_id"]:
+            raise ValueError("growth campaign plan preview scan id mismatch")
+        if preview["opportunity_id"] not in {item["opportunity_id"] for item in opportunity_scan["opportunities"]}:
+            raise ValueError("growth campaign plan preview opportunity id not found in scan")
+    if evidence_contract is not None:
+        validate_growth_business_evidence_contract(evidence_contract, opportunity_scan)
+        if preview["growth_business_evidence_contract_id"] != evidence_contract["growth_business_evidence_contract_id"]:
+            raise ValueError("growth campaign plan preview evidence contract id mismatch")
+    if opportunity_review_package is not None:
+        validate_growth_opportunity_review_package(opportunity_review_package, opportunity_scan, evidence_contract)
+        if preview["growth_opportunity_review_package_id"] != opportunity_review_package["growth_opportunity_review_package_id"]:
+            raise ValueError("growth campaign plan preview review package id mismatch")
+        expected_id = make_growth_campaign_plan_preview_id(opportunity_review_package, preview["opportunity_id"])
+        if preview["campaign_plan_preview_id"] != expected_id:
+            raise ValueError("growth campaign plan preview id is not deterministic")
+
+
+def stable_growth_campaign_plan_preview_json(preview: dict[str, Any]) -> str:
+    validate_growth_campaign_plan_preview(preview)
+    return _stable_ruflo_json(preview, indent=2) + "\n"
+
+
+def parse_growth_campaign_plan_preview_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    preview = _json.loads(text)
+    validate_growth_campaign_plan_preview(preview)
+    return preview
+
+
+LINK_MODULE_BOUNDARY_REGISTRY_VERSION = "link-module-boundary-registry-v1"
+LINK_MODULE_IDS = ("link_core", "growth", "business_development", "business_operations")
+LINK_SHARED_SERVICE_IDS = ("evidence", "approval", "review_package", "safety_boundary", "memory")
+
+
+def make_link_module_boundary_registry_id() -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "module_ids": list(LINK_MODULE_IDS),
+        "shared_service_ids": list(LINK_SHARED_SERVICE_IDS),
+        "version": LINK_MODULE_BOUNDARY_REGISTRY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"link-module-boundary-registry-{digest}"
+
+
+def collect_link_module_boundary_registry(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Define Link-level module boundaries without mutating any module."""
+    registry = {
+        "link_module_boundary_registry_version": LINK_MODULE_BOUNDARY_REGISTRY_VERSION,
+        "link_module_boundary_registry_id": make_link_module_boundary_registry_id(),
+        "parent_architecture": {
+            "module_id": "link_core",
+            "name": "Link",
+            "responsibility": "Parent operating architecture, contracts, evidence, approvals, safety boundaries, and review packages.",
+        },
+        "modules": [
+            {
+                "module_id": "link_core",
+                "module_name": "Link Core",
+                "module_status": "active_parent",
+                "responsibility": "Owns cross-module contracts, safety gates, receipts, reviews, and shared services.",
+                "boundary_rule": "Submodules consume Link-level contracts; Link Core does not absorb lane-specific business workflows.",
+            },
+            {
+                "module_id": "growth",
+                "module_name": "Growth",
+                "module_status": "active_governed_module",
+                "responsibility": "Produces governed opportunity, evidence, review, and campaign planning previews.",
+                "boundary_rule": "Growth previews business opportunities but does not run Business Development or Business Operations systems.",
+            },
+            {
+                "module_id": "business_development",
+                "module_name": "Business Development",
+                "module_status": "future_module",
+                "responsibility": "Future module for market validation, partnerships, outreach, and sales pipeline workflows.",
+                "boundary_rule": "Consumes Growth outputs only through Link evidence, approval, review, and safety contracts.",
+            },
+            {
+                "module_id": "business_operations",
+                "module_name": "Business Operations",
+                "module_status": "future_module",
+                "responsibility": "Future module for ecommerce, CRM, fulfillment, pricing, and operating workflows.",
+                "boundary_rule": "Consumes approved plans only through Link evidence, approval, review, and safety contracts.",
+            },
+        ],
+        "shared_services": [
+            {"service_id": "evidence", "contract": "All modules must preserve source refs, missing evidence, and reviewer-visible summaries."},
+            {"service_id": "approval", "contract": "External effects require explicit human approval before execution."},
+            {"service_id": "review_package", "contract": "Cross-module handoffs must be summarized in compact review objects."},
+            {"service_id": "safety_boundary", "contract": "Runtime actions must pass Link-level safety boundaries before writes or external effects."},
+            {"service_id": "memory", "contract": "Business memory is future shared state and must stay governed by retention and redaction rules."},
+        ],
+        "handoff_rules": _normalize_implementation_branch_refs([
+            "Growth may produce opportunity and campaign planning previews only.",
+            "Business Development may consume Growth outputs after evidence and approval review.",
+            "Business Operations may consume approved business plans after safety boundary validation.",
+            "Shared services flow through Link-level contracts, not direct module coupling.",
+        ]),
+        "blocked_cross_module_actions": _normalize_implementation_branch_refs([
+            "Growth direct CRM writes",
+            "Growth direct ecommerce integration",
+            "Growth outbound communication",
+            "Growth campaign execution",
+            "Submodule bypass of Link approval contracts",
+        ]),
+        "recommended_next_action": "Keep Growth previews separate from future Business Development and Business Operations runtimes.",
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_link_module_boundary_registry(registry)
+    return registry
+
+
+def validate_link_module_boundary_registry(registry: dict[str, Any]) -> None:
+    required = (
+        "link_module_boundary_registry_version", "link_module_boundary_registry_id",
+        "parent_architecture", "modules", "shared_services", "handoff_rules",
+        "blocked_cross_module_actions", "recommended_next_action", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in registry:
+            raise ValueError(f"link module boundary registry missing required field: {key}")
+    if registry["link_module_boundary_registry_version"] != LINK_MODULE_BOUNDARY_REGISTRY_VERSION:
+        raise ValueError("invalid link module boundary registry version")
+    if registry["link_module_boundary_registry_id"] != make_link_module_boundary_registry_id():
+        raise ValueError("link module boundary registry id is not deterministic")
+    parent = registry["parent_architecture"]
+    if not isinstance(parent, dict) or parent.get("module_id") != "link_core" or parent.get("name") != "Link":
+        raise ValueError("link module boundary registry parent architecture mismatch")
+    modules = registry["modules"]
+    if not isinstance(modules, list) or [item.get("module_id") for item in modules] != list(LINK_MODULE_IDS):
+        raise ValueError("link module boundary registry module ids mismatch")
+    for module in modules:
+        for field in ("module_id", "module_name", "module_status", "responsibility", "boundary_rule"):
+            if not isinstance(module.get(field), str) or not module[field].strip():
+                raise ValueError(f"link module boundary registry module missing {field}")
+    services = registry["shared_services"]
+    if not isinstance(services, list) or [item.get("service_id") for item in services] != list(LINK_SHARED_SERVICE_IDS):
+        raise ValueError("link module boundary registry shared service ids mismatch")
+    for service in services:
+        if not isinstance(service.get("contract"), str) or not service["contract"].strip():
+            raise ValueError("link module boundary registry shared service contract must be non-empty")
+    for field in ("handoff_rules", "blocked_cross_module_actions"):
+        values = _normalize_implementation_branch_refs(registry[field])
+        if not values or values != registry[field]:
+            raise ValueError(f"link module boundary registry {field} must be normalized and non-empty")
+    if not isinstance(registry["recommended_next_action"], str) or not registry["recommended_next_action"].strip():
+        raise ValueError("link module boundary registry recommended_next_action must be non-empty")
+    if registry["dry_run"] is not True or registry["write_allowed"] is not False:
+        raise ValueError("link module boundary registry must be read-only")
+    if registry["automation_allowed"] is not False or registry["writes"] != []:
+        raise ValueError("link module boundary registry must not allow automation or writes")
+
+
+def stable_link_module_boundary_registry_json(registry: dict[str, Any]) -> str:
+    validate_link_module_boundary_registry(registry)
+    return _stable_ruflo_json(registry, indent=2) + "\n"
+
+
+def parse_link_module_boundary_registry_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    registry = _json.loads(text)
+    validate_link_module_boundary_registry(registry)
+    return registry
+
+
+GROWTH_CAMPAIGN_EVIDENCE_CONTRACT_VERSION = "link-growth-campaign-evidence-contract-v1"
+GROWTH_CAMPAIGN_BLOCKED_ACTIONS = (
+    "publishing",
+    "outreach",
+    "paid ads",
+    "scraping",
+    "CRM writes",
+    "ecommerce integration",
+    "inventory purchasing",
+    "customer data storage",
+    "revenue claims",
+    "automated campaigns",
+)
+GROWTH_CAMPAIGN_REVIEW_STATUSES = ("pass", "review", "block")
+GROWTH_CAMPAIGN_READINESS_STATUSES = ("ready_for_review", "blocked")
+GROWTH_CAMPAIGN_RECOMMENDATIONS = ("do_not_execute", "review_before_action", "ready_for_review")
+BUSINESS_DEVELOPMENT_ALLOWED_HANDOFF_ARTIFACTS = (
+    "reviewed opportunity package",
+    "campaign review package",
+    "evidence contract refs",
+    "source refs",
+    "risk summary",
+    "required approvals",
+)
+BUSINESS_DEVELOPMENT_FORBIDDEN_HANDOFF_ARTIFACTS = (
+    "customer private data",
+    "credentials",
+    "unsourced claims",
+    "scraped datasets",
+    "purchased inventory commitments",
+    "outbound messages",
+    "unpublished ad campaigns",
+    "CRM writes",
+    "ecommerce writes",
+)
+
+
+def _read_only_safety_metadata() -> dict[str, Any]:
+    return {
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+    }
+
+
+def make_growth_campaign_evidence_contract_id(
+    campaign_plan_preview: dict[str, Any],
+    growth_business_evidence_contract: dict[str, Any],
+    module_boundary_registry: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "campaign_plan_preview_id": campaign_plan_preview["campaign_plan_preview_id"],
+        "growth_business_evidence_contract_id": growth_business_evidence_contract["growth_business_evidence_contract_id"],
+        "link_module_boundary_registry_id": module_boundary_registry["link_module_boundary_registry_id"],
+        "version": GROWTH_CAMPAIGN_EVIDENCE_CONTRACT_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"growth-campaign-evidence-contract-{digest}"
+
+
+def collect_growth_campaign_evidence_contract(
+    campaign_plan_preview: dict[str, Any] | None = None,
+    growth_business_evidence_contract: dict[str, Any] | None = None,
+    growth_opportunity_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Define evidence required before a Growth campaign can become executable."""
+    scan = collect_growth_business_opportunity_scan()
+    business_contract = growth_business_evidence_contract or collect_growth_business_evidence_contract(scan)
+    validate_growth_business_evidence_contract(business_contract, scan)
+    review = growth_opportunity_review_package or collect_growth_opportunity_review_package(scan, business_contract)
+    validate_growth_opportunity_review_package(review, scan, business_contract)
+    plan = campaign_plan_preview or collect_growth_campaign_plan_preview(scan, business_contract, review)
+    validate_growth_campaign_plan_preview(plan, scan, business_contract, review)
+    registry = module_boundary_registry or collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(registry)
+
+    required_evidence = _normalize_implementation_branch_refs(
+        list(plan["required_evidence"]) + [
+            "campaign channel policy",
+            "campaign claim review summary",
+            "campaign success metric definition",
+            "human approval record reference",
+        ]
+    )
+    missing_evidence = _normalize_implementation_branch_refs(
+        list(business_contract["missing_evidence"]) + list(plan["required_evidence"])
+    )
+    approval_requirements = _normalize_implementation_branch_refs(
+        list(plan["required_approvals"]) + [
+            "approve campaign channel before execution",
+            "approve campaign claims before publication",
+            "approve Business Development handoff before transfer",
+        ]
+    )
+    contract = {
+        "growth_campaign_evidence_contract_version": GROWTH_CAMPAIGN_EVIDENCE_CONTRACT_VERSION,
+        "growth_campaign_evidence_contract_id": make_growth_campaign_evidence_contract_id(plan, business_contract, registry),
+        "campaign_plan_preview_id": plan["campaign_plan_preview_id"],
+        "growth_opportunity_review_package_id": review["growth_opportunity_review_package_id"],
+        "growth_business_evidence_contract_id": business_contract["growth_business_evidence_contract_id"],
+        "link_module_boundary_registry_id": registry["link_module_boundary_registry_id"],
+        "claim_types": list(business_contract["claim_types"]),
+        "required_sources": list(business_contract["required_sources"]),
+        "required_evidence": required_evidence,
+        "confidence_thresholds": dict(business_contract["confidence_thresholds"]),
+        "missing_evidence": missing_evidence,
+        "approval_requirements": approval_requirements,
+        "blocked_actions": list(GROWTH_CAMPAIGN_BLOCKED_ACTIONS),
+        "recommended_next_action": "Resolve campaign evidence and approval blockers before any campaign execution.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_campaign_evidence_contract(contract, plan, business_contract, review, registry)
+    return contract
+
+
+def validate_growth_campaign_evidence_contract(
+    contract: dict[str, Any],
+    campaign_plan_preview: dict[str, Any] | None = None,
+    growth_business_evidence_contract: dict[str, Any] | None = None,
+    growth_opportunity_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "growth_campaign_evidence_contract_version", "growth_campaign_evidence_contract_id",
+        "campaign_plan_preview_id", "growth_opportunity_review_package_id",
+        "claim_types", "required_sources", "required_evidence", "confidence_thresholds",
+        "missing_evidence", "approval_requirements", "blocked_actions",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in contract:
+            raise ValueError(f"growth campaign evidence contract missing required field: {key}")
+    if contract["growth_campaign_evidence_contract_version"] != GROWTH_CAMPAIGN_EVIDENCE_CONTRACT_VERSION:
+        raise ValueError("invalid growth campaign evidence contract version")
+    if not isinstance(contract["growth_campaign_evidence_contract_id"], str) or not contract["growth_campaign_evidence_contract_id"].startswith("growth-campaign-evidence-contract-"):
+        raise ValueError("invalid growth campaign evidence contract id")
+    if not isinstance(contract["campaign_plan_preview_id"], str) or not contract["campaign_plan_preview_id"].startswith("growth-campaign-plan-preview-"):
+        raise ValueError("invalid campaign plan preview id in campaign evidence contract")
+    if not isinstance(contract["growth_opportunity_review_package_id"], str) or not contract["growth_opportunity_review_package_id"].startswith("growth-opportunity-review-package-"):
+        raise ValueError("invalid opportunity review package id in campaign evidence contract")
+    if contract["claim_types"] != list(GROWTH_BUSINESS_CLAIM_TYPES):
+        raise ValueError("growth campaign evidence contract claim_types mismatch")
+    _validate_growth_business_source_list(contract["required_sources"], "required_sources")
+    _validate_growth_business_text_list(contract["required_evidence"], "required_evidence", require_non_empty=True)
+    _validate_growth_business_confidence_thresholds(contract["confidence_thresholds"])
+    _validate_growth_business_text_list(contract["missing_evidence"], "missing_evidence", require_non_empty=True)
+    _validate_growth_business_text_list(contract["approval_requirements"], "approval_requirements", require_non_empty=True)
+    if contract["blocked_actions"] != list(GROWTH_CAMPAIGN_BLOCKED_ACTIONS):
+        raise ValueError("growth campaign evidence contract blocked_actions mismatch")
+    if contract["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("growth campaign evidence contract safety metadata mismatch")
+    if contract["dry_run"] is not True or contract["write_allowed"] is not False:
+        raise ValueError("growth campaign evidence contract must be read-only")
+    if contract["automation_allowed"] is not False or contract["writes"] != []:
+        raise ValueError("growth campaign evidence contract must not allow automation or writes")
+    if not isinstance(contract["recommended_next_action"], str) or not contract["recommended_next_action"].strip():
+        raise ValueError("growth campaign evidence contract recommended_next_action must be non-empty")
+    if campaign_plan_preview is not None:
+        validate_growth_campaign_plan_preview(campaign_plan_preview)
+        if contract["campaign_plan_preview_id"] != campaign_plan_preview["campaign_plan_preview_id"]:
+            raise ValueError("growth campaign evidence contract plan id mismatch")
+    if growth_opportunity_review_package is not None:
+        validate_growth_opportunity_review_package(growth_opportunity_review_package)
+        if contract["growth_opportunity_review_package_id"] != growth_opportunity_review_package["growth_opportunity_review_package_id"]:
+            raise ValueError("growth campaign evidence contract review package id mismatch")
+    if growth_business_evidence_contract is not None:
+        validate_growth_business_evidence_contract(growth_business_evidence_contract)
+        if contract.get("growth_business_evidence_contract_id") != growth_business_evidence_contract["growth_business_evidence_contract_id"]:
+            raise ValueError("growth campaign evidence contract business evidence id mismatch")
+    if module_boundary_registry is not None:
+        validate_link_module_boundary_registry(module_boundary_registry)
+        if contract.get("link_module_boundary_registry_id") != module_boundary_registry["link_module_boundary_registry_id"]:
+            raise ValueError("growth campaign evidence contract module registry id mismatch")
+    if campaign_plan_preview is not None and growth_business_evidence_contract is not None and module_boundary_registry is not None:
+        expected_id = make_growth_campaign_evidence_contract_id(campaign_plan_preview, growth_business_evidence_contract, module_boundary_registry)
+        if contract["growth_campaign_evidence_contract_id"] != expected_id:
+            raise ValueError("growth campaign evidence contract id is not deterministic")
+
+
+def stable_growth_campaign_evidence_contract_json(contract: dict[str, Any]) -> str:
+    validate_growth_campaign_evidence_contract(contract)
+    return _stable_ruflo_json(contract, indent=2) + "\n"
+
+
+def parse_growth_campaign_evidence_contract_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    contract = _json.loads(text)
+    validate_growth_campaign_evidence_contract(contract)
+    return contract
+
+
+def make_growth_campaign_approval_checklist_id(
+    campaign_plan_preview: dict[str, Any],
+    campaign_evidence_contract: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "campaign_plan_preview_id": campaign_plan_preview["campaign_plan_preview_id"],
+        "growth_campaign_evidence_contract_id": campaign_evidence_contract["growth_campaign_evidence_contract_id"],
+        "version": "link-growth-campaign-approval-checklist-v1",
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"growth-campaign-approval-checklist-{digest}"
+
+
+def collect_growth_campaign_approval_checklist(
+    campaign_plan_preview: dict[str, Any] | None = None,
+    campaign_evidence_contract: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Preview human approval gates before any Growth campaign execution."""
+    plan = campaign_plan_preview or collect_growth_campaign_plan_preview()
+    validate_growth_campaign_plan_preview(plan)
+    evidence = campaign_evidence_contract or collect_growth_campaign_evidence_contract(plan)
+    validate_growth_campaign_evidence_contract(evidence, plan)
+    blockers = _normalize_implementation_branch_refs(
+        [f"missing campaign evidence: {item}" for item in evidence["missing_evidence"]]
+        + [f"blocked campaign action: {item}" for item in evidence["blocked_actions"]]
+    )
+    required_actions = _normalize_implementation_branch_refs(list(evidence["approval_requirements"]))
+    checklist = {
+        "growth_campaign_approval_checklist_version": "link-growth-campaign-approval-checklist-v1",
+        "growth_campaign_approval_checklist_id": make_growth_campaign_approval_checklist_id(plan, evidence),
+        "campaign_plan_preview_id": plan["campaign_plan_preview_id"],
+        "campaign_evidence_contract_id": evidence["growth_campaign_evidence_contract_id"],
+        "required_approvals": required_actions,
+        "approval_status": "block" if blockers else "pass",
+        "blockers": blockers,
+        "required_human_actions": required_actions,
+        "recommended_next_action": "Complete required campaign approvals before execution or handoff.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_campaign_approval_checklist(checklist, plan, evidence)
+    return checklist
+
+
+def validate_growth_campaign_approval_checklist(
+    checklist: dict[str, Any],
+    campaign_plan_preview: dict[str, Any] | None = None,
+    campaign_evidence_contract: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "growth_campaign_approval_checklist_version", "growth_campaign_approval_checklist_id",
+        "campaign_plan_preview_id", "campaign_evidence_contract_id", "required_approvals",
+        "approval_status", "blockers", "required_human_actions", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in checklist:
+            raise ValueError(f"growth campaign approval checklist missing required field: {key}")
+    if checklist["growth_campaign_approval_checklist_version"] != "link-growth-campaign-approval-checklist-v1":
+        raise ValueError("invalid growth campaign approval checklist version")
+    if not isinstance(checklist["growth_campaign_approval_checklist_id"], str) or not checklist["growth_campaign_approval_checklist_id"].startswith("growth-campaign-approval-checklist-"):
+        raise ValueError("invalid growth campaign approval checklist id")
+    if not isinstance(checklist["campaign_plan_preview_id"], str) or not checklist["campaign_plan_preview_id"].startswith("growth-campaign-plan-preview-"):
+        raise ValueError("invalid campaign plan preview id in approval checklist")
+    if not isinstance(checklist["campaign_evidence_contract_id"], str) or not checklist["campaign_evidence_contract_id"].startswith("growth-campaign-evidence-contract-"):
+        raise ValueError("invalid campaign evidence contract id in approval checklist")
+    if checklist["approval_status"] not in GROWTH_CAMPAIGN_REVIEW_STATUSES:
+        raise ValueError("invalid growth campaign approval status")
+    for field in ("required_approvals", "blockers", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(checklist[field])
+        if normalized != checklist[field]:
+            raise ValueError(f"growth campaign approval checklist {field} must be normalized and sorted")
+    if checklist["approval_status"] in {"review", "block"} and not checklist["required_human_actions"]:
+        raise ValueError("campaign approval review/block requires human actions")
+    if checklist["approval_status"] == "block" and not checklist["blockers"]:
+        raise ValueError("blocked campaign approval checklist must include blockers")
+    if checklist["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("growth campaign approval checklist safety metadata mismatch")
+    if checklist["dry_run"] is not True or checklist["write_allowed"] is not False:
+        raise ValueError("growth campaign approval checklist must be read-only")
+    if checklist["automation_allowed"] is not False or checklist["writes"] != []:
+        raise ValueError("growth campaign approval checklist must not allow automation or writes")
+    if campaign_plan_preview is not None:
+        validate_growth_campaign_plan_preview(campaign_plan_preview)
+        if checklist["campaign_plan_preview_id"] != campaign_plan_preview["campaign_plan_preview_id"]:
+            raise ValueError("growth campaign approval checklist plan id mismatch")
+    if campaign_evidence_contract is not None:
+        validate_growth_campaign_evidence_contract(campaign_evidence_contract, campaign_plan_preview)
+        if checklist["campaign_evidence_contract_id"] != campaign_evidence_contract["growth_campaign_evidence_contract_id"]:
+            raise ValueError("growth campaign approval checklist evidence id mismatch")
+    if campaign_plan_preview is not None and campaign_evidence_contract is not None:
+        expected_id = make_growth_campaign_approval_checklist_id(campaign_plan_preview, campaign_evidence_contract)
+        if checklist["growth_campaign_approval_checklist_id"] != expected_id:
+            raise ValueError("growth campaign approval checklist id is not deterministic")
+
+
+def stable_growth_campaign_approval_checklist_json(checklist: dict[str, Any]) -> str:
+    validate_growth_campaign_approval_checklist(checklist)
+    return _stable_ruflo_json(checklist, indent=2) + "\n"
+
+
+def parse_growth_campaign_approval_checklist_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    checklist = _json.loads(text)
+    validate_growth_campaign_approval_checklist(checklist)
+    return checklist
+
+
+def make_growth_campaign_review_package_id(
+    campaign_plan_preview: dict[str, Any],
+    campaign_evidence_contract: dict[str, Any],
+    campaign_approval_checklist: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "campaign_approval_checklist_id": campaign_approval_checklist["growth_campaign_approval_checklist_id"],
+        "campaign_evidence_contract_id": campaign_evidence_contract["growth_campaign_evidence_contract_id"],
+        "campaign_plan_preview_id": campaign_plan_preview["campaign_plan_preview_id"],
+        "version": "link-growth-campaign-review-package-v1",
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"growth-campaign-review-package-{digest}"
+
+
+def collect_growth_campaign_review_package(
+    campaign_plan_preview: dict[str, Any] | None = None,
+    campaign_evidence_contract: dict[str, Any] | None = None,
+    campaign_approval_checklist: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aggregate Growth campaign readiness into a reviewer-facing package."""
+    plan = campaign_plan_preview or collect_growth_campaign_plan_preview()
+    validate_growth_campaign_plan_preview(plan)
+    evidence = campaign_evidence_contract or collect_growth_campaign_evidence_contract(plan)
+    validate_growth_campaign_evidence_contract(evidence, plan)
+    approval = campaign_approval_checklist or collect_growth_campaign_approval_checklist(plan, evidence)
+    validate_growth_campaign_approval_checklist(approval, plan, evidence)
+    evidence_status = "block" if evidence["missing_evidence"] else "pass"
+    approval_status = approval["approval_status"]
+    risk_status = "review" if evidence["blocked_actions"] else "pass"
+    blockers = _normalize_implementation_branch_refs(
+        list(approval["blockers"]) + [f"missing campaign evidence: {item}" for item in evidence["missing_evidence"]]
+    )
+    warnings = _normalize_implementation_branch_refs(
+        [f"campaign action remains blocked until review: {item}" for item in evidence["blocked_actions"]]
+    )
+    readiness_status = "blocked" if blockers or evidence_status == "block" or approval_status == "block" else "ready_for_review"
+    package = {
+        "growth_campaign_review_package_version": "link-growth-campaign-review-package-v1",
+        "growth_campaign_review_package_id": make_growth_campaign_review_package_id(plan, evidence, approval),
+        "campaign_plan_preview_id": plan["campaign_plan_preview_id"],
+        "campaign_evidence_contract_id": evidence["growth_campaign_evidence_contract_id"],
+        "campaign_approval_checklist_id": approval["growth_campaign_approval_checklist_id"],
+        "campaign_status": "review",
+        "evidence_status": evidence_status,
+        "approval_status": approval_status,
+        "risk_status": risk_status,
+        "readiness_status": readiness_status,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": list(approval["required_human_actions"]),
+        "review_recommendation": "do_not_execute" if readiness_status == "blocked" else "review_before_action",
+        "recommended_next_action": "Resolve campaign review blockers before Business Development handoff or execution.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_campaign_review_package(package, plan, evidence, approval)
+    return package
+
+
+def validate_growth_campaign_review_package(
+    package: dict[str, Any],
+    campaign_plan_preview: dict[str, Any] | None = None,
+    campaign_evidence_contract: dict[str, Any] | None = None,
+    campaign_approval_checklist: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "growth_campaign_review_package_version", "growth_campaign_review_package_id",
+        "campaign_plan_preview_id", "campaign_evidence_contract_id",
+        "campaign_approval_checklist_id", "campaign_status", "evidence_status",
+        "approval_status", "risk_status", "readiness_status", "blockers", "warnings",
+        "required_human_actions", "review_recommendation", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"growth campaign review package missing required field: {key}")
+    if package["growth_campaign_review_package_version"] != "link-growth-campaign-review-package-v1":
+        raise ValueError("invalid growth campaign review package version")
+    if not isinstance(package["growth_campaign_review_package_id"], str) or not package["growth_campaign_review_package_id"].startswith("growth-campaign-review-package-"):
+        raise ValueError("invalid growth campaign review package id")
+    for field in ("campaign_status", "evidence_status", "approval_status", "risk_status"):
+        if package[field] not in GROWTH_CAMPAIGN_REVIEW_STATUSES:
+            raise ValueError(f"invalid growth campaign review {field}")
+    if package["readiness_status"] not in GROWTH_CAMPAIGN_READINESS_STATUSES:
+        raise ValueError("invalid growth campaign review readiness_status")
+    if package["review_recommendation"] not in GROWTH_CAMPAIGN_RECOMMENDATIONS:
+        raise ValueError("invalid growth campaign review recommendation")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"growth campaign review package {field} must be normalized and sorted")
+    if package["readiness_status"] == "blocked" and not package["blockers"]:
+        raise ValueError("blocked growth campaign review package must include blockers")
+    if package["review_recommendation"] == "ready_for_review" and package["readiness_status"] != "ready_for_review":
+        raise ValueError("ready campaign recommendation requires ready readiness status")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("growth campaign review package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("growth campaign review package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("growth campaign review package must not allow automation or writes")
+    if campaign_plan_preview is not None:
+        validate_growth_campaign_plan_preview(campaign_plan_preview)
+        if package["campaign_plan_preview_id"] != campaign_plan_preview["campaign_plan_preview_id"]:
+            raise ValueError("growth campaign review package plan id mismatch")
+    if campaign_evidence_contract is not None:
+        validate_growth_campaign_evidence_contract(campaign_evidence_contract, campaign_plan_preview)
+        if package["campaign_evidence_contract_id"] != campaign_evidence_contract["growth_campaign_evidence_contract_id"]:
+            raise ValueError("growth campaign review package evidence id mismatch")
+    if campaign_approval_checklist is not None:
+        validate_growth_campaign_approval_checklist(campaign_approval_checklist, campaign_plan_preview, campaign_evidence_contract)
+        if package["campaign_approval_checklist_id"] != campaign_approval_checklist["growth_campaign_approval_checklist_id"]:
+            raise ValueError("growth campaign review package approval id mismatch")
+    if campaign_plan_preview is not None and campaign_evidence_contract is not None and campaign_approval_checklist is not None:
+        expected_id = make_growth_campaign_review_package_id(campaign_plan_preview, campaign_evidence_contract, campaign_approval_checklist)
+        if package["growth_campaign_review_package_id"] != expected_id:
+            raise ValueError("growth campaign review package id is not deterministic")
+
+
+def stable_growth_campaign_review_package_json(package: dict[str, Any]) -> str:
+    validate_growth_campaign_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_growth_campaign_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_growth_campaign_review_package(package)
+    return package
+
+
+def make_business_development_handoff_boundary_id(
+    opportunity_review_package: dict[str, Any],
+    campaign_review_package: dict[str, Any],
+    module_boundary_registry: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "campaign_review_package_id": campaign_review_package["growth_campaign_review_package_id"],
+        "link_module_boundary_registry_id": module_boundary_registry["link_module_boundary_registry_id"],
+        "opportunity_review_package_id": opportunity_review_package["growth_opportunity_review_package_id"],
+        "version": "link-business-development-handoff-boundary-v1",
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-handoff-boundary-{digest}"
+
+
+def collect_business_development_handoff_boundary(
+    growth_opportunity_review_package: dict[str, Any] | None = None,
+    growth_campaign_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Define Growth-to-Business-Development handoff limits without runtime."""
+    opportunity_review = growth_opportunity_review_package or collect_growth_opportunity_review_package()
+    validate_growth_opportunity_review_package(opportunity_review)
+    campaign_review = growth_campaign_review_package or collect_growth_campaign_review_package()
+    validate_growth_campaign_review_package(campaign_review)
+    registry = module_boundary_registry or collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(registry)
+    blockers = _normalize_implementation_branch_refs(
+        list(opportunity_review["blockers"]) + list(campaign_review["blockers"])
+    )
+    warnings = _normalize_implementation_branch_refs(
+        list(opportunity_review["warnings"]) + list(campaign_review["warnings"])
+    )
+    boundary = {
+        "business_development_handoff_boundary_version": "link-business-development-handoff-boundary-v1",
+        "business_development_handoff_boundary_id": make_business_development_handoff_boundary_id(opportunity_review, campaign_review, registry),
+        "source_module": "growth",
+        "target_module": "business_development",
+        "growth_opportunity_review_package_id": opportunity_review["growth_opportunity_review_package_id"],
+        "growth_campaign_review_package_id": campaign_review["growth_campaign_review_package_id"],
+        "link_module_boundary_registry_id": registry["link_module_boundary_registry_id"],
+        "allowed_handoff_artifacts": list(BUSINESS_DEVELOPMENT_ALLOWED_HANDOFF_ARTIFACTS),
+        "forbidden_handoff_artifacts": list(BUSINESS_DEVELOPMENT_FORBIDDEN_HANDOFF_ARTIFACTS),
+        "required_evidence": _normalize_implementation_branch_refs([
+            "reviewed opportunity package",
+            "campaign review package",
+            "campaign evidence contract",
+            "source refs",
+            "risk summary",
+        ]),
+        "required_approvals": _normalize_implementation_branch_refs(list(campaign_review["required_human_actions"])),
+        "blockers": blockers,
+        "warnings": warnings,
+        "handoff_status": "block" if blockers else "review",
+        "recommended_next_action": "Resolve Growth review blockers before handing off to Business Development.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_handoff_boundary(boundary, opportunity_review, campaign_review, registry)
+    return boundary
+
+
+def validate_business_development_handoff_boundary(
+    boundary: dict[str, Any],
+    growth_opportunity_review_package: dict[str, Any] | None = None,
+    growth_campaign_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_development_handoff_boundary_version", "business_development_handoff_boundary_id",
+        "source_module", "target_module", "allowed_handoff_artifacts",
+        "forbidden_handoff_artifacts", "required_evidence", "required_approvals",
+        "blockers", "warnings", "handoff_status", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in boundary:
+            raise ValueError(f"business development handoff boundary missing required field: {key}")
+    if boundary["business_development_handoff_boundary_version"] != "link-business-development-handoff-boundary-v1":
+        raise ValueError("invalid business development handoff boundary version")
+    if not isinstance(boundary["business_development_handoff_boundary_id"], str) or not boundary["business_development_handoff_boundary_id"].startswith("business-development-handoff-boundary-"):
+        raise ValueError("invalid business development handoff boundary id")
+    if boundary["source_module"] != "growth" or boundary["target_module"] != "business_development":
+        raise ValueError("business development handoff boundary module flow mismatch")
+    if boundary["allowed_handoff_artifacts"] != list(BUSINESS_DEVELOPMENT_ALLOWED_HANDOFF_ARTIFACTS):
+        raise ValueError("business development handoff allowed artifacts mismatch")
+    if boundary["forbidden_handoff_artifacts"] != list(BUSINESS_DEVELOPMENT_FORBIDDEN_HANDOFF_ARTIFACTS):
+        raise ValueError("business development handoff forbidden artifacts mismatch")
+    for field in ("required_evidence", "required_approvals", "blockers", "warnings"):
+        normalized = _normalize_implementation_branch_refs(boundary[field])
+        if normalized != boundary[field]:
+            raise ValueError(f"business development handoff boundary {field} must be normalized and sorted")
+    if boundary["handoff_status"] not in GROWTH_CAMPAIGN_REVIEW_STATUSES:
+        raise ValueError("invalid business development handoff status")
+    if boundary["handoff_status"] == "block" and not boundary["blockers"]:
+        raise ValueError("blocked business development handoff must include blockers")
+    if boundary["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development handoff boundary safety metadata mismatch")
+    if boundary["dry_run"] is not True or boundary["write_allowed"] is not False:
+        raise ValueError("business development handoff boundary must be read-only")
+    if boundary["automation_allowed"] is not False or boundary["writes"] != []:
+        raise ValueError("business development handoff boundary must not allow automation or writes")
+    if growth_opportunity_review_package is not None:
+        validate_growth_opportunity_review_package(growth_opportunity_review_package)
+        if boundary.get("growth_opportunity_review_package_id") != growth_opportunity_review_package["growth_opportunity_review_package_id"]:
+            raise ValueError("business development handoff opportunity review id mismatch")
+    if growth_campaign_review_package is not None:
+        validate_growth_campaign_review_package(growth_campaign_review_package)
+        if boundary.get("growth_campaign_review_package_id") != growth_campaign_review_package["growth_campaign_review_package_id"]:
+            raise ValueError("business development handoff campaign review id mismatch")
+    if module_boundary_registry is not None:
+        validate_link_module_boundary_registry(module_boundary_registry)
+        if boundary.get("link_module_boundary_registry_id") != module_boundary_registry["link_module_boundary_registry_id"]:
+            raise ValueError("business development handoff module registry id mismatch")
+    if growth_opportunity_review_package is not None and growth_campaign_review_package is not None and module_boundary_registry is not None:
+        expected_id = make_business_development_handoff_boundary_id(growth_opportunity_review_package, growth_campaign_review_package, module_boundary_registry)
+        if boundary["business_development_handoff_boundary_id"] != expected_id:
+            raise ValueError("business development handoff boundary id is not deterministic")
+
+
+def stable_business_development_handoff_boundary_json(boundary: dict[str, Any]) -> str:
+    validate_business_development_handoff_boundary(boundary)
+    return _stable_ruflo_json(boundary, indent=2) + "\n"
+
+
+def parse_business_development_handoff_boundary_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    boundary = _json.loads(text)
+    validate_business_development_handoff_boundary(boundary)
+    return boundary
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -11625,6 +12734,275 @@ def business_evidence_contract_main(argv: list[str] | None = None) -> int:
         print(stable_growth_business_evidence_contract_json(contract), end="")
         return 0
     render_business_evidence_contract_plain(contract)
+    return 0
+
+
+def render_opportunity_review_plain(package: dict[str, Any]) -> None:
+    validate_growth_opportunity_review_package(package)
+    print("Growth opportunity review")
+    print(f"growth_opportunity_review_package_id: {package['growth_opportunity_review_package_id']}")
+    print(f"growth_business_opportunity_scan_id: {package['growth_business_opportunity_scan_id']}")
+    print(f"growth_business_evidence_contract_id: {package['growth_business_evidence_contract_id']}")
+    print(f"opportunity_status: {package['opportunity_status']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"approval_status: {package['approval_status']}")
+    print(f"risk_status: {package['risk_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def opportunity_review_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth opportunity-review`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth opportunity-review: opportunity review package preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth opportunity-review")
+        print("  python3 link.py growth opportunity-review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth opportunity-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_growth_opportunity_review_package()
+    validate_growth_opportunity_review_package(package)
+    if "--json" in args:
+        print(stable_growth_opportunity_review_package_json(package), end="")
+        return 0
+    render_opportunity_review_plain(package)
+    return 0
+
+
+
+def render_campaign_evidence_contract_plain(contract: dict[str, Any]) -> None:
+    validate_growth_campaign_evidence_contract(contract)
+    print("Growth campaign evidence contract")
+    print(f"growth_campaign_evidence_contract_id: {contract['growth_campaign_evidence_contract_id']}")
+    print(f"campaign_plan_preview_id: {contract['campaign_plan_preview_id']}")
+    print(f"growth_opportunity_review_package_id: {contract['growth_opportunity_review_package_id']}")
+    print(f"claim_type_count: {len(contract['claim_types'])}")
+    print(f"required_evidence_count: {len(contract['required_evidence'])}")
+    print(f"missing_evidence_count: {len(contract['missing_evidence'])}")
+    print(f"approval_requirement_count: {len(contract['approval_requirements'])}")
+    print(f"blocked_action_count: {len(contract['blocked_actions'])}")
+    print(f"next_action: {contract['recommended_next_action']}")
+
+
+def campaign_evidence_contract_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth campaign-evidence-contract: campaign evidence contract preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth campaign-evidence-contract")
+        print("  python3 link.py growth campaign-evidence-contract --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth campaign-evidence-contract is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    contract = collect_growth_campaign_evidence_contract()
+    validate_growth_campaign_evidence_contract(contract)
+    if "--json" in args:
+        print(stable_growth_campaign_evidence_contract_json(contract), end="")
+        return 0
+    render_campaign_evidence_contract_plain(contract)
+    return 0
+
+
+def render_campaign_approval_checklist_plain(checklist: dict[str, Any]) -> None:
+    validate_growth_campaign_approval_checklist(checklist)
+    print("Growth campaign approval checklist")
+    print(f"growth_campaign_approval_checklist_id: {checklist['growth_campaign_approval_checklist_id']}")
+    print(f"campaign_plan_preview_id: {checklist['campaign_plan_preview_id']}")
+    print(f"campaign_evidence_contract_id: {checklist['campaign_evidence_contract_id']}")
+    print(f"approval_status: {checklist['approval_status']}")
+    print(f"required_approval_count: {len(checklist['required_approvals'])}")
+    print(f"blocker_count: {len(checklist['blockers'])}")
+    print(f"required_human_action_count: {len(checklist['required_human_actions'])}")
+    print(f"next_action: {checklist['recommended_next_action']}")
+
+
+def campaign_approval_checklist_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth campaign-approval-checklist: campaign approval checklist preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth campaign-approval-checklist")
+        print("  python3 link.py growth campaign-approval-checklist --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth campaign-approval-checklist is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    checklist = collect_growth_campaign_approval_checklist()
+    validate_growth_campaign_approval_checklist(checklist)
+    if "--json" in args:
+        print(stable_growth_campaign_approval_checklist_json(checklist), end="")
+        return 0
+    render_campaign_approval_checklist_plain(checklist)
+    return 0
+
+
+def render_campaign_review_plain(package: dict[str, Any]) -> None:
+    validate_growth_campaign_review_package(package)
+    print("Growth campaign review")
+    print(f"growth_campaign_review_package_id: {package['growth_campaign_review_package_id']}")
+    print(f"campaign_plan_preview_id: {package['campaign_plan_preview_id']}")
+    print(f"campaign_evidence_contract_id: {package['campaign_evidence_contract_id']}")
+    print(f"campaign_approval_checklist_id: {package['campaign_approval_checklist_id']}")
+    print(f"campaign_status: {package['campaign_status']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"approval_status: {package['approval_status']}")
+    print(f"risk_status: {package['risk_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def campaign_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth campaign-review: campaign review package preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth campaign-review")
+        print("  python3 link.py growth campaign-review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth campaign-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_growth_campaign_review_package()
+    validate_growth_campaign_review_package(package)
+    if "--json" in args:
+        print(stable_growth_campaign_review_package_json(package), end="")
+        return 0
+    render_campaign_review_plain(package)
+    return 0
+
+
+def render_business_development_handoff_plain(boundary: dict[str, Any]) -> None:
+    validate_business_development_handoff_boundary(boundary)
+    print("Business Development handoff boundary")
+    print(f"business_development_handoff_boundary_id: {boundary['business_development_handoff_boundary_id']}")
+    print(f"source_module: {boundary['source_module']}")
+    print(f"target_module: {boundary['target_module']}")
+    print(f"allowed_handoff_artifact_count: {len(boundary['allowed_handoff_artifacts'])}")
+    print(f"forbidden_handoff_artifact_count: {len(boundary['forbidden_handoff_artifacts'])}")
+    print(f"required_evidence_count: {len(boundary['required_evidence'])}")
+    print(f"required_approval_count: {len(boundary['required_approvals'])}")
+    print(f"blocker_count: {len(boundary['blockers'])}")
+    print(f"warning_count: {len(boundary['warnings'])}")
+    print(f"handoff_status: {boundary['handoff_status']}")
+    print(f"next_action: {boundary['recommended_next_action']}")
+
+
+def business_development_handoff_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth business-development-handoff: Business Development handoff boundary preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth business-development-handoff")
+        print("  python3 link.py growth business-development-handoff --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth business-development-handoff is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    boundary = collect_business_development_handoff_boundary()
+    validate_business_development_handoff_boundary(boundary)
+    if "--json" in args:
+        print(stable_business_development_handoff_boundary_json(boundary), end="")
+        return 0
+    render_business_development_handoff_plain(boundary)
+    return 0
+
+def render_campaign_plan_preview_plain(preview: dict[str, Any]) -> None:
+    validate_growth_campaign_plan_preview(preview)
+    print("Growth campaign plan preview")
+    print(f"campaign_plan_preview_id: {preview['campaign_plan_preview_id']}")
+    print(f"opportunity_id: {preview['opportunity_id']}")
+    print(f"campaign_type: {preview['campaign_type']}")
+    print(f"target_channel: {preview['target_channel']}")
+    print(f"required_evidence_count: {len(preview['required_evidence'])}")
+    print(f"required_approval_count: {len(preview['required_approvals'])}")
+    print(f"blocked_action_count: {len(preview['blocked_actions'])}")
+    print(f"next_action: {preview['next_action']}")
+
+
+def campaign_plan_preview_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth campaign-plan-preview`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth campaign-plan-preview: campaign planning preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth campaign-plan-preview")
+        print("  python3 link.py growth campaign-plan-preview --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth campaign-plan-preview is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    preview = collect_growth_campaign_plan_preview()
+    validate_growth_campaign_plan_preview(preview)
+    if "--json" in args:
+        print(stable_growth_campaign_plan_preview_json(preview), end="")
+        return 0
+    render_campaign_plan_preview_plain(preview)
+    return 0
+
+
+def render_module_boundary_registry_plain(registry: dict[str, Any]) -> None:
+    validate_link_module_boundary_registry(registry)
+    print("Link module boundary registry")
+    print(f"link_module_boundary_registry_id: {registry['link_module_boundary_registry_id']}")
+    print(f"parent_architecture: {registry['parent_architecture']['name']}")
+    print(f"module_count: {len(registry['modules'])}")
+    print(f"shared_service_count: {len(registry['shared_services'])}")
+    print(f"handoff_rule_count: {len(registry['handoff_rules'])}")
+    print(f"blocked_cross_module_action_count: {len(registry['blocked_cross_module_actions'])}")
+    print(f"next_action: {registry['recommended_next_action']}")
+
+
+def module_boundary_registry_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``modules boundary-registry`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Link modules boundary-registry: module boundary registry preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py modules boundary-registry")
+        print("  python3 link.py modules boundary-registry --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: modules boundary-registry is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    registry = collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(registry)
+    if "--json" in args:
+        print(stable_link_module_boundary_registry_json(registry), end="")
+        return 0
+    render_module_boundary_registry_plain(registry)
     return 0
 
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:

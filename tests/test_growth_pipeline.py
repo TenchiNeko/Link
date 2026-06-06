@@ -12357,6 +12357,589 @@ def check_growth_business_evidence_contract_cli() -> None:
              "business-evidence-contract --write must not print normal output")
     print("growth business-evidence-contract CLI OK")
 
+
+# ---------------------------------------------------------------------------
+# 62j. Growth opportunity-review CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_opportunity_review_cli() -> None:
+    """opportunity-review exposes only the Growth opportunity review package."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_growth_opportunity_review_package,
+        opportunity_review_main,
+        parse_growth_opportunity_review_package_json,
+        validate_growth_opportunity_review_package,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("opportunity-review" in help_out.getvalue(),
+             "growth help must include opportunity-review")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = opportunity_review_main(["--json"])
+    _require(json_rc == 0, "opportunity-review --json must return 0")
+    parsed = parse_growth_opportunity_review_package_json(json_out.getvalue())
+    validate_growth_opportunity_review_package(parsed)
+    expected = collect_growth_opportunity_review_package()
+    _require(parsed["growth_opportunity_review_package_id"] == expected["growth_opportunity_review_package_id"],
+             "opportunity-review package id must be deterministic")
+    _require(parsed["growth_business_opportunity_scan_id"] == expected["growth_business_opportunity_scan_id"],
+             "opportunity-review must preserve scan id")
+    _require(parsed["growth_business_evidence_contract_id"] == expected["growth_business_evidence_contract_id"],
+             "opportunity-review must preserve evidence contract id")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "opportunity-review must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "opportunity-review must not allow automation or writes")
+    for full_chain_key in (
+        "planning_chain_id",
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_gate_stack_preview",
+        "supervised_execution_plan",
+        "growth_business_opportunity_scan",
+        "growth_business_evidence_contract",
+    ):
+        _require(full_chain_key not in parsed,
+                 "opportunity-review --json must output only review package payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["opportunity-review", "--json"])
+    routed = parse_growth_opportunity_review_package_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth opportunity-review --json route must return 0")
+    _require(routed["growth_opportunity_review_package_id"] == parsed["growth_opportunity_review_package_id"],
+             "growth opportunity-review route must preserve deterministic package id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = opportunity_review_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "opportunity-review human mode must return 0")
+    for needle in (
+        "Growth opportunity review",
+        "growth_opportunity_review_package_id:",
+        "growth_business_opportunity_scan_id:",
+        "growth_business_evidence_contract_id:",
+        "opportunity_status:",
+        "evidence_status:",
+        "approval_status:",
+        "risk_status:",
+        "readiness_status:",
+        "blocker_count:",
+        "warning_count:",
+        "required_human_action_count:",
+        "review_recommendation:",
+        "next_action:",
+    ):
+        _require(needle in human, f"opportunity-review human mode must include {needle}")
+    _require(len(human.splitlines()) <= 14,
+             "opportunity-review human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = opportunity_review_main(["--write", "--json"])
+    _require(write_rc != 0, "opportunity-review --write must be rejected")
+    _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+             "opportunity-review --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "opportunity-review --write must not print normal output")
+    print("growth opportunity-review CLI OK")
+
+
+# ---------------------------------------------------------------------------
+# 62j. Growth campaign plan preview helper and CLI
+# ---------------------------------------------------------------------------
+
+def check_growth_campaign_plan_preview_helper() -> None:
+    """Campaign previews convert reviewed opportunities into read-only plans."""
+    from link_modes.growth.link_growth_console import (
+        collect_growth_business_evidence_contract,
+        collect_growth_business_opportunity_scan,
+        collect_growth_campaign_plan_preview,
+        collect_growth_opportunity_review_package,
+        parse_growth_campaign_plan_preview_json,
+        stable_growth_campaign_plan_preview_json,
+        validate_growth_campaign_plan_preview,
+    )
+
+    scan = collect_growth_business_opportunity_scan()
+    contract = collect_growth_business_evidence_contract(scan)
+    review = collect_growth_opportunity_review_package(scan, contract)
+    preview = collect_growth_campaign_plan_preview(scan, contract, review)
+    same = collect_growth_campaign_plan_preview(scan, contract, review)
+    validate_growth_campaign_plan_preview(preview, scan, contract, review)
+    _require(preview["campaign_plan_preview_id"] == same["campaign_plan_preview_id"],
+             "growth campaign plan preview id must be deterministic")
+    _require(preview["opportunity_id"] == scan["opportunities"][0]["opportunity_id"],
+             "growth campaign plan preview must preserve top opportunity id")
+    _require(preview["growth_opportunity_review_package_id"] == review["growth_opportunity_review_package_id"],
+             "growth campaign plan preview must preserve review package id")
+    _require(preview["campaign_type"] in {
+        "content_marketing", "lead_generation", "product_validation", "research_report", "internal_automation",
+    }, "growth campaign plan preview campaign type must be valid")
+    _require(preview["target_channel"] == scan["opportunities"][0]["growth_channel"],
+             "growth campaign plan preview must preserve target channel")
+    _require(preview["required_evidence"], "growth campaign plan preview must include required evidence")
+    _require(preview["required_approvals"], "growth campaign plan preview must include required approvals")
+    _require(preview["blocked_actions"], "growth campaign plan preview must include blocked actions")
+    _require(preview["dry_run"] is True and preview["write_allowed"] is False,
+             "growth campaign plan preview must be read-only")
+    _require(preview["automation_allowed"] is False and preview["writes"] == [],
+             "growth campaign plan preview must not allow automation or writes")
+    decoded = parse_growth_campaign_plan_preview_json(stable_growth_campaign_plan_preview_json(preview))
+    _require(decoded == preview, "growth campaign plan preview JSON must round trip")
+
+    bad_type = dict(preview)
+    bad_type["campaign_type"] = "launch_now"
+    try:
+        validate_growth_campaign_plan_preview(bad_type)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth campaign plan preview validation must reject invalid campaign type")
+
+    bad_safety = dict(preview)
+    bad_safety["write_allowed"] = True
+    try:
+        validate_growth_campaign_plan_preview(bad_safety)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth campaign plan preview validation must reject write allowance")
+
+    missing = dict(preview)
+    missing.pop("required_evidence")
+    try:
+        validate_growth_campaign_plan_preview(missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth campaign plan preview validation must reject missing fields")
+    print("growth campaign plan preview helper OK")
+
+
+def check_growth_campaign_plan_preview_cli() -> None:
+    """campaign-plan-preview exposes only the campaign preview payload."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        campaign_plan_preview_main,
+        collect_growth_campaign_plan_preview,
+        parse_growth_campaign_plan_preview_json,
+        validate_growth_campaign_plan_preview,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("campaign-plan-preview" in help_out.getvalue(),
+             "growth help must include campaign-plan-preview")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = campaign_plan_preview_main(["--json"])
+    _require(json_rc == 0, "campaign-plan-preview --json must return 0")
+    parsed = parse_growth_campaign_plan_preview_json(json_out.getvalue())
+    validate_growth_campaign_plan_preview(parsed)
+    expected = collect_growth_campaign_plan_preview()
+    _require(parsed["campaign_plan_preview_id"] == expected["campaign_plan_preview_id"],
+             "campaign-plan-preview id must be deterministic")
+    for full_payload_key in (
+        "planning_chain_id",
+        "growth_business_opportunity_scan",
+        "growth_business_evidence_contract",
+        "growth_opportunity_review_package",
+    ):
+        _require(full_payload_key not in parsed,
+                 "campaign-plan-preview --json must output only preview payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["campaign-plan-preview", "--json"])
+    routed = parse_growth_campaign_plan_preview_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth campaign-plan-preview --json route must return 0")
+    _require(routed["campaign_plan_preview_id"] == parsed["campaign_plan_preview_id"],
+             "growth campaign-plan-preview route must preserve deterministic id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = campaign_plan_preview_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "campaign-plan-preview human mode must return 0")
+    for needle in (
+        "Growth campaign plan preview",
+        "campaign_plan_preview_id:",
+        "opportunity_id:",
+        "campaign_type:",
+        "target_channel:",
+        "required_evidence_count:",
+        "required_approval_count:",
+        "blocked_action_count:",
+        "next_action:",
+    ):
+        _require(needle in human, f"campaign-plan-preview human mode must include {needle}")
+    _require(len(human.splitlines()) <= 9,
+             "campaign-plan-preview human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = campaign_plan_preview_main(["--write", "--json"])
+    _require(write_rc != 0, "campaign-plan-preview --write must be rejected")
+    _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+             "campaign-plan-preview --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "campaign-plan-preview --write must not print normal output")
+    print("growth campaign-plan-preview CLI OK")
+
+
+# ---------------------------------------------------------------------------
+# 62j. Link module boundary registry helper and CLI
+# ---------------------------------------------------------------------------
+
+def check_link_module_boundary_registry_helper() -> None:
+    """Module boundary registry keeps Link parent and business lanes separate."""
+    from link_modes.growth.link_growth_console import (
+        collect_link_module_boundary_registry,
+        parse_link_module_boundary_registry_json,
+        stable_link_module_boundary_registry_json,
+        validate_link_module_boundary_registry,
+    )
+
+    registry = collect_link_module_boundary_registry()
+    same = collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(registry)
+    _require(registry["link_module_boundary_registry_id"] == same["link_module_boundary_registry_id"],
+             "link module boundary registry id must be deterministic")
+    _require(registry["parent_architecture"]["name"] == "Link",
+             "link module boundary registry must define Link as parent")
+    module_ids = [item["module_id"] for item in registry["modules"]]
+    _require(module_ids == ["link_core", "growth", "business_development", "business_operations"],
+             "link module boundary registry must preserve module lanes")
+    service_ids = [item["service_id"] for item in registry["shared_services"]]
+    _require(service_ids == ["evidence", "approval", "review_package", "safety_boundary", "memory"],
+             "link module boundary registry must preserve shared services")
+    _require(registry["dry_run"] is True and registry["write_allowed"] is False,
+             "link module boundary registry must be read-only")
+    _require(registry["automation_allowed"] is False and registry["writes"] == [],
+             "link module boundary registry must not allow automation or writes")
+    decoded = parse_link_module_boundary_registry_json(stable_link_module_boundary_registry_json(registry))
+    _require(decoded == registry, "link module boundary registry JSON must round trip")
+
+    bad_modules = dict(registry)
+    bad_modules["modules"] = list(registry["modules"])[1:]
+    try:
+        validate_link_module_boundary_registry(bad_modules)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("module boundary registry validation must reject missing parent module")
+
+    bad_safety = dict(registry)
+    bad_safety["write_allowed"] = True
+    try:
+        validate_link_module_boundary_registry(bad_safety)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("module boundary registry validation must reject write allowance")
+    print("link module boundary registry helper OK")
+
+
+def check_link_module_boundary_registry_cli() -> None:
+    """modules boundary-registry exposes only the registry payload."""
+    from link import _cmd_modules
+    from link_modes.growth.link_growth_console import (
+        collect_link_module_boundary_registry,
+        module_boundary_registry_main,
+        parse_link_module_boundary_registry_json,
+        validate_link_module_boundary_registry,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_modules(["--help"])
+    _require(help_rc == 0, "modules --help must return 0")
+    _require("boundary-registry" in help_out.getvalue(),
+             "modules help must include boundary-registry")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = module_boundary_registry_main(["--json"])
+    _require(json_rc == 0, "modules boundary-registry --json must return 0")
+    parsed = parse_link_module_boundary_registry_json(json_out.getvalue())
+    validate_link_module_boundary_registry(parsed)
+    expected = collect_link_module_boundary_registry()
+    _require(parsed["link_module_boundary_registry_id"] == expected["link_module_boundary_registry_id"],
+             "modules boundary-registry id must be deterministic")
+    for full_payload_key in (
+        "growth_business_opportunity_scan",
+        "growth_business_evidence_contract",
+        "growth_opportunity_review_package",
+        "campaign_plan_preview",
+    ):
+        _require(full_payload_key not in parsed,
+                 "modules boundary-registry --json must output only registry payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_modules(["boundary-registry", "--json"])
+    routed = parse_link_module_boundary_registry_json(routed_out.getvalue())
+    _require(routed_rc == 0, "modules boundary-registry --json route must return 0")
+    _require(routed["link_module_boundary_registry_id"] == parsed["link_module_boundary_registry_id"],
+             "modules boundary-registry route must preserve deterministic id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = module_boundary_registry_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "modules boundary-registry human mode must return 0")
+    for needle in (
+        "Link module boundary registry",
+        "link_module_boundary_registry_id:",
+        "parent_architecture:",
+        "module_count:",
+        "shared_service_count:",
+        "handoff_rule_count:",
+        "blocked_cross_module_action_count:",
+        "next_action:",
+    ):
+        _require(needle in human, f"modules boundary-registry human mode must include {needle}")
+    _require(len(human.splitlines()) <= 8,
+             "modules boundary-registry human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = module_boundary_registry_main(["--write", "--json"])
+    _require(write_rc != 0, "modules boundary-registry --write must be rejected")
+    _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+             "modules boundary-registry --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "modules boundary-registry --write must not print normal output")
+    print("link module boundary registry CLI OK")
+
+
+# ---------------------------------------------------------------------------
+# 62j. Growth campaign governance and Business Development boundary
+# ---------------------------------------------------------------------------
+
+def check_growth_campaign_governance_helpers() -> None:
+    """Campaign governance objects preserve ID flow and stay read-only."""
+    from link_modes.growth.link_growth_console import (
+        BUSINESS_DEVELOPMENT_ALLOWED_HANDOFF_ARTIFACTS,
+        BUSINESS_DEVELOPMENT_FORBIDDEN_HANDOFF_ARTIFACTS,
+        GROWTH_CAMPAIGN_BLOCKED_ACTIONS,
+        collect_business_development_handoff_boundary,
+        collect_growth_business_evidence_contract,
+        collect_growth_business_opportunity_scan,
+        collect_growth_campaign_approval_checklist,
+        collect_growth_campaign_evidence_contract,
+        collect_growth_campaign_plan_preview,
+        collect_growth_campaign_review_package,
+        collect_growth_opportunity_review_package,
+        collect_link_module_boundary_registry,
+        parse_business_development_handoff_boundary_json,
+        parse_growth_campaign_approval_checklist_json,
+        parse_growth_campaign_evidence_contract_json,
+        parse_growth_campaign_review_package_json,
+        stable_business_development_handoff_boundary_json,
+        stable_growth_campaign_approval_checklist_json,
+        stable_growth_campaign_evidence_contract_json,
+        stable_growth_campaign_review_package_json,
+        validate_business_development_handoff_boundary,
+        validate_growth_campaign_approval_checklist,
+        validate_growth_campaign_evidence_contract,
+        validate_growth_campaign_review_package,
+    )
+
+    scan = collect_growth_business_opportunity_scan()
+    business_contract = collect_growth_business_evidence_contract(scan)
+    opportunity_review = collect_growth_opportunity_review_package(scan, business_contract)
+    campaign_plan = collect_growth_campaign_plan_preview(scan, business_contract, opportunity_review)
+    registry = collect_link_module_boundary_registry()
+    evidence = collect_growth_campaign_evidence_contract(campaign_plan, business_contract, opportunity_review, registry)
+    same_evidence = collect_growth_campaign_evidence_contract(campaign_plan, business_contract, opportunity_review, registry)
+    validate_growth_campaign_evidence_contract(evidence, campaign_plan, business_contract, opportunity_review, registry)
+    _require(evidence["growth_campaign_evidence_contract_id"] == same_evidence["growth_campaign_evidence_contract_id"],
+             "campaign evidence contract id must be deterministic")
+    _require(evidence["campaign_plan_preview_id"] == campaign_plan["campaign_plan_preview_id"],
+             "campaign evidence contract must preserve plan id")
+    _require(evidence["growth_opportunity_review_package_id"] == opportunity_review["growth_opportunity_review_package_id"],
+             "campaign evidence contract must preserve opportunity review id")
+    _require(evidence["blocked_actions"] == list(GROWTH_CAMPAIGN_BLOCKED_ACTIONS),
+             "campaign evidence contract must preserve blocked actions")
+    _require(evidence["missing_evidence"], "campaign evidence contract must include missing evidence")
+    _require(evidence["safety_metadata"] == {
+        "dry_run": True, "write_allowed": False, "automation_allowed": False, "writes": [],
+    }, "campaign evidence contract must include read-only safety metadata")
+    _require(parse_growth_campaign_evidence_contract_json(stable_growth_campaign_evidence_contract_json(evidence)) == evidence,
+             "campaign evidence contract JSON must round trip")
+
+    approval = collect_growth_campaign_approval_checklist(campaign_plan, evidence)
+    same_approval = collect_growth_campaign_approval_checklist(campaign_plan, evidence)
+    validate_growth_campaign_approval_checklist(approval, campaign_plan, evidence)
+    _require(approval["growth_campaign_approval_checklist_id"] == same_approval["growth_campaign_approval_checklist_id"],
+             "campaign approval checklist id must be deterministic")
+    _require(approval["approval_status"] == "block",
+             "campaign approval checklist must block while evidence/actions are blocked")
+    _require(approval["blockers"], "campaign approval checklist must include blockers")
+    _require(approval["required_human_actions"], "campaign approval checklist must include human actions")
+    _require(parse_growth_campaign_approval_checklist_json(stable_growth_campaign_approval_checklist_json(approval)) == approval,
+             "campaign approval checklist JSON must round trip")
+
+    review = collect_growth_campaign_review_package(campaign_plan, evidence, approval)
+    same_review = collect_growth_campaign_review_package(campaign_plan, evidence, approval)
+    validate_growth_campaign_review_package(review, campaign_plan, evidence, approval)
+    _require(review["growth_campaign_review_package_id"] == same_review["growth_campaign_review_package_id"],
+             "campaign review package id must be deterministic")
+    _require(review["campaign_plan_preview_id"] == campaign_plan["campaign_plan_preview_id"],
+             "campaign review package must preserve plan id")
+    _require(review["campaign_evidence_contract_id"] == evidence["growth_campaign_evidence_contract_id"],
+             "campaign review package must preserve evidence id")
+    _require(review["campaign_approval_checklist_id"] == approval["growth_campaign_approval_checklist_id"],
+             "campaign review package must preserve approval id")
+    _require(review["readiness_status"] == "blocked", "campaign review package must be blocked by default")
+    _require(review["review_recommendation"] == "do_not_execute",
+             "blocked campaign review package must recommend no execution")
+    _require(parse_growth_campaign_review_package_json(stable_growth_campaign_review_package_json(review)) == review,
+             "campaign review package JSON must round trip")
+
+    handoff = collect_business_development_handoff_boundary(opportunity_review, review, registry)
+    same_handoff = collect_business_development_handoff_boundary(opportunity_review, review, registry)
+    validate_business_development_handoff_boundary(handoff, opportunity_review, review, registry)
+    _require(handoff["business_development_handoff_boundary_id"] == same_handoff["business_development_handoff_boundary_id"],
+             "Business Development handoff boundary id must be deterministic")
+    _require(handoff["source_module"] == "growth" and handoff["target_module"] == "business_development",
+             "Business Development handoff boundary must preserve module flow")
+    _require(handoff["allowed_handoff_artifacts"] == list(BUSINESS_DEVELOPMENT_ALLOWED_HANDOFF_ARTIFACTS),
+             "Business Development handoff allowed artifacts must match contract")
+    _require(handoff["forbidden_handoff_artifacts"] == list(BUSINESS_DEVELOPMENT_FORBIDDEN_HANDOFF_ARTIFACTS),
+             "Business Development handoff forbidden artifacts must match contract")
+    _require(handoff["handoff_status"] == "block", "Business Development handoff must block by default")
+    _require(parse_business_development_handoff_boundary_json(stable_business_development_handoff_boundary_json(handoff)) == handoff,
+             "Business Development handoff boundary JSON must round trip")
+
+    bad_evidence = dict(evidence)
+    bad_evidence["blocked_actions"] = ["publish now"]
+    try:
+        validate_growth_campaign_evidence_contract(bad_evidence)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("campaign evidence contract validation must reject bad blocked actions")
+
+    bad_approval = dict(approval)
+    bad_approval["approval_status"] = "approved"
+    try:
+        validate_growth_campaign_approval_checklist(bad_approval)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("campaign approval checklist validation must reject invalid status")
+
+    bad_review = dict(review)
+    bad_review["readiness_status"] = "ready"
+    try:
+        validate_growth_campaign_review_package(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("campaign review package validation must reject invalid readiness")
+
+    bad_handoff = dict(handoff)
+    bad_handoff["forbidden_handoff_artifacts"] = ["credentials"]
+    try:
+        validate_business_development_handoff_boundary(bad_handoff)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development handoff validation must reject artifact mismatch")
+    print("growth campaign governance helpers OK")
+
+
+def check_growth_campaign_governance_clis() -> None:
+    """Campaign governance CLIs expose only their object payloads and reject writes."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        business_development_handoff_main,
+        campaign_approval_checklist_main,
+        campaign_evidence_contract_main,
+        campaign_review_main,
+        parse_business_development_handoff_boundary_json,
+        parse_growth_campaign_approval_checklist_json,
+        parse_growth_campaign_evidence_contract_json,
+        parse_growth_campaign_review_package_json,
+    )
+
+    expected = [
+        ("campaign-evidence-contract", campaign_evidence_contract_main, parse_growth_campaign_evidence_contract_json,
+         "growth_campaign_evidence_contract_id", "Growth campaign evidence contract"),
+        ("campaign-approval-checklist", campaign_approval_checklist_main, parse_growth_campaign_approval_checklist_json,
+         "growth_campaign_approval_checklist_id", "Growth campaign approval checklist"),
+        ("campaign-review", campaign_review_main, parse_growth_campaign_review_package_json,
+         "growth_campaign_review_package_id", "Growth campaign review"),
+        ("business-development-handoff", business_development_handoff_main, parse_business_development_handoff_boundary_json,
+         "business_development_handoff_boundary_id", "Business Development handoff boundary"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    for command, main_func, parse_func, id_key, title in expected:
+        _require(command in help_out.getvalue(), f"growth help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"{command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"{command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"{command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"{command} must not allow automation or writes")
+        for full_payload_key in (
+            "growth_campaign_plan_preview",
+            "growth_campaign_evidence_contract",
+            "growth_campaign_approval_checklist",
+            "growth_campaign_review_package",
+            "business_development_handoff_boundary",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"{command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_growth([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"growth {command} --json route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"growth {command} route must preserve deterministic id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"{command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"{command} human mode must include concise title and id")
+        _require(len(human.splitlines()) <= 15, f"{command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"{command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"{command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"{command} --write must not print normal output")
+    print("growth campaign governance CLIs OK")
+
 # ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
@@ -13155,6 +13738,159 @@ def check_growth_business_evidence_contract_helper() -> None:
 
     print("growth business evidence contract helper OK")
 
+
+# ---------------------------------------------------------------------------
+# 65. Growth opportunity review package helper
+# ---------------------------------------------------------------------------
+
+def check_growth_opportunity_review_package_helper() -> None:
+    """Growth opportunity review packages summarize business readiness read-only."""
+    from link_modes.growth.link_growth_console import (
+        collect_growth_business_evidence_contract,
+        collect_growth_business_opportunity_scan,
+        collect_growth_opportunity_review_package,
+        parse_growth_opportunity_review_package_json,
+        stable_growth_opportunity_review_package_json,
+        validate_growth_opportunity_review_package,
+    )
+
+    scan = collect_growth_business_opportunity_scan()
+    contract = collect_growth_business_evidence_contract(scan)
+    package = collect_growth_opportunity_review_package(scan, contract)
+    same = collect_growth_opportunity_review_package(scan, contract)
+    validate_growth_opportunity_review_package(package, scan, contract)
+    _require(package["growth_opportunity_review_package_id"] == same["growth_opportunity_review_package_id"],
+             "growth opportunity review package id must be deterministic")
+    _require(package["growth_business_opportunity_scan_id"] == scan["growth_business_opportunity_scan_id"],
+             "growth opportunity review package must preserve scan id")
+    _require(package["growth_business_evidence_contract_id"] == contract["growth_business_evidence_contract_id"],
+             "growth opportunity review package must preserve evidence contract id")
+    _require(package["opportunity_status"] == "pass",
+             "default growth opportunity review package must pass opportunity status")
+    _require(package["evidence_status"] == "block",
+             "default growth opportunity review package must block on missing evidence")
+    _require(package["approval_status"] == "review",
+             "default growth opportunity review package must require approval review")
+    _require(package["risk_status"] == "review",
+             "default growth opportunity review package must require risk review")
+    _require(package["readiness_status"] == "blocked",
+             "default growth opportunity review package must be blocked")
+    _require(package["review_recommendation"] == "do_not_execute",
+             "blocked growth opportunity review package must recommend no execution")
+    _require(package["blockers"], "growth opportunity review package must aggregate blockers")
+    _require(package["warnings"], "growth opportunity review package must aggregate warnings")
+    _require(package["required_human_actions"],
+             "growth opportunity review package must aggregate required human actions")
+    _require(any(item.startswith("missing evidence:") for item in package["blockers"]),
+             "growth opportunity review package blockers must include missing evidence")
+    _require(any(item.startswith("blocked action until evidence review:") for item in package["blockers"]),
+             "growth opportunity review package blockers must include blocked actions")
+    _require(any(item.startswith("risk review required:") for item in package["warnings"]),
+             "growth opportunity review package warnings must include risk review items")
+    _require(package["dry_run"] is True and package["write_allowed"] is False,
+             "growth opportunity review package must be read-only")
+    _require(package["automation_allowed"] is False and package["writes"] == [],
+             "growth opportunity review package must not allow automation or writes")
+
+    decoded = parse_growth_opportunity_review_package_json(stable_growth_opportunity_review_package_json(package))
+    _require(decoded == package, "growth opportunity review package JSON must round trip")
+    _require(stable_growth_opportunity_review_package_json(package) == stable_growth_opportunity_review_package_json(package),
+             "growth opportunity review package JSON must be stable")
+
+    bad_scan = json.loads(stable_growth_opportunity_review_package_json(package))
+    bad_scan["growth_business_opportunity_scan_id"] = "growth-business-opportunity-scan-wrong"
+    try:
+        validate_growth_opportunity_review_package(bad_scan, scan, contract)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth opportunity review validation must reject scan id mismatch")
+
+    bad_contract = json.loads(stable_growth_opportunity_review_package_json(package))
+    bad_contract["growth_business_evidence_contract_id"] = "growth-business-evidence-contract-wrong"
+    try:
+        validate_growth_opportunity_review_package(bad_contract, scan, contract)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth opportunity review validation must reject evidence contract id mismatch")
+
+    bad_status = json.loads(stable_growth_opportunity_review_package_json(package))
+    bad_status["opportunity_status"] = "maybe"
+    try:
+        validate_growth_opportunity_review_package(bad_status)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth opportunity review validation must reject invalid opportunity status")
+
+    bad_evidence = json.loads(stable_growth_opportunity_review_package_json(package))
+    bad_evidence["evidence_status"] = "maybe"
+    try:
+        validate_growth_opportunity_review_package(bad_evidence)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth opportunity review validation must reject invalid evidence status")
+
+    bad_approval = json.loads(stable_growth_opportunity_review_package_json(package))
+    bad_approval["approval_status"] = "review"
+    bad_approval["required_human_actions"] = []
+    try:
+        validate_growth_opportunity_review_package(bad_approval)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth opportunity review validation must reject approval review without actions")
+
+    bad_risk = json.loads(stable_growth_opportunity_review_package_json(package))
+    bad_risk["risk_status"] = "review"
+    bad_risk["warnings"] = []
+    try:
+        validate_growth_opportunity_review_package(bad_risk)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth opportunity review validation must reject risk review without warnings")
+
+    bad_readiness = json.loads(stable_growth_opportunity_review_package_json(package))
+    bad_readiness["readiness_status"] = "ready_for_review"
+    try:
+        validate_growth_opportunity_review_package(bad_readiness)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth opportunity review validation must reject ready status with blockers")
+
+    bad_recommendation = json.loads(stable_growth_opportunity_review_package_json(package))
+    bad_recommendation["review_recommendation"] = "ready_for_review"
+    try:
+        validate_growth_opportunity_review_package(bad_recommendation)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth opportunity review validation must reject ready recommendation when blocked")
+
+    bad_safety = json.loads(stable_growth_opportunity_review_package_json(package))
+    bad_safety["write_allowed"] = True
+    try:
+        validate_growth_opportunity_review_package(bad_safety)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth opportunity review validation must reject unsafe safety metadata")
+
+    missing = json.loads(stable_growth_opportunity_review_package_json(package))
+    missing.pop("growth_opportunity_review_package_id")
+    try:
+        validate_growth_opportunity_review_package(missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth opportunity review validation must reject missing required fields")
+
+    print("growth opportunity review package helper OK")
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -13215,6 +13951,14 @@ def main() -> None:
     check_growth_business_opportunities_cli()
     check_growth_business_evidence_contract_helper()
     check_growth_business_evidence_contract_cli()
+    check_growth_opportunity_review_package_helper()
+    check_growth_opportunity_review_cli()
+    check_growth_campaign_plan_preview_helper()
+    check_growth_campaign_plan_preview_cli()
+    check_link_module_boundary_registry_helper()
+    check_link_module_boundary_registry_cli()
+    check_growth_campaign_governance_helpers()
+    check_growth_campaign_governance_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

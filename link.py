@@ -140,6 +140,22 @@ def _cmd_roles(argv: list[str]) -> int:
     return 0
 
 
+
+def _cmd_modules(argv: list[str]) -> int:
+    """Print Link module boundary views."""
+    subcommand = argv[0] if argv else ""
+    if subcommand == "boundary-registry":
+        from link_modes.growth.link_growth_console import module_boundary_registry_main as _module_boundary_registry_main
+
+        return _module_boundary_registry_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand in ("-h", "--help", "help", ""):
+        print("Link modules commands:")
+        print("  boundary-registry Preview Link module boundary registry")
+        return 0
+    print(f"modules: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py modules --help' for subcommands.", file=sys.stderr)
+    return 2
+
 def _cmd_dashboard(argv: list[str]) -> int:
     """Print a compact dashboard/status summary."""
     from link_core.dashboard import collect as _collect
@@ -487,6 +503,30 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import business_evidence_contract_main as _growth_business_evidence_contract_main
 
         return _growth_business_evidence_contract_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "opportunity-review":
+        from link_modes.growth.link_growth_console import opportunity_review_main as _growth_opportunity_review_main
+
+        return _growth_opportunity_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "campaign-plan-preview":
+        from link_modes.growth.link_growth_console import campaign_plan_preview_main as _growth_campaign_plan_preview_main
+
+        return _growth_campaign_plan_preview_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "campaign-evidence-contract":
+        from link_modes.growth.link_growth_console import campaign_evidence_contract_main as _growth_campaign_evidence_contract_main
+
+        return _growth_campaign_evidence_contract_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "campaign-approval-checklist":
+        from link_modes.growth.link_growth_console import campaign_approval_checklist_main as _growth_campaign_approval_checklist_main
+
+        return _growth_campaign_approval_checklist_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "campaign-review":
+        from link_modes.growth.link_growth_console import campaign_review_main as _growth_campaign_review_main
+
+        return _growth_campaign_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "business-development-handoff":
+        from link_modes.growth.link_growth_console import business_development_handoff_main as _growth_business_development_handoff_main
+
+        return _growth_business_development_handoff_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "patch-apply":
         from link_modes.growth.link_growth_console import patch_apply_main as _growth_patch_apply_main
 
@@ -544,6 +584,12 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  supervised-execution-review Preview supervised execution review package")
         print("  business-opportunities Preview Growth business opportunity scan")
         print("  business-evidence-contract Preview Growth business evidence contract")
+        print("  opportunity-review Preview Growth opportunity review package")
+        print("  campaign-plan-preview Preview Growth campaign plan preview")
+        print("  campaign-evidence-contract Preview Growth campaign evidence contract")
+        print("  campaign-approval-checklist Preview Growth campaign approval checklist")
+        print("  campaign-review    Preview Growth campaign review package")
+        print("  business-development-handoff Preview Business Development handoff boundary")
         print("  patch-apply        Apply guarded patch inside approved workspace")
         print("  workspace-create   Create guarded temporary workspace with approval")
         print("  workspace-cleanup  Cleanup guarded temporary workspace")
@@ -559,6 +605,7 @@ def _cmd_growth(argv: list[str]) -> int:
 _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "modes": (_cmd_modes, "List Link operating modes (base/growth/business)."),
     "roles": (_cmd_roles, "List worker safety profiles and business roles."),
+    "modules": (_cmd_modules, "Preview Link module boundary registry."),
     "dashboard": (_cmd_dashboard, "Compact diagnostics dashboard."),
     "self-test": (_cmd_self_test, "Run canonical architecture smoke checks."),
     "config": (_cmd_config, "Validate Link configuration files against runtime."),
