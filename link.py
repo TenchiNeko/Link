@@ -479,6 +479,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import supervised_execution_review_package_main as _growth_supervised_execution_review_package_main
 
         return _growth_supervised_execution_review_package_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "business-opportunities":
+        from link_modes.growth.link_growth_console import business_opportunities_main as _growth_business_opportunities_main
+
+        return _growth_business_opportunities_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "patch-apply":
         from link_modes.growth.link_growth_console import patch_apply_main as _growth_patch_apply_main
 
@@ -534,6 +538,7 @@ def _cmd_growth(argv: list[str]) -> int:
         print("  supervised-execution Preview supervised execution plan")
         print("  supervised-execution-boundary Preview supervised execution write boundary")
         print("  supervised-execution-review Preview supervised execution review package")
+        print("  business-opportunities Preview Growth business opportunity scan")
         print("  patch-apply        Apply guarded patch inside approved workspace")
         print("  workspace-create   Create guarded temporary workspace with approval")
         print("  workspace-cleanup  Cleanup guarded temporary workspace")

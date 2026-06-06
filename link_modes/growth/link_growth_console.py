@@ -9106,6 +9106,337 @@ def _normalize_implementation_branch_refs(values: Any) -> list[str]:
     return sorted(normalized)
 
 
+GROWTH_BUSINESS_OPPORTUNITY_SCAN_VERSION = "link-growth-business-opportunity-scan-v1"
+GROWTH_BUSINESS_OPPORTUNITY_CATEGORIES = (
+    "SaaS",
+    "Ecommerce",
+    "Content",
+    "Lead Generation",
+    "Services",
+    "Research Products",
+    "AI Tools",
+    "Internal Automation",
+    "Marketplaces",
+    "Other",
+)
+
+
+def _growth_business_source_ref_available(source_ref: str) -> bool:
+    from pathlib import Path
+    import zipfile
+
+    ref = str(source_ref or "").strip()
+    if not ref:
+        return False
+    if "!" not in ref:
+        return Path(ref).is_file()
+    archive, member = ref.split("!", 1)
+    if not archive or not member or not Path(archive).is_file():
+        return False
+    try:
+        with zipfile.ZipFile(archive) as zf:
+            return member in zf.namelist()
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
+def _growth_business_available_source_refs(source_refs: list[str]) -> list[str]:
+    return _normalize_implementation_branch_refs([
+        ref for ref in source_refs if _growth_business_source_ref_available(ref)
+    ])
+
+
+def _growth_business_score(value: Any, field: str) -> int:
+    if not isinstance(value, int):
+        raise TypeError(f"{field} must be an integer")
+    if value < 0 or value > 100:
+        raise ValueError(f"{field} must be between 0 and 100")
+    return value
+
+
+def make_growth_business_opportunity_id(opportunity: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "category": opportunity["category"],
+        "growth_channel": opportunity["growth_channel"],
+        "monetization_model": opportunity["monetization_model"],
+        "source_refs": opportunity["source_refs"],
+        "title": opportunity["title"],
+        "version": GROWTH_BUSINESS_OPPORTUNITY_SCAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"growth-business-opportunity-{digest}"
+
+
+def make_growth_business_opportunity_scan_id(opportunities: list[dict[str, Any]]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "opportunity_ids": [item["opportunity_id"] for item in opportunities],
+        "version": GROWTH_BUSINESS_OPPORTUNITY_SCAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"growth-business-opportunity-scan-{digest}"
+
+
+def _growth_business_opportunity_templates() -> list[dict[str, Any]]:
+    manual_report = ".agents/tool_results/manual/growth_business_repo_mining_report.md"
+    return [
+        {
+            "title": "Local business opportunity scanner",
+            "category": "Research Products",
+            "description": (
+                "Turn local research reports, inventories, and notes into ranked business "
+                "opportunity candidates with evidence, risks, approvals, and next actions."
+            ),
+            "source_refs": [
+                manual_report,
+                "research/link_research_source_inventory_latest.md",
+                "research/link_research_ranked_report.md",
+                "research/mission-control-main.zip!mission-control-main/specs/product-autopilot-spec.md",
+            ],
+            "evidence_strength": 88,
+            "confidence_score": 84,
+            "effort_score": 28,
+            "risk_score": 18,
+            "monetization_model": "Local research productization and consulting workflow support",
+            "growth_channel": "Local-first research and planning CLI",
+            "required_approvals": ["approve opportunity ranking before runtime data collection"],
+            "missing_evidence": ["validated buyer persona", "priced offer hypothesis"],
+            "recommended_next_action": "Implement read-only business opportunity scan CLI after this helper is committed.",
+        },
+        {
+            "title": "Content and SEO campaign planner",
+            "category": "Content",
+            "description": (
+                "Model content calendars, SEO briefs, channel fit, claim evidence, and human "
+                "approval before any publishing or account integration exists."
+            ),
+            "source_refs": [
+                manual_report,
+                "research/AiToEarn-main.zip!AiToEarn-main/README_EN.md",
+                "research/taste-skill-main.zip!taste-skill-main/README.md",
+                "research/mission-control-main.zip!mission-control-main/specs/product-autopilot-spec.md",
+            ],
+            "evidence_strength": 82,
+            "confidence_score": 78,
+            "effort_score": 45,
+            "risk_score": 32,
+            "monetization_model": "Content services, affiliate offers, product-led content, and SEO asset generation",
+            "growth_channel": "Owned content, SEO, and scheduled publishing plans",
+            "required_approvals": ["approve channel/account use", "approve claims before publishing"],
+            "missing_evidence": ["brand voice constraints", "keyword demand evidence", "publishing account policy"],
+            "recommended_next_action": "Add a read-only content campaign evidence contract before any publishing workflow.",
+        },
+        {
+            "title": "Automation flow planner for growth campaigns",
+            "category": "Internal Automation",
+            "description": (
+                "Represent growth campaigns as local trigger/action/approval/evidence flows "
+                "with draft and review states before external connector runtime exists."
+            ),
+            "source_refs": [
+                manual_report,
+                "research/activepieces-main.zip!activepieces-main/.agents/features/flows.md",
+                "research/activepieces-main.zip!activepieces-main/.agents/features/human-input.md",
+                "research/background-agents-main.zip!background-agents-main/docs/AUTOMATIONS.md",
+            ],
+            "evidence_strength": 86,
+            "confidence_score": 82,
+            "effort_score": 52,
+            "risk_score": 40,
+            "monetization_model": "Operational leverage for Brandon-owned products and client growth workflows",
+            "growth_channel": "Local campaign queue and approval-driven automation planning",
+            "required_approvals": ["approve external connector boundaries", "approve flow before scheduling"],
+            "missing_evidence": ["campaign success metric definition", "runtime connector allowlist"],
+            "recommended_next_action": "Create a read-only Growth campaign plan preview after opportunity scanning.",
+        },
+        {
+            "title": "Bounded competitor and market research collector",
+            "category": "Research Products",
+            "description": (
+                "Define source allowlists, max source counts, provenance, and evidence rules "
+                "for future competitor and market scans without network access in this slice."
+            ),
+            "source_refs": [
+                manual_report,
+                "research/gpt-crawler-main.zip!gpt-crawler-main/README.md",
+                "research/gpt-crawler-main.zip!gpt-crawler-main/config.ts",
+                "research/agentmemory-main.zip!agentmemory-main/.github/security-advisories/06-privacy-redaction-incomplete.md",
+            ],
+            "evidence_strength": 78,
+            "confidence_score": 74,
+            "effort_score": 58,
+            "risk_score": 55,
+            "monetization_model": "Market research reports, competitor dossiers, and validation briefs",
+            "growth_channel": "Approved source collection and reviewer-facing research bundles",
+            "required_approvals": ["approve source domains before collection", "approve storage of sensitive findings"],
+            "missing_evidence": ["redaction policy", "robots/rate guidance", "source legality policy"],
+            "recommended_next_action": "Add a read-only Growth research source boundary before any crawler runtime.",
+        },
+        {
+            "title": "Business research memory and dashboard",
+            "category": "AI Tools",
+            "description": (
+                "Store source-backed business findings as reviewable memory candidates and "
+                "summarize opportunities, blockers, approvals, and evidence quality in a dashboard."
+            ),
+            "source_refs": [
+                manual_report,
+                "research/agentmemory-main.zip!agentmemory-main/README.md",
+                "research/Research/Research/src/memdir/memoryTypes.ts",
+                "research/Research/Research/src/components/tasks/BackgroundTasksDialog.tsx",
+            ],
+            "evidence_strength": 75,
+            "confidence_score": 76,
+            "effort_score": 48,
+            "risk_score": 46,
+            "monetization_model": "Reusable AI research assistant capability for Link-powered projects",
+            "growth_channel": "Local dashboard, memory review, and recurring planning loop",
+            "required_approvals": ["approve memory persistence", "approve sensitive data retention policy"],
+            "missing_evidence": ["dashboard metric definitions", "memory retention rules", "redaction checks"],
+            "recommended_next_action": "Add read-only business memory candidate previews after evidence contracts exist.",
+        },
+    ]
+
+
+def collect_growth_business_opportunity_scan(
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Generate deterministic business/growth opportunities from local research references."""
+    opportunities: list[dict[str, Any]] = []
+    for template in _growth_business_opportunity_templates():
+        source_refs = _growth_business_available_source_refs(list(template["source_refs"]))
+        if not source_refs:
+            source_refs = _normalize_implementation_branch_refs(["research/link_research_source_inventory_latest.md"])
+        opportunity = {
+            "title": template["title"],
+            "category": template["category"],
+            "description": template["description"],
+            "source_refs": source_refs,
+            "evidence_strength": int(template["evidence_strength"]),
+            "confidence_score": int(template["confidence_score"]),
+            "effort_score": int(template["effort_score"]),
+            "risk_score": int(template["risk_score"]),
+            "monetization_model": template["monetization_model"],
+            "growth_channel": template["growth_channel"],
+            "required_approvals": _normalize_implementation_branch_refs(template["required_approvals"]),
+            "missing_evidence": _normalize_implementation_branch_refs(template["missing_evidence"]),
+            "recommended_next_action": template["recommended_next_action"],
+        }
+        opportunity["opportunity_id"] = make_growth_business_opportunity_id(opportunity)
+        opportunities.append(opportunity)
+    opportunities = sorted(opportunities, key=lambda item: item["opportunity_id"])
+    scan = {
+        "growth_business_opportunity_scan_version": GROWTH_BUSINESS_OPPORTUNITY_SCAN_VERSION,
+        "growth_business_opportunity_scan_id": make_growth_business_opportunity_scan_id(opportunities),
+        "source_scope": [
+            "growth repo mining reports",
+            "research inventories",
+            "local business research notes",
+            "growth-related source references",
+        ],
+        "opportunity_count": len(opportunities),
+        "opportunities": opportunities,
+        "top_recommended_next_action": opportunities[0]["recommended_next_action"] if opportunities else "No opportunities found.",
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_business_opportunity_scan(scan)
+    return scan
+
+
+def validate_growth_business_opportunity_scan(scan: dict[str, Any]) -> None:
+    required = (
+        "growth_business_opportunity_scan_version", "growth_business_opportunity_scan_id",
+        "source_scope", "opportunity_count", "opportunities", "top_recommended_next_action",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in scan:
+            raise ValueError(f"growth business opportunity scan missing required field: {key}")
+    if scan["growth_business_opportunity_scan_version"] != GROWTH_BUSINESS_OPPORTUNITY_SCAN_VERSION:
+        raise ValueError("invalid growth business opportunity scan version")
+    if not isinstance(scan["growth_business_opportunity_scan_id"], str) or not scan["growth_business_opportunity_scan_id"].startswith("growth-business-opportunity-scan-"):
+        raise ValueError("invalid growth business opportunity scan id")
+    if scan["dry_run"] is not True or scan["write_allowed"] is not False:
+        raise ValueError("growth business opportunity scan must be read-only")
+    if scan["automation_allowed"] is not False or scan["writes"] != []:
+        raise ValueError("growth business opportunity scan must not allow automation or writes")
+    if not isinstance(scan["source_scope"], list) or not scan["source_scope"]:
+        raise ValueError("growth business opportunity scan source_scope must be a non-empty list")
+    if not isinstance(scan["opportunities"], list) or not scan["opportunities"]:
+        raise ValueError("growth business opportunity scan opportunities must be a non-empty list")
+    if scan["opportunity_count"] != len(scan["opportunities"]):
+        raise ValueError("growth business opportunity scan opportunity_count mismatch")
+    seen_ids: set[str] = set()
+    for opportunity in scan["opportunities"]:
+        validate_growth_business_opportunity(opportunity)
+        if opportunity["opportunity_id"] in seen_ids:
+            raise ValueError(f"duplicate growth business opportunity id: {opportunity['opportunity_id']}")
+        seen_ids.add(opportunity["opportunity_id"])
+        expected_id = make_growth_business_opportunity_id(opportunity)
+        if opportunity["opportunity_id"] != expected_id:
+            raise ValueError("growth business opportunity id is not deterministic")
+    expected_scan_id = make_growth_business_opportunity_scan_id(scan["opportunities"])
+    if scan["growth_business_opportunity_scan_id"] != expected_scan_id:
+        raise ValueError("growth business opportunity scan id is not deterministic")
+
+
+def validate_growth_business_opportunity(opportunity: dict[str, Any]) -> None:
+    required = (
+        "opportunity_id", "title", "category", "description", "source_refs",
+        "evidence_strength", "confidence_score", "effort_score", "risk_score",
+        "monetization_model", "growth_channel", "required_approvals",
+        "missing_evidence", "recommended_next_action",
+    )
+    for key in required:
+        if key not in opportunity:
+            raise ValueError(f"growth business opportunity missing required field: {key}")
+    if not isinstance(opportunity["opportunity_id"], str) or not opportunity["opportunity_id"].startswith("growth-business-opportunity-"):
+        raise ValueError("invalid growth business opportunity id")
+    if opportunity["category"] not in GROWTH_BUSINESS_OPPORTUNITY_CATEGORIES:
+        raise ValueError(f"invalid growth business opportunity category: {opportunity['category']}")
+    for key in ("title", "description", "monetization_model", "growth_channel", "recommended_next_action"):
+        if not isinstance(opportunity[key], str) or not opportunity[key].strip():
+            raise ValueError(f"growth business opportunity {key} must be a non-empty string")
+    source_refs = _normalize_implementation_branch_refs(opportunity["source_refs"])
+    if not source_refs:
+        raise ValueError("growth business opportunity source_refs must be non-empty")
+    if source_refs != opportunity["source_refs"]:
+        raise ValueError("growth business opportunity source_refs must be normalized and sorted")
+    for field in ("evidence_strength", "confidence_score", "effort_score", "risk_score"):
+        _growth_business_score(opportunity[field], field)
+    approvals = _normalize_implementation_branch_refs(opportunity["required_approvals"])
+    if not approvals:
+        raise ValueError("growth business opportunity required_approvals must be non-empty")
+    if approvals != opportunity["required_approvals"]:
+        raise ValueError("growth business opportunity required_approvals must be normalized and sorted")
+    missing_evidence = _normalize_implementation_branch_refs(opportunity["missing_evidence"])
+    if not missing_evidence:
+        raise ValueError("growth business opportunity missing_evidence must be non-empty")
+    if missing_evidence != opportunity["missing_evidence"]:
+        raise ValueError("growth business opportunity missing_evidence must be normalized and sorted")
+
+
+def stable_growth_business_opportunity_scan_json(scan: dict[str, Any]) -> str:
+    validate_growth_business_opportunity_scan(scan)
+    return _stable_ruflo_json(scan, indent=2) + "\n"
+
+
+def parse_growth_business_opportunity_scan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    scan = _json.loads(text)
+    validate_growth_business_opportunity_scan(scan)
+    return scan
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -10938,6 +11269,45 @@ def supervised_execution_review_package_main(argv: list[str] | None = None) -> i
         print(stable_supervised_execution_review_package_json(package), end="")
         return 0
     render_supervised_execution_review_package_plain(package)
+    return 0
+
+
+def render_business_opportunities_plain(scan: dict[str, Any]) -> None:
+    validate_growth_business_opportunity_scan(scan)
+    top = scan["opportunities"][0]
+    print("Growth business opportunities")
+    print(f"growth_business_opportunity_scan_id: {scan['growth_business_opportunity_scan_id']}")
+    print(f"opportunity_count: {scan['opportunity_count']}")
+    print(f"top_opportunity_title: {top['title']}")
+    print(f"top_opportunity_category: {top['category']}")
+    print(f"top_opportunity_evidence_strength: {top['evidence_strength']}")
+    print(f"top_opportunity_confidence_score: {top['confidence_score']}")
+    print(f"top_opportunity_effort_score: {top['effort_score']}")
+    print(f"top_opportunity_risk_score: {top['risk_score']}")
+    print(f"next_action: {scan['top_recommended_next_action']}")
+
+
+def business_opportunities_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth business-opportunities`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth business-opportunities: business opportunity scan preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth business-opportunities")
+        print("  python3 link.py growth business-opportunities --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth business-opportunities is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    scan = collect_growth_business_opportunity_scan()
+    validate_growth_business_opportunity_scan(scan)
+    if "--json" in args:
+        print(stable_growth_business_opportunity_scan_json(scan), end="")
+        return 0
+    render_business_opportunities_plain(scan)
     return 0
 
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:

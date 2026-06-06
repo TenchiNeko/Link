@@ -12180,6 +12180,94 @@ def check_supervised_execution_review_package_helper() -> None:
 
 
 
+
+# ---------------------------------------------------------------------------
+# 62j. Growth business-opportunities CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_business_opportunities_cli() -> None:
+    """business-opportunities exposes only the Growth business scan payload."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        business_opportunities_main,
+        collect_growth_business_opportunity_scan,
+        parse_growth_business_opportunity_scan_json,
+        validate_growth_business_opportunity_scan,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("business-opportunities" in help_out.getvalue(),
+             "growth help must include business-opportunities")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = business_opportunities_main(["--json"])
+    _require(json_rc == 0, "business-opportunities --json must return 0")
+    parsed = parse_growth_business_opportunity_scan_json(json_out.getvalue())
+    validate_growth_business_opportunity_scan(parsed)
+    expected = collect_growth_business_opportunity_scan()
+    _require(parsed["growth_business_opportunity_scan_id"] == expected["growth_business_opportunity_scan_id"],
+             "business-opportunities scan id must be deterministic")
+    _require(parsed["opportunity_count"] == len(parsed["opportunities"]),
+             "business-opportunities JSON must preserve opportunity count")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "business-opportunities must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "business-opportunities must not allow automation or writes")
+    for full_chain_key in (
+        "planning_chain_id",
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_gate_stack_preview",
+        "supervised_execution_plan",
+        "supervised_execution_write_boundary",
+    ):
+        _require(full_chain_key not in parsed,
+                 "business-opportunities --json must output only scan payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["business-opportunities", "--json"])
+    routed = parse_growth_business_opportunity_scan_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth business-opportunities --json route must return 0")
+    _require(routed["growth_business_opportunity_scan_id"] == parsed["growth_business_opportunity_scan_id"],
+             "growth business-opportunities route must preserve deterministic scan id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = business_opportunities_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "business-opportunities human mode must return 0")
+    for needle in (
+        "Growth business opportunities",
+        "growth_business_opportunity_scan_id:",
+        "opportunity_count:",
+        "top_opportunity_title:",
+        "top_opportunity_category:",
+        "top_opportunity_evidence_strength:",
+        "top_opportunity_confidence_score:",
+        "top_opportunity_effort_score:",
+        "top_opportunity_risk_score:",
+        "next_action:",
+    ):
+        _require(needle in human, f"business-opportunities human mode must include {needle}")
+    _require(len(human.splitlines()) <= 10,
+             "business-opportunities human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = business_opportunities_main(["--write", "--json"])
+    _require(write_rc != 0, "business-opportunities --write must be rejected")
+    _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+             "business-opportunities --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "business-opportunities --write must not print normal output")
+    print("growth business-opportunities CLI OK")
+
 # ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
@@ -12693,6 +12781,129 @@ def check_supervised_execution_orchestrator_runtime_component() -> None:
              "supervised execution tests must leave repo file unchanged")
     print("supervised execution orchestrator runtime component OK")
 
+
+# ---------------------------------------------------------------------------
+# 63. Growth business opportunity scan helper
+# ---------------------------------------------------------------------------
+
+def check_growth_business_opportunity_scan_helper() -> None:
+    """Growth business opportunity scans are deterministic and read-only."""
+    from link_modes.growth.link_growth_console import (
+        GROWTH_BUSINESS_OPPORTUNITY_CATEGORIES,
+        collect_growth_business_opportunity_scan,
+        parse_growth_business_opportunity_scan_json,
+        stable_growth_business_opportunity_scan_json,
+        validate_growth_business_opportunity_scan,
+    )
+
+    scan = collect_growth_business_opportunity_scan()
+    same = collect_growth_business_opportunity_scan()
+    validate_growth_business_opportunity_scan(scan)
+    _require(scan["growth_business_opportunity_scan_id"] == same["growth_business_opportunity_scan_id"],
+             "growth business opportunity scan id must be deterministic")
+    _require(scan["opportunity_count"] == len(scan["opportunities"]),
+             "growth business opportunity count must match opportunities list")
+    _require(scan["opportunity_count"] >= 5,
+             "growth business opportunity scan must include seeded local opportunities")
+    _require(scan["dry_run"] is True and scan["write_allowed"] is False,
+             "growth business opportunity scan must be read-only")
+    _require(scan["automation_allowed"] is False and scan["writes"] == [],
+             "growth business opportunity scan must not allow automation or writes")
+
+    decoded = parse_growth_business_opportunity_scan_json(stable_growth_business_opportunity_scan_json(scan))
+    _require(decoded == scan, "growth business opportunity scan JSON must round trip")
+    _require(stable_growth_business_opportunity_scan_json(scan) == stable_growth_business_opportunity_scan_json(scan),
+             "growth business opportunity scan JSON must be stable")
+
+    seen_ids: set[str] = set()
+    categories = set()
+    for opportunity in scan["opportunities"]:
+        _require(opportunity["opportunity_id"] not in seen_ids,
+                 "growth business opportunity ids must be unique")
+        seen_ids.add(opportunity["opportunity_id"])
+        _require(opportunity["category"] in GROWTH_BUSINESS_OPPORTUNITY_CATEGORIES,
+                 "growth business opportunity category must be allowed")
+        categories.add(opportunity["category"])
+        _require(opportunity["source_refs"] == sorted(opportunity["source_refs"]),
+                 "growth business source refs must be normalized and sorted")
+        _require(opportunity["source_refs"],
+                 "growth business source refs must be non-empty")
+        _require(opportunity["missing_evidence"],
+                 "growth business opportunities must preserve missing evidence")
+        _require(opportunity["required_approvals"],
+                 "growth business opportunities must preserve required approvals")
+        for field in ("evidence_strength", "confidence_score", "effort_score", "risk_score"):
+            value = opportunity[field]
+            _require(isinstance(value, int) and 0 <= value <= 100,
+                     f"growth business {field} must be a 0-100 integer")
+    _require("Content" in categories and "Research Products" in categories,
+             "growth business scan must include content and research product opportunities")
+
+    bad_category = json.loads(stable_growth_business_opportunity_scan_json(scan))
+    bad_category["opportunities"][0]["category"] = "Crypto Arbitrage"
+    try:
+        validate_growth_business_opportunity_scan(bad_category)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business scan validation must reject invalid categories")
+
+    bad_score = json.loads(stable_growth_business_opportunity_scan_json(scan))
+    bad_score["opportunities"][0]["confidence_score"] = 101
+    try:
+        validate_growth_business_opportunity_scan(bad_score)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business scan validation must reject invalid scores")
+
+    bad_source = json.loads(stable_growth_business_opportunity_scan_json(scan))
+    bad_source["opportunities"][0]["source_refs"] = ["/tmp/not-allowed"]
+    try:
+        validate_growth_business_opportunity_scan(bad_source)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business scan validation must reject invalid source refs")
+
+    bad_missing = json.loads(stable_growth_business_opportunity_scan_json(scan))
+    bad_missing["opportunities"][0]["missing_evidence"] = []
+    try:
+        validate_growth_business_opportunity_scan(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business scan validation must reject empty missing evidence")
+
+    bad_id = json.loads(stable_growth_business_opportunity_scan_json(scan))
+    bad_id["opportunities"][0]["opportunity_id"] = "growth-business-opportunity-wrong"
+    try:
+        validate_growth_business_opportunity_scan(bad_id)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business scan validation must reject non-deterministic opportunity IDs")
+
+    bad_safety = json.loads(stable_growth_business_opportunity_scan_json(scan))
+    bad_safety["write_allowed"] = True
+    try:
+        validate_growth_business_opportunity_scan(bad_safety)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business scan validation must reject unsafe metadata")
+
+    missing = json.loads(stable_growth_business_opportunity_scan_json(scan))
+    missing.pop("growth_business_opportunity_scan_id")
+    try:
+        validate_growth_business_opportunity_scan(missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business scan validation must reject missing required fields")
+
+    print("growth business opportunity scan helper OK")
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -12749,6 +12960,8 @@ def main() -> None:
     check_growth_archive_code_queue_empty()
     check_growth_archive_code_queue_populated()
     check_growth_archive_code_queue_top_clamp()
+    check_growth_business_opportunity_scan_helper()
+    check_growth_business_opportunities_cli()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()
