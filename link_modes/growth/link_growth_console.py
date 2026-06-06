@@ -10937,6 +10937,45 @@ BUSINESS_DEVELOPMENT_BLOCKED_SOURCE_CARD_IDS = (
     "proxy-evasion-source-card",
 )
 BUSINESS_DEVELOPMENT_COLLECTION_RECOMMENDATIONS = ("do_not_collect", "review_before_collection")
+BUSINESS_OPERATIONS_INTAKE_PREVIEW_VERSION = "link-business-operations-intake-preview-v1"
+BUSINESS_OPERATIONS_EVIDENCE_CONTRACT_VERSION = "link-business-operations-evidence-contract-v1"
+BUSINESS_OPERATIONS_APPROVAL_CHECKLIST_VERSION = "link-business-operations-approval-checklist-v1"
+BUSINESS_OPERATIONS_REVIEW_PACKAGE_VERSION = "link-business-operations-review-package-v1"
+BUSINESS_OPERATIONS_CLAIM_TYPES = (
+    "operational_feasibility",
+    "staffing_requirements",
+    "cost_assumptions",
+    "workflow_feasibility",
+    "scaling_feasibility",
+    "support_requirements",
+    "maintenance_requirements",
+    "compliance_requirements",
+)
+BUSINESS_OPERATIONS_BLOCKED_ACTIONS = (
+    "operations execution",
+    "purchases",
+    "vendor contact",
+    "outreach",
+    "staffing actions",
+    "customer data storage",
+    "paid services",
+    "CRM writes",
+    "ecommerce writes",
+    "automated operations",
+)
+BUSINESS_OPERATIONS_FORBIDDEN_ARTIFACTS = (
+    "customer private data",
+    "credentials",
+    "vendor account access",
+    "purchase commitments",
+    "staffing commitments",
+    "outbound messages",
+    "CRM writes",
+    "ecommerce writes",
+)
+BUSINESS_OPERATIONS_STATUSES = ("pass", "review", "block")
+BUSINESS_OPERATIONS_READINESS_STATUSES = ("ready_for_review", "blocked")
+BUSINESS_OPERATIONS_RECOMMENDATIONS = ("do_not_operate", "review_before_operations")
 
 
 def make_business_development_intake_preview_id(
@@ -12655,6 +12694,539 @@ def parse_link_shared_services_registry_json(text: str) -> dict[str, Any]:
     registry = _json.loads(text)
     validate_link_shared_services_registry(registry)
     return registry
+
+
+
+def make_business_operations_intake_preview_id(
+    business_development_review_package: dict[str, Any],
+    business_development_collection_review_package: dict[str, Any],
+    module_boundary_registry: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_development_review_package_id": business_development_review_package["business_development_review_package_id"],
+        "collection_review_package_id": business_development_collection_review_package["collection_review_package_id"],
+        "link_module_boundary_registry_id": module_boundary_registry["link_module_boundary_registry_id"],
+        "version": BUSINESS_OPERATIONS_INTAKE_PREVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-operations-intake-preview-{digest}"
+
+
+def collect_business_operations_intake_preview(
+    business_development_review_package: dict[str, Any] | None = None,
+    business_development_collection_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Preview Business Operations intake without executing operations."""
+    development_review = business_development_review_package or collect_business_development_review_package()
+    validate_business_development_review_package(development_review)
+    collection_review = business_development_collection_review_package or collect_business_development_collection_review_package()
+    validate_business_development_collection_review_package(collection_review)
+    registry = module_boundary_registry or collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(registry)
+    accepted_refs = _normalize_implementation_branch_refs([
+        development_review["business_development_review_package_id"],
+        collection_review["collection_review_package_id"],
+        registry["link_module_boundary_registry_id"],
+    ])
+    rejected_refs = _normalize_implementation_branch_refs(list(BUSINESS_OPERATIONS_FORBIDDEN_ARTIFACTS))
+    blockers = _normalize_implementation_branch_refs(
+        list(development_review["blockers"]) + list(collection_review["blockers"])
+    )
+    warnings = _normalize_implementation_branch_refs(
+        list(development_review["warnings"]) + list(collection_review["warnings"]) + [
+            "Business Operations execution is not implemented in this governance batch."
+        ]
+    )
+    required_human_actions = _normalize_implementation_branch_refs(
+        list(development_review["required_human_actions"]) + list(collection_review["required_human_actions"]) + [
+            "approve Business Operations intake before any operational action",
+        ]
+    )
+    preview = {
+        "business_operations_intake_preview_version": BUSINESS_OPERATIONS_INTAKE_PREVIEW_VERSION,
+        "business_operations_intake_preview_id": make_business_operations_intake_preview_id(development_review, collection_review, registry),
+        "source_module": "business_development",
+        "target_module": "business_operations",
+        "business_development_review_package_id": development_review["business_development_review_package_id"],
+        "business_development_collection_review_package_id": collection_review["collection_review_package_id"],
+        "link_module_boundary_registry_id": registry["link_module_boundary_registry_id"],
+        "accepted_artifact_refs": accepted_refs,
+        "rejected_artifact_refs": rejected_refs,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": required_human_actions,
+        "intake_status": "block" if blockers else "review",
+        "recommended_next_action": "Resolve Business Operations intake blockers before operational planning or execution.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_operations_intake_preview(preview, development_review, collection_review, registry)
+    return preview
+
+
+def validate_business_operations_intake_preview(
+    preview: dict[str, Any],
+    business_development_review_package: dict[str, Any] | None = None,
+    business_development_collection_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_operations_intake_preview_version", "business_operations_intake_preview_id",
+        "source_module", "target_module", "business_development_review_package_id",
+        "business_development_collection_review_package_id", "link_module_boundary_registry_id",
+        "accepted_artifact_refs", "rejected_artifact_refs", "blockers", "warnings",
+        "required_human_actions", "intake_status", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in preview:
+            raise ValueError(f"business operations intake preview missing required field: {key}")
+    if preview["business_operations_intake_preview_version"] != BUSINESS_OPERATIONS_INTAKE_PREVIEW_VERSION:
+        raise ValueError("invalid business operations intake preview version")
+    if not isinstance(preview["business_operations_intake_preview_id"], str) or not preview["business_operations_intake_preview_id"].startswith("business-operations-intake-preview-"):
+        raise ValueError("invalid business operations intake preview id")
+    if preview["source_module"] != "business_development" or preview["target_module"] != "business_operations":
+        raise ValueError("business operations intake preview module flow mismatch")
+    if not isinstance(preview["business_development_review_package_id"], str) or not preview["business_development_review_package_id"].startswith("business-development-review-package-"):
+        raise ValueError("invalid business development review id in operations intake")
+    if not isinstance(preview["business_development_collection_review_package_id"], str) or not preview["business_development_collection_review_package_id"].startswith("business-development-collection-review-package-"):
+        raise ValueError("invalid collection review id in operations intake")
+    if not isinstance(preview["link_module_boundary_registry_id"], str) or not preview["link_module_boundary_registry_id"].startswith("link-module-boundary-registry-"):
+        raise ValueError("invalid module registry id in operations intake")
+    for field in ("accepted_artifact_refs", "rejected_artifact_refs", "blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(preview[field])
+        if normalized != preview[field]:
+            raise ValueError(f"business operations intake preview {field} must be normalized and sorted")
+    if preview["rejected_artifact_refs"] != _normalize_implementation_branch_refs(list(BUSINESS_OPERATIONS_FORBIDDEN_ARTIFACTS)):
+        raise ValueError("business operations intake preview rejected artifact refs mismatch")
+    if preview["intake_status"] not in BUSINESS_OPERATIONS_STATUSES:
+        raise ValueError("invalid business operations intake status")
+    if preview["intake_status"] == "block" and not preview["blockers"]:
+        raise ValueError("blocked business operations intake must include blockers")
+    if preview["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business operations intake preview safety metadata mismatch")
+    if preview["dry_run"] is not True or preview["write_allowed"] is not False:
+        raise ValueError("business operations intake preview must be read-only")
+    if preview["automation_allowed"] is not False or preview["writes"] != []:
+        raise ValueError("business operations intake preview must not allow automation or writes")
+    if business_development_review_package is not None:
+        validate_business_development_review_package(business_development_review_package)
+        if preview["business_development_review_package_id"] != business_development_review_package["business_development_review_package_id"]:
+            raise ValueError("business operations intake development review id mismatch")
+    if business_development_collection_review_package is not None:
+        validate_business_development_collection_review_package(business_development_collection_review_package)
+        if preview["business_development_collection_review_package_id"] != business_development_collection_review_package["collection_review_package_id"]:
+            raise ValueError("business operations intake collection review id mismatch")
+    if module_boundary_registry is not None:
+        validate_link_module_boundary_registry(module_boundary_registry)
+        if preview["link_module_boundary_registry_id"] != module_boundary_registry["link_module_boundary_registry_id"]:
+            raise ValueError("business operations intake module registry id mismatch")
+    if business_development_review_package is not None and business_development_collection_review_package is not None and module_boundary_registry is not None:
+        expected_id = make_business_operations_intake_preview_id(business_development_review_package, business_development_collection_review_package, module_boundary_registry)
+        if preview["business_operations_intake_preview_id"] != expected_id:
+            raise ValueError("business operations intake preview id is not deterministic")
+
+
+def stable_business_operations_intake_preview_json(preview: dict[str, Any]) -> str:
+    validate_business_operations_intake_preview(preview)
+    return _stable_ruflo_json(preview, indent=2) + "\n"
+
+
+def parse_business_operations_intake_preview_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    preview = _json.loads(text)
+    validate_business_operations_intake_preview(preview)
+    return preview
+
+
+def make_business_operations_evidence_contract_id(
+    intake_preview: dict[str, Any],
+    module_boundary_registry: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_operations_intake_preview_id": intake_preview["business_operations_intake_preview_id"],
+        "link_module_boundary_registry_id": module_boundary_registry["link_module_boundary_registry_id"],
+        "version": BUSINESS_OPERATIONS_EVIDENCE_CONTRACT_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-operations-evidence-contract-{digest}"
+
+
+def collect_business_operations_evidence_contract(
+    business_operations_intake_preview: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Define evidence required before Business Operations can act."""
+    registry = module_boundary_registry or collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(registry)
+    intake = business_operations_intake_preview or collect_business_operations_intake_preview(module_boundary_registry=registry)
+    validate_business_operations_intake_preview(intake, module_boundary_registry=registry)
+    required_evidence = _normalize_implementation_branch_refs([
+        "operational feasibility assessment",
+        "staffing requirements summary",
+        "cost assumptions worksheet",
+        "workflow feasibility review",
+        "scaling feasibility review",
+        "support requirements summary",
+        "maintenance requirements summary",
+        "compliance requirements review",
+    ])
+    contract = {
+        "business_operations_evidence_contract_version": BUSINESS_OPERATIONS_EVIDENCE_CONTRACT_VERSION,
+        "business_operations_evidence_contract_id": make_business_operations_evidence_contract_id(intake, registry),
+        "business_operations_intake_preview_id": intake["business_operations_intake_preview_id"],
+        "link_module_boundary_registry_id": registry["link_module_boundary_registry_id"],
+        "claim_types": list(BUSINESS_OPERATIONS_CLAIM_TYPES),
+        "required_sources": _normalize_implementation_branch_refs(list(intake["accepted_artifact_refs"])),
+        "required_evidence": required_evidence,
+        "confidence_thresholds": {
+            "minimum_evidence_strength": 70,
+            "minimum_confidence_score": 75,
+            "maximum_risk_score_without_review": 30,
+            "minimum_independent_source_count": 2,
+        },
+        "missing_evidence": list(required_evidence),
+        "approval_requirements": _normalize_implementation_branch_refs([
+            "approve operational feasibility before execution",
+            "approve staffing or vendor assumptions before action",
+            "approve cost and compliance assumptions before commitments",
+        ]),
+        "blocked_actions": _normalize_implementation_branch_refs(list(BUSINESS_OPERATIONS_BLOCKED_ACTIONS)),
+        "recommended_next_action": "Collect and review Business Operations evidence before any operational action.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_operations_evidence_contract(contract, intake, registry)
+    return contract
+
+
+def validate_business_operations_evidence_contract(
+    contract: dict[str, Any],
+    business_operations_intake_preview: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_operations_evidence_contract_version", "business_operations_evidence_contract_id",
+        "business_operations_intake_preview_id", "link_module_boundary_registry_id",
+        "claim_types", "required_sources", "required_evidence", "confidence_thresholds",
+        "missing_evidence", "approval_requirements", "blocked_actions", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in contract:
+            raise ValueError(f"business operations evidence contract missing required field: {key}")
+    if contract["business_operations_evidence_contract_version"] != BUSINESS_OPERATIONS_EVIDENCE_CONTRACT_VERSION:
+        raise ValueError("invalid business operations evidence contract version")
+    if not isinstance(contract["business_operations_evidence_contract_id"], str) or not contract["business_operations_evidence_contract_id"].startswith("business-operations-evidence-contract-"):
+        raise ValueError("invalid business operations evidence contract id")
+    if contract["claim_types"] != list(BUSINESS_OPERATIONS_CLAIM_TYPES):
+        raise ValueError("business operations evidence contract claim types mismatch")
+    for field in ("required_sources", "required_evidence", "missing_evidence", "approval_requirements", "blocked_actions"):
+        normalized = _normalize_implementation_branch_refs(contract[field])
+        if not normalized or normalized != contract[field]:
+            raise ValueError(f"business operations evidence contract {field} must be normalized and non-empty")
+    _validate_growth_business_confidence_thresholds(contract["confidence_thresholds"])
+    if contract["blocked_actions"] != _normalize_implementation_branch_refs(list(BUSINESS_OPERATIONS_BLOCKED_ACTIONS)):
+        raise ValueError("business operations evidence contract blocked actions mismatch")
+    if contract["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business operations evidence contract safety metadata mismatch")
+    if contract["dry_run"] is not True or contract["write_allowed"] is not False:
+        raise ValueError("business operations evidence contract must be read-only")
+    if contract["automation_allowed"] is not False or contract["writes"] != []:
+        raise ValueError("business operations evidence contract must not allow automation or writes")
+    if business_operations_intake_preview is not None:
+        validate_business_operations_intake_preview(business_operations_intake_preview, module_boundary_registry=module_boundary_registry)
+        if contract["business_operations_intake_preview_id"] != business_operations_intake_preview["business_operations_intake_preview_id"]:
+            raise ValueError("business operations evidence contract intake id mismatch")
+    if module_boundary_registry is not None:
+        validate_link_module_boundary_registry(module_boundary_registry)
+        if contract["link_module_boundary_registry_id"] != module_boundary_registry["link_module_boundary_registry_id"]:
+            raise ValueError("business operations evidence contract module registry id mismatch")
+    if business_operations_intake_preview is not None and module_boundary_registry is not None:
+        expected_id = make_business_operations_evidence_contract_id(business_operations_intake_preview, module_boundary_registry)
+        if contract["business_operations_evidence_contract_id"] != expected_id:
+            raise ValueError("business operations evidence contract id is not deterministic")
+
+
+def stable_business_operations_evidence_contract_json(contract: dict[str, Any]) -> str:
+    validate_business_operations_evidence_contract(contract)
+    return _stable_ruflo_json(contract, indent=2) + "\n"
+
+
+def parse_business_operations_evidence_contract_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    contract = _json.loads(text)
+    validate_business_operations_evidence_contract(contract)
+    return contract
+
+
+def make_business_operations_approval_checklist_id(
+    intake_preview: dict[str, Any],
+    evidence_contract: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_operations_evidence_contract_id": evidence_contract["business_operations_evidence_contract_id"],
+        "business_operations_intake_preview_id": intake_preview["business_operations_intake_preview_id"],
+        "version": BUSINESS_OPERATIONS_APPROVAL_CHECKLIST_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-operations-approval-checklist-{digest}"
+
+
+def collect_business_operations_approval_checklist(
+    business_operations_intake_preview: dict[str, Any] | None = None,
+    business_operations_evidence_contract: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create human approval gates before Business Operations action."""
+    intake = business_operations_intake_preview or collect_business_operations_intake_preview()
+    validate_business_operations_intake_preview(intake)
+    contract = business_operations_evidence_contract or collect_business_operations_evidence_contract(intake)
+    validate_business_operations_evidence_contract(contract, intake)
+    required_approvals = _normalize_implementation_branch_refs(
+        list(intake["required_human_actions"]) + list(contract["approval_requirements"])
+    )
+    blockers = _normalize_implementation_branch_refs(
+        list(intake["blockers"]) + [f"missing evidence: {item}" for item in contract["missing_evidence"]]
+    )
+    checklist = {
+        "business_operations_approval_checklist_version": BUSINESS_OPERATIONS_APPROVAL_CHECKLIST_VERSION,
+        "business_operations_approval_checklist_id": make_business_operations_approval_checklist_id(intake, contract),
+        "business_operations_intake_preview_id": intake["business_operations_intake_preview_id"],
+        "business_operations_evidence_contract_id": contract["business_operations_evidence_contract_id"],
+        "required_approvals": required_approvals,
+        "approval_status": "block" if blockers else "pass",
+        "blockers": blockers,
+        "required_human_actions": required_approvals,
+        "recommended_next_action": "Resolve approval blockers before any Business Operations action.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_operations_approval_checklist(checklist, intake, contract)
+    return checklist
+
+
+def validate_business_operations_approval_checklist(
+    checklist: dict[str, Any],
+    business_operations_intake_preview: dict[str, Any] | None = None,
+    business_operations_evidence_contract: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_operations_approval_checklist_version", "business_operations_approval_checklist_id",
+        "business_operations_intake_preview_id", "business_operations_evidence_contract_id",
+        "required_approvals", "approval_status", "blockers", "required_human_actions",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in checklist:
+            raise ValueError(f"business operations approval checklist missing required field: {key}")
+    if checklist["business_operations_approval_checklist_version"] != BUSINESS_OPERATIONS_APPROVAL_CHECKLIST_VERSION:
+        raise ValueError("invalid business operations approval checklist version")
+    if not isinstance(checklist["business_operations_approval_checklist_id"], str) or not checklist["business_operations_approval_checklist_id"].startswith("business-operations-approval-checklist-"):
+        raise ValueError("invalid business operations approval checklist id")
+    for field in ("required_approvals", "blockers", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(checklist[field])
+        if not normalized or normalized != checklist[field]:
+            raise ValueError(f"business operations approval checklist {field} must be normalized and non-empty")
+    if checklist["approval_status"] not in BUSINESS_OPERATIONS_STATUSES:
+        raise ValueError("invalid business operations approval status")
+    if checklist["approval_status"] == "block" and not checklist["blockers"]:
+        raise ValueError("blocked business operations approval must include blockers")
+    if checklist["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business operations approval checklist safety metadata mismatch")
+    if checklist["dry_run"] is not True or checklist["write_allowed"] is not False:
+        raise ValueError("business operations approval checklist must be read-only")
+    if checklist["automation_allowed"] is not False or checklist["writes"] != []:
+        raise ValueError("business operations approval checklist must not allow automation or writes")
+    if business_operations_intake_preview is not None:
+        validate_business_operations_intake_preview(business_operations_intake_preview)
+        if checklist["business_operations_intake_preview_id"] != business_operations_intake_preview["business_operations_intake_preview_id"]:
+            raise ValueError("business operations approval checklist intake id mismatch")
+    if business_operations_evidence_contract is not None:
+        validate_business_operations_evidence_contract(business_operations_evidence_contract, business_operations_intake_preview)
+        if checklist["business_operations_evidence_contract_id"] != business_operations_evidence_contract["business_operations_evidence_contract_id"]:
+            raise ValueError("business operations approval checklist evidence id mismatch")
+    if business_operations_intake_preview is not None and business_operations_evidence_contract is not None:
+        expected_id = make_business_operations_approval_checklist_id(business_operations_intake_preview, business_operations_evidence_contract)
+        if checklist["business_operations_approval_checklist_id"] != expected_id:
+            raise ValueError("business operations approval checklist id is not deterministic")
+
+
+def stable_business_operations_approval_checklist_json(checklist: dict[str, Any]) -> str:
+    validate_business_operations_approval_checklist(checklist)
+    return _stable_ruflo_json(checklist, indent=2) + "\n"
+
+
+def parse_business_operations_approval_checklist_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    checklist = _json.loads(text)
+    validate_business_operations_approval_checklist(checklist)
+    return checklist
+
+
+def make_business_operations_review_package_id(
+    intake_preview: dict[str, Any],
+    evidence_contract: dict[str, Any],
+    approval_checklist: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_operations_approval_checklist_id": approval_checklist["business_operations_approval_checklist_id"],
+        "business_operations_evidence_contract_id": evidence_contract["business_operations_evidence_contract_id"],
+        "business_operations_intake_preview_id": intake_preview["business_operations_intake_preview_id"],
+        "version": BUSINESS_OPERATIONS_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-operations-review-package-{digest}"
+
+
+def collect_business_operations_review_package(
+    business_operations_intake_preview: dict[str, Any] | None = None,
+    business_operations_evidence_contract: dict[str, Any] | None = None,
+    business_operations_approval_checklist: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aggregate Business Operations governance state for review."""
+    intake = business_operations_intake_preview or collect_business_operations_intake_preview()
+    validate_business_operations_intake_preview(intake)
+    contract = business_operations_evidence_contract or collect_business_operations_evidence_contract(intake)
+    validate_business_operations_evidence_contract(contract, intake)
+    checklist = business_operations_approval_checklist or collect_business_operations_approval_checklist(intake, contract)
+    validate_business_operations_approval_checklist(checklist, intake, contract)
+    evidence_status = "block" if contract["missing_evidence"] else "pass"
+    approval_status = checklist["approval_status"]
+    risk_status = "review" if contract["blocked_actions"] or intake["warnings"] else "pass"
+    blockers = _normalize_implementation_branch_refs(list(intake["blockers"]) + list(checklist["blockers"]))
+    warnings = _normalize_implementation_branch_refs(
+        list(intake["warnings"]) + [f"blocked operational action: {item}" for item in contract["blocked_actions"]]
+    )
+    readiness_status = "blocked" if blockers or evidence_status == "block" or approval_status == "block" else "ready_for_review"
+    package = {
+        "business_operations_review_package_version": BUSINESS_OPERATIONS_REVIEW_PACKAGE_VERSION,
+        "business_operations_review_package_id": make_business_operations_review_package_id(intake, contract, checklist),
+        "business_operations_intake_preview_id": intake["business_operations_intake_preview_id"],
+        "business_operations_evidence_contract_id": contract["business_operations_evidence_contract_id"],
+        "business_operations_approval_checklist_id": checklist["business_operations_approval_checklist_id"],
+        "intake_status": intake["intake_status"],
+        "evidence_status": evidence_status,
+        "approval_status": approval_status,
+        "risk_status": risk_status,
+        "readiness_status": readiness_status,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": list(checklist["required_human_actions"]),
+        "review_recommendation": "do_not_operate" if readiness_status == "blocked" else "review_before_operations",
+        "recommended_next_action": "Resolve Business Operations evidence and approval blockers before introducing operational execution.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_operations_review_package(package, intake, contract, checklist)
+    return package
+
+
+def validate_business_operations_review_package(
+    package: dict[str, Any],
+    business_operations_intake_preview: dict[str, Any] | None = None,
+    business_operations_evidence_contract: dict[str, Any] | None = None,
+    business_operations_approval_checklist: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_operations_review_package_version", "business_operations_review_package_id",
+        "business_operations_intake_preview_id", "business_operations_evidence_contract_id",
+        "business_operations_approval_checklist_id", "intake_status", "evidence_status",
+        "approval_status", "risk_status", "readiness_status", "blockers", "warnings",
+        "required_human_actions", "review_recommendation", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"business operations review package missing required field: {key}")
+    if package["business_operations_review_package_version"] != BUSINESS_OPERATIONS_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid business operations review package version")
+    if not isinstance(package["business_operations_review_package_id"], str) or not package["business_operations_review_package_id"].startswith("business-operations-review-package-"):
+        raise ValueError("invalid business operations review package id")
+    for field in ("intake_status", "evidence_status", "approval_status", "risk_status"):
+        if package[field] not in BUSINESS_OPERATIONS_STATUSES:
+            raise ValueError(f"invalid business operations review {field}")
+    if package["readiness_status"] not in BUSINESS_OPERATIONS_READINESS_STATUSES:
+        raise ValueError("invalid business operations readiness status")
+    if package["review_recommendation"] not in BUSINESS_OPERATIONS_RECOMMENDATIONS:
+        raise ValueError("invalid business operations review recommendation")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"business operations review package {field} must be normalized and sorted")
+    if package["readiness_status"] == "blocked" and not package["blockers"]:
+        raise ValueError("blocked business operations review must include blockers")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business operations review package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("business operations review package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("business operations review package must not allow automation or writes")
+    if business_operations_intake_preview is not None:
+        validate_business_operations_intake_preview(business_operations_intake_preview)
+        if package["business_operations_intake_preview_id"] != business_operations_intake_preview["business_operations_intake_preview_id"]:
+            raise ValueError("business operations review intake id mismatch")
+    if business_operations_evidence_contract is not None:
+        validate_business_operations_evidence_contract(business_operations_evidence_contract, business_operations_intake_preview)
+        if package["business_operations_evidence_contract_id"] != business_operations_evidence_contract["business_operations_evidence_contract_id"]:
+            raise ValueError("business operations review evidence id mismatch")
+    if business_operations_approval_checklist is not None:
+        validate_business_operations_approval_checklist(business_operations_approval_checklist, business_operations_intake_preview, business_operations_evidence_contract)
+        if package["business_operations_approval_checklist_id"] != business_operations_approval_checklist["business_operations_approval_checklist_id"]:
+            raise ValueError("business operations review approval id mismatch")
+    if business_operations_intake_preview is not None and business_operations_evidence_contract is not None and business_operations_approval_checklist is not None:
+        expected_id = make_business_operations_review_package_id(business_operations_intake_preview, business_operations_evidence_contract, business_operations_approval_checklist)
+        if package["business_operations_review_package_id"] != expected_id:
+            raise ValueError("business operations review package id is not deterministic")
+
+
+def stable_business_operations_review_package_json(package: dict[str, Any]) -> str:
+    validate_business_operations_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_business_operations_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_business_operations_review_package(package)
+    return package
 
 
 def _valid_implementation_branch_name(name: str) -> bool:
@@ -14880,6 +15452,160 @@ def business_development_collection_review_main(argv: list[str] | None = None) -
         print(stable_business_development_collection_review_package_json(package), end="")
         return 0
     render_business_development_collection_review_plain(package)
+    return 0
+
+
+
+def render_business_operations_intake_preview_plain(preview: dict[str, Any]) -> None:
+    validate_business_operations_intake_preview(preview)
+    print("Business Operations intake preview")
+    print(f"business_operations_intake_preview_id: {preview['business_operations_intake_preview_id']}")
+    print(f"source_module: {preview['source_module']}")
+    print(f"target_module: {preview['target_module']}")
+    print(f"accepted_artifact_count: {len(preview['accepted_artifact_refs'])}")
+    print(f"rejected_artifact_count: {len(preview['rejected_artifact_refs'])}")
+    print(f"blocker_count: {len(preview['blockers'])}")
+    print(f"warning_count: {len(preview['warnings'])}")
+    print(f"required_human_action_count: {len(preview['required_human_actions'])}")
+    print(f"intake_status: {preview['intake_status']}")
+    print(f"next_action: {preview['recommended_next_action']}")
+
+
+def business_operations_intake_preview_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Operations intake-preview: intake preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-operations intake-preview")
+        print("  python3 link.py business-operations intake-preview --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-operations intake-preview is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    preview = collect_business_operations_intake_preview()
+    validate_business_operations_intake_preview(preview)
+    if "--json" in args:
+        print(stable_business_operations_intake_preview_json(preview), end="")
+        return 0
+    render_business_operations_intake_preview_plain(preview)
+    return 0
+
+
+def render_business_operations_evidence_contract_plain(contract: dict[str, Any]) -> None:
+    validate_business_operations_evidence_contract(contract)
+    print("Business Operations evidence contract")
+    print(f"business_operations_evidence_contract_id: {contract['business_operations_evidence_contract_id']}")
+    print(f"business_operations_intake_preview_id: {contract['business_operations_intake_preview_id']}")
+    print(f"claim_type_count: {len(contract['claim_types'])}")
+    print(f"required_source_count: {len(contract['required_sources'])}")
+    print(f"required_evidence_count: {len(contract['required_evidence'])}")
+    print(f"missing_evidence_count: {len(contract['missing_evidence'])}")
+    print(f"approval_requirement_count: {len(contract['approval_requirements'])}")
+    print(f"blocked_action_count: {len(contract['blocked_actions'])}")
+    print(f"next_action: {contract['recommended_next_action']}")
+
+
+def business_operations_evidence_contract_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Operations evidence-contract: evidence contract preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-operations evidence-contract")
+        print("  python3 link.py business-operations evidence-contract --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-operations evidence-contract is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    contract = collect_business_operations_evidence_contract()
+    validate_business_operations_evidence_contract(contract)
+    if "--json" in args:
+        print(stable_business_operations_evidence_contract_json(contract), end="")
+        return 0
+    render_business_operations_evidence_contract_plain(contract)
+    return 0
+
+
+def render_business_operations_approval_checklist_plain(checklist: dict[str, Any]) -> None:
+    validate_business_operations_approval_checklist(checklist)
+    print("Business Operations approval checklist")
+    print(f"business_operations_approval_checklist_id: {checklist['business_operations_approval_checklist_id']}")
+    print(f"business_operations_intake_preview_id: {checklist['business_operations_intake_preview_id']}")
+    print(f"business_operations_evidence_contract_id: {checklist['business_operations_evidence_contract_id']}")
+    print(f"required_approval_count: {len(checklist['required_approvals'])}")
+    print(f"approval_status: {checklist['approval_status']}")
+    print(f"blocker_count: {len(checklist['blockers'])}")
+    print(f"required_human_action_count: {len(checklist['required_human_actions'])}")
+    print(f"next_action: {checklist['recommended_next_action']}")
+
+
+def business_operations_approval_checklist_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Operations approval-checklist: approval checklist preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-operations approval-checklist")
+        print("  python3 link.py business-operations approval-checklist --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-operations approval-checklist is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    checklist = collect_business_operations_approval_checklist()
+    validate_business_operations_approval_checklist(checklist)
+    if "--json" in args:
+        print(stable_business_operations_approval_checklist_json(checklist), end="")
+        return 0
+    render_business_operations_approval_checklist_plain(checklist)
+    return 0
+
+
+def render_business_operations_review_plain(package: dict[str, Any]) -> None:
+    validate_business_operations_review_package(package)
+    print("Business Operations review")
+    print(f"business_operations_review_package_id: {package['business_operations_review_package_id']}")
+    print(f"business_operations_intake_preview_id: {package['business_operations_intake_preview_id']}")
+    print(f"business_operations_evidence_contract_id: {package['business_operations_evidence_contract_id']}")
+    print(f"business_operations_approval_checklist_id: {package['business_operations_approval_checklist_id']}")
+    print(f"intake_status: {package['intake_status']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"approval_status: {package['approval_status']}")
+    print(f"risk_status: {package['risk_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def business_operations_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Operations review: review package preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-operations review")
+        print("  python3 link.py business-operations review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-operations review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_business_operations_review_package()
+    validate_business_operations_review_package(package)
+    if "--json" in args:
+        print(stable_business_operations_review_package_json(package), end="")
+        return 0
+    render_business_operations_review_plain(package)
     return 0
 
 
