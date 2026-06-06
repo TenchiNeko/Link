@@ -9437,6 +9437,284 @@ def parse_growth_business_opportunity_scan_json(text: str) -> dict[str, Any]:
     return scan
 
 
+GROWTH_BUSINESS_EVIDENCE_CONTRACT_VERSION = "link-growth-business-evidence-contract-v1"
+GROWTH_BUSINESS_CLAIM_TYPES = (
+    "market_size",
+    "customer_demand",
+    "competitor_claim",
+    "seo_opportunity",
+    "content_opportunity",
+    "revenue_estimate",
+    "margin_estimate",
+    "product_viability",
+    "lead_quality",
+    "sourcing_availability",
+    "compliance_or_policy_risk",
+)
+GROWTH_BUSINESS_BLOCKED_ACTIONS = (
+    "scraping",
+    "outbound communication",
+    "CRM writes",
+    "ecommerce integration",
+    "publishing",
+    "purchasing inventory",
+    "paid ads",
+    "customer data storage",
+    "revenue claims",
+    "automated campaigns",
+)
+
+
+def make_growth_business_evidence_contract_id(scan: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "claim_types": list(GROWTH_BUSINESS_CLAIM_TYPES),
+        "growth_business_opportunity_scan_id": scan["growth_business_opportunity_scan_id"],
+        "version": GROWTH_BUSINESS_EVIDENCE_CONTRACT_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"growth-business-evidence-contract-{digest}"
+
+
+def collect_growth_business_evidence_contract(
+    opportunity_scan: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Define evidence requirements before Growth opportunities become business action."""
+    scan = opportunity_scan if opportunity_scan is not None else collect_growth_business_opportunity_scan()
+    validate_growth_business_opportunity_scan(scan)
+    source_refs: list[str] = []
+    missing_evidence: list[str] = []
+    approval_requirements: list[str] = []
+    for opportunity in scan["opportunities"]:
+        source_refs.extend(opportunity["source_refs"])
+        missing_evidence.extend(opportunity["missing_evidence"])
+        approval_requirements.extend(opportunity["required_approvals"])
+    required_sources = _normalize_implementation_branch_refs(source_refs)
+    required_evidence = [
+        {
+            "evidence_id": "growth-evidence-market-size",
+            "claim_type": "market_size",
+            "required_source_count": 2,
+            "required_fields": ["confidence_score", "estimate_method", "market_definition", "source_ref"],
+            "reviewer_summary_required": True,
+            "blocks_business_action_if_missing": True,
+        },
+        {
+            "evidence_id": "growth-evidence-customer-demand",
+            "claim_type": "customer_demand",
+            "required_source_count": 2,
+            "required_fields": ["customer_segment", "demand_signal", "recency", "source_ref"],
+            "reviewer_summary_required": True,
+            "blocks_business_action_if_missing": True,
+        },
+        {
+            "evidence_id": "growth-evidence-competitor-claim",
+            "claim_type": "competitor_claim",
+            "required_source_count": 1,
+            "required_fields": ["claim", "competitor_name", "observed_at_policy", "source_ref"],
+            "reviewer_summary_required": True,
+            "blocks_business_action_if_missing": True,
+        },
+        {
+            "evidence_id": "growth-evidence-seo-content",
+            "claim_type": "seo_opportunity",
+            "required_source_count": 2,
+            "required_fields": ["evidence_strength", "intent", "query_or_topic", "source_ref"],
+            "reviewer_summary_required": True,
+            "blocks_business_action_if_missing": True,
+        },
+        {
+            "evidence_id": "growth-evidence-revenue-margin",
+            "claim_type": "revenue_estimate",
+            "required_source_count": 2,
+            "required_fields": ["assumption", "calculation_method", "risk_score", "source_ref"],
+            "reviewer_summary_required": True,
+            "blocks_business_action_if_missing": True,
+        },
+        {
+            "evidence_id": "growth-evidence-compliance-policy",
+            "claim_type": "compliance_or_policy_risk",
+            "required_source_count": 1,
+            "required_fields": ["policy_area", "required_human_approval", "risk_summary", "source_ref"],
+            "reviewer_summary_required": True,
+            "blocks_business_action_if_missing": True,
+        },
+    ]
+    contract = {
+        "growth_business_evidence_contract_version": GROWTH_BUSINESS_EVIDENCE_CONTRACT_VERSION,
+        "growth_business_evidence_contract_id": make_growth_business_evidence_contract_id(scan),
+        "growth_business_opportunity_scan_id": scan["growth_business_opportunity_scan_id"],
+        "claim_types": list(GROWTH_BUSINESS_CLAIM_TYPES),
+        "required_sources": required_sources,
+        "required_evidence": required_evidence,
+        "confidence_thresholds": {
+            "maximum_risk_score_without_review": 35,
+            "minimum_confidence_score": 70,
+            "minimum_evidence_strength": 70,
+            "minimum_independent_source_count": 2,
+        },
+        "missing_evidence": _normalize_implementation_branch_refs(missing_evidence),
+        "approval_requirements": _normalize_implementation_branch_refs(approval_requirements + [
+            "approve before customer data storage",
+            "approve before ecommerce or CRM integration",
+            "approve before outbound communication",
+            "approve before publishing or paid ads",
+        ]),
+        "review_requirements": [
+            "human review of claim confidence",
+            "human review of compliance or policy risk",
+            "human review of missing evidence before action",
+            "human review of source provenance",
+        ],
+        "blocked_actions": list(GROWTH_BUSINESS_BLOCKED_ACTIONS),
+        "recommended_next_action": "Resolve missing evidence and human review requirements before any Growth business action.",
+        "safety_metadata": {
+            "dry_run": True,
+            "write_allowed": False,
+            "automation_allowed": False,
+            "writes": [],
+        },
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_business_evidence_contract(contract, scan)
+    return contract
+
+
+def validate_growth_business_evidence_contract(
+    contract: dict[str, Any],
+    opportunity_scan: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "growth_business_evidence_contract_version", "growth_business_evidence_contract_id",
+        "growth_business_opportunity_scan_id", "claim_types", "required_sources",
+        "required_evidence", "confidence_thresholds", "missing_evidence",
+        "approval_requirements", "review_requirements", "blocked_actions",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in contract:
+            raise ValueError(f"growth business evidence contract missing required field: {key}")
+    if contract["growth_business_evidence_contract_version"] != GROWTH_BUSINESS_EVIDENCE_CONTRACT_VERSION:
+        raise ValueError("invalid growth business evidence contract version")
+    if not isinstance(contract["growth_business_evidence_contract_id"], str) or not contract["growth_business_evidence_contract_id"].startswith("growth-business-evidence-contract-"):
+        raise ValueError("invalid growth business evidence contract id")
+    if not isinstance(contract["growth_business_opportunity_scan_id"], str) or not contract["growth_business_opportunity_scan_id"].startswith("growth-business-opportunity-scan-"):
+        raise ValueError("invalid growth business opportunity scan id")
+    if contract["claim_types"] != list(GROWTH_BUSINESS_CLAIM_TYPES):
+        raise ValueError("growth business evidence contract claim_types mismatch")
+    _validate_growth_business_source_list(contract["required_sources"], "required_sources")
+    _validate_growth_business_required_evidence(contract["required_evidence"])
+    _validate_growth_business_confidence_thresholds(contract["confidence_thresholds"])
+    _validate_growth_business_text_list(contract["missing_evidence"], "missing_evidence", require_non_empty=True)
+    _validate_growth_business_text_list(contract["approval_requirements"], "approval_requirements", require_non_empty=True)
+    _validate_growth_business_text_list(contract["review_requirements"], "review_requirements", require_non_empty=True)
+    if contract["blocked_actions"] != list(GROWTH_BUSINESS_BLOCKED_ACTIONS):
+        raise ValueError("growth business evidence contract blocked_actions mismatch")
+    if not isinstance(contract["recommended_next_action"], str) or not contract["recommended_next_action"].strip():
+        raise ValueError("growth business evidence contract recommended_next_action must be non-empty")
+    expected_safety = {
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+    }
+    if contract["safety_metadata"] != expected_safety:
+        raise ValueError("growth business evidence contract safety_metadata mismatch")
+    if contract["dry_run"] is not True or contract["write_allowed"] is not False:
+        raise ValueError("growth business evidence contract must be read-only")
+    if contract["automation_allowed"] is not False or contract["writes"] != []:
+        raise ValueError("growth business evidence contract must not allow automation or writes")
+    if opportunity_scan is not None:
+        validate_growth_business_opportunity_scan(opportunity_scan)
+        if contract["growth_business_opportunity_scan_id"] != opportunity_scan["growth_business_opportunity_scan_id"]:
+            raise ValueError("growth business evidence contract scan id mismatch")
+        expected_id = make_growth_business_evidence_contract_id(opportunity_scan)
+        if contract["growth_business_evidence_contract_id"] != expected_id:
+            raise ValueError("growth business evidence contract id is not deterministic")
+
+
+def _validate_growth_business_source_list(values: Any, field: str) -> None:
+    normalized = _normalize_implementation_branch_refs(values)
+    if not normalized:
+        raise ValueError(f"growth business evidence contract {field} must be non-empty")
+    if normalized != values:
+        raise ValueError(f"growth business evidence contract {field} must be normalized and sorted")
+
+
+def _validate_growth_business_text_list(values: Any, field: str, *, require_non_empty: bool) -> None:
+    normalized = _normalize_implementation_branch_refs(values)
+    if require_non_empty and not normalized:
+        raise ValueError(f"growth business evidence contract {field} must be non-empty")
+    if normalized != values:
+        raise ValueError(f"growth business evidence contract {field} must be normalized and sorted")
+
+
+def _validate_growth_business_required_evidence(items: Any) -> None:
+    if not isinstance(items, list) or not items:
+        raise ValueError("growth business evidence contract required_evidence must be a non-empty list")
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise TypeError("growth business evidence item must be a dict")
+        required = (
+            "evidence_id", "claim_type", "required_source_count", "required_fields",
+            "reviewer_summary_required", "blocks_business_action_if_missing",
+        )
+        for key in required:
+            if key not in item:
+                raise ValueError(f"growth business evidence item missing required field: {key}")
+        evidence_id = str(item["evidence_id"])
+        if not evidence_id.startswith("growth-evidence-") or evidence_id in seen:
+            raise ValueError(f"invalid growth business evidence id: {evidence_id}")
+        seen.add(evidence_id)
+        if item["claim_type"] not in GROWTH_BUSINESS_CLAIM_TYPES:
+            raise ValueError(f"invalid growth business evidence claim type: {item['claim_type']}")
+        if not isinstance(item["required_source_count"], int) or item["required_source_count"] < 1:
+            raise ValueError("growth business evidence required_source_count must be positive")
+        _validate_growth_business_text_list(item["required_fields"], "required_fields", require_non_empty=True)
+        if item["reviewer_summary_required"] is not True:
+            raise ValueError("growth business evidence reviewer_summary_required must be true")
+        if item["blocks_business_action_if_missing"] is not True:
+            raise ValueError("growth business evidence must block business action when missing")
+
+
+def _validate_growth_business_confidence_thresholds(thresholds: Any) -> None:
+    if not isinstance(thresholds, dict):
+        raise TypeError("growth business evidence confidence_thresholds must be a dict")
+    required = (
+        "minimum_evidence_strength", "minimum_confidence_score",
+        "maximum_risk_score_without_review", "minimum_independent_source_count",
+    )
+    for key in required:
+        if key not in thresholds:
+            raise ValueError(f"growth business evidence confidence threshold missing: {key}")
+    for key in ("minimum_evidence_strength", "minimum_confidence_score", "maximum_risk_score_without_review"):
+        _growth_business_score(thresholds[key], key)
+    if not isinstance(thresholds["minimum_independent_source_count"], int) or thresholds["minimum_independent_source_count"] < 1:
+        raise ValueError("minimum_independent_source_count must be a positive integer")
+
+
+def stable_growth_business_evidence_contract_json(contract: dict[str, Any]) -> str:
+    validate_growth_business_evidence_contract(contract)
+    return _stable_ruflo_json(contract, indent=2) + "\n"
+
+
+def parse_growth_business_evidence_contract_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    contract = _json.loads(text)
+    validate_growth_business_evidence_contract(contract)
+    return contract
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -11308,6 +11586,45 @@ def business_opportunities_main(argv: list[str] | None = None) -> int:
         print(stable_growth_business_opportunity_scan_json(scan), end="")
         return 0
     render_business_opportunities_plain(scan)
+    return 0
+
+
+def render_business_evidence_contract_plain(contract: dict[str, Any]) -> None:
+    validate_growth_business_evidence_contract(contract)
+    print("Growth business evidence contract")
+    print(f"growth_business_evidence_contract_id: {contract['growth_business_evidence_contract_id']}")
+    print(f"growth_business_opportunity_scan_id: {contract['growth_business_opportunity_scan_id']}")
+    print(f"claim_type_count: {len(contract['claim_types'])}")
+    print(f"required_source_count: {len(contract['required_sources'])}")
+    print(f"required_evidence_count: {len(contract['required_evidence'])}")
+    print(f"missing_evidence_count: {len(contract['missing_evidence'])}")
+    print(f"approval_requirement_count: {len(contract['approval_requirements'])}")
+    print(f"review_requirement_count: {len(contract['review_requirements'])}")
+    print(f"blocked_action_count: {len(contract['blocked_actions'])}")
+    print(f"next_action: {contract['recommended_next_action']}")
+
+
+def business_evidence_contract_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth business-evidence-contract`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth business-evidence-contract: business evidence contract preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth business-evidence-contract")
+        print("  python3 link.py growth business-evidence-contract --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth business-evidence-contract is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    contract = collect_growth_business_evidence_contract()
+    validate_growth_business_evidence_contract(contract)
+    if "--json" in args:
+        print(stable_growth_business_evidence_contract_json(contract), end="")
+        return 0
+    render_business_evidence_contract_plain(contract)
     return 0
 
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:

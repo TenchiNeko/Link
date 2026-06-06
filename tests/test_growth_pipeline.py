@@ -12268,6 +12268,95 @@ def check_growth_business_opportunities_cli() -> None:
              "business-opportunities --write must not print normal output")
     print("growth business-opportunities CLI OK")
 
+
+# ---------------------------------------------------------------------------
+# 62j. Growth business-evidence-contract CLI preview
+# ---------------------------------------------------------------------------
+
+def check_growth_business_evidence_contract_cli() -> None:
+    """business-evidence-contract exposes only the Growth evidence contract payload."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        business_evidence_contract_main,
+        collect_growth_business_evidence_contract,
+        parse_growth_business_evidence_contract_json,
+        validate_growth_business_evidence_contract,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("business-evidence-contract" in help_out.getvalue(),
+             "growth help must include business-evidence-contract")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = business_evidence_contract_main(["--json"])
+    _require(json_rc == 0, "business-evidence-contract --json must return 0")
+    parsed = parse_growth_business_evidence_contract_json(json_out.getvalue())
+    validate_growth_business_evidence_contract(parsed)
+    expected = collect_growth_business_evidence_contract()
+    _require(parsed["growth_business_evidence_contract_id"] == expected["growth_business_evidence_contract_id"],
+             "business-evidence-contract id must be deterministic")
+    _require(parsed["growth_business_opportunity_scan_id"] == expected["growth_business_opportunity_scan_id"],
+             "business-evidence-contract must preserve scan id")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "business-evidence-contract must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "business-evidence-contract must not allow automation or writes")
+    for full_chain_key in (
+        "planning_chain_id",
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_gate_stack_preview",
+        "supervised_execution_plan",
+        "growth_business_opportunity_scan",
+    ):
+        _require(full_chain_key not in parsed,
+                 "business-evidence-contract --json must output only contract payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["business-evidence-contract", "--json"])
+    routed = parse_growth_business_evidence_contract_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth business-evidence-contract --json route must return 0")
+    _require(routed["growth_business_evidence_contract_id"] == parsed["growth_business_evidence_contract_id"],
+             "growth business-evidence-contract route must preserve deterministic contract id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = business_evidence_contract_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "business-evidence-contract human mode must return 0")
+    for needle in (
+        "Growth business evidence contract",
+        "growth_business_evidence_contract_id:",
+        "growth_business_opportunity_scan_id:",
+        "claim_type_count:",
+        "required_source_count:",
+        "required_evidence_count:",
+        "missing_evidence_count:",
+        "approval_requirement_count:",
+        "review_requirement_count:",
+        "blocked_action_count:",
+        "next_action:",
+    ):
+        _require(needle in human, f"business-evidence-contract human mode must include {needle}")
+    _require(len(human.splitlines()) <= 11,
+             "business-evidence-contract human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = business_evidence_contract_main(["--write", "--json"])
+    _require(write_rc != 0, "business-evidence-contract --write must be rejected")
+    _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+             "business-evidence-contract --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "business-evidence-contract --write must not print normal output")
+    print("growth business-evidence-contract CLI OK")
+
 # ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
@@ -12904,6 +12993,168 @@ def check_growth_business_opportunity_scan_helper() -> None:
 
     print("growth business opportunity scan helper OK")
 
+
+# ---------------------------------------------------------------------------
+# 64. Growth business evidence contract helper
+# ---------------------------------------------------------------------------
+
+def check_growth_business_evidence_contract_helper() -> None:
+    """Growth business evidence contracts gate business action read-only."""
+    from link_modes.growth.link_growth_console import (
+        GROWTH_BUSINESS_BLOCKED_ACTIONS,
+        GROWTH_BUSINESS_CLAIM_TYPES,
+        collect_growth_business_evidence_contract,
+        collect_growth_business_opportunity_scan,
+        parse_growth_business_evidence_contract_json,
+        stable_growth_business_evidence_contract_json,
+        validate_growth_business_evidence_contract,
+    )
+
+    scan = collect_growth_business_opportunity_scan()
+    contract = collect_growth_business_evidence_contract(scan)
+    same = collect_growth_business_evidence_contract(scan)
+    validate_growth_business_evidence_contract(contract, scan)
+    _require(contract["growth_business_evidence_contract_id"] == same["growth_business_evidence_contract_id"],
+             "growth business evidence contract id must be deterministic")
+    _require(contract["growth_business_opportunity_scan_id"] == scan["growth_business_opportunity_scan_id"],
+             "growth business evidence contract must reference opportunity scan")
+    _require(contract["claim_types"] == list(GROWTH_BUSINESS_CLAIM_TYPES),
+             "growth business evidence contract must preserve claim types")
+    _require(contract["blocked_actions"] == list(GROWTH_BUSINESS_BLOCKED_ACTIONS),
+             "growth business evidence contract must preserve blocked actions")
+    _require(contract["required_sources"],
+             "growth business evidence contract must include required sources")
+    _require(contract["required_sources"] == sorted(contract["required_sources"]),
+             "growth business evidence contract required sources must be sorted")
+    _require(contract["required_evidence"],
+             "growth business evidence contract must include required evidence")
+    _require(contract["missing_evidence"],
+             "growth business evidence contract must preserve missing evidence")
+    _require(contract["approval_requirements"],
+             "growth business evidence contract must include approval requirements")
+    _require(contract["review_requirements"],
+             "growth business evidence contract must include review requirements")
+    thresholds = contract["confidence_thresholds"]
+    _require(thresholds["minimum_evidence_strength"] == 70,
+             "growth business evidence contract must define evidence threshold")
+    _require(thresholds["minimum_confidence_score"] == 70,
+             "growth business evidence contract must define confidence threshold")
+    _require(thresholds["minimum_independent_source_count"] == 2,
+             "growth business evidence contract must define source count threshold")
+    _require(contract["safety_metadata"] == {
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+    }, "growth business evidence contract must include read-only safety metadata")
+    _require(contract["dry_run"] is True and contract["write_allowed"] is False,
+             "growth business evidence contract must be read-only")
+    _require(contract["automation_allowed"] is False and contract["writes"] == [],
+             "growth business evidence contract must not allow automation or writes")
+
+    decoded = parse_growth_business_evidence_contract_json(stable_growth_business_evidence_contract_json(contract))
+    _require(decoded == contract, "growth business evidence contract JSON must round trip")
+    _require(stable_growth_business_evidence_contract_json(contract) == stable_growth_business_evidence_contract_json(contract),
+             "growth business evidence contract JSON must be stable")
+
+    claim_types_with_evidence = {item["claim_type"] for item in contract["required_evidence"]}
+    _require("market_size" in claim_types_with_evidence,
+             "growth business evidence contract must require market size evidence")
+    _require("customer_demand" in claim_types_with_evidence,
+             "growth business evidence contract must require customer demand evidence")
+    _require("compliance_or_policy_risk" in claim_types_with_evidence,
+             "growth business evidence contract must require policy risk evidence")
+    for item in contract["required_evidence"]:
+        _require(item["required_fields"] == sorted(item["required_fields"]),
+                 "growth business evidence required fields must be sorted")
+        _require(item["reviewer_summary_required"] is True,
+                 "growth business evidence must require reviewer summary")
+        _require(item["blocks_business_action_if_missing"] is True,
+                 "growth business evidence must block action when missing")
+
+    mismatch = json.loads(stable_growth_business_evidence_contract_json(contract))
+    mismatch["growth_business_opportunity_scan_id"] = "growth-business-opportunity-scan-wrong"
+    try:
+        validate_growth_business_evidence_contract(mismatch, scan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business evidence contract validation must reject scan id mismatch")
+
+    bad_claim = json.loads(stable_growth_business_evidence_contract_json(contract))
+    bad_claim["claim_types"] = ["market_size"]
+    try:
+        validate_growth_business_evidence_contract(bad_claim)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business evidence contract validation must reject claim type mismatch")
+
+    bad_source = json.loads(stable_growth_business_evidence_contract_json(contract))
+    bad_source["required_sources"] = ["/tmp/not-allowed"]
+    try:
+        validate_growth_business_evidence_contract(bad_source)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business evidence contract validation must reject invalid source refs")
+
+    bad_evidence = json.loads(stable_growth_business_evidence_contract_json(contract))
+    bad_evidence["required_evidence"][0]["claim_type"] = "made_up_claim"
+    try:
+        validate_growth_business_evidence_contract(bad_evidence)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business evidence contract validation must reject invalid evidence claim type")
+
+    bad_threshold = json.loads(stable_growth_business_evidence_contract_json(contract))
+    bad_threshold["confidence_thresholds"]["minimum_confidence_score"] = 101
+    try:
+        validate_growth_business_evidence_contract(bad_threshold)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business evidence contract validation must reject invalid confidence threshold")
+
+    bad_missing = json.loads(stable_growth_business_evidence_contract_json(contract))
+    bad_missing["missing_evidence"] = []
+    try:
+        validate_growth_business_evidence_contract(bad_missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business evidence contract validation must reject empty missing evidence")
+
+    bad_blocked = json.loads(stable_growth_business_evidence_contract_json(contract))
+    bad_blocked["blocked_actions"] = ["publishing"]
+    try:
+        validate_growth_business_evidence_contract(bad_blocked)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business evidence contract validation must reject blocked action mismatch")
+
+    bad_safety = json.loads(stable_growth_business_evidence_contract_json(contract))
+    bad_safety["safety_metadata"]["write_allowed"] = True
+    try:
+        validate_growth_business_evidence_contract(bad_safety)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business evidence contract validation must reject unsafe safety metadata")
+
+    missing = json.loads(stable_growth_business_evidence_contract_json(contract))
+    missing.pop("growth_business_evidence_contract_id")
+    try:
+        validate_growth_business_evidence_contract(missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("growth business evidence contract validation must reject missing required fields")
+
+    print("growth business evidence contract helper OK")
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -12962,6 +13213,8 @@ def main() -> None:
     check_growth_archive_code_queue_top_clamp()
     check_growth_business_opportunity_scan_helper()
     check_growth_business_opportunities_cli()
+    check_growth_business_evidence_contract_helper()
+    check_growth_business_evidence_contract_cli()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()
