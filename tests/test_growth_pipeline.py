@@ -12054,6 +12054,245 @@ def check_supervised_execution_write_boundary_helper() -> None:
     print("supervised execution write boundary helper OK")
 
 
+
+# ---------------------------------------------------------------------------
+# 62k. Supervised execution review package helper
+# ---------------------------------------------------------------------------
+
+def check_supervised_execution_review_package_helper() -> None:
+    """supervised execution review package summarizes whole-system state read-only."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_approval_checklist,
+        collect_execution_review,
+        collect_growth_planning_chain_preview,
+        collect_supervised_execution_plan,
+        collect_supervised_execution_review_package,
+        collect_supervised_execution_write_boundary,
+        parse_supervised_execution_review_package_json,
+        stable_supervised_execution_review_package_json,
+        validate_supervised_execution_review_package,
+    )
+
+    chain = collect_growth_planning_chain_preview()
+    plan = collect_supervised_execution_plan(chain)
+    boundary = collect_supervised_execution_write_boundary(chain, supervised_execution_plan=plan)
+    review = collect_execution_review(chain)
+    approval = collect_execution_approval_checklist(chain)
+    gate_stack = chain["execution_gate_stack_preview"]
+    package = collect_supervised_execution_review_package(
+        chain,
+        supervised_execution_plan=plan,
+        supervised_execution_write_boundary=boundary,
+        execution_review=review,
+        approval_checklist=approval,
+        gate_stack=gate_stack,
+    )
+    validate_supervised_execution_review_package(
+        package,
+        planning_chain=chain,
+        supervised_execution_plan=plan,
+        supervised_execution_write_boundary=boundary,
+        execution_review=review,
+        approval_checklist=approval,
+        gate_stack=gate_stack,
+    )
+    same = collect_supervised_execution_review_package(
+        chain,
+        supervised_execution_plan=plan,
+        supervised_execution_write_boundary=boundary,
+        execution_review=review,
+        approval_checklist=approval,
+        gate_stack=gate_stack,
+    )
+    _require(package["supervised_execution_review_package_id"] == same["supervised_execution_review_package_id"],
+             "supervised execution review package id must be deterministic")
+    decoded = parse_supervised_execution_review_package_json(stable_supervised_execution_review_package_json(package))
+    _require(decoded == package, "supervised execution review package JSON must round trip")
+    _require(package["planning_chain_id"] == chain["planning_chain_id"],
+             "review package must preserve planning chain id")
+    _require(package["supervised_execution_plan_id"] == plan["supervised_execution_plan_id"],
+             "review package must preserve supervised plan id")
+    _require(package["supervised_execution_write_boundary_id"] == boundary["supervised_execution_write_boundary_id"],
+             "review package must preserve write boundary id")
+    _require(package["execution_package_id"] == plan["execution_package_id"],
+             "review package must preserve execution package id")
+    for field in ("workspace_status", "patch_status", "verification_status", "rollback_status"):
+        _require(package[field] == boundary[field], f"review package must preserve {field}")
+    _require(package["evidence_status"] == boundary["evidence_status"],
+             "review package must preserve boundary evidence status without runtime bundle")
+    _require(package["blockers"], "review package must aggregate blockers")
+    _require(package["warnings"], "review package must aggregate warnings")
+    _require(package["required_human_actions"], "review package must aggregate required human actions")
+    _require(package["review_recommendation"] == "do_not_execute",
+             "default blocked package must recommend no execution")
+    _require("Resolve supervised execution blockers" in package["recommended_next_action"],
+             "blocked package must recommend resolving blockers")
+    _require(package["dry_run"] is True and package["write_allowed"] is False,
+             "review package must be read-only")
+    _require(package["automation_allowed"] is False and package["writes"] == [],
+             "review package must not allow automation or writes")
+
+    bad = dict(package)
+    bad["review_recommendation"] = "ready_for_human_approval"
+    try:
+        validate_supervised_execution_review_package(bad)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("review package validation must reject ready recommendation with blockers")
+
+    bad_status = dict(package)
+    bad_status["workspace_status"] = "maybe"
+    try:
+        validate_supervised_execution_review_package(bad_status)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("review package validation must reject invalid workspace status")
+
+    bad_safety = dict(package)
+    bad_safety["write_allowed"] = True
+    try:
+        validate_supervised_execution_review_package(bad_safety)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("review package validation must reject unsafe write metadata")
+
+    mismatch = dict(package)
+    mismatch["supervised_execution_plan_id"] = "supervised-execution-plan-wrong"
+    try:
+        validate_supervised_execution_review_package(mismatch, supervised_execution_plan=plan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("review package validation must reject supervised plan mismatch")
+
+    missing = dict(package)
+    missing.pop("supervised_execution_review_package_id")
+    try:
+        validate_supervised_execution_review_package(missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("review package validation must reject missing id")
+    print("supervised execution review package helper OK")
+
+
+
+# ---------------------------------------------------------------------------
+# 62k. Growth supervised-execution-review CLI
+# ---------------------------------------------------------------------------
+
+def check_growth_supervised_execution_review_package_cli() -> None:
+    """supervised-execution-review exposes only the compact review package."""
+    from link import _cmd_growth
+    from link_modes.growth.link_growth_console import (
+        collect_growth_planning_chain_preview,
+        collect_supervised_execution_review_package,
+        parse_supervised_execution_review_package_json,
+        supervised_execution_review_package_main,
+        validate_supervised_execution_review_package,
+    )
+
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_growth(["--help"])
+    _require(help_rc == 0, "growth --help must return 0")
+    _require("supervised-execution-review" in help_out.getvalue(),
+             "growth help must include supervised-execution-review")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = supervised_execution_review_package_main(["--json"])
+    _require(json_rc == 0, "supervised-execution-review --json must return 0")
+    parsed = parse_supervised_execution_review_package_json(json_out.getvalue())
+    validate_supervised_execution_review_package(parsed)
+    chain = collect_growth_planning_chain_preview()
+    expected = collect_supervised_execution_review_package(chain)
+    _require(parsed["supervised_execution_review_package_id"] == expected["supervised_execution_review_package_id"],
+             "supervised-execution-review package id must be deterministic")
+    for field in (
+        "supervised_execution_review_package_id",
+        "planning_chain_id",
+        "supervised_execution_plan_id",
+        "supervised_execution_write_boundary_id",
+        "execution_package_id",
+        "workspace_status",
+        "patch_status",
+        "verification_status",
+        "rollback_status",
+        "evidence_status",
+        "blockers",
+        "warnings",
+        "required_human_actions",
+        "review_recommendation",
+        "recommended_next_action",
+    ):
+        _require(field in parsed, f"supervised-execution-review JSON must include {field}")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "supervised-execution-review must remain read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "supervised-execution-review must not allow automation or writes")
+    for full_chain_key in (
+        "capability_gap_preview",
+        "upgrade_execution_plan",
+        "execution_gate_stack_preview",
+        "execution_review",
+        "execution_evidence_contract",
+        "supervised_execution_plan",
+        "supervised_execution_write_boundary",
+    ):
+        _require(full_chain_key not in parsed,
+                 "supervised-execution-review --json must output only review package payload")
+
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_growth(["supervised-execution-review", "--json"])
+    routed = parse_supervised_execution_review_package_json(routed_out.getvalue())
+    _require(routed_rc == 0, "growth supervised-execution-review --json route must return 0")
+    _require(routed["supervised_execution_review_package_id"] == parsed["supervised_execution_review_package_id"],
+             "growth supervised-execution-review route must preserve deterministic package id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = supervised_execution_review_package_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "supervised-execution-review human mode must return 0")
+    for needle in (
+        "Growth supervised execution review package",
+        "supervised_execution_review_package_id:",
+        "planning_chain_id:",
+        "supervised_execution_plan_id:",
+        "supervised_execution_write_boundary_id:",
+        "execution_package_id:",
+        "workspace_status:",
+        "patch_status:",
+        "verification_status:",
+        "rollback_status:",
+        "evidence_status:",
+        "blocker_count:",
+        "warning_count:",
+        "required_human_action_count:",
+        "review_recommendation:",
+        "next_action:",
+    ):
+        _require(needle in human, f"supervised-execution-review human mode must include {needle}")
+    _require(len(human.splitlines()) <= 16,
+             "supervised-execution-review human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = supervised_execution_review_package_main(["--write", "--json"])
+    _require(write_rc != 0, "supervised-execution-review --write must be rejected")
+    _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+             "supervised-execution-review --write must print clear error")
+    _require(write_out.getvalue() == "",
+             "supervised-execution-review --write must not print normal output")
+    print("growth supervised-execution-review CLI OK")
+
+
 # ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-boundary CLI
 # ---------------------------------------------------------------------------
@@ -12552,6 +12791,8 @@ def main() -> None:
     check_execution_evidence_collector_runtime_component()
     check_growth_evidence_collect_cli()
     check_supervised_execution_write_boundary_helper()
+    check_supervised_execution_review_package_helper()
+    check_growth_supervised_execution_review_package_cli()
     check_growth_supervised_execution_boundary_cli()
     check_growth_supervised_execution_cli()
     check_supervised_execution_orchestrator_runtime_component()

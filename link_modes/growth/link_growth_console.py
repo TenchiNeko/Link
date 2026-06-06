@@ -10895,6 +10895,51 @@ def supervised_execution_boundary_main(argv: list[str] | None = None) -> int:
     render_supervised_execution_boundary_plain(boundary)
     return 0
 
+
+def render_supervised_execution_review_package_plain(package: dict[str, Any]) -> None:
+    validate_supervised_execution_review_package(package)
+    print("Growth supervised execution review package")
+    print(f"supervised_execution_review_package_id: {package['supervised_execution_review_package_id']}")
+    print(f"planning_chain_id: {package['planning_chain_id']}")
+    print(f"supervised_execution_plan_id: {package['supervised_execution_plan_id']}")
+    print(f"supervised_execution_write_boundary_id: {package['supervised_execution_write_boundary_id']}")
+    print(f"execution_package_id: {package['execution_package_id']}")
+    print(f"workspace_status: {package['workspace_status']}")
+    print(f"patch_status: {package['patch_status']}")
+    print(f"verification_status: {package['verification_status']}")
+    print(f"rollback_status: {package['rollback_status']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def supervised_execution_review_package_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``growth supervised-execution-review`` read-only preview."""
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Growth supervised-execution-review: supervised execution review package")
+        print("")
+        print("Usage:")
+        print("  python3 link.py growth supervised-execution-review")
+        print("  python3 link.py growth supervised-execution-review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: growth supervised-execution-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    chain = collect_growth_planning_chain_preview()
+    package = collect_supervised_execution_review_package(chain)
+    validate_supervised_execution_review_package(package, planning_chain=chain)
+    if "--json" in args:
+        print(stable_supervised_execution_review_package_json(package), end="")
+        return 0
+    render_supervised_execution_review_package_plain(package)
+    return 0
+
 def render_planning_chain_plain(chain: dict[str, Any]) -> None:
     validate_growth_planning_chain_preview(chain)
     gap_counts = chain["capability_gap_preview"]["counts"]
@@ -20117,6 +20162,292 @@ def parse_supervised_execution_write_boundary_json(text: str) -> dict[str, Any]:
     boundary = json.loads(text)
     validate_supervised_execution_write_boundary(boundary)
     return boundary
+
+
+SUPERVISED_EXECUTION_REVIEW_PACKAGE_VERSION = "link-supervised-execution-review-package-v1"
+
+
+def make_supervised_execution_review_package_id(
+    planning_chain_id: str,
+    supervised_execution_plan_id: str,
+    supervised_execution_write_boundary_id: str,
+    execution_package_id: str,
+    workspace_status: str,
+    patch_status: str,
+    verification_status: str,
+    rollback_status: str,
+    evidence_status: str,
+    blockers: list[str],
+    warnings: list[str],
+    required_human_actions: list[str],
+) -> str:
+    return _execution_readiness_id("supervised-execution-review-package", {
+        "blockers": blockers,
+        "evidence_status": evidence_status,
+        "execution_package_id": execution_package_id,
+        "patch_status": patch_status,
+        "planning_chain_id": planning_chain_id,
+        "required_human_actions": required_human_actions,
+        "rollback_status": rollback_status,
+        "supervised_execution_plan_id": supervised_execution_plan_id,
+        "supervised_execution_write_boundary_id": supervised_execution_write_boundary_id,
+        "verification_status": verification_status,
+        "version": SUPERVISED_EXECUTION_REVIEW_PACKAGE_VERSION,
+        "warnings": warnings,
+        "workspace_status": workspace_status,
+    })
+
+
+def _supervised_execution_review_recommendation(
+    blockers: list[str],
+    warnings: list[str],
+    write_boundary: dict[str, Any],
+) -> str:
+    if blockers or write_boundary["write_authorization_status"] == "denied":
+        return "do_not_execute"
+    if warnings:
+        return "review_before_execute"
+    return "ready_for_human_approval"
+
+
+def collect_supervised_execution_review_package(
+    planning_chain: dict[str, Any] | None = None,
+    *,
+    supervised_execution_plan: dict[str, Any] | None = None,
+    supervised_execution_write_boundary: dict[str, Any] | None = None,
+    execution_review: dict[str, Any] | None = None,
+    evidence_bundle: dict[str, Any] | None = None,
+    approval_checklist: dict[str, Any] | None = None,
+    gate_stack: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a compact read-only package summarizing the whole execution state."""
+    chain = planning_chain or collect_growth_planning_chain_preview()
+    validate_growth_planning_chain_preview(chain)
+    plan = supervised_execution_plan or collect_supervised_execution_plan(chain)
+    boundary = supervised_execution_write_boundary or collect_supervised_execution_write_boundary(chain, supervised_execution_plan=plan)
+    review = execution_review or collect_execution_review(chain)
+    approval = approval_checklist or collect_execution_approval_checklist(chain)
+    gates = gate_stack or chain["execution_gate_stack_preview"]
+
+    validate_supervised_execution_plan(plan, chain)
+    validate_supervised_execution_write_boundary(boundary, planning_chain=chain, supervised_execution_plan=plan)
+    validate_execution_review(review)
+    validate_execution_approval_checklist(approval)
+    validate_execution_gate_stack_preview(gates)
+    if evidence_bundle is not None:
+        validate_execution_evidence_bundle(evidence_bundle)
+        if evidence_bundle["planning_chain_id"] != chain["planning_chain_id"]:
+            raise ValueError("supervised execution review package evidence planning chain mismatch")
+        if evidence_bundle["execution_package_id"] != plan["execution_package_id"]:
+            raise ValueError("supervised execution review package evidence execution package mismatch")
+
+    evidence_status = evidence_bundle["evidence_status"] if evidence_bundle is not None else boundary["evidence_status"]
+    evidence_bundle_id = evidence_bundle["execution_evidence_bundle_id"] if evidence_bundle is not None else ""
+    blockers = [
+        *boundary["blockers"],
+        *review["blocker_summary"]["top_blockers"],
+        *approval["approval_blockers"],
+        *(f"{gate['gate_type']}: {blocker}" for gate in gates["gates"] for blocker in gate["blockers"]),
+    ]
+    if evidence_bundle is not None and evidence_bundle["missing_evidence"]:
+        blockers.append(f"evidence bundle missing {len(evidence_bundle['missing_evidence'])} evidence item(s)")
+    blockers = _normalize_patch_behavior_text_list(blockers)
+    warnings = [
+        *boundary["warnings"],
+        *review["warning_summary"]["top_warnings"],
+        *approval["approval_warnings"],
+        *(f"{gate['gate_type']}: {warning}" for gate in gates["gates"] for warning in gate["warnings"]),
+    ]
+    if evidence_bundle is not None and evidence_bundle["evidence_status"] == "missing_evidence":
+        warnings.append(evidence_bundle["reviewer_summary"])
+    warnings = _normalize_patch_behavior_text_list(warnings)
+    required_actions = _normalize_patch_behavior_text_list([
+        *boundary["required_human_actions"],
+        *approval["required_approvals"],
+    ])
+    recommendation = _supervised_execution_review_recommendation(blockers, warnings, boundary)
+    if recommendation == "do_not_execute":
+        next_action = "Resolve supervised execution blockers before any write-enabled execution."
+    elif recommendation == "review_before_execute":
+        next_action = "Review supervised execution warnings and required human actions before write authorization."
+    else:
+        next_action = "Package is ready for explicit human approval; runtime execution remains disabled by default."
+    package = {
+        "supervised_execution_review_package_version": SUPERVISED_EXECUTION_REVIEW_PACKAGE_VERSION,
+        "supervised_execution_review_package_id": make_supervised_execution_review_package_id(
+            chain["planning_chain_id"],
+            plan["supervised_execution_plan_id"],
+            boundary["supervised_execution_write_boundary_id"],
+            plan["execution_package_id"],
+            boundary["workspace_status"],
+            boundary["patch_status"],
+            boundary["verification_status"],
+            boundary["rollback_status"],
+            evidence_status,
+            blockers,
+            warnings,
+            required_actions,
+        ),
+        "planning_chain_id": chain["planning_chain_id"],
+        "supervised_execution_plan_id": plan["supervised_execution_plan_id"],
+        "supervised_execution_write_boundary_id": boundary["supervised_execution_write_boundary_id"],
+        "execution_package_id": plan["execution_package_id"],
+        "execution_review_id": review["execution_review_id"],
+        "execution_evidence_bundle_id": evidence_bundle_id,
+        "approval_checklist_id": approval["approval_checklist_id"],
+        "gate_stack_preview_id": gates["gate_stack_preview_id"],
+        "workspace_status": boundary["workspace_status"],
+        "patch_status": boundary["patch_status"],
+        "verification_status": boundary["verification_status"],
+        "rollback_status": boundary["rollback_status"],
+        "evidence_status": evidence_status,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": required_actions,
+        "review_recommendation": recommendation,
+        "recommended_next_action": next_action,
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+        "metadata": dict(metadata or {}),
+    }
+    validate_supervised_execution_review_package(
+        package,
+        planning_chain=chain,
+        supervised_execution_plan=plan,
+        supervised_execution_write_boundary=boundary,
+        execution_review=review,
+        evidence_bundle=evidence_bundle,
+        approval_checklist=approval,
+        gate_stack=gates,
+    )
+    return package
+
+
+def validate_supervised_execution_review_package(
+    package: dict[str, Any],
+    *,
+    planning_chain: dict[str, Any] | None = None,
+    supervised_execution_plan: dict[str, Any] | None = None,
+    supervised_execution_write_boundary: dict[str, Any] | None = None,
+    execution_review: dict[str, Any] | None = None,
+    evidence_bundle: dict[str, Any] | None = None,
+    approval_checklist: dict[str, Any] | None = None,
+    gate_stack: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "supervised_execution_review_package_version", "supervised_execution_review_package_id",
+        "planning_chain_id", "supervised_execution_plan_id", "supervised_execution_write_boundary_id",
+        "execution_package_id", "execution_review_id", "execution_evidence_bundle_id",
+        "approval_checklist_id", "gate_stack_preview_id", "workspace_status", "patch_status",
+        "verification_status", "rollback_status", "evidence_status", "blockers", "warnings",
+        "required_human_actions", "review_recommendation", "recommended_next_action",
+        "dry_run", "write_allowed", "automation_allowed", "writes", "metadata",
+    )
+    missing = [field for field in required if field not in package]
+    if missing:
+        raise ValueError(f"supervised execution review package missing fields: {missing}")
+    if package["supervised_execution_review_package_version"] != SUPERVISED_EXECUTION_REVIEW_PACKAGE_VERSION:
+        raise ValueError("unsupported supervised execution review package version")
+    _validate_execution_read_only(package, "supervised execution review package")
+    for field in (
+        "supervised_execution_review_package_id", "planning_chain_id", "supervised_execution_plan_id",
+        "supervised_execution_write_boundary_id", "execution_package_id", "execution_review_id",
+        "approval_checklist_id", "gate_stack_preview_id", "workspace_status", "patch_status",
+        "verification_status", "rollback_status", "evidence_status", "review_recommendation",
+        "recommended_next_action",
+    ):
+        _validate_non_empty_string(package[field], field)
+    if not isinstance(package["execution_evidence_bundle_id"], str):
+        raise TypeError("execution_evidence_bundle_id must be a string")
+    for field in ("workspace_status", "patch_status", "verification_status", "rollback_status"):
+        if package[field] not in {"pass", "review", "block"}:
+            raise ValueError(f"invalid {field}")
+    if package["evidence_status"] not in {"pass", "block", "complete", "missing_evidence"}:
+        raise ValueError("invalid evidence_status")
+    if package["review_recommendation"] not in {"do_not_execute", "review_before_execute", "ready_for_human_approval"}:
+        raise ValueError("invalid review_recommendation")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        values = package[field]
+        if not isinstance(values, list):
+            raise TypeError(f"{field} must be a list")
+        if field == "required_human_actions" and not values:
+            raise ValueError("required_human_actions must not be empty")
+        if values != _normalize_patch_behavior_text_list(values):
+            raise ValueError(f"{field} must be normalized and sorted")
+    if package["blockers"] and package["review_recommendation"] != "do_not_execute":
+        raise ValueError("review recommendation must block when blockers exist")
+    if not package["blockers"] and package["review_recommendation"] == "do_not_execute":
+        raise ValueError("do_not_execute requires blockers")
+    expected_id = make_supervised_execution_review_package_id(
+        package["planning_chain_id"],
+        package["supervised_execution_plan_id"],
+        package["supervised_execution_write_boundary_id"],
+        package["execution_package_id"],
+        package["workspace_status"],
+        package["patch_status"],
+        package["verification_status"],
+        package["rollback_status"],
+        package["evidence_status"],
+        package["blockers"],
+        package["warnings"],
+        package["required_human_actions"],
+    )
+    if package["supervised_execution_review_package_id"] != expected_id:
+        raise ValueError("supervised execution review package id does not match contents")
+    if not isinstance(package["metadata"], dict):
+        raise TypeError("metadata must be a dict")
+    if planning_chain is not None:
+        validate_growth_planning_chain_preview(planning_chain)
+        if package["planning_chain_id"] != planning_chain["planning_chain_id"]:
+            raise ValueError("review package planning chain mismatch")
+        if package["execution_package_id"] != planning_chain["autonomous_execution_package"]["execution_package_id"]:
+            raise ValueError("review package execution package mismatch")
+    if supervised_execution_plan is not None:
+        validate_supervised_execution_plan(supervised_execution_plan)
+        if package["supervised_execution_plan_id"] != supervised_execution_plan["supervised_execution_plan_id"]:
+            raise ValueError("review package supervised plan mismatch")
+        if package["execution_package_id"] != supervised_execution_plan["execution_package_id"]:
+            raise ValueError("review package supervised plan execution package mismatch")
+    if supervised_execution_write_boundary is not None:
+        validate_supervised_execution_write_boundary(supervised_execution_write_boundary)
+        if package["supervised_execution_write_boundary_id"] != supervised_execution_write_boundary["supervised_execution_write_boundary_id"]:
+            raise ValueError("review package write boundary mismatch")
+        for field in ("workspace_status", "patch_status", "verification_status", "rollback_status"):
+            if package[field] != supervised_execution_write_boundary[field]:
+                raise ValueError(f"review package {field} mismatch")
+    if execution_review is not None:
+        validate_execution_review(execution_review)
+        if package["execution_review_id"] != execution_review["execution_review_id"]:
+            raise ValueError("review package execution review mismatch")
+    if evidence_bundle is not None:
+        validate_execution_evidence_bundle(evidence_bundle)
+        if package["execution_evidence_bundle_id"] != evidence_bundle["execution_evidence_bundle_id"]:
+            raise ValueError("review package evidence bundle mismatch")
+        if package["evidence_status"] != evidence_bundle["evidence_status"]:
+            raise ValueError("review package evidence status mismatch")
+    if approval_checklist is not None:
+        validate_execution_approval_checklist(approval_checklist)
+        if package["approval_checklist_id"] != approval_checklist["approval_checklist_id"]:
+            raise ValueError("review package approval checklist mismatch")
+    if gate_stack is not None:
+        validate_execution_gate_stack_preview(gate_stack)
+        if package["gate_stack_preview_id"] != gate_stack["gate_stack_preview_id"]:
+            raise ValueError("review package gate stack mismatch")
+
+
+def stable_supervised_execution_review_package_json(package: dict[str, Any]) -> str:
+    validate_supervised_execution_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_supervised_execution_review_package_json(text: str) -> dict[str, Any]:
+    package = json.loads(text)
+    validate_supervised_execution_review_package(package)
+    return package
+
 
 def make_supervised_execution_request(
     supervised_execution_plan: dict[str, Any],
