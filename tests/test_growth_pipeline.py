@@ -12940,6 +12940,224 @@ def check_growth_campaign_governance_clis() -> None:
         _require(write_out.getvalue() == "", f"{command} --write must not print normal output")
     print("growth campaign governance CLIs OK")
 
+
+# ---------------------------------------------------------------------------
+# 62j. Business Development intake governance helpers and CLI
+# ---------------------------------------------------------------------------
+
+def check_business_development_intake_governance_helpers() -> None:
+    """Business Development governance objects preserve handoff ID flow read-only."""
+    from link_modes.growth.link_growth_console import (
+        BUSINESS_DEVELOPMENT_BLOCKED_ACTIONS,
+        BUSINESS_DEVELOPMENT_CLAIM_TYPES,
+        BUSINESS_DEVELOPMENT_FORBIDDEN_HANDOFF_ARTIFACTS,
+        collect_business_development_approval_checklist,
+        collect_business_development_evidence_contract,
+        collect_business_development_handoff_boundary,
+        collect_business_development_intake_preview,
+        collect_business_development_review_package,
+        collect_growth_campaign_review_package,
+        collect_growth_opportunity_review_package,
+        collect_link_module_boundary_registry,
+        parse_business_development_approval_checklist_json,
+        parse_business_development_evidence_contract_json,
+        parse_business_development_intake_preview_json,
+        parse_business_development_review_package_json,
+        stable_business_development_approval_checklist_json,
+        stable_business_development_evidence_contract_json,
+        stable_business_development_intake_preview_json,
+        stable_business_development_review_package_json,
+        validate_business_development_approval_checklist,
+        validate_business_development_evidence_contract,
+        validate_business_development_intake_preview,
+        validate_business_development_review_package,
+    )
+
+    registry = collect_link_module_boundary_registry()
+    opportunity_review = collect_growth_opportunity_review_package()
+    campaign_review = collect_growth_campaign_review_package()
+    handoff = collect_business_development_handoff_boundary(opportunity_review, campaign_review, registry)
+    intake = collect_business_development_intake_preview(handoff, opportunity_review, campaign_review, registry)
+    same_intake = collect_business_development_intake_preview(handoff, opportunity_review, campaign_review, registry)
+    validate_business_development_intake_preview(intake, handoff, opportunity_review, campaign_review, registry)
+    _require(intake["business_development_intake_preview_id"] == same_intake["business_development_intake_preview_id"],
+             "Business Development intake preview id must be deterministic")
+    _require(intake["business_development_handoff_boundary_id"] == handoff["business_development_handoff_boundary_id"],
+             "Business Development intake preview must preserve handoff id")
+    _require(intake["source_module"] == "growth" and intake["target_module"] == "business_development",
+             "Business Development intake preview must preserve module flow")
+    _require(intake["accepted_artifact_refs"], "Business Development intake preview must include accepted refs")
+    _require(intake["rejected_artifact_refs"] == list(BUSINESS_DEVELOPMENT_FORBIDDEN_HANDOFF_ARTIFACTS),
+             "Business Development intake preview rejected artifacts must match boundary")
+    _require(intake["missing_evidence"], "Business Development intake preview must include missing evidence")
+    _require(intake["intake_status"] == "block", "Business Development intake preview must block by default")
+    _require(parse_business_development_intake_preview_json(stable_business_development_intake_preview_json(intake)) == intake,
+             "Business Development intake preview JSON must round trip")
+
+    evidence = collect_business_development_evidence_contract(intake, handoff, registry)
+    same_evidence = collect_business_development_evidence_contract(intake, handoff, registry)
+    validate_business_development_evidence_contract(evidence, intake, handoff, registry)
+    _require(evidence["business_development_evidence_contract_id"] == same_evidence["business_development_evidence_contract_id"],
+             "Business Development evidence contract id must be deterministic")
+    _require(evidence["business_development_intake_preview_id"] == intake["business_development_intake_preview_id"],
+             "Business Development evidence contract must preserve intake id")
+    _require(evidence["claim_types"] == list(BUSINESS_DEVELOPMENT_CLAIM_TYPES),
+             "Business Development evidence contract must preserve claim types")
+    _require(evidence["blocked_actions"] == list(BUSINESS_DEVELOPMENT_BLOCKED_ACTIONS),
+             "Business Development evidence contract must preserve blocked actions")
+    _require(evidence["missing_evidence"], "Business Development evidence contract must include missing evidence")
+    _require(parse_business_development_evidence_contract_json(stable_business_development_evidence_contract_json(evidence)) == evidence,
+             "Business Development evidence contract JSON must round trip")
+
+    approval = collect_business_development_approval_checklist(intake, evidence)
+    same_approval = collect_business_development_approval_checklist(intake, evidence)
+    validate_business_development_approval_checklist(approval, intake, evidence)
+    _require(approval["business_development_approval_checklist_id"] == same_approval["business_development_approval_checklist_id"],
+             "Business Development approval checklist id must be deterministic")
+    _require(approval["approval_status"] == "block", "Business Development approval checklist must block by default")
+    _require(approval["blockers"], "Business Development approval checklist must include blockers")
+    _require(approval["required_human_actions"], "Business Development approval checklist must include actions")
+    _require(parse_business_development_approval_checklist_json(stable_business_development_approval_checklist_json(approval)) == approval,
+             "Business Development approval checklist JSON must round trip")
+
+    review = collect_business_development_review_package(intake, evidence, approval)
+    same_review = collect_business_development_review_package(intake, evidence, approval)
+    validate_business_development_review_package(review, intake, evidence, approval)
+    _require(review["business_development_review_package_id"] == same_review["business_development_review_package_id"],
+             "Business Development review package id must be deterministic")
+    _require(review["business_development_intake_preview_id"] == intake["business_development_intake_preview_id"],
+             "Business Development review package must preserve intake id")
+    _require(review["business_development_evidence_contract_id"] == evidence["business_development_evidence_contract_id"],
+             "Business Development review package must preserve evidence id")
+    _require(review["business_development_approval_checklist_id"] == approval["business_development_approval_checklist_id"],
+             "Business Development review package must preserve approval id")
+    _require(review["readiness_status"] == "blocked", "Business Development review package must block by default")
+    _require(review["review_recommendation"] == "do_not_execute",
+             "blocked Business Development review package must recommend no execution")
+    _require(parse_business_development_review_package_json(stable_business_development_review_package_json(review)) == review,
+             "Business Development review package JSON must round trip")
+
+    for payload in (intake, evidence, approval, review):
+        _require(payload["dry_run"] is True and payload["write_allowed"] is False,
+                 "Business Development governance payloads must be read-only")
+        _require(payload["automation_allowed"] is False and payload["writes"] == [],
+                 "Business Development governance payloads must not allow automation or writes")
+        _require(payload["safety_metadata"] == {
+            "dry_run": True, "write_allowed": False, "automation_allowed": False, "writes": [],
+        }, "Business Development governance payloads must include safety metadata")
+
+    bad_intake = dict(intake)
+    bad_intake["rejected_artifact_refs"] = ["credentials"]
+    try:
+        validate_business_development_intake_preview(bad_intake)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development intake validation must reject artifact mismatch")
+
+    bad_evidence = dict(evidence)
+    bad_evidence["blocked_actions"] = ["vendor contact"]
+    try:
+        validate_business_development_evidence_contract(bad_evidence)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development evidence validation must reject blocked action mismatch")
+
+    bad_approval = dict(approval)
+    bad_approval["approval_status"] = "approved"
+    try:
+        validate_business_development_approval_checklist(bad_approval)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development approval validation must reject invalid status")
+
+    bad_review = dict(review)
+    bad_review["readiness_status"] = "ready"
+    try:
+        validate_business_development_review_package(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Development review validation must reject invalid readiness")
+    print("business development intake governance helpers OK")
+
+
+def check_business_development_intake_governance_clis() -> None:
+    """Business Development governance CLIs expose only object payloads and reject writes."""
+    from link import _cmd_business_development
+    from link_modes.growth.link_growth_console import (
+        business_development_approval_checklist_main,
+        business_development_evidence_contract_main,
+        business_development_intake_preview_main,
+        business_development_review_main,
+        parse_business_development_approval_checklist_json,
+        parse_business_development_evidence_contract_json,
+        parse_business_development_intake_preview_json,
+        parse_business_development_review_package_json,
+    )
+
+    expected = [
+        ("intake-preview", business_development_intake_preview_main, parse_business_development_intake_preview_json,
+         "business_development_intake_preview_id", "Business Development intake preview"),
+        ("evidence-contract", business_development_evidence_contract_main, parse_business_development_evidence_contract_json,
+         "business_development_evidence_contract_id", "Business Development evidence contract"),
+        ("approval-checklist", business_development_approval_checklist_main, parse_business_development_approval_checklist_json,
+         "business_development_approval_checklist_id", "Business Development approval checklist"),
+        ("review", business_development_review_main, parse_business_development_review_package_json,
+         "business_development_review_package_id", "Business Development review"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_business_development(["--help"])
+    _require(help_rc == 0, "business-development --help must return 0")
+    for command, main_func, parse_func, id_key, title in expected:
+        _require(command in help_out.getvalue(), f"business-development help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"business-development {command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"business-development {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"business-development {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"business-development {command} must not allow automation or writes")
+        for full_payload_key in (
+            "business_development_intake_preview",
+            "business_development_evidence_contract",
+            "business_development_approval_checklist",
+            "business_development_review_package",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"business-development {command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_business_development([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"business-development {command} route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"business-development {command} route must preserve id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"business-development {command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"business-development {command} human mode must include title and id")
+        _require(len(human.splitlines()) <= 15, f"business-development {command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"business-development {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"business-development {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"business-development {command} --write must not print normal output")
+    print("business development intake governance CLIs OK")
+
 # ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
@@ -13959,6 +14177,8 @@ def main() -> None:
     check_link_module_boundary_registry_cli()
     check_growth_campaign_governance_helpers()
     check_growth_campaign_governance_clis()
+    check_business_development_intake_governance_helpers()
+    check_business_development_intake_governance_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

@@ -10824,6 +10824,616 @@ def parse_business_development_handoff_boundary_json(text: str) -> dict[str, Any
     validate_business_development_handoff_boundary(boundary)
     return boundary
 
+
+BUSINESS_DEVELOPMENT_INTAKE_PREVIEW_VERSION = "link-business-development-intake-preview-v1"
+BUSINESS_DEVELOPMENT_EVIDENCE_CONTRACT_VERSION = "link-business-development-evidence-contract-v1"
+BUSINESS_DEVELOPMENT_APPROVAL_CHECKLIST_VERSION = "link-business-development-approval-checklist-v1"
+BUSINESS_DEVELOPMENT_REVIEW_PACKAGE_VERSION = "link-business-development-review-package-v1"
+BUSINESS_DEVELOPMENT_CLAIM_TYPES = (
+    "supplier_availability",
+    "sourcing_cost",
+    "margin_assumption",
+    "revenue_assumption",
+    "market_validation",
+    "customer_validation",
+    "competitor_validation",
+    "compliance_risk",
+    "operational_feasibility",
+    "fulfillment_feasibility",
+    "platform_policy_risk",
+)
+BUSINESS_DEVELOPMENT_BLOCKED_ACTIONS = (
+    "vendor contact",
+    "supplier account creation",
+    "purchasing inventory",
+    "marketplace listing",
+    "ecommerce integration",
+    "CRM writes",
+    "customer data storage",
+    "outbound messaging",
+    "paid ads",
+    "revenue claims",
+    "automated operations",
+)
+BUSINESS_DEVELOPMENT_STATUSES = ("pass", "review", "block")
+BUSINESS_DEVELOPMENT_READINESS_STATUSES = ("ready_for_review", "blocked")
+BUSINESS_DEVELOPMENT_RECOMMENDATIONS = ("do_not_execute", "review_before_action", "ready_for_review")
+
+
+def make_business_development_intake_preview_id(
+    handoff_boundary: dict[str, Any],
+    opportunity_review_package: dict[str, Any],
+    campaign_review_package: dict[str, Any],
+    module_boundary_registry: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_development_handoff_boundary_id": handoff_boundary["business_development_handoff_boundary_id"],
+        "growth_campaign_review_package_id": campaign_review_package["growth_campaign_review_package_id"],
+        "growth_opportunity_review_package_id": opportunity_review_package["growth_opportunity_review_package_id"],
+        "link_module_boundary_registry_id": module_boundary_registry["link_module_boundary_registry_id"],
+        "version": BUSINESS_DEVELOPMENT_INTAKE_PREVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-intake-preview-{digest}"
+
+
+def collect_business_development_intake_preview(
+    business_development_handoff_boundary: dict[str, Any] | None = None,
+    growth_opportunity_review_package: dict[str, Any] | None = None,
+    growth_campaign_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Preview what Growth may hand off to Business Development without action."""
+    opportunity_review = growth_opportunity_review_package or collect_growth_opportunity_review_package()
+    validate_growth_opportunity_review_package(opportunity_review)
+    campaign_review = growth_campaign_review_package or collect_growth_campaign_review_package()
+    validate_growth_campaign_review_package(campaign_review)
+    registry = module_boundary_registry or collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(registry)
+    handoff = business_development_handoff_boundary or collect_business_development_handoff_boundary(opportunity_review, campaign_review, registry)
+    validate_business_development_handoff_boundary(handoff, opportunity_review, campaign_review, registry)
+
+    intake_items = [
+        {
+            "intake_item_id": "business-development-intake-reviewed-opportunity",
+            "artifact_type": "reviewed opportunity package",
+            "artifact_ref": opportunity_review["growth_opportunity_review_package_id"],
+            "status": "accepted",
+            "review_required": True,
+        },
+        {
+            "intake_item_id": "business-development-intake-campaign-review",
+            "artifact_type": "campaign review package",
+            "artifact_ref": campaign_review["growth_campaign_review_package_id"],
+            "status": "accepted",
+            "review_required": True,
+        },
+        {
+            "intake_item_id": "business-development-intake-module-boundary",
+            "artifact_type": "module boundary registry",
+            "artifact_ref": registry["link_module_boundary_registry_id"],
+            "status": "accepted",
+            "review_required": True,
+        },
+    ]
+    accepted_refs = _normalize_implementation_branch_refs([item["artifact_ref"] for item in intake_items])
+    rejected_refs = list(handoff["forbidden_handoff_artifacts"])
+    missing_evidence = _normalize_implementation_branch_refs(
+        [item for item in handoff["blockers"] if "missing" in item.lower()]
+    )
+    preview = {
+        "business_development_intake_preview_version": BUSINESS_DEVELOPMENT_INTAKE_PREVIEW_VERSION,
+        "business_development_intake_preview_id": make_business_development_intake_preview_id(handoff, opportunity_review, campaign_review, registry),
+        "business_development_handoff_boundary_id": handoff["business_development_handoff_boundary_id"],
+        "source_module": "growth",
+        "target_module": "business_development",
+        "intake_items": intake_items,
+        "accepted_artifact_refs": accepted_refs,
+        "rejected_artifact_refs": rejected_refs,
+        "missing_evidence": missing_evidence,
+        "blockers": list(handoff["blockers"]),
+        "warnings": list(handoff["warnings"]),
+        "required_human_actions": list(handoff["required_approvals"]),
+        "intake_status": "block" if handoff["blockers"] else "review",
+        "recommended_next_action": "Resolve Business Development intake blockers before any business action.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_intake_preview(preview, handoff, opportunity_review, campaign_review, registry)
+    return preview
+
+
+def validate_business_development_intake_preview(
+    preview: dict[str, Any],
+    business_development_handoff_boundary: dict[str, Any] | None = None,
+    growth_opportunity_review_package: dict[str, Any] | None = None,
+    growth_campaign_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_development_intake_preview_version", "business_development_intake_preview_id",
+        "business_development_handoff_boundary_id", "source_module", "target_module",
+        "intake_items", "accepted_artifact_refs", "rejected_artifact_refs", "missing_evidence",
+        "blockers", "warnings", "required_human_actions", "intake_status",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in preview:
+            raise ValueError(f"business development intake preview missing required field: {key}")
+    if preview["business_development_intake_preview_version"] != BUSINESS_DEVELOPMENT_INTAKE_PREVIEW_VERSION:
+        raise ValueError("invalid business development intake preview version")
+    if not isinstance(preview["business_development_intake_preview_id"], str) or not preview["business_development_intake_preview_id"].startswith("business-development-intake-preview-"):
+        raise ValueError("invalid business development intake preview id")
+    if not isinstance(preview["business_development_handoff_boundary_id"], str) or not preview["business_development_handoff_boundary_id"].startswith("business-development-handoff-boundary-"):
+        raise ValueError("invalid business development handoff boundary id in intake preview")
+    if preview["source_module"] != "growth" or preview["target_module"] != "business_development":
+        raise ValueError("business development intake preview module flow mismatch")
+    items = preview["intake_items"]
+    if not isinstance(items, list) or not items:
+        raise ValueError("business development intake preview intake_items must be non-empty")
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise TypeError("business development intake item must be a dict")
+        for field in ("intake_item_id", "artifact_type", "artifact_ref", "status", "review_required"):
+            if field not in item:
+                raise ValueError(f"business development intake item missing {field}")
+        if item["intake_item_id"] in seen:
+            raise ValueError("duplicate business development intake item id")
+        seen.add(item["intake_item_id"])
+        if item["status"] not in {"accepted", "rejected", "blocked"}:
+            raise ValueError("invalid business development intake item status")
+        if item["review_required"] is not True:
+            raise ValueError("business development intake item must require review")
+    for field in ("accepted_artifact_refs", "missing_evidence", "blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(preview[field])
+        if normalized != preview[field]:
+            raise ValueError(f"business development intake preview {field} must be normalized and sorted")
+    if preview["rejected_artifact_refs"] != list(BUSINESS_DEVELOPMENT_FORBIDDEN_HANDOFF_ARTIFACTS):
+        raise ValueError("business development intake preview rejected artifacts mismatch")
+    if preview["intake_status"] not in BUSINESS_DEVELOPMENT_STATUSES:
+        raise ValueError("invalid business development intake status")
+    if preview["intake_status"] == "block" and not preview["blockers"]:
+        raise ValueError("blocked business development intake must include blockers")
+    if preview["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development intake preview safety metadata mismatch")
+    if preview["dry_run"] is not True or preview["write_allowed"] is not False:
+        raise ValueError("business development intake preview must be read-only")
+    if preview["automation_allowed"] is not False or preview["writes"] != []:
+        raise ValueError("business development intake preview must not allow automation or writes")
+    if business_development_handoff_boundary is not None:
+        validate_business_development_handoff_boundary(business_development_handoff_boundary, growth_opportunity_review_package, growth_campaign_review_package, module_boundary_registry)
+        if preview["business_development_handoff_boundary_id"] != business_development_handoff_boundary["business_development_handoff_boundary_id"]:
+            raise ValueError("business development intake preview handoff id mismatch")
+    if business_development_handoff_boundary is not None and growth_opportunity_review_package is not None and growth_campaign_review_package is not None and module_boundary_registry is not None:
+        expected_id = make_business_development_intake_preview_id(business_development_handoff_boundary, growth_opportunity_review_package, growth_campaign_review_package, module_boundary_registry)
+        if preview["business_development_intake_preview_id"] != expected_id:
+            raise ValueError("business development intake preview id is not deterministic")
+
+
+def stable_business_development_intake_preview_json(preview: dict[str, Any]) -> str:
+    validate_business_development_intake_preview(preview)
+    return _stable_ruflo_json(preview, indent=2) + "\n"
+
+
+def parse_business_development_intake_preview_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    preview = _json.loads(text)
+    validate_business_development_intake_preview(preview)
+    return preview
+
+
+def make_business_development_evidence_contract_id(
+    intake_preview: dict[str, Any],
+    handoff_boundary: dict[str, Any],
+    module_boundary_registry: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_development_handoff_boundary_id": handoff_boundary["business_development_handoff_boundary_id"],
+        "business_development_intake_preview_id": intake_preview["business_development_intake_preview_id"],
+        "link_module_boundary_registry_id": module_boundary_registry["link_module_boundary_registry_id"],
+        "version": BUSINESS_DEVELOPMENT_EVIDENCE_CONTRACT_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-evidence-contract-{digest}"
+
+
+def collect_business_development_evidence_contract(
+    business_development_intake_preview: dict[str, Any] | None = None,
+    business_development_handoff_boundary: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Define evidence required before Business Development actions."""
+    registry = module_boundary_registry or collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(registry)
+    handoff = business_development_handoff_boundary or collect_business_development_handoff_boundary(module_boundary_registry=registry)
+    validate_business_development_handoff_boundary(handoff, module_boundary_registry=registry)
+    intake = business_development_intake_preview or collect_business_development_intake_preview(handoff, module_boundary_registry=registry)
+    validate_business_development_intake_preview(intake, handoff, module_boundary_registry=registry)
+    missing_evidence = _normalize_implementation_branch_refs(
+        list(intake["missing_evidence"]) + [
+            "supplier availability evidence",
+            "sourcing cost evidence",
+            "margin assumption worksheet",
+            "market validation summary",
+            "platform policy review",
+        ]
+    )
+    approval_requirements = _normalize_implementation_branch_refs(
+        list(intake["required_human_actions"]) + [
+            "approve vendor contact before outreach",
+            "approve sourcing or pricing assumptions before claims",
+            "approve platform and compliance risks before marketplace action",
+        ]
+    )
+    contract = {
+        "business_development_evidence_contract_version": BUSINESS_DEVELOPMENT_EVIDENCE_CONTRACT_VERSION,
+        "business_development_evidence_contract_id": make_business_development_evidence_contract_id(intake, handoff, registry),
+        "business_development_intake_preview_id": intake["business_development_intake_preview_id"],
+        "business_development_handoff_boundary_id": handoff["business_development_handoff_boundary_id"],
+        "link_module_boundary_registry_id": registry["link_module_boundary_registry_id"],
+        "claim_types": list(BUSINESS_DEVELOPMENT_CLAIM_TYPES),
+        "required_sources": _normalize_implementation_branch_refs(list(intake["accepted_artifact_refs"]) + list(handoff["required_evidence"])),
+        "required_evidence": _normalize_implementation_branch_refs([
+            "supplier availability evidence",
+            "sourcing cost evidence",
+            "margin assumption worksheet",
+            "market validation summary",
+            "customer validation summary",
+            "competitor validation summary",
+            "compliance risk review",
+            "operational feasibility note",
+            "fulfillment feasibility note",
+            "platform policy review",
+        ]),
+        "confidence_thresholds": {
+            "minimum_confidence_score": 70,
+            "minimum_evidence_strength": 70,
+            "maximum_risk_score_without_review": 35,
+            "minimum_independent_source_count": 2,
+        },
+        "missing_evidence": missing_evidence,
+        "approval_requirements": approval_requirements,
+        "blocked_actions": list(BUSINESS_DEVELOPMENT_BLOCKED_ACTIONS),
+        "recommended_next_action": "Resolve Business Development evidence blockers before vendor, sourcing, pricing, or operations actions.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_evidence_contract(contract, intake, handoff, registry)
+    return contract
+
+
+def validate_business_development_evidence_contract(
+    contract: dict[str, Any],
+    business_development_intake_preview: dict[str, Any] | None = None,
+    business_development_handoff_boundary: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_development_evidence_contract_version", "business_development_evidence_contract_id",
+        "business_development_intake_preview_id", "claim_types", "required_sources",
+        "required_evidence", "confidence_thresholds", "missing_evidence", "approval_requirements",
+        "blocked_actions", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in contract:
+            raise ValueError(f"business development evidence contract missing required field: {key}")
+    if contract["business_development_evidence_contract_version"] != BUSINESS_DEVELOPMENT_EVIDENCE_CONTRACT_VERSION:
+        raise ValueError("invalid business development evidence contract version")
+    if not isinstance(contract["business_development_evidence_contract_id"], str) or not contract["business_development_evidence_contract_id"].startswith("business-development-evidence-contract-"):
+        raise ValueError("invalid business development evidence contract id")
+    if not isinstance(contract["business_development_intake_preview_id"], str) or not contract["business_development_intake_preview_id"].startswith("business-development-intake-preview-"):
+        raise ValueError("invalid business development intake preview id in evidence contract")
+    if contract["claim_types"] != list(BUSINESS_DEVELOPMENT_CLAIM_TYPES):
+        raise ValueError("business development evidence contract claim_types mismatch")
+    for field in ("required_sources", "required_evidence", "missing_evidence", "approval_requirements"):
+        normalized = _normalize_implementation_branch_refs(contract[field])
+        if not normalized or normalized != contract[field]:
+            raise ValueError(f"business development evidence contract {field} must be normalized and non-empty")
+    _validate_growth_business_confidence_thresholds(contract["confidence_thresholds"])
+    if contract["blocked_actions"] != list(BUSINESS_DEVELOPMENT_BLOCKED_ACTIONS):
+        raise ValueError("business development evidence contract blocked_actions mismatch")
+    if contract["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development evidence contract safety metadata mismatch")
+    if contract["dry_run"] is not True or contract["write_allowed"] is not False:
+        raise ValueError("business development evidence contract must be read-only")
+    if contract["automation_allowed"] is not False or contract["writes"] != []:
+        raise ValueError("business development evidence contract must not allow automation or writes")
+    if business_development_intake_preview is not None:
+        validate_business_development_intake_preview(business_development_intake_preview, business_development_handoff_boundary, module_boundary_registry=module_boundary_registry)
+        if contract["business_development_intake_preview_id"] != business_development_intake_preview["business_development_intake_preview_id"]:
+            raise ValueError("business development evidence contract intake id mismatch")
+    if business_development_intake_preview is not None and business_development_handoff_boundary is not None and module_boundary_registry is not None:
+        expected_id = make_business_development_evidence_contract_id(business_development_intake_preview, business_development_handoff_boundary, module_boundary_registry)
+        if contract["business_development_evidence_contract_id"] != expected_id:
+            raise ValueError("business development evidence contract id is not deterministic")
+
+
+def stable_business_development_evidence_contract_json(contract: dict[str, Any]) -> str:
+    validate_business_development_evidence_contract(contract)
+    return _stable_ruflo_json(contract, indent=2) + "\n"
+
+
+def parse_business_development_evidence_contract_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    contract = _json.loads(text)
+    validate_business_development_evidence_contract(contract)
+    return contract
+
+
+def make_business_development_approval_checklist_id(
+    intake_preview: dict[str, Any],
+    evidence_contract: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_development_evidence_contract_id": evidence_contract["business_development_evidence_contract_id"],
+        "business_development_intake_preview_id": intake_preview["business_development_intake_preview_id"],
+        "version": BUSINESS_DEVELOPMENT_APPROVAL_CHECKLIST_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-approval-checklist-{digest}"
+
+
+def collect_business_development_approval_checklist(
+    business_development_intake_preview: dict[str, Any] | None = None,
+    business_development_evidence_contract: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create read-only approval gates before Business Development action."""
+    intake = business_development_intake_preview or collect_business_development_intake_preview()
+    validate_business_development_intake_preview(intake)
+    evidence = business_development_evidence_contract or collect_business_development_evidence_contract(intake)
+    validate_business_development_evidence_contract(evidence, intake)
+    blockers = _normalize_implementation_branch_refs(
+        [f"missing business development evidence: {item}" for item in evidence["missing_evidence"]]
+        + [f"blocked business development action: {item}" for item in evidence["blocked_actions"]]
+        + list(intake["blockers"])
+    )
+    required_actions = _normalize_implementation_branch_refs(list(evidence["approval_requirements"]))
+    checklist = {
+        "business_development_approval_checklist_version": BUSINESS_DEVELOPMENT_APPROVAL_CHECKLIST_VERSION,
+        "business_development_approval_checklist_id": make_business_development_approval_checklist_id(intake, evidence),
+        "business_development_intake_preview_id": intake["business_development_intake_preview_id"],
+        "business_development_evidence_contract_id": evidence["business_development_evidence_contract_id"],
+        "required_approvals": required_actions,
+        "approval_status": "block" if blockers else "pass",
+        "blockers": blockers,
+        "required_human_actions": required_actions,
+        "recommended_next_action": "Complete Business Development approvals before any vendor, sourcing, pricing, or operations action.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_approval_checklist(checklist, intake, evidence)
+    return checklist
+
+
+def validate_business_development_approval_checklist(
+    checklist: dict[str, Any],
+    business_development_intake_preview: dict[str, Any] | None = None,
+    business_development_evidence_contract: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_development_approval_checklist_version", "business_development_approval_checklist_id",
+        "business_development_intake_preview_id", "business_development_evidence_contract_id",
+        "required_approvals", "approval_status", "blockers", "required_human_actions",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in checklist:
+            raise ValueError(f"business development approval checklist missing required field: {key}")
+    if checklist["business_development_approval_checklist_version"] != BUSINESS_DEVELOPMENT_APPROVAL_CHECKLIST_VERSION:
+        raise ValueError("invalid business development approval checklist version")
+    if not isinstance(checklist["business_development_approval_checklist_id"], str) or not checklist["business_development_approval_checklist_id"].startswith("business-development-approval-checklist-"):
+        raise ValueError("invalid business development approval checklist id")
+    if checklist["approval_status"] not in BUSINESS_DEVELOPMENT_STATUSES:
+        raise ValueError("invalid business development approval status")
+    for field in ("required_approvals", "blockers", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(checklist[field])
+        if normalized != checklist[field]:
+            raise ValueError(f"business development approval checklist {field} must be normalized and sorted")
+    if checklist["approval_status"] in {"review", "block"} and not checklist["required_human_actions"]:
+        raise ValueError("business development approval review/block requires human actions")
+    if checklist["approval_status"] == "block" and not checklist["blockers"]:
+        raise ValueError("blocked business development approval checklist must include blockers")
+    if checklist["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development approval checklist safety metadata mismatch")
+    if checklist["dry_run"] is not True or checklist["write_allowed"] is not False:
+        raise ValueError("business development approval checklist must be read-only")
+    if checklist["automation_allowed"] is not False or checklist["writes"] != []:
+        raise ValueError("business development approval checklist must not allow automation or writes")
+    if business_development_intake_preview is not None:
+        validate_business_development_intake_preview(business_development_intake_preview)
+        if checklist["business_development_intake_preview_id"] != business_development_intake_preview["business_development_intake_preview_id"]:
+            raise ValueError("business development approval checklist intake id mismatch")
+    if business_development_evidence_contract is not None:
+        validate_business_development_evidence_contract(business_development_evidence_contract, business_development_intake_preview)
+        if checklist["business_development_evidence_contract_id"] != business_development_evidence_contract["business_development_evidence_contract_id"]:
+            raise ValueError("business development approval checklist evidence id mismatch")
+    if business_development_intake_preview is not None and business_development_evidence_contract is not None:
+        expected_id = make_business_development_approval_checklist_id(business_development_intake_preview, business_development_evidence_contract)
+        if checklist["business_development_approval_checklist_id"] != expected_id:
+            raise ValueError("business development approval checklist id is not deterministic")
+
+
+def stable_business_development_approval_checklist_json(checklist: dict[str, Any]) -> str:
+    validate_business_development_approval_checklist(checklist)
+    return _stable_ruflo_json(checklist, indent=2) + "\n"
+
+
+def parse_business_development_approval_checklist_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    checklist = _json.loads(text)
+    validate_business_development_approval_checklist(checklist)
+    return checklist
+
+
+def make_business_development_review_package_id(
+    intake_preview: dict[str, Any],
+    evidence_contract: dict[str, Any],
+    approval_checklist: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_development_approval_checklist_id": approval_checklist["business_development_approval_checklist_id"],
+        "business_development_evidence_contract_id": evidence_contract["business_development_evidence_contract_id"],
+        "business_development_intake_preview_id": intake_preview["business_development_intake_preview_id"],
+        "version": BUSINESS_DEVELOPMENT_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-development-review-package-{digest}"
+
+
+def collect_business_development_review_package(
+    business_development_intake_preview: dict[str, Any] | None = None,
+    business_development_evidence_contract: dict[str, Any] | None = None,
+    business_development_approval_checklist: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aggregate Business Development governance into a reviewer-facing object."""
+    intake = business_development_intake_preview or collect_business_development_intake_preview()
+    validate_business_development_intake_preview(intake)
+    evidence = business_development_evidence_contract or collect_business_development_evidence_contract(intake)
+    validate_business_development_evidence_contract(evidence, intake)
+    approval = business_development_approval_checklist or collect_business_development_approval_checklist(intake, evidence)
+    validate_business_development_approval_checklist(approval, intake, evidence)
+    evidence_status = "block" if evidence["missing_evidence"] else "pass"
+    approval_status = approval["approval_status"]
+    risk_status = "review" if evidence["blocked_actions"] or intake["warnings"] else "pass"
+    blockers = _normalize_implementation_branch_refs(list(intake["blockers"]) + list(approval["blockers"]))
+    warnings = _normalize_implementation_branch_refs(
+        list(intake["warnings"]) + [f"business development action remains blocked until review: {item}" for item in evidence["blocked_actions"]]
+    )
+    readiness_status = "blocked" if blockers or evidence_status == "block" or approval_status == "block" else "ready_for_review"
+    package = {
+        "business_development_review_package_version": BUSINESS_DEVELOPMENT_REVIEW_PACKAGE_VERSION,
+        "business_development_review_package_id": make_business_development_review_package_id(intake, evidence, approval),
+        "business_development_intake_preview_id": intake["business_development_intake_preview_id"],
+        "business_development_evidence_contract_id": evidence["business_development_evidence_contract_id"],
+        "business_development_approval_checklist_id": approval["business_development_approval_checklist_id"],
+        "intake_status": intake["intake_status"],
+        "evidence_status": evidence_status,
+        "approval_status": approval_status,
+        "risk_status": risk_status,
+        "readiness_status": readiness_status,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": list(approval["required_human_actions"]),
+        "review_recommendation": "do_not_execute" if readiness_status == "blocked" else "review_before_action",
+        "recommended_next_action": "Resolve Business Development blockers before vendor, sourcing, pricing, or operations work.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_development_review_package(package, intake, evidence, approval)
+    return package
+
+
+def validate_business_development_review_package(
+    package: dict[str, Any],
+    business_development_intake_preview: dict[str, Any] | None = None,
+    business_development_evidence_contract: dict[str, Any] | None = None,
+    business_development_approval_checklist: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_development_review_package_version", "business_development_review_package_id",
+        "business_development_intake_preview_id", "business_development_evidence_contract_id",
+        "business_development_approval_checklist_id", "intake_status", "evidence_status",
+        "approval_status", "risk_status", "readiness_status", "blockers", "warnings",
+        "required_human_actions", "review_recommendation", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"business development review package missing required field: {key}")
+    if package["business_development_review_package_version"] != BUSINESS_DEVELOPMENT_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid business development review package version")
+    if not isinstance(package["business_development_review_package_id"], str) or not package["business_development_review_package_id"].startswith("business-development-review-package-"):
+        raise ValueError("invalid business development review package id")
+    for field in ("intake_status", "evidence_status", "approval_status", "risk_status"):
+        if package[field] not in BUSINESS_DEVELOPMENT_STATUSES:
+            raise ValueError(f"invalid business development review {field}")
+    if package["readiness_status"] not in BUSINESS_DEVELOPMENT_READINESS_STATUSES:
+        raise ValueError("invalid business development review readiness_status")
+    if package["review_recommendation"] not in BUSINESS_DEVELOPMENT_RECOMMENDATIONS:
+        raise ValueError("invalid business development review recommendation")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"business development review package {field} must be normalized and sorted")
+    if package["readiness_status"] == "blocked" and not package["blockers"]:
+        raise ValueError("blocked business development review package must include blockers")
+    if package["review_recommendation"] == "ready_for_review" and package["readiness_status"] != "ready_for_review":
+        raise ValueError("ready Business Development recommendation requires ready readiness status")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business development review package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("business development review package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("business development review package must not allow automation or writes")
+    if business_development_intake_preview is not None:
+        validate_business_development_intake_preview(business_development_intake_preview)
+        if package["business_development_intake_preview_id"] != business_development_intake_preview["business_development_intake_preview_id"]:
+            raise ValueError("business development review package intake id mismatch")
+    if business_development_evidence_contract is not None:
+        validate_business_development_evidence_contract(business_development_evidence_contract, business_development_intake_preview)
+        if package["business_development_evidence_contract_id"] != business_development_evidence_contract["business_development_evidence_contract_id"]:
+            raise ValueError("business development review package evidence id mismatch")
+    if business_development_approval_checklist is not None:
+        validate_business_development_approval_checklist(business_development_approval_checklist, business_development_intake_preview, business_development_evidence_contract)
+        if package["business_development_approval_checklist_id"] != business_development_approval_checklist["business_development_approval_checklist_id"]:
+            raise ValueError("business development review package approval id mismatch")
+    if business_development_intake_preview is not None and business_development_evidence_contract is not None and business_development_approval_checklist is not None:
+        expected_id = make_business_development_review_package_id(business_development_intake_preview, business_development_evidence_contract, business_development_approval_checklist)
+        if package["business_development_review_package_id"] != expected_id:
+            raise ValueError("business development review package id is not deterministic")
+
+
+def stable_business_development_review_package_json(package: dict[str, Any]) -> str:
+    validate_business_development_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_business_development_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_business_development_review_package(package)
+    return package
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -12894,6 +13504,160 @@ def campaign_review_main(argv: list[str] | None = None) -> int:
     render_campaign_review_plain(package)
     return 0
 
+
+
+def render_business_development_intake_preview_plain(preview: dict[str, Any]) -> None:
+    validate_business_development_intake_preview(preview)
+    print("Business Development intake preview")
+    print(f"business_development_intake_preview_id: {preview['business_development_intake_preview_id']}")
+    print(f"business_development_handoff_boundary_id: {preview['business_development_handoff_boundary_id']}")
+    print(f"source_module: {preview['source_module']}")
+    print(f"target_module: {preview['target_module']}")
+    print(f"intake_item_count: {len(preview['intake_items'])}")
+    print(f"accepted_artifact_count: {len(preview['accepted_artifact_refs'])}")
+    print(f"rejected_artifact_count: {len(preview['rejected_artifact_refs'])}")
+    print(f"blocker_count: {len(preview['blockers'])}")
+    print(f"warning_count: {len(preview['warnings'])}")
+    print(f"intake_status: {preview['intake_status']}")
+    print(f"next_action: {preview['recommended_next_action']}")
+
+
+def business_development_intake_preview_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Development intake-preview: intake preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-development intake-preview")
+        print("  python3 link.py business-development intake-preview --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-development intake-preview is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    preview = collect_business_development_intake_preview()
+    validate_business_development_intake_preview(preview)
+    if "--json" in args:
+        print(stable_business_development_intake_preview_json(preview), end="")
+        return 0
+    render_business_development_intake_preview_plain(preview)
+    return 0
+
+
+def render_business_development_evidence_contract_plain(contract: dict[str, Any]) -> None:
+    validate_business_development_evidence_contract(contract)
+    print("Business Development evidence contract")
+    print(f"business_development_evidence_contract_id: {contract['business_development_evidence_contract_id']}")
+    print(f"business_development_intake_preview_id: {contract['business_development_intake_preview_id']}")
+    print(f"claim_type_count: {len(contract['claim_types'])}")
+    print(f"required_source_count: {len(contract['required_sources'])}")
+    print(f"required_evidence_count: {len(contract['required_evidence'])}")
+    print(f"missing_evidence_count: {len(contract['missing_evidence'])}")
+    print(f"approval_requirement_count: {len(contract['approval_requirements'])}")
+    print(f"blocked_action_count: {len(contract['blocked_actions'])}")
+    print(f"next_action: {contract['recommended_next_action']}")
+
+
+def business_development_evidence_contract_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Development evidence-contract: evidence contract preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-development evidence-contract")
+        print("  python3 link.py business-development evidence-contract --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-development evidence-contract is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    contract = collect_business_development_evidence_contract()
+    validate_business_development_evidence_contract(contract)
+    if "--json" in args:
+        print(stable_business_development_evidence_contract_json(contract), end="")
+        return 0
+    render_business_development_evidence_contract_plain(contract)
+    return 0
+
+
+def render_business_development_approval_checklist_plain(checklist: dict[str, Any]) -> None:
+    validate_business_development_approval_checklist(checklist)
+    print("Business Development approval checklist")
+    print(f"business_development_approval_checklist_id: {checklist['business_development_approval_checklist_id']}")
+    print(f"business_development_intake_preview_id: {checklist['business_development_intake_preview_id']}")
+    print(f"business_development_evidence_contract_id: {checklist['business_development_evidence_contract_id']}")
+    print(f"approval_status: {checklist['approval_status']}")
+    print(f"required_approval_count: {len(checklist['required_approvals'])}")
+    print(f"blocker_count: {len(checklist['blockers'])}")
+    print(f"required_human_action_count: {len(checklist['required_human_actions'])}")
+    print(f"next_action: {checklist['recommended_next_action']}")
+
+
+def business_development_approval_checklist_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Development approval-checklist: approval checklist preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-development approval-checklist")
+        print("  python3 link.py business-development approval-checklist --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-development approval-checklist is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    checklist = collect_business_development_approval_checklist()
+    validate_business_development_approval_checklist(checklist)
+    if "--json" in args:
+        print(stable_business_development_approval_checklist_json(checklist), end="")
+        return 0
+    render_business_development_approval_checklist_plain(checklist)
+    return 0
+
+
+def render_business_development_review_plain(package: dict[str, Any]) -> None:
+    validate_business_development_review_package(package)
+    print("Business Development review")
+    print(f"business_development_review_package_id: {package['business_development_review_package_id']}")
+    print(f"business_development_intake_preview_id: {package['business_development_intake_preview_id']}")
+    print(f"business_development_evidence_contract_id: {package['business_development_evidence_contract_id']}")
+    print(f"business_development_approval_checklist_id: {package['business_development_approval_checklist_id']}")
+    print(f"intake_status: {package['intake_status']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"approval_status: {package['approval_status']}")
+    print(f"risk_status: {package['risk_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def business_development_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Development review: review package preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-development review")
+        print("  python3 link.py business-development review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-development review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_business_development_review_package()
+    validate_business_development_review_package(package)
+    if "--json" in args:
+        print(stable_business_development_review_package_json(package), end="")
+        return 0
+    render_business_development_review_plain(package)
+    return 0
 
 def render_business_development_handoff_plain(boundary: dict[str, Any]) -> None:
     validate_business_development_handoff_boundary(boundary)

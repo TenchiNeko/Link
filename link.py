@@ -156,6 +156,37 @@ def _cmd_modules(argv: list[str]) -> int:
     print("Run 'python3 link.py modules --help' for subcommands.", file=sys.stderr)
     return 2
 
+
+def _cmd_business_development(argv: list[str]) -> int:
+    """Business Development governance previews."""
+    subcommand = argv[0] if argv else ""
+    if subcommand == "intake-preview":
+        from link_modes.growth.link_growth_console import business_development_intake_preview_main as _bd_intake_preview_main
+
+        return _bd_intake_preview_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "evidence-contract":
+        from link_modes.growth.link_growth_console import business_development_evidence_contract_main as _bd_evidence_contract_main
+
+        return _bd_evidence_contract_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "approval-checklist":
+        from link_modes.growth.link_growth_console import business_development_approval_checklist_main as _bd_approval_checklist_main
+
+        return _bd_approval_checklist_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "review":
+        from link_modes.growth.link_growth_console import business_development_review_main as _bd_review_main
+
+        return _bd_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand in ("-h", "--help", "help", ""):
+        print("Business Development commands:")
+        print("  intake-preview      Preview Business Development intake")
+        print("  evidence-contract   Preview Business Development evidence contract")
+        print("  approval-checklist  Preview Business Development approval checklist")
+        print("  review              Preview Business Development review package")
+        return 0
+    print(f"business-development: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py business-development --help' for subcommands.", file=sys.stderr)
+    return 2
+
 def _cmd_dashboard(argv: list[str]) -> int:
     """Print a compact dashboard/status summary."""
     from link_core.dashboard import collect as _collect
@@ -606,6 +637,7 @@ _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "modes": (_cmd_modes, "List Link operating modes (base/growth/business)."),
     "roles": (_cmd_roles, "List worker safety profiles and business roles."),
     "modules": (_cmd_modules, "Preview Link module boundary registry."),
+    "business-development": (_cmd_business_development, "Business Development governance previews."),
     "dashboard": (_cmd_dashboard, "Compact diagnostics dashboard."),
     "self-test": (_cmd_self_test, "Run canonical architecture smoke checks."),
     "config": (_cmd_config, "Validate Link configuration files against runtime."),
