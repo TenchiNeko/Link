@@ -13829,6 +13829,285 @@ def check_business_operations_governance_clis() -> None:
         _require(write_out.getvalue() == "", f"business-operations {command} --write must not print normal output")
     print("business operations governance CLIs OK")
 
+
+# ---------------------------------------------------------------------------
+# 62n. Business Readiness governance helpers and CLI
+# ---------------------------------------------------------------------------
+
+def check_business_readiness_governance_helpers() -> None:
+    """Business readiness objects aggregate Growth, Development, and Operations read-only."""
+    from link_modes.growth.link_growth_console import (
+        OPERATIONS_RISK_CATEGORIES,
+        collect_business_development_collection_review_package,
+        collect_business_development_review_package,
+        collect_business_operations_evidence_contract,
+        collect_business_operations_operating_model_preview,
+        collect_business_operations_approval_checklist,
+        collect_business_operations_review_package,
+        collect_business_readiness_review_package,
+        collect_growth_opportunity_review_package,
+        collect_operations_evidence_review,
+        collect_operations_risk_boundary,
+        parse_business_operations_operating_model_preview_json,
+        parse_business_readiness_review_package_json,
+        parse_operations_evidence_review_json,
+        parse_operations_risk_boundary_json,
+        stable_business_operations_operating_model_preview_json,
+        stable_business_readiness_review_package_json,
+        stable_operations_evidence_review_json,
+        stable_operations_risk_boundary_json,
+        validate_business_operations_operating_model_preview,
+        validate_business_readiness_review_package,
+        validate_operations_evidence_review,
+        validate_operations_risk_boundary,
+    )
+
+    growth_review = collect_growth_opportunity_review_package()
+    development_review = collect_business_development_review_package()
+    collection_review = collect_business_development_collection_review_package()
+    operations_review = collect_business_operations_review_package()
+    evidence_contract = collect_business_operations_evidence_contract()
+    approval = collect_business_operations_approval_checklist(business_operations_evidence_contract=evidence_contract)
+
+    model = collect_business_operations_operating_model_preview(operations_review, development_review, collection_review)
+    same_model = collect_business_operations_operating_model_preview(operations_review, development_review, collection_review)
+    validate_business_operations_operating_model_preview(model, operations_review, development_review, collection_review)
+    _require(model["operating_model_preview_id"] == same_model["operating_model_preview_id"],
+             "Business Operations operating model id must be deterministic")
+    _require(model["business_operations_review_package_id"] == operations_review["business_operations_review_package_id"],
+             "Business Operations operating model must preserve operations review id")
+    for field in ("dependency_summary", "staffing_requirements", "system_requirements", "vendor_requirements", "maintenance_requirements"):
+        _require(model[field], f"Business Operations operating model must include {field}")
+    _require(model["blockers"] and model["warnings"],
+             "Business Operations operating model must include blockers and warnings")
+    _require(parse_business_operations_operating_model_preview_json(stable_business_operations_operating_model_preview_json(model)) == model,
+             "Business Operations operating model JSON must round trip")
+
+    risk = collect_operations_risk_boundary(model, operations_review)
+    same_risk = collect_operations_risk_boundary(model, operations_review)
+    validate_operations_risk_boundary(risk, model, operations_review)
+    _require(risk["operations_risk_boundary_id"] == same_risk["operations_risk_boundary_id"],
+             "Operations risk boundary id must be deterministic")
+    _require(risk["operating_model_preview_id"] == model["operating_model_preview_id"],
+             "Operations risk boundary must preserve operating model id")
+    _require(risk["risk_categories"] == list(OPERATIONS_RISK_CATEGORIES),
+             "Operations risk boundary must include expected risk categories")
+    _require(risk["high_risk_items"] and risk["mitigation_requirements"],
+             "Operations risk boundary must include risk items and mitigations")
+    _require(risk["blockers"] and risk["warnings"],
+             "Operations risk boundary must include blockers and warnings")
+    _require(parse_operations_risk_boundary_json(stable_operations_risk_boundary_json(risk)) == risk,
+             "Operations risk boundary JSON must round trip")
+
+    evidence_review = collect_operations_evidence_review(development_review, operations_review, evidence_contract, approval)
+    same_evidence_review = collect_operations_evidence_review(development_review, operations_review, evidence_contract, approval)
+    validate_operations_evidence_review(evidence_review, development_review, operations_review, evidence_contract, approval)
+    _require(evidence_review["operations_evidence_review_id"] == same_evidence_review["operations_evidence_review_id"],
+             "Operations evidence review id must be deterministic")
+    _require(evidence_review["business_development_review_package_id"] == development_review["business_development_review_package_id"],
+             "Operations evidence review must preserve development review id")
+    _require(evidence_review["business_operations_review_package_id"] == operations_review["business_operations_review_package_id"],
+             "Operations evidence review must preserve operations review id")
+    _require(evidence_review["evidence_status"] == "block", "Operations evidence review must block by default")
+    _require(evidence_review["missing_evidence"] and evidence_review["blockers"],
+             "Operations evidence review must include missing evidence and blockers")
+    _require(parse_operations_evidence_review_json(stable_operations_evidence_review_json(evidence_review)) == evidence_review,
+             "Operations evidence review JSON must round trip")
+
+    readiness = collect_business_readiness_review_package(growth_review, development_review, operations_review, evidence_review, risk)
+    same_readiness = collect_business_readiness_review_package(growth_review, development_review, operations_review, evidence_review, risk)
+    validate_business_readiness_review_package(readiness, growth_review, development_review, operations_review, evidence_review, risk)
+    _require(readiness["business_readiness_review_package_id"] == same_readiness["business_readiness_review_package_id"],
+             "Business readiness review id must be deterministic")
+    _require(readiness["growth_opportunity_review_package_id"] == growth_review["growth_opportunity_review_package_id"],
+             "Business readiness review must preserve growth review id")
+    _require(readiness["business_development_review_package_id"] == development_review["business_development_review_package_id"],
+             "Business readiness review must preserve development review id")
+    _require(readiness["business_operations_review_package_id"] == operations_review["business_operations_review_package_id"],
+             "Business readiness review must preserve operations review id")
+    _require(readiness["operations_evidence_review_id"] == evidence_review["operations_evidence_review_id"],
+             "Business readiness review must preserve evidence review id")
+    _require(readiness["operations_risk_boundary_id"] == risk["operations_risk_boundary_id"],
+             "Business readiness review must preserve risk boundary id")
+    _require(readiness["readiness_status"] == "blocked", "Business readiness review must block by default")
+    _require(readiness["review_recommendation"] == "not_ready",
+             "Business readiness review must recommend not ready by default")
+    _require(readiness["blockers"] and readiness["warnings"] and readiness["required_human_actions"],
+             "Business readiness review must aggregate blockers, warnings, and actions")
+    _require(parse_business_readiness_review_package_json(stable_business_readiness_review_package_json(readiness)) == readiness,
+             "Business readiness review JSON must round trip")
+
+    for payload in (model, risk, evidence_review, readiness):
+        _require(payload["dry_run"] is True and payload["write_allowed"] is False,
+                 "Business readiness payloads must be read-only")
+        _require(payload["automation_allowed"] is False and payload["writes"] == [],
+                 "Business readiness payloads must not allow automation or writes")
+        _require(payload["safety_metadata"] == {
+            "dry_run": True, "write_allowed": False, "automation_allowed": False, "writes": [],
+        }, "Business readiness payloads must include safety metadata")
+
+    bad_model = dict(model)
+    bad_model["dependency_summary"] = []
+    try:
+        validate_business_operations_operating_model_preview(bad_model)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business Operations operating model validation must reject missing dependencies")
+
+    bad_risk = dict(risk)
+    bad_risk["risk_categories"] = []
+    try:
+        validate_operations_risk_boundary(bad_risk)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Operations risk boundary validation must reject missing risk categories")
+
+    bad_evidence = dict(evidence_review)
+    bad_evidence["evidence_status"] = "ready"
+    try:
+        validate_operations_evidence_review(bad_evidence)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Operations evidence review validation must reject invalid status")
+
+    bad_readiness = dict(readiness)
+    bad_readiness["readiness_status"] = "ready"
+    try:
+        validate_business_readiness_review_package(bad_readiness)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business readiness validation must reject invalid readiness")
+    print("business readiness governance helpers OK")
+
+
+def check_business_readiness_governance_clis() -> None:
+    """Business readiness CLIs expose only object payloads and reject writes."""
+    from link import _cmd_business, _cmd_business_operations
+    from link_modes.growth.link_growth_console import (
+        business_operations_operating_model_preview_main,
+        business_readiness_review_main,
+        operations_evidence_review_main,
+        operations_risk_boundary_main,
+        parse_business_operations_operating_model_preview_json,
+        parse_business_readiness_review_package_json,
+        parse_operations_evidence_review_json,
+        parse_operations_risk_boundary_json,
+    )
+
+    operations_expected = [
+        ("operating-model-preview", business_operations_operating_model_preview_main, parse_business_operations_operating_model_preview_json,
+         "operating_model_preview_id", "Business Operations operating model preview"),
+        ("risk-boundary", operations_risk_boundary_main, parse_operations_risk_boundary_json,
+         "operations_risk_boundary_id", "Business Operations risk boundary"),
+        ("evidence-review", operations_evidence_review_main, parse_operations_evidence_review_json,
+         "operations_evidence_review_id", "Business Operations evidence review"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_business_operations(["--help"])
+    _require(help_rc == 0, "business-operations --help must return 0 for readiness CLIs")
+    for command, main_func, parse_func, id_key, title in operations_expected:
+        _require(command in help_out.getvalue(), f"business-operations help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"business-operations {command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"business-operations {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"business-operations {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"business-operations {command} must not allow automation or writes")
+        for full_payload_key in (
+            "business_operations_review_package",
+            "business_operations_operating_model_preview",
+            "operations_risk_boundary",
+            "operations_evidence_review",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"business-operations {command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_business_operations([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"business-operations {command} route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"business-operations {command} route must preserve id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"business-operations {command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"business-operations {command} human mode must include title and id")
+        _require(len(human.splitlines()) <= 15, f"business-operations {command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"business-operations {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"business-operations {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"business-operations {command} --write must not print normal output")
+
+    business_help_out = io.StringIO()
+    with contextlib.redirect_stdout(business_help_out):
+        business_help_rc = _cmd_business(["--help"])
+    _require(business_help_rc == 0, "business --help must return 0")
+    _require("readiness-review" in business_help_out.getvalue(), "business help must include readiness-review")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = business_readiness_review_main(["--json"])
+    _require(json_rc == 0, "business readiness-review --json must return 0")
+    parsed = parse_business_readiness_review_package_json(json_out.getvalue())
+    _require("business_readiness_review_package_id" in parsed,
+             "business readiness-review JSON must include package id")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "business readiness-review must be read-only")
+    _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+             "business readiness-review must not allow automation or writes")
+    for full_payload_key in (
+        "growth_opportunity_review_package",
+        "business_development_review_package",
+        "business_operations_review_package",
+        "operations_evidence_review",
+        "operations_risk_boundary",
+    ):
+        _require(full_payload_key not in parsed,
+                 "business readiness-review --json must output only review package payload")
+    routed_out = io.StringIO()
+    with contextlib.redirect_stdout(routed_out):
+        routed_rc = _cmd_business(["readiness-review", "--json"])
+    routed = parse_business_readiness_review_package_json(routed_out.getvalue())
+    _require(routed_rc == 0, "business readiness-review route must return 0")
+    _require(routed["business_readiness_review_package_id"] == parsed["business_readiness_review_package_id"],
+             "business readiness-review route must preserve id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = business_readiness_review_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "business readiness-review human mode must return 0")
+    _require("Business readiness review" in human and "business_readiness_review_package_id:" in human,
+             "business readiness-review human mode must include title and id")
+    _require(len(human.splitlines()) <= 15, "business readiness-review human mode must stay concise")
+
+    write_out = io.StringIO()
+    write_err = io.StringIO()
+    with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+        write_rc = business_readiness_review_main(["--write", "--json"])
+    _require(write_rc != 0, "business readiness-review --write must be rejected")
+    _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+             "business readiness-review --write must print clear error")
+    _require(write_out.getvalue() == "", "business readiness-review --write must not print normal output")
+    print("business readiness governance CLIs OK")
+
 # ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
@@ -14856,6 +15135,8 @@ def main() -> None:
     check_business_development_collection_planning_clis()
     check_business_operations_governance_helpers()
     check_business_operations_governance_clis()
+    check_business_readiness_governance_helpers()
+    check_business_readiness_governance_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

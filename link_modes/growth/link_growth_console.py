@@ -10976,6 +10976,19 @@ BUSINESS_OPERATIONS_FORBIDDEN_ARTIFACTS = (
 BUSINESS_OPERATIONS_STATUSES = ("pass", "review", "block")
 BUSINESS_OPERATIONS_READINESS_STATUSES = ("ready_for_review", "blocked")
 BUSINESS_OPERATIONS_RECOMMENDATIONS = ("do_not_operate", "review_before_operations")
+BUSINESS_OPERATIONS_OPERATING_MODEL_PREVIEW_VERSION = "link-business-operations-operating-model-preview-v1"
+OPERATIONS_RISK_BOUNDARY_VERSION = "link-operations-risk-boundary-v1"
+OPERATIONS_EVIDENCE_REVIEW_VERSION = "link-operations-evidence-review-v1"
+BUSINESS_READINESS_REVIEW_PACKAGE_VERSION = "link-business-readiness-review-package-v1"
+OPERATIONS_RISK_CATEGORIES = (
+    "single_point_of_failure",
+    "vendor_risk",
+    "compliance_risk",
+    "cost_risk",
+    "scaling_risk",
+    "operational_complexity",
+)
+BUSINESS_READINESS_RECOMMENDATIONS = ("not_ready", "review_before_execution", "ready_for_execution_review")
 
 
 def make_business_development_intake_preview_id(
@@ -13226,6 +13239,596 @@ def parse_business_operations_review_package_json(text: str) -> dict[str, Any]:
 
     package = _json.loads(text)
     validate_business_operations_review_package(package)
+    return package
+
+
+
+def make_business_operations_operating_model_preview_id(
+    business_operations_review_package: dict[str, Any],
+    business_development_review_package: dict[str, Any],
+    business_development_collection_review_package: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_development_collection_review_package_id": business_development_collection_review_package["collection_review_package_id"],
+        "business_development_review_package_id": business_development_review_package["business_development_review_package_id"],
+        "business_operations_review_package_id": business_operations_review_package["business_operations_review_package_id"],
+        "version": BUSINESS_OPERATIONS_OPERATING_MODEL_PREVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-operations-operating-model-preview-{digest}"
+
+
+def collect_business_operations_operating_model_preview(
+    business_operations_review_package: dict[str, Any] | None = None,
+    business_development_review_package: dict[str, Any] | None = None,
+    business_development_collection_review_package: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Model Business Operations operating assumptions without executing operations."""
+    operations_review = business_operations_review_package or collect_business_operations_review_package()
+    validate_business_operations_review_package(operations_review)
+    development_review = business_development_review_package or collect_business_development_review_package()
+    validate_business_development_review_package(development_review)
+    collection_review = business_development_collection_review_package or collect_business_development_collection_review_package()
+    validate_business_development_collection_review_package(collection_review)
+    blockers = _normalize_implementation_branch_refs(
+        list(operations_review["blockers"]) + [
+            "operating model requires human approval before execution",
+            "vendor and staffing assumptions are not validated",
+        ]
+    )
+    warnings = _normalize_implementation_branch_refs(
+        list(operations_review["warnings"]) + [
+            "operational dependencies are modeled only; no runtime exists",
+            "cost and maintenance assumptions require review",
+        ]
+    )
+    preview = {
+        "business_operations_operating_model_preview_version": BUSINESS_OPERATIONS_OPERATING_MODEL_PREVIEW_VERSION,
+        "operating_model_preview_id": make_business_operations_operating_model_preview_id(operations_review, development_review, collection_review),
+        "business_operations_review_package_id": operations_review["business_operations_review_package_id"],
+        "business_development_review_package_id": development_review["business_development_review_package_id"],
+        "business_development_collection_review_package_id": collection_review["collection_review_package_id"],
+        "dependency_summary": _normalize_implementation_branch_refs([
+            "Growth reviewed opportunity package",
+            "Business Development review package",
+            "Business Development collection review package",
+            "Business Operations review package",
+            "Link evidence and approval services",
+        ]),
+        "staffing_requirements": _normalize_implementation_branch_refs([
+            "human owner for operating decisions",
+            "human reviewer for vendor or staffing assumptions",
+            "support owner before customer-facing operation",
+        ]),
+        "system_requirements": _normalize_implementation_branch_refs([
+            "Link evidence tracking",
+            "Link approval tracking",
+            "read-only dashboard review before execution",
+        ]),
+        "vendor_requirements": _normalize_implementation_branch_refs([
+            "vendor terms review before contact",
+            "vendor cost evidence before commitments",
+            "no supplier account creation without approval",
+        ]),
+        "maintenance_requirements": _normalize_implementation_branch_refs([
+            "maintenance owner defined",
+            "support path defined",
+            "cost monitoring plan defined",
+        ]),
+        "blockers": blockers,
+        "warnings": warnings,
+        "recommended_next_action": "Review operating dependencies, staffing, vendor, cost, and maintenance assumptions before any operations runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_operations_operating_model_preview(preview, operations_review, development_review, collection_review)
+    return preview
+
+
+def validate_business_operations_operating_model_preview(
+    preview: dict[str, Any],
+    business_operations_review_package: dict[str, Any] | None = None,
+    business_development_review_package: dict[str, Any] | None = None,
+    business_development_collection_review_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_operations_operating_model_preview_version", "operating_model_preview_id",
+        "business_operations_review_package_id", "business_development_review_package_id",
+        "business_development_collection_review_package_id", "dependency_summary",
+        "staffing_requirements", "system_requirements", "vendor_requirements",
+        "maintenance_requirements", "blockers", "warnings", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in preview:
+            raise ValueError(f"business operations operating model preview missing required field: {key}")
+    if preview["business_operations_operating_model_preview_version"] != BUSINESS_OPERATIONS_OPERATING_MODEL_PREVIEW_VERSION:
+        raise ValueError("invalid business operations operating model preview version")
+    if not isinstance(preview["operating_model_preview_id"], str) or not preview["operating_model_preview_id"].startswith("business-operations-operating-model-preview-"):
+        raise ValueError("invalid business operations operating model preview id")
+    for field in (
+        "dependency_summary", "staffing_requirements", "system_requirements", "vendor_requirements",
+        "maintenance_requirements", "blockers", "warnings",
+    ):
+        normalized = _normalize_implementation_branch_refs(preview[field])
+        if not normalized or normalized != preview[field]:
+            raise ValueError(f"business operations operating model preview {field} must be normalized and non-empty")
+    if preview["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business operations operating model preview safety metadata mismatch")
+    if preview["dry_run"] is not True or preview["write_allowed"] is not False:
+        raise ValueError("business operations operating model preview must be read-only")
+    if preview["automation_allowed"] is not False or preview["writes"] != []:
+        raise ValueError("business operations operating model preview must not allow automation or writes")
+    if business_operations_review_package is not None:
+        validate_business_operations_review_package(business_operations_review_package)
+        if preview["business_operations_review_package_id"] != business_operations_review_package["business_operations_review_package_id"]:
+            raise ValueError("business operations operating model review id mismatch")
+    if business_development_review_package is not None:
+        validate_business_development_review_package(business_development_review_package)
+        if preview["business_development_review_package_id"] != business_development_review_package["business_development_review_package_id"]:
+            raise ValueError("business operations operating model development review id mismatch")
+    if business_development_collection_review_package is not None:
+        validate_business_development_collection_review_package(business_development_collection_review_package)
+        if preview["business_development_collection_review_package_id"] != business_development_collection_review_package["collection_review_package_id"]:
+            raise ValueError("business operations operating model collection review id mismatch")
+    if business_operations_review_package is not None and business_development_review_package is not None and business_development_collection_review_package is not None:
+        expected_id = make_business_operations_operating_model_preview_id(business_operations_review_package, business_development_review_package, business_development_collection_review_package)
+        if preview["operating_model_preview_id"] != expected_id:
+            raise ValueError("business operations operating model preview id is not deterministic")
+
+
+def stable_business_operations_operating_model_preview_json(preview: dict[str, Any]) -> str:
+    validate_business_operations_operating_model_preview(preview)
+    return _stable_ruflo_json(preview, indent=2) + "\n"
+
+
+def parse_business_operations_operating_model_preview_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    preview = _json.loads(text)
+    validate_business_operations_operating_model_preview(preview)
+    return preview
+
+
+def make_operations_risk_boundary_id(
+    operating_model_preview: dict[str, Any],
+    business_operations_review_package: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_operations_review_package_id": business_operations_review_package["business_operations_review_package_id"],
+        "operating_model_preview_id": operating_model_preview["operating_model_preview_id"],
+        "version": OPERATIONS_RISK_BOUNDARY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operations-risk-boundary-{digest}"
+
+
+def collect_operations_risk_boundary(
+    business_operations_operating_model_preview: dict[str, Any] | None = None,
+    business_operations_review_package: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Identify operational risks before any business execution capability exists."""
+    operations_review = business_operations_review_package or collect_business_operations_review_package()
+    validate_business_operations_review_package(operations_review)
+    model = business_operations_operating_model_preview or collect_business_operations_operating_model_preview(operations_review)
+    validate_business_operations_operating_model_preview(model, operations_review)
+    high_risk_items = _normalize_implementation_branch_refs([
+        "unvalidated vendor dependencies",
+        "missing operational evidence",
+        "manual staffing dependency",
+        "unreviewed cost assumptions",
+        "compliance review incomplete",
+        "operational execution runtime does not exist",
+    ])
+    blockers = _normalize_implementation_branch_refs(list(model["blockers"]) + [f"high risk item requires mitigation: {item}" for item in high_risk_items])
+    warnings = _normalize_implementation_branch_refs(list(model["warnings"]) + [f"risk review required: {item}" for item in high_risk_items])
+    boundary = {
+        "operations_risk_boundary_version": OPERATIONS_RISK_BOUNDARY_VERSION,
+        "operations_risk_boundary_id": make_operations_risk_boundary_id(model, operations_review),
+        "operating_model_preview_id": model["operating_model_preview_id"],
+        "business_operations_review_package_id": operations_review["business_operations_review_package_id"],
+        "risk_categories": list(OPERATIONS_RISK_CATEGORIES),
+        "high_risk_items": high_risk_items,
+        "blockers": blockers,
+        "warnings": warnings,
+        "mitigation_requirements": _normalize_implementation_branch_refs([
+            "assign human owner for each operational dependency",
+            "complete compliance and cost review",
+            "define vendor fallback before contact",
+            "define support and maintenance ownership",
+            "keep execution disabled until approvals complete",
+        ]),
+        "recommended_next_action": "Mitigate operational risks before readiness can move beyond blocked review.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operations_risk_boundary(boundary, model, operations_review)
+    return boundary
+
+
+def validate_operations_risk_boundary(
+    boundary: dict[str, Any],
+    business_operations_operating_model_preview: dict[str, Any] | None = None,
+    business_operations_review_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "operations_risk_boundary_version", "operations_risk_boundary_id",
+        "operating_model_preview_id", "business_operations_review_package_id", "risk_categories",
+        "high_risk_items", "blockers", "warnings", "mitigation_requirements",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in boundary:
+            raise ValueError(f"operations risk boundary missing required field: {key}")
+    if boundary["operations_risk_boundary_version"] != OPERATIONS_RISK_BOUNDARY_VERSION:
+        raise ValueError("invalid operations risk boundary version")
+    if not isinstance(boundary["operations_risk_boundary_id"], str) or not boundary["operations_risk_boundary_id"].startswith("operations-risk-boundary-"):
+        raise ValueError("invalid operations risk boundary id")
+    if boundary["risk_categories"] != list(OPERATIONS_RISK_CATEGORIES):
+        raise ValueError("operations risk boundary categories mismatch")
+    for field in ("high_risk_items", "blockers", "warnings", "mitigation_requirements"):
+        normalized = _normalize_implementation_branch_refs(boundary[field])
+        if not normalized or normalized != boundary[field]:
+            raise ValueError(f"operations risk boundary {field} must be normalized and non-empty")
+    if boundary["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("operations risk boundary safety metadata mismatch")
+    if boundary["dry_run"] is not True or boundary["write_allowed"] is not False:
+        raise ValueError("operations risk boundary must be read-only")
+    if boundary["automation_allowed"] is not False or boundary["writes"] != []:
+        raise ValueError("operations risk boundary must not allow automation or writes")
+    if business_operations_operating_model_preview is not None:
+        validate_business_operations_operating_model_preview(business_operations_operating_model_preview, business_operations_review_package)
+        if boundary["operating_model_preview_id"] != business_operations_operating_model_preview["operating_model_preview_id"]:
+            raise ValueError("operations risk boundary operating model id mismatch")
+    if business_operations_review_package is not None:
+        validate_business_operations_review_package(business_operations_review_package)
+        if boundary["business_operations_review_package_id"] != business_operations_review_package["business_operations_review_package_id"]:
+            raise ValueError("operations risk boundary operations review id mismatch")
+    if business_operations_operating_model_preview is not None and business_operations_review_package is not None:
+        expected_id = make_operations_risk_boundary_id(business_operations_operating_model_preview, business_operations_review_package)
+        if boundary["operations_risk_boundary_id"] != expected_id:
+            raise ValueError("operations risk boundary id is not deterministic")
+
+
+def stable_operations_risk_boundary_json(boundary: dict[str, Any]) -> str:
+    validate_operations_risk_boundary(boundary)
+    return _stable_ruflo_json(boundary, indent=2) + "\n"
+
+
+def parse_operations_risk_boundary_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    boundary = _json.loads(text)
+    validate_operations_risk_boundary(boundary)
+    return boundary
+
+
+def make_operations_evidence_review_id(
+    business_development_review_package: dict[str, Any],
+    business_operations_review_package: dict[str, Any],
+    business_operations_evidence_contract: dict[str, Any],
+    business_operations_approval_checklist: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_development_review_package_id": business_development_review_package["business_development_review_package_id"],
+        "business_operations_approval_checklist_id": business_operations_approval_checklist["business_operations_approval_checklist_id"],
+        "business_operations_evidence_contract_id": business_operations_evidence_contract["business_operations_evidence_contract_id"],
+        "business_operations_review_package_id": business_operations_review_package["business_operations_review_package_id"],
+        "version": OPERATIONS_EVIDENCE_REVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operations-evidence-review-{digest}"
+
+
+def collect_operations_evidence_review(
+    business_development_review_package: dict[str, Any] | None = None,
+    business_operations_review_package: dict[str, Any] | None = None,
+    business_operations_evidence_contract: dict[str, Any] | None = None,
+    business_operations_approval_checklist: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aggregate cross-lane business evidence and approvals for readiness."""
+    development_review = business_development_review_package or collect_business_development_review_package()
+    validate_business_development_review_package(development_review)
+    operations_review = business_operations_review_package or collect_business_operations_review_package()
+    validate_business_operations_review_package(operations_review)
+    evidence_contract = business_operations_evidence_contract or collect_business_operations_evidence_contract()
+    validate_business_operations_evidence_contract(evidence_contract)
+    approval_checklist = business_operations_approval_checklist or collect_business_operations_approval_checklist(business_operations_evidence_contract=evidence_contract)
+    validate_business_operations_approval_checklist(approval_checklist, business_operations_evidence_contract=evidence_contract)
+    missing_evidence = _normalize_implementation_branch_refs(
+        list(evidence_contract["missing_evidence"]) + [item for item in development_review["blockers"] if "missing" in item.lower()]
+    )
+    blockers = _normalize_implementation_branch_refs(
+        list(development_review["blockers"]) + list(operations_review["blockers"]) + list(approval_checklist["blockers"])
+    )
+    warnings = _normalize_implementation_branch_refs(list(development_review["warnings"]) + list(operations_review["warnings"]))
+    required_actions = _normalize_implementation_branch_refs(
+        list(development_review["required_human_actions"]) + list(operations_review["required_human_actions"]) + list(approval_checklist["required_human_actions"])
+    )
+    review = {
+        "operations_evidence_review_version": OPERATIONS_EVIDENCE_REVIEW_VERSION,
+        "operations_evidence_review_id": make_operations_evidence_review_id(development_review, operations_review, evidence_contract, approval_checklist),
+        "business_development_review_package_id": development_review["business_development_review_package_id"],
+        "business_operations_review_package_id": operations_review["business_operations_review_package_id"],
+        "business_operations_evidence_contract_id": evidence_contract["business_operations_evidence_contract_id"],
+        "business_operations_approval_checklist_id": approval_checklist["business_operations_approval_checklist_id"],
+        "evidence_status": "block" if missing_evidence else "pass",
+        "missing_evidence": missing_evidence,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": required_actions,
+        "recommended_next_action": "Resolve missing business evidence and approval blockers before readiness review can pass.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operations_evidence_review(review, development_review, operations_review, evidence_contract, approval_checklist)
+    return review
+
+
+def validate_operations_evidence_review(
+    review: dict[str, Any],
+    business_development_review_package: dict[str, Any] | None = None,
+    business_operations_review_package: dict[str, Any] | None = None,
+    business_operations_evidence_contract: dict[str, Any] | None = None,
+    business_operations_approval_checklist: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "operations_evidence_review_version", "operations_evidence_review_id",
+        "business_development_review_package_id", "business_operations_review_package_id",
+        "business_operations_evidence_contract_id", "business_operations_approval_checklist_id",
+        "evidence_status", "missing_evidence", "blockers", "warnings",
+        "required_human_actions", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in review:
+            raise ValueError(f"operations evidence review missing required field: {key}")
+    if review["operations_evidence_review_version"] != OPERATIONS_EVIDENCE_REVIEW_VERSION:
+        raise ValueError("invalid operations evidence review version")
+    if not isinstance(review["operations_evidence_review_id"], str) or not review["operations_evidence_review_id"].startswith("operations-evidence-review-"):
+        raise ValueError("invalid operations evidence review id")
+    if review["evidence_status"] not in BUSINESS_OPERATIONS_STATUSES:
+        raise ValueError("invalid operations evidence status")
+    for field in ("missing_evidence", "blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(review[field])
+        if normalized != review[field]:
+            raise ValueError(f"operations evidence review {field} must be normalized and sorted")
+    if review["evidence_status"] == "block" and not review["missing_evidence"]:
+        raise ValueError("blocked operations evidence review must include missing evidence")
+    if review["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("operations evidence review safety metadata mismatch")
+    if review["dry_run"] is not True or review["write_allowed"] is not False:
+        raise ValueError("operations evidence review must be read-only")
+    if review["automation_allowed"] is not False or review["writes"] != []:
+        raise ValueError("operations evidence review must not allow automation or writes")
+    if business_development_review_package is not None:
+        validate_business_development_review_package(business_development_review_package)
+        if review["business_development_review_package_id"] != business_development_review_package["business_development_review_package_id"]:
+            raise ValueError("operations evidence review development id mismatch")
+    if business_operations_review_package is not None:
+        validate_business_operations_review_package(business_operations_review_package)
+        if review["business_operations_review_package_id"] != business_operations_review_package["business_operations_review_package_id"]:
+            raise ValueError("operations evidence review operations id mismatch")
+    if business_operations_evidence_contract is not None:
+        validate_business_operations_evidence_contract(business_operations_evidence_contract)
+        if review["business_operations_evidence_contract_id"] != business_operations_evidence_contract["business_operations_evidence_contract_id"]:
+            raise ValueError("operations evidence review evidence id mismatch")
+    if business_operations_approval_checklist is not None:
+        validate_business_operations_approval_checklist(business_operations_approval_checklist, business_operations_evidence_contract=business_operations_evidence_contract)
+        if review["business_operations_approval_checklist_id"] != business_operations_approval_checklist["business_operations_approval_checklist_id"]:
+            raise ValueError("operations evidence review approval id mismatch")
+    if all(item is not None for item in (business_development_review_package, business_operations_review_package, business_operations_evidence_contract, business_operations_approval_checklist)):
+        expected_id = make_operations_evidence_review_id(business_development_review_package, business_operations_review_package, business_operations_evidence_contract, business_operations_approval_checklist)
+        if review["operations_evidence_review_id"] != expected_id:
+            raise ValueError("operations evidence review id is not deterministic")
+
+
+def stable_operations_evidence_review_json(review: dict[str, Any]) -> str:
+    validate_operations_evidence_review(review)
+    return _stable_ruflo_json(review, indent=2) + "\n"
+
+
+def parse_operations_evidence_review_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    review = _json.loads(text)
+    validate_operations_evidence_review(review)
+    return review
+
+
+def make_business_readiness_review_package_id(
+    growth_opportunity_review_package: dict[str, Any],
+    business_development_review_package: dict[str, Any],
+    business_operations_review_package: dict[str, Any],
+    operations_evidence_review: dict[str, Any],
+    operations_risk_boundary: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_development_review_package_id": business_development_review_package["business_development_review_package_id"],
+        "business_operations_review_package_id": business_operations_review_package["business_operations_review_package_id"],
+        "growth_opportunity_review_package_id": growth_opportunity_review_package["growth_opportunity_review_package_id"],
+        "operations_evidence_review_id": operations_evidence_review["operations_evidence_review_id"],
+        "operations_risk_boundary_id": operations_risk_boundary["operations_risk_boundary_id"],
+        "version": BUSINESS_READINESS_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-readiness-review-package-{digest}"
+
+
+def collect_business_readiness_review_package(
+    growth_opportunity_review_package: dict[str, Any] | None = None,
+    business_development_review_package: dict[str, Any] | None = None,
+    business_operations_review_package: dict[str, Any] | None = None,
+    operations_evidence_review: dict[str, Any] | None = None,
+    operations_risk_boundary: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Answer whether Growth, Business Development, and Operations are ready to execute."""
+    growth_review = growth_opportunity_review_package or collect_growth_opportunity_review_package()
+    validate_growth_opportunity_review_package(growth_review)
+    development_review = business_development_review_package or collect_business_development_review_package()
+    validate_business_development_review_package(development_review)
+    operations_review = business_operations_review_package or collect_business_operations_review_package()
+    validate_business_operations_review_package(operations_review)
+    evidence_review = operations_evidence_review or collect_operations_evidence_review(development_review, operations_review)
+    validate_operations_evidence_review(evidence_review, development_review, operations_review)
+    risk_boundary = operations_risk_boundary or collect_operations_risk_boundary(business_operations_review_package=operations_review)
+    validate_operations_risk_boundary(risk_boundary, business_operations_review_package=operations_review)
+    blockers = _normalize_implementation_branch_refs(
+        list(growth_review["blockers"]) + list(development_review["blockers"]) + list(operations_review["blockers"]) +
+        list(evidence_review["blockers"]) + list(risk_boundary["blockers"])
+    )
+    warnings = _normalize_implementation_branch_refs(
+        list(growth_review["warnings"]) + list(development_review["warnings"]) + list(operations_review["warnings"]) +
+        list(evidence_review["warnings"]) + list(risk_boundary["warnings"])
+    )
+    required_actions = _normalize_implementation_branch_refs(
+        list(growth_review["required_human_actions"]) + list(development_review["required_human_actions"]) +
+        list(operations_review["required_human_actions"]) + list(evidence_review["required_human_actions"])
+    )
+    evidence_status = evidence_review["evidence_status"]
+    approval_status = "block" if required_actions else "pass"
+    risk_status = "block" if risk_boundary["blockers"] else "review" if risk_boundary["high_risk_items"] else "pass"
+    readiness_status = "blocked" if blockers or evidence_status == "block" or approval_status == "block" or risk_status == "block" else "ready_for_review"
+    package = {
+        "business_readiness_review_package_version": BUSINESS_READINESS_REVIEW_PACKAGE_VERSION,
+        "business_readiness_review_package_id": make_business_readiness_review_package_id(growth_review, development_review, operations_review, evidence_review, risk_boundary),
+        "growth_opportunity_review_package_id": growth_review["growth_opportunity_review_package_id"],
+        "business_development_review_package_id": development_review["business_development_review_package_id"],
+        "business_operations_review_package_id": operations_review["business_operations_review_package_id"],
+        "operations_evidence_review_id": evidence_review["operations_evidence_review_id"],
+        "operations_risk_boundary_id": risk_boundary["operations_risk_boundary_id"],
+        "growth_status": growth_review["readiness_status"],
+        "business_development_status": development_review["readiness_status"],
+        "business_operations_status": operations_review["readiness_status"],
+        "evidence_status": evidence_status,
+        "approval_status": approval_status,
+        "risk_status": risk_status,
+        "readiness_status": readiness_status,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": required_actions,
+        "review_recommendation": "not_ready" if readiness_status == "blocked" else "review_before_execution",
+        "recommended_next_action": "Resolve cross-lane evidence, approval, and operational risk blockers before business execution.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_readiness_review_package(package, growth_review, development_review, operations_review, evidence_review, risk_boundary)
+    return package
+
+
+def validate_business_readiness_review_package(
+    package: dict[str, Any],
+    growth_opportunity_review_package: dict[str, Any] | None = None,
+    business_development_review_package: dict[str, Any] | None = None,
+    business_operations_review_package: dict[str, Any] | None = None,
+    operations_evidence_review: dict[str, Any] | None = None,
+    operations_risk_boundary: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_readiness_review_package_version", "business_readiness_review_package_id",
+        "growth_opportunity_review_package_id", "business_development_review_package_id",
+        "business_operations_review_package_id", "operations_evidence_review_id",
+        "operations_risk_boundary_id", "growth_status", "business_development_status",
+        "business_operations_status", "evidence_status", "approval_status", "risk_status",
+        "readiness_status", "blockers", "warnings", "required_human_actions",
+        "review_recommendation", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"business readiness review package missing required field: {key}")
+    if package["business_readiness_review_package_version"] != BUSINESS_READINESS_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid business readiness review package version")
+    if not isinstance(package["business_readiness_review_package_id"], str) or not package["business_readiness_review_package_id"].startswith("business-readiness-review-package-"):
+        raise ValueError("invalid business readiness review package id")
+    for field in ("evidence_status", "approval_status", "risk_status"):
+        if package[field] not in BUSINESS_OPERATIONS_STATUSES:
+            raise ValueError(f"invalid business readiness {field}")
+    if package["readiness_status"] not in BUSINESS_OPERATIONS_READINESS_STATUSES:
+        raise ValueError("invalid business readiness status")
+    if package["review_recommendation"] not in BUSINESS_READINESS_RECOMMENDATIONS:
+        raise ValueError("invalid business readiness review recommendation")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"business readiness review package {field} must be normalized and sorted")
+    if package["readiness_status"] == "blocked" and not package["blockers"]:
+        raise ValueError("blocked business readiness review must include blockers")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business readiness review package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("business readiness review package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("business readiness review package must not allow automation or writes")
+    if growth_opportunity_review_package is not None:
+        validate_growth_opportunity_review_package(growth_opportunity_review_package)
+        if package["growth_opportunity_review_package_id"] != growth_opportunity_review_package["growth_opportunity_review_package_id"]:
+            raise ValueError("business readiness growth review id mismatch")
+    if business_development_review_package is not None:
+        validate_business_development_review_package(business_development_review_package)
+        if package["business_development_review_package_id"] != business_development_review_package["business_development_review_package_id"]:
+            raise ValueError("business readiness development review id mismatch")
+    if business_operations_review_package is not None:
+        validate_business_operations_review_package(business_operations_review_package)
+        if package["business_operations_review_package_id"] != business_operations_review_package["business_operations_review_package_id"]:
+            raise ValueError("business readiness operations review id mismatch")
+    if operations_evidence_review is not None:
+        validate_operations_evidence_review(operations_evidence_review, business_development_review_package, business_operations_review_package)
+        if package["operations_evidence_review_id"] != operations_evidence_review["operations_evidence_review_id"]:
+            raise ValueError("business readiness evidence review id mismatch")
+    if operations_risk_boundary is not None:
+        validate_operations_risk_boundary(operations_risk_boundary, business_operations_review_package=business_operations_review_package)
+        if package["operations_risk_boundary_id"] != operations_risk_boundary["operations_risk_boundary_id"]:
+            raise ValueError("business readiness risk boundary id mismatch")
+    if all(item is not None for item in (growth_opportunity_review_package, business_development_review_package, business_operations_review_package, operations_evidence_review, operations_risk_boundary)):
+        expected_id = make_business_readiness_review_package_id(growth_opportunity_review_package, business_development_review_package, business_operations_review_package, operations_evidence_review, operations_risk_boundary)
+        if package["business_readiness_review_package_id"] != expected_id:
+            raise ValueError("business readiness review package id is not deterministic")
+
+
+def stable_business_readiness_review_package_json(package: dict[str, Any]) -> str:
+    validate_business_readiness_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_business_readiness_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_business_readiness_review_package(package)
     return package
 
 
@@ -15606,6 +16209,159 @@ def business_operations_review_main(argv: list[str] | None = None) -> int:
         print(stable_business_operations_review_package_json(package), end="")
         return 0
     render_business_operations_review_plain(package)
+    return 0
+
+
+
+def render_business_operations_operating_model_preview_plain(preview: dict[str, Any]) -> None:
+    validate_business_operations_operating_model_preview(preview)
+    print("Business Operations operating model preview")
+    print(f"operating_model_preview_id: {preview['operating_model_preview_id']}")
+    print(f"business_operations_review_package_id: {preview['business_operations_review_package_id']}")
+    print(f"dependency_count: {len(preview['dependency_summary'])}")
+    print(f"staffing_requirement_count: {len(preview['staffing_requirements'])}")
+    print(f"system_requirement_count: {len(preview['system_requirements'])}")
+    print(f"vendor_requirement_count: {len(preview['vendor_requirements'])}")
+    print(f"maintenance_requirement_count: {len(preview['maintenance_requirements'])}")
+    print(f"blocker_count: {len(preview['blockers'])}")
+    print(f"warning_count: {len(preview['warnings'])}")
+    print(f"next_action: {preview['recommended_next_action']}")
+
+
+def business_operations_operating_model_preview_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Operations operating-model-preview: operating model preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-operations operating-model-preview")
+        print("  python3 link.py business-operations operating-model-preview --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-operations operating-model-preview is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    preview = collect_business_operations_operating_model_preview()
+    validate_business_operations_operating_model_preview(preview)
+    if "--json" in args:
+        print(stable_business_operations_operating_model_preview_json(preview), end="")
+        return 0
+    render_business_operations_operating_model_preview_plain(preview)
+    return 0
+
+
+def render_operations_risk_boundary_plain(boundary: dict[str, Any]) -> None:
+    validate_operations_risk_boundary(boundary)
+    print("Business Operations risk boundary")
+    print(f"operations_risk_boundary_id: {boundary['operations_risk_boundary_id']}")
+    print(f"operating_model_preview_id: {boundary['operating_model_preview_id']}")
+    print(f"risk_category_count: {len(boundary['risk_categories'])}")
+    print(f"high_risk_item_count: {len(boundary['high_risk_items'])}")
+    print(f"blocker_count: {len(boundary['blockers'])}")
+    print(f"warning_count: {len(boundary['warnings'])}")
+    print(f"mitigation_requirement_count: {len(boundary['mitigation_requirements'])}")
+    print(f"next_action: {boundary['recommended_next_action']}")
+
+
+def operations_risk_boundary_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Operations risk-boundary: operations risk boundary preview")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-operations risk-boundary")
+        print("  python3 link.py business-operations risk-boundary --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-operations risk-boundary is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    boundary = collect_operations_risk_boundary()
+    validate_operations_risk_boundary(boundary)
+    if "--json" in args:
+        print(stable_operations_risk_boundary_json(boundary), end="")
+        return 0
+    render_operations_risk_boundary_plain(boundary)
+    return 0
+
+
+def render_operations_evidence_review_plain(review: dict[str, Any]) -> None:
+    validate_operations_evidence_review(review)
+    print("Business Operations evidence review")
+    print(f"operations_evidence_review_id: {review['operations_evidence_review_id']}")
+    print(f"business_development_review_package_id: {review['business_development_review_package_id']}")
+    print(f"business_operations_review_package_id: {review['business_operations_review_package_id']}")
+    print(f"evidence_status: {review['evidence_status']}")
+    print(f"missing_evidence_count: {len(review['missing_evidence'])}")
+    print(f"blocker_count: {len(review['blockers'])}")
+    print(f"warning_count: {len(review['warnings'])}")
+    print(f"required_human_action_count: {len(review['required_human_actions'])}")
+    print(f"next_action: {review['recommended_next_action']}")
+
+
+def operations_evidence_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business Operations evidence-review: operations evidence review")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business-operations evidence-review")
+        print("  python3 link.py business-operations evidence-review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business-operations evidence-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    review = collect_operations_evidence_review()
+    validate_operations_evidence_review(review)
+    if "--json" in args:
+        print(stable_operations_evidence_review_json(review), end="")
+        return 0
+    render_operations_evidence_review_plain(review)
+    return 0
+
+
+def render_business_readiness_review_plain(package: dict[str, Any]) -> None:
+    validate_business_readiness_review_package(package)
+    print("Business readiness review")
+    print(f"business_readiness_review_package_id: {package['business_readiness_review_package_id']}")
+    print(f"growth_status: {package['growth_status']}")
+    print(f"business_development_status: {package['business_development_status']}")
+    print(f"business_operations_status: {package['business_operations_status']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"approval_status: {package['approval_status']}")
+    print(f"risk_status: {package['risk_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def business_readiness_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business readiness-review: cross-lane readiness review")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business readiness-review")
+        print("  python3 link.py business readiness-review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business readiness-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_business_readiness_review_package()
+    validate_business_readiness_review_package(package)
+    if "--json" in args:
+        print(stable_business_readiness_review_package_json(package), end="")
+        return 0
+    render_business_readiness_review_plain(package)
     return 0
 
 
