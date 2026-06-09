@@ -11007,6 +11007,13 @@ BUSINESS_EXECUTION_BLOCKED_ACTIONS = (
     "automated execution",
 )
 BUSINESS_EXECUTION_RECOMMENDATIONS = ("execution_not_allowed", "review_before_execution", "execution_review_ready")
+GOVERNANCE_DASHBOARD_SUMMARY_VERSION = "link-governance-dashboard-summary-v1"
+GOVERNANCE_RISK_DASHBOARD_VERSION = "link-governance-risk-dashboard-v1"
+GOVERNANCE_READINESS_DASHBOARD_VERSION = "link-governance-readiness-dashboard-v1"
+GOVERNANCE_EXECUTIVE_REVIEW_PACKAGE_VERSION = "link-governance-executive-review-package-v1"
+GOVERNANCE_STATUSES = ("pass", "review", "block")
+GOVERNANCE_OVERALL_STATUSES = ("ready_for_review", "blocked")
+GOVERNANCE_RECOMMENDATIONS = ("resolve_blockers", "review_before_action", "ready_for_operator_review")
 
 
 def make_business_development_intake_preview_id(
@@ -14419,6 +14426,566 @@ def parse_business_execution_review_package_json(text: str) -> dict[str, Any]:
     return package
 
 
+
+def _governance_status_from_readiness(value: str) -> str:
+    if value == "ready_for_review":
+        return "review"
+    if value == "blocked":
+        return "block"
+    if value in GOVERNANCE_STATUSES:
+        return value
+    return "review"
+
+
+def _governance_status_from_blockers(blockers: list[str], warnings: list[str] | None = None) -> str:
+    if blockers:
+        return "block"
+    if warnings:
+        return "review"
+    return "pass"
+
+
+def _governance_missing_evidence_values(*payloads: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for payload in payloads:
+        for key in ("missing_evidence", "required_evidence"):
+            items = payload.get(key, [])
+            if isinstance(items, list):
+                if key == "missing_evidence" or payload.get("evidence_status") == "block":
+                    values.extend(str(item) for item in items if str(item).strip())
+        blockers = payload.get("blockers", [])
+        if isinstance(blockers, list):
+            values.extend(str(item) for item in blockers if "missing" in str(item).lower())
+    return _normalize_implementation_branch_refs(values)
+
+
+def _governance_required_action_values(*payloads: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for payload in payloads:
+        for key in ("required_human_actions", "required_approvals"):
+            items = payload.get(key, [])
+            if isinstance(items, list):
+                values.extend(str(item) for item in items if str(item).strip())
+    return _normalize_implementation_branch_refs(values)
+
+
+def make_governance_dashboard_summary_id(
+    engineering_review: dict[str, Any],
+    growth_opportunity_review: dict[str, Any],
+    growth_campaign_review: dict[str, Any],
+    business_development_review: dict[str, Any],
+    business_operations_review: dict[str, Any],
+    business_readiness_review: dict[str, Any],
+    business_execution_review: dict[str, Any],
+    module_boundary_registry: dict[str, Any],
+    shared_services_registry: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_development_review_package_id": business_development_review["business_development_review_package_id"],
+        "business_execution_review_package_id": business_execution_review["business_execution_review_package_id"],
+        "business_operations_review_package_id": business_operations_review["business_operations_review_package_id"],
+        "business_readiness_review_package_id": business_readiness_review["business_readiness_review_package_id"],
+        "growth_campaign_review_package_id": growth_campaign_review["growth_campaign_review_package_id"],
+        "growth_opportunity_review_package_id": growth_opportunity_review["growth_opportunity_review_package_id"],
+        "link_module_boundary_registry_id": module_boundary_registry["link_module_boundary_registry_id"],
+        "shared_services_registry_id": shared_services_registry["shared_services_registry_id"],
+        "supervised_execution_review_package_id": engineering_review["supervised_execution_review_package_id"],
+        "version": GOVERNANCE_DASHBOARD_SUMMARY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"governance-dashboard-summary-{digest}"
+
+
+def collect_governance_dashboard_summary(
+    engineering_review: dict[str, Any] | None = None,
+    growth_opportunity_review: dict[str, Any] | None = None,
+    growth_campaign_review: dict[str, Any] | None = None,
+    business_development_review: dict[str, Any] | None = None,
+    business_operations_review: dict[str, Any] | None = None,
+    business_readiness_review: dict[str, Any] | None = None,
+    business_execution_review: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    shared_services_registry: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize the top-level Link governance state without executing anything."""
+    engineering = engineering_review or collect_supervised_execution_review_package()
+    validate_supervised_execution_review_package(engineering)
+    growth_opp = growth_opportunity_review or collect_growth_opportunity_review_package()
+    validate_growth_opportunity_review_package(growth_opp)
+    growth_campaign = growth_campaign_review or collect_growth_campaign_review_package()
+    validate_growth_campaign_review_package(growth_campaign)
+    development = business_development_review or collect_business_development_review_package()
+    validate_business_development_review_package(development)
+    operations = business_operations_review or collect_business_operations_review_package()
+    validate_business_operations_review_package(operations)
+    readiness = business_readiness_review or collect_business_readiness_review_package(growth_opp, development, operations)
+    validate_business_readiness_review_package(readiness, growth_opp, development, operations)
+    execution = business_execution_review or collect_business_execution_review_package(business_readiness_review_package=readiness)
+    validate_business_execution_review_package(execution, business_readiness_review_package=readiness)
+    modules = module_boundary_registry or collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(modules)
+    services = shared_services_registry or collect_link_shared_services_registry()
+    validate_link_shared_services_registry(services)
+    blockers = _normalize_implementation_branch_refs(
+        list(engineering["blockers"]) + list(growth_opp["blockers"]) + list(growth_campaign["blockers"]) +
+        list(development["blockers"]) + list(operations["blockers"]) + list(readiness["blockers"]) + list(execution["blockers"])
+    )
+    warnings = _normalize_implementation_branch_refs(
+        list(engineering["warnings"]) + list(growth_opp["warnings"]) + list(growth_campaign["warnings"]) +
+        list(development["warnings"]) + list(operations["warnings"]) + list(readiness["warnings"]) + list(execution["warnings"])
+    )
+    missing_evidence = _governance_missing_evidence_values(growth_opp, growth_campaign, development, operations, readiness, execution)
+    missing_approvals = _governance_required_action_values(growth_opp, growth_campaign, development, operations, readiness, execution)
+    overall_status = "blocked" if blockers or readiness["readiness_status"] == "blocked" or execution["execution_status"] == "block" else "ready_for_review"
+    summary = {
+        "governance_dashboard_summary_version": GOVERNANCE_DASHBOARD_SUMMARY_VERSION,
+        "governance_dashboard_summary_id": make_governance_dashboard_summary_id(engineering, growth_opp, growth_campaign, development, operations, readiness, execution, modules, services),
+        "engineering_status": _governance_status_from_blockers(engineering["blockers"], engineering["warnings"]),
+        "growth_status": _governance_status_from_blockers(list(growth_opp["blockers"]) + list(growth_campaign["blockers"]), list(growth_opp["warnings"]) + list(growth_campaign["warnings"])),
+        "business_development_status": _governance_status_from_readiness(development["readiness_status"]),
+        "business_operations_status": _governance_status_from_readiness(operations["readiness_status"]),
+        "readiness_status": readiness["readiness_status"],
+        "execution_governance_status": execution["execution_status"],
+        "shared_services_status": "review",
+        "overall_status": overall_status,
+        "blocker_count": len(blockers),
+        "warning_count": len(warnings),
+        "missing_evidence_count": len(missing_evidence),
+        "missing_approval_count": len(missing_approvals),
+        "recommended_next_action": "Resolve dashboard blockers before adding any execution, outreach, source collection, or external-effect runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_governance_dashboard_summary(summary, engineering, growth_opp, growth_campaign, development, operations, readiness, execution, modules, services)
+    return summary
+
+
+def validate_governance_dashboard_summary(
+    summary: dict[str, Any],
+    engineering_review: dict[str, Any] | None = None,
+    growth_opportunity_review: dict[str, Any] | None = None,
+    growth_campaign_review: dict[str, Any] | None = None,
+    business_development_review: dict[str, Any] | None = None,
+    business_operations_review: dict[str, Any] | None = None,
+    business_readiness_review: dict[str, Any] | None = None,
+    business_execution_review: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    shared_services_registry: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "governance_dashboard_summary_version", "governance_dashboard_summary_id",
+        "engineering_status", "growth_status", "business_development_status",
+        "business_operations_status", "readiness_status", "execution_governance_status",
+        "shared_services_status", "overall_status", "blocker_count", "warning_count",
+        "missing_evidence_count", "missing_approval_count", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in summary:
+            raise ValueError(f"governance dashboard summary missing required field: {key}")
+    if summary["governance_dashboard_summary_version"] != GOVERNANCE_DASHBOARD_SUMMARY_VERSION:
+        raise ValueError("invalid governance dashboard summary version")
+    if not isinstance(summary["governance_dashboard_summary_id"], str) or not summary["governance_dashboard_summary_id"].startswith("governance-dashboard-summary-"):
+        raise ValueError("invalid governance dashboard summary id")
+    for field in ("engineering_status", "growth_status", "business_development_status", "business_operations_status", "execution_governance_status", "shared_services_status"):
+        if summary[field] not in GOVERNANCE_STATUSES:
+            raise ValueError(f"invalid governance dashboard {field}")
+    if summary["readiness_status"] not in GOVERNANCE_OVERALL_STATUSES:
+        raise ValueError("invalid governance dashboard readiness status")
+    if summary["overall_status"] not in GOVERNANCE_OVERALL_STATUSES:
+        raise ValueError("invalid governance dashboard overall status")
+    for field in ("blocker_count", "warning_count", "missing_evidence_count", "missing_approval_count"):
+        if not isinstance(summary[field], int) or summary[field] < 0:
+            raise ValueError(f"governance dashboard {field} must be a non-negative integer")
+    if summary["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("governance dashboard summary safety metadata mismatch")
+    if summary["dry_run"] is not True or summary["write_allowed"] is not False:
+        raise ValueError("governance dashboard summary must be read-only")
+    if summary["automation_allowed"] is not False or summary["writes"] != []:
+        raise ValueError("governance dashboard summary must not allow automation or writes")
+    if all(item is not None for item in (engineering_review, growth_opportunity_review, growth_campaign_review, business_development_review, business_operations_review, business_readiness_review, business_execution_review, module_boundary_registry, shared_services_registry)):
+        expected_id = make_governance_dashboard_summary_id(engineering_review, growth_opportunity_review, growth_campaign_review, business_development_review, business_operations_review, business_readiness_review, business_execution_review, module_boundary_registry, shared_services_registry)
+        if summary["governance_dashboard_summary_id"] != expected_id:
+            raise ValueError("governance dashboard summary id is not deterministic")
+
+
+def stable_governance_dashboard_summary_json(summary: dict[str, Any]) -> str:
+    validate_governance_dashboard_summary(summary)
+    return _stable_ruflo_json(summary, indent=2) + "\n"
+
+
+def parse_governance_dashboard_summary_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    summary = _json.loads(text)
+    validate_governance_dashboard_summary(summary)
+    return summary
+
+
+def make_governance_risk_dashboard_id(
+    summary: dict[str, Any],
+    business_readiness_review: dict[str, Any],
+    business_execution_review: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_execution_review_package_id": business_execution_review["business_execution_review_package_id"],
+        "business_readiness_review_package_id": business_readiness_review["business_readiness_review_package_id"],
+        "governance_dashboard_summary_id": summary["governance_dashboard_summary_id"],
+        "version": GOVERNANCE_RISK_DASHBOARD_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"governance-risk-dashboard-{digest}"
+
+
+def collect_governance_risk_dashboard(
+    governance_dashboard_summary: dict[str, Any] | None = None,
+    business_readiness_review: dict[str, Any] | None = None,
+    business_execution_review: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aggregate governance risks across Link lanes without runtime actions."""
+    readiness = business_readiness_review or collect_business_readiness_review_package()
+    validate_business_readiness_review_package(readiness)
+    execution = business_execution_review or collect_business_execution_review_package(business_readiness_review_package=readiness)
+    validate_business_execution_review_package(execution, business_readiness_review_package=readiness)
+    summary = governance_dashboard_summary or collect_governance_dashboard_summary(business_readiness_review=readiness, business_execution_review=execution)
+    validate_governance_dashboard_summary(summary)
+    blockers = _normalize_implementation_branch_refs(list(readiness["blockers"]) + list(execution["blockers"]))
+    warnings = _normalize_implementation_branch_refs(list(readiness["warnings"]) + list(execution["warnings"]))
+    missing_evidence = _governance_missing_evidence_values(readiness, execution)
+    missing_approvals = _governance_required_action_values(readiness, execution)
+    high_risk_items = _normalize_implementation_branch_refs([item for item in blockers + warnings if "risk" in item.lower() or "blocked" in item.lower()][:80])
+    dashboard = {
+        "governance_risk_dashboard_version": GOVERNANCE_RISK_DASHBOARD_VERSION,
+        "governance_risk_dashboard_id": make_governance_risk_dashboard_id(summary, readiness, execution),
+        "governance_dashboard_summary_id": summary["governance_dashboard_summary_id"],
+        "business_readiness_review_package_id": readiness["business_readiness_review_package_id"],
+        "business_execution_review_package_id": execution["business_execution_review_package_id"],
+        "high_risk_items": high_risk_items,
+        "blockers": blockers,
+        "warnings": warnings,
+        "missing_evidence": missing_evidence,
+        "missing_approvals": missing_approvals,
+        "module_risk_summary": [
+            {"module_id": "engineering", "status": summary["engineering_status"], "risk_level": "high" if summary["engineering_status"] == "block" else "review"},
+            {"module_id": "growth", "status": summary["growth_status"], "risk_level": "high" if summary["growth_status"] == "block" else "review"},
+            {"module_id": "business_development", "status": summary["business_development_status"], "risk_level": "high" if summary["business_development_status"] == "block" else "review"},
+            {"module_id": "business_operations", "status": summary["business_operations_status"], "risk_level": "high" if summary["business_operations_status"] == "block" else "review"},
+            {"module_id": "business_readiness", "status": summary["readiness_status"], "risk_level": "high" if summary["readiness_status"] == "blocked" else "review"},
+            {"module_id": "business_execution_governance", "status": summary["execution_governance_status"], "risk_level": "high" if summary["execution_governance_status"] == "block" else "review"},
+        ],
+        "recommended_next_action": "Review high-risk blockers before any new runtime, source collection, outreach, or external-effect work.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_governance_risk_dashboard(dashboard, summary, readiness, execution)
+    return dashboard
+
+
+def validate_governance_risk_dashboard(
+    dashboard: dict[str, Any],
+    governance_dashboard_summary: dict[str, Any] | None = None,
+    business_readiness_review: dict[str, Any] | None = None,
+    business_execution_review: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "governance_risk_dashboard_version", "governance_risk_dashboard_id",
+        "governance_dashboard_summary_id", "business_readiness_review_package_id",
+        "business_execution_review_package_id", "high_risk_items", "blockers", "warnings",
+        "missing_evidence", "missing_approvals", "module_risk_summary", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in dashboard:
+            raise ValueError(f"governance risk dashboard missing required field: {key}")
+    if dashboard["governance_risk_dashboard_version"] != GOVERNANCE_RISK_DASHBOARD_VERSION:
+        raise ValueError("invalid governance risk dashboard version")
+    if not isinstance(dashboard["governance_risk_dashboard_id"], str) or not dashboard["governance_risk_dashboard_id"].startswith("governance-risk-dashboard-"):
+        raise ValueError("invalid governance risk dashboard id")
+    for field in ("high_risk_items", "blockers", "warnings", "missing_evidence", "missing_approvals"):
+        normalized = _normalize_implementation_branch_refs(dashboard[field])
+        if normalized != dashboard[field]:
+            raise ValueError(f"governance risk dashboard {field} must be normalized and sorted")
+    if not isinstance(dashboard["module_risk_summary"], list) or not dashboard["module_risk_summary"]:
+        raise ValueError("governance risk dashboard module summary must be non-empty")
+    for item in dashboard["module_risk_summary"]:
+        if not isinstance(item, dict) or not item.get("module_id") or item.get("risk_level") not in {"review", "high"}:
+            raise ValueError("invalid governance risk dashboard module risk summary item")
+    if dashboard["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("governance risk dashboard safety metadata mismatch")
+    if dashboard["dry_run"] is not True or dashboard["write_allowed"] is not False:
+        raise ValueError("governance risk dashboard must be read-only")
+    if dashboard["automation_allowed"] is not False or dashboard["writes"] != []:
+        raise ValueError("governance risk dashboard must not allow automation or writes")
+    if governance_dashboard_summary is not None and business_readiness_review is not None and business_execution_review is not None:
+        expected_id = make_governance_risk_dashboard_id(governance_dashboard_summary, business_readiness_review, business_execution_review)
+        if dashboard["governance_risk_dashboard_id"] != expected_id:
+            raise ValueError("governance risk dashboard id is not deterministic")
+
+
+def stable_governance_risk_dashboard_json(dashboard: dict[str, Any]) -> str:
+    validate_governance_risk_dashboard(dashboard)
+    return _stable_ruflo_json(dashboard, indent=2) + "\n"
+
+
+def parse_governance_risk_dashboard_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    dashboard = _json.loads(text)
+    validate_governance_risk_dashboard(dashboard)
+    return dashboard
+
+
+def make_governance_readiness_dashboard_id(summary: dict[str, Any], business_readiness_review: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_readiness_review_package_id": business_readiness_review["business_readiness_review_package_id"],
+        "governance_dashboard_summary_id": summary["governance_dashboard_summary_id"],
+        "version": GOVERNANCE_READINESS_DASHBOARD_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"governance-readiness-dashboard-{digest}"
+
+
+def collect_governance_readiness_dashboard(
+    governance_dashboard_summary: dict[str, Any] | None = None,
+    business_readiness_review: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Show module readiness for the Link governance control plane."""
+    readiness = business_readiness_review or collect_business_readiness_review_package()
+    validate_business_readiness_review_package(readiness)
+    summary = governance_dashboard_summary or collect_governance_dashboard_summary(business_readiness_review=readiness)
+    validate_governance_dashboard_summary(summary)
+    module_readiness = [
+        {"module_id": "engineering", "status": summary["engineering_status"]},
+        {"module_id": "growth", "status": summary["growth_status"]},
+        {"module_id": "business_development", "status": summary["business_development_status"]},
+        {"module_id": "business_operations", "status": summary["business_operations_status"]},
+        {"module_id": "business_readiness", "status": summary["readiness_status"]},
+        {"module_id": "business_execution_governance", "status": summary["execution_governance_status"]},
+        {"module_id": "shared_services", "status": summary["shared_services_status"]},
+    ]
+    ready_modules = _normalize_implementation_branch_refs([item["module_id"] for item in module_readiness if item["status"] in {"pass", "ready_for_review"}])
+    blocked_modules = _normalize_implementation_branch_refs([item["module_id"] for item in module_readiness if item["status"] in {"block", "blocked"}])
+    dashboard = {
+        "governance_readiness_dashboard_version": GOVERNANCE_READINESS_DASHBOARD_VERSION,
+        "governance_readiness_dashboard_id": make_governance_readiness_dashboard_id(summary, readiness),
+        "governance_dashboard_summary_id": summary["governance_dashboard_summary_id"],
+        "business_readiness_review_package_id": readiness["business_readiness_review_package_id"],
+        "module_readiness": module_readiness,
+        "readiness_blockers": list(readiness["blockers"]),
+        "readiness_warnings": list(readiness["warnings"]),
+        "required_human_actions": list(readiness["required_human_actions"]),
+        "ready_modules": ready_modules,
+        "blocked_modules": blocked_modules,
+        "recommended_next_action": "Review blocked modules and required human actions before runtime expansion.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_governance_readiness_dashboard(dashboard, summary, readiness)
+    return dashboard
+
+
+def validate_governance_readiness_dashboard(
+    dashboard: dict[str, Any],
+    governance_dashboard_summary: dict[str, Any] | None = None,
+    business_readiness_review: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "governance_readiness_dashboard_version", "governance_readiness_dashboard_id",
+        "governance_dashboard_summary_id", "business_readiness_review_package_id",
+        "module_readiness", "readiness_blockers", "readiness_warnings", "required_human_actions",
+        "ready_modules", "blocked_modules", "recommended_next_action", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in dashboard:
+            raise ValueError(f"governance readiness dashboard missing required field: {key}")
+    if dashboard["governance_readiness_dashboard_version"] != GOVERNANCE_READINESS_DASHBOARD_VERSION:
+        raise ValueError("invalid governance readiness dashboard version")
+    if not isinstance(dashboard["governance_readiness_dashboard_id"], str) or not dashboard["governance_readiness_dashboard_id"].startswith("governance-readiness-dashboard-"):
+        raise ValueError("invalid governance readiness dashboard id")
+    if not isinstance(dashboard["module_readiness"], list) or not dashboard["module_readiness"]:
+        raise ValueError("governance readiness dashboard module_readiness must be non-empty")
+    for item in dashboard["module_readiness"]:
+        if not isinstance(item, dict) or not item.get("module_id") or not item.get("status"):
+            raise ValueError("invalid governance readiness module item")
+    for field in ("readiness_blockers", "readiness_warnings", "required_human_actions", "ready_modules", "blocked_modules"):
+        normalized = _normalize_implementation_branch_refs(dashboard[field])
+        if normalized != dashboard[field]:
+            raise ValueError(f"governance readiness dashboard {field} must be normalized and sorted")
+    if dashboard["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("governance readiness dashboard safety metadata mismatch")
+    if dashboard["dry_run"] is not True or dashboard["write_allowed"] is not False:
+        raise ValueError("governance readiness dashboard must be read-only")
+    if dashboard["automation_allowed"] is not False or dashboard["writes"] != []:
+        raise ValueError("governance readiness dashboard must not allow automation or writes")
+    if governance_dashboard_summary is not None and business_readiness_review is not None:
+        expected_id = make_governance_readiness_dashboard_id(governance_dashboard_summary, business_readiness_review)
+        if dashboard["governance_readiness_dashboard_id"] != expected_id:
+            raise ValueError("governance readiness dashboard id is not deterministic")
+
+
+def stable_governance_readiness_dashboard_json(dashboard: dict[str, Any]) -> str:
+    validate_governance_readiness_dashboard(dashboard)
+    return _stable_ruflo_json(dashboard, indent=2) + "\n"
+
+
+def parse_governance_readiness_dashboard_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    dashboard = _json.loads(text)
+    validate_governance_readiness_dashboard(dashboard)
+    return dashboard
+
+
+def make_governance_executive_review_package_id(
+    summary: dict[str, Any],
+    risk_dashboard: dict[str, Any],
+    readiness_dashboard: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "governance_dashboard_summary_id": summary["governance_dashboard_summary_id"],
+        "governance_readiness_dashboard_id": readiness_dashboard["governance_readiness_dashboard_id"],
+        "governance_risk_dashboard_id": risk_dashboard["governance_risk_dashboard_id"],
+        "version": GOVERNANCE_EXECUTIVE_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"governance-executive-review-package-{digest}"
+
+
+def collect_governance_executive_review_package(
+    governance_dashboard_summary: dict[str, Any] | None = None,
+    governance_risk_dashboard: dict[str, Any] | None = None,
+    governance_readiness_dashboard: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Produce one executive-level review package for Link governance state."""
+    summary = governance_dashboard_summary or collect_governance_dashboard_summary()
+    validate_governance_dashboard_summary(summary)
+    risk = governance_risk_dashboard or collect_governance_risk_dashboard(summary)
+    validate_governance_risk_dashboard(risk, governance_dashboard_summary=summary)
+    readiness = governance_readiness_dashboard or collect_governance_readiness_dashboard(summary)
+    validate_governance_readiness_dashboard(readiness, summary)
+    blockers = _normalize_implementation_branch_refs(list(risk["blockers"]) + list(readiness["readiness_blockers"]))
+    warnings = _normalize_implementation_branch_refs(list(risk["warnings"]) + list(readiness["readiness_warnings"]))
+    actions = _normalize_implementation_branch_refs(list(risk["missing_approvals"]) + list(readiness["required_human_actions"]))
+    package = {
+        "governance_executive_review_package_version": GOVERNANCE_EXECUTIVE_REVIEW_PACKAGE_VERSION,
+        "governance_executive_review_package_id": make_governance_executive_review_package_id(summary, risk, readiness),
+        "dashboard_summary_id": summary["governance_dashboard_summary_id"],
+        "risk_dashboard_id": risk["governance_risk_dashboard_id"],
+        "readiness_dashboard_id": readiness["governance_readiness_dashboard_id"],
+        "overall_status": summary["overall_status"],
+        "executive_summary": f"Link governance is {summary['overall_status']} with {summary['blocker_count']} blockers, {summary['warning_count']} warnings, {summary['missing_evidence_count']} missing evidence items, and {summary['missing_approval_count']} pending approvals.",
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": actions,
+        "review_recommendation": "resolve_blockers" if summary["overall_status"] == "blocked" else "ready_for_operator_review",
+        "recommended_next_action": "Use this dashboard as the operator control-plane view before planning the next governance or runtime slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_governance_executive_review_package(package, summary, risk, readiness)
+    return package
+
+
+def validate_governance_executive_review_package(
+    package: dict[str, Any],
+    governance_dashboard_summary: dict[str, Any] | None = None,
+    governance_risk_dashboard: dict[str, Any] | None = None,
+    governance_readiness_dashboard: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "governance_executive_review_package_version", "governance_executive_review_package_id",
+        "dashboard_summary_id", "risk_dashboard_id", "readiness_dashboard_id", "overall_status",
+        "executive_summary", "blockers", "warnings", "required_human_actions",
+        "review_recommendation", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"governance executive review package missing required field: {key}")
+    if package["governance_executive_review_package_version"] != GOVERNANCE_EXECUTIVE_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid governance executive review package version")
+    if not isinstance(package["governance_executive_review_package_id"], str) or not package["governance_executive_review_package_id"].startswith("governance-executive-review-package-"):
+        raise ValueError("invalid governance executive review package id")
+    if package["overall_status"] not in GOVERNANCE_OVERALL_STATUSES:
+        raise ValueError("invalid governance executive overall status")
+    if package["review_recommendation"] not in GOVERNANCE_RECOMMENDATIONS:
+        raise ValueError("invalid governance executive review recommendation")
+    if not isinstance(package["executive_summary"], str) or not package["executive_summary"].strip():
+        raise ValueError("governance executive summary must be non-empty")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"governance executive review package {field} must be normalized and sorted")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("governance executive review package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("governance executive review package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("governance executive review package must not allow automation or writes")
+    if governance_dashboard_summary is not None:
+        validate_governance_dashboard_summary(governance_dashboard_summary)
+        if package["dashboard_summary_id"] != governance_dashboard_summary["governance_dashboard_summary_id"]:
+            raise ValueError("governance executive summary id mismatch")
+    if governance_risk_dashboard is not None:
+        validate_governance_risk_dashboard(governance_risk_dashboard)
+        if package["risk_dashboard_id"] != governance_risk_dashboard["governance_risk_dashboard_id"]:
+            raise ValueError("governance executive risk id mismatch")
+    if governance_readiness_dashboard is not None:
+        validate_governance_readiness_dashboard(governance_readiness_dashboard)
+        if package["readiness_dashboard_id"] != governance_readiness_dashboard["governance_readiness_dashboard_id"]:
+            raise ValueError("governance executive readiness id mismatch")
+    if governance_dashboard_summary is not None and governance_risk_dashboard is not None and governance_readiness_dashboard is not None:
+        expected_id = make_governance_executive_review_package_id(governance_dashboard_summary, governance_risk_dashboard, governance_readiness_dashboard)
+        if package["governance_executive_review_package_id"] != expected_id:
+            raise ValueError("governance executive review package id is not deterministic")
+
+
+def stable_governance_executive_review_package_json(package: dict[str, Any]) -> str:
+    validate_governance_executive_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_governance_executive_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_governance_executive_review_package(package)
+    return package
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -17097,6 +17664,160 @@ def business_execution_review_main(argv: list[str] | None = None) -> int:
         print(stable_business_execution_review_package_json(package), end="")
         return 0
     render_business_execution_review_plain(package)
+    return 0
+
+
+
+def render_governance_dashboard_summary_plain(summary: dict[str, Any]) -> None:
+    validate_governance_dashboard_summary(summary)
+    print("Governance dashboard summary")
+    print(f"governance_dashboard_summary_id: {summary['governance_dashboard_summary_id']}")
+    print(f"overall_status: {summary['overall_status']}")
+    print(f"engineering_status: {summary['engineering_status']}")
+    print(f"growth_status: {summary['growth_status']}")
+    print(f"business_development_status: {summary['business_development_status']}")
+    print(f"business_operations_status: {summary['business_operations_status']}")
+    print(f"readiness_status: {summary['readiness_status']}")
+    print(f"execution_governance_status: {summary['execution_governance_status']}")
+    print(f"blocker_count: {summary['blocker_count']}")
+    print(f"warning_count: {summary['warning_count']}")
+    print(f"missing_evidence_count: {summary['missing_evidence_count']}")
+    print(f"missing_approval_count: {summary['missing_approval_count']}")
+    print(f"next_action: {summary['recommended_next_action']}")
+
+
+def governance_dashboard_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Governance dashboard: unified Link governance summary")
+        print("")
+        print("Usage:")
+        print("  python3 link.py governance dashboard")
+        print("  python3 link.py governance dashboard --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: governance dashboard is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    summary = collect_governance_dashboard_summary()
+    validate_governance_dashboard_summary(summary)
+    if "--json" in args:
+        print(stable_governance_dashboard_summary_json(summary), end="")
+        return 0
+    render_governance_dashboard_summary_plain(summary)
+    return 0
+
+
+def render_governance_risk_dashboard_plain(dashboard: dict[str, Any]) -> None:
+    validate_governance_risk_dashboard(dashboard)
+    print("Governance risk dashboard")
+    print(f"governance_risk_dashboard_id: {dashboard['governance_risk_dashboard_id']}")
+    print(f"governance_dashboard_summary_id: {dashboard['governance_dashboard_summary_id']}")
+    print(f"high_risk_item_count: {len(dashboard['high_risk_items'])}")
+    print(f"blocker_count: {len(dashboard['blockers'])}")
+    print(f"warning_count: {len(dashboard['warnings'])}")
+    print(f"missing_evidence_count: {len(dashboard['missing_evidence'])}")
+    print(f"missing_approval_count: {len(dashboard['missing_approvals'])}")
+    print(f"module_risk_count: {len(dashboard['module_risk_summary'])}")
+    print(f"next_action: {dashboard['recommended_next_action']}")
+
+
+def governance_risk_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Governance risk: cross-lane risk dashboard")
+        print("")
+        print("Usage:")
+        print("  python3 link.py governance risk")
+        print("  python3 link.py governance risk --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: governance risk is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    dashboard = collect_governance_risk_dashboard()
+    validate_governance_risk_dashboard(dashboard)
+    if "--json" in args:
+        print(stable_governance_risk_dashboard_json(dashboard), end="")
+        return 0
+    render_governance_risk_dashboard_plain(dashboard)
+    return 0
+
+
+def render_governance_readiness_dashboard_plain(dashboard: dict[str, Any]) -> None:
+    validate_governance_readiness_dashboard(dashboard)
+    print("Governance readiness dashboard")
+    print(f"governance_readiness_dashboard_id: {dashboard['governance_readiness_dashboard_id']}")
+    print(f"governance_dashboard_summary_id: {dashboard['governance_dashboard_summary_id']}")
+    print(f"module_readiness_count: {len(dashboard['module_readiness'])}")
+    print(f"readiness_blocker_count: {len(dashboard['readiness_blockers'])}")
+    print(f"readiness_warning_count: {len(dashboard['readiness_warnings'])}")
+    print(f"required_human_action_count: {len(dashboard['required_human_actions'])}")
+    print(f"ready_module_count: {len(dashboard['ready_modules'])}")
+    print(f"blocked_module_count: {len(dashboard['blocked_modules'])}")
+    print(f"next_action: {dashboard['recommended_next_action']}")
+
+
+def governance_readiness_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Governance readiness: cross-lane readiness dashboard")
+        print("")
+        print("Usage:")
+        print("  python3 link.py governance readiness")
+        print("  python3 link.py governance readiness --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: governance readiness is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    dashboard = collect_governance_readiness_dashboard()
+    validate_governance_readiness_dashboard(dashboard)
+    if "--json" in args:
+        print(stable_governance_readiness_dashboard_json(dashboard), end="")
+        return 0
+    render_governance_readiness_dashboard_plain(dashboard)
+    return 0
+
+
+def render_governance_executive_review_plain(package: dict[str, Any]) -> None:
+    validate_governance_executive_review_package(package)
+    print("Governance executive review")
+    print(f"governance_executive_review_package_id: {package['governance_executive_review_package_id']}")
+    print(f"dashboard_summary_id: {package['dashboard_summary_id']}")
+    print(f"risk_dashboard_id: {package['risk_dashboard_id']}")
+    print(f"readiness_dashboard_id: {package['readiness_dashboard_id']}")
+    print(f"overall_status: {package['overall_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def governance_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Governance review: executive governance review package")
+        print("")
+        print("Usage:")
+        print("  python3 link.py governance review")
+        print("  python3 link.py governance review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: governance review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_governance_executive_review_package()
+    validate_governance_executive_review_package(package)
+    if "--json" in args:
+        print(stable_governance_executive_review_package_json(package), end="")
+        return 0
+    render_governance_executive_review_plain(package)
     return 0
 
 

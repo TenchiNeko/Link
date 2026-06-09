@@ -14337,6 +14337,233 @@ def check_business_execution_governance_clis() -> None:
         _require(write_out.getvalue() == "", f"business {command} --write must not print normal output")
     print("business execution governance CLIs OK")
 
+
+# ---------------------------------------------------------------------------
+# 62p. Governance Dashboard helpers and CLI
+# ---------------------------------------------------------------------------
+
+def check_governance_dashboard_helpers() -> None:
+    """Governance dashboard objects aggregate Link lanes read-only."""
+    from link_modes.growth.link_growth_console import (
+        collect_business_development_review_package,
+        collect_business_execution_review_package,
+        collect_business_operations_review_package,
+        collect_business_readiness_review_package,
+        collect_governance_dashboard_summary,
+        collect_governance_executive_review_package,
+        collect_governance_readiness_dashboard,
+        collect_governance_risk_dashboard,
+        collect_growth_campaign_review_package,
+        collect_growth_opportunity_review_package,
+        collect_link_module_boundary_registry,
+        collect_link_shared_services_registry,
+        collect_supervised_execution_review_package,
+        parse_governance_dashboard_summary_json,
+        parse_governance_executive_review_package_json,
+        parse_governance_readiness_dashboard_json,
+        parse_governance_risk_dashboard_json,
+        stable_governance_dashboard_summary_json,
+        stable_governance_executive_review_package_json,
+        stable_governance_readiness_dashboard_json,
+        stable_governance_risk_dashboard_json,
+        validate_governance_dashboard_summary,
+        validate_governance_executive_review_package,
+        validate_governance_readiness_dashboard,
+        validate_governance_risk_dashboard,
+    )
+
+    engineering = collect_supervised_execution_review_package()
+    growth_opp = collect_growth_opportunity_review_package()
+    growth_campaign = collect_growth_campaign_review_package()
+    development = collect_business_development_review_package()
+    operations = collect_business_operations_review_package()
+    readiness = collect_business_readiness_review_package(growth_opp, development, operations)
+    execution = collect_business_execution_review_package(business_readiness_review_package=readiness)
+    modules = collect_link_module_boundary_registry()
+    services = collect_link_shared_services_registry()
+
+    summary = collect_governance_dashboard_summary(
+        engineering, growth_opp, growth_campaign, development, operations, readiness, execution, modules, services
+    )
+    same_summary = collect_governance_dashboard_summary(
+        engineering, growth_opp, growth_campaign, development, operations, readiness, execution, modules, services
+    )
+    validate_governance_dashboard_summary(summary, engineering, growth_opp, growth_campaign, development, operations, readiness, execution, modules, services)
+    _require(summary["governance_dashboard_summary_id"] == same_summary["governance_dashboard_summary_id"],
+             "Governance dashboard summary id must be deterministic")
+    _require(summary["overall_status"] == "blocked", "Governance dashboard summary must block by default")
+    _require(summary["blocker_count"] > 0 and summary["warning_count"] > 0,
+             "Governance dashboard summary must aggregate blockers and warnings")
+    _require(summary["missing_evidence_count"] > 0 and summary["missing_approval_count"] > 0,
+             "Governance dashboard summary must aggregate missing evidence and approvals")
+    _require(parse_governance_dashboard_summary_json(stable_governance_dashboard_summary_json(summary)) == summary,
+             "Governance dashboard summary JSON must round trip")
+
+    risk = collect_governance_risk_dashboard(summary, readiness, execution)
+    same_risk = collect_governance_risk_dashboard(summary, readiness, execution)
+    validate_governance_risk_dashboard(risk, summary, readiness, execution)
+    _require(risk["governance_risk_dashboard_id"] == same_risk["governance_risk_dashboard_id"],
+             "Governance risk dashboard id must be deterministic")
+    _require(risk["governance_dashboard_summary_id"] == summary["governance_dashboard_summary_id"],
+             "Governance risk dashboard must preserve summary id")
+    _require(risk["high_risk_items"] and risk["blockers"] and risk["module_risk_summary"],
+             "Governance risk dashboard must aggregate risk items, blockers, and module risks")
+    _require(parse_governance_risk_dashboard_json(stable_governance_risk_dashboard_json(risk)) == risk,
+             "Governance risk dashboard JSON must round trip")
+
+    readiness_dashboard = collect_governance_readiness_dashboard(summary, readiness)
+    same_readiness_dashboard = collect_governance_readiness_dashboard(summary, readiness)
+    validate_governance_readiness_dashboard(readiness_dashboard, summary, readiness)
+    _require(readiness_dashboard["governance_readiness_dashboard_id"] == same_readiness_dashboard["governance_readiness_dashboard_id"],
+             "Governance readiness dashboard id must be deterministic")
+    _require(readiness_dashboard["governance_dashboard_summary_id"] == summary["governance_dashboard_summary_id"],
+             "Governance readiness dashboard must preserve summary id")
+    _require(readiness_dashboard["module_readiness"] and readiness_dashboard["blocked_modules"],
+             "Governance readiness dashboard must include module readiness and blocked modules")
+    _require(readiness_dashboard["required_human_actions"],
+             "Governance readiness dashboard must aggregate required actions")
+    _require(parse_governance_readiness_dashboard_json(stable_governance_readiness_dashboard_json(readiness_dashboard)) == readiness_dashboard,
+             "Governance readiness dashboard JSON must round trip")
+
+    executive = collect_governance_executive_review_package(summary, risk, readiness_dashboard)
+    same_executive = collect_governance_executive_review_package(summary, risk, readiness_dashboard)
+    validate_governance_executive_review_package(executive, summary, risk, readiness_dashboard)
+    _require(executive["governance_executive_review_package_id"] == same_executive["governance_executive_review_package_id"],
+             "Governance executive review id must be deterministic")
+    _require(executive["dashboard_summary_id"] == summary["governance_dashboard_summary_id"],
+             "Governance executive review must preserve summary id")
+    _require(executive["risk_dashboard_id"] == risk["governance_risk_dashboard_id"],
+             "Governance executive review must preserve risk id")
+    _require(executive["readiness_dashboard_id"] == readiness_dashboard["governance_readiness_dashboard_id"],
+             "Governance executive review must preserve readiness id")
+    _require(executive["overall_status"] == "blocked" and executive["review_recommendation"] == "resolve_blockers",
+             "Governance executive review must recommend resolving blockers by default")
+    _require(executive["executive_summary"], "Governance executive review must include executive summary")
+    _require(parse_governance_executive_review_package_json(stable_governance_executive_review_package_json(executive)) == executive,
+             "Governance executive review JSON must round trip")
+
+    for payload in (summary, risk, readiness_dashboard, executive):
+        _require(payload["dry_run"] is True and payload["write_allowed"] is False,
+                 "Governance dashboard payloads must be read-only")
+        _require(payload["automation_allowed"] is False and payload["writes"] == [],
+                 "Governance dashboard payloads must not allow automation or writes")
+        _require(payload["safety_metadata"] == {
+            "dry_run": True, "write_allowed": False, "automation_allowed": False, "writes": [],
+        }, "Governance dashboard payloads must include safety metadata")
+
+    bad_summary = dict(summary)
+    bad_summary["overall_status"] = "ready"
+    try:
+        validate_governance_dashboard_summary(bad_summary)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Governance dashboard summary validation must reject invalid status")
+
+    bad_risk = dict(risk)
+    bad_risk["module_risk_summary"] = []
+    try:
+        validate_governance_risk_dashboard(bad_risk)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Governance risk dashboard validation must reject missing module risk summary")
+
+    bad_readiness = dict(readiness_dashboard)
+    bad_readiness["module_readiness"] = []
+    try:
+        validate_governance_readiness_dashboard(bad_readiness)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Governance readiness dashboard validation must reject missing module readiness")
+
+    bad_executive = dict(executive)
+    bad_executive["review_recommendation"] = "execute"
+    try:
+        validate_governance_executive_review_package(bad_executive)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Governance executive review validation must reject invalid recommendation")
+    print("governance dashboard helpers OK")
+
+
+def check_governance_dashboard_clis() -> None:
+    """Governance CLIs expose only object payloads and reject writes."""
+    from link import _cmd_governance
+    from link_modes.growth.link_growth_console import (
+        governance_dashboard_main,
+        governance_readiness_main,
+        governance_review_main,
+        governance_risk_main,
+        parse_governance_dashboard_summary_json,
+        parse_governance_executive_review_package_json,
+        parse_governance_readiness_dashboard_json,
+        parse_governance_risk_dashboard_json,
+    )
+
+    expected = [
+        ("dashboard", governance_dashboard_main, parse_governance_dashboard_summary_json,
+         "governance_dashboard_summary_id", "Governance dashboard summary"),
+        ("risk", governance_risk_main, parse_governance_risk_dashboard_json,
+         "governance_risk_dashboard_id", "Governance risk dashboard"),
+        ("readiness", governance_readiness_main, parse_governance_readiness_dashboard_json,
+         "governance_readiness_dashboard_id", "Governance readiness dashboard"),
+        ("review", governance_review_main, parse_governance_executive_review_package_json,
+         "governance_executive_review_package_id", "Governance executive review"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_governance(["--help"])
+    _require(help_rc == 0, "governance --help must return 0")
+    for command, main_func, parse_func, id_key, title in expected:
+        _require(command in help_out.getvalue(), f"governance help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"governance {command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"governance {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"governance {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"governance {command} must not allow automation or writes")
+        for full_payload_key in (
+            "governance_dashboard_summary",
+            "governance_risk_dashboard",
+            "governance_readiness_dashboard",
+            "governance_executive_review_package",
+            "business_execution_review_package",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"governance {command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_governance([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"governance {command} route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"governance {command} route must preserve id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"governance {command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"governance {command} human mode must include title and id")
+        _require(len(human.splitlines()) <= 14, f"governance {command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"governance {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"governance {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"governance {command} --write must not print normal output")
+    print("governance dashboard CLIs OK")
+
 # ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
@@ -15368,6 +15595,8 @@ def main() -> None:
     check_business_readiness_governance_clis()
     check_business_execution_governance_helpers()
     check_business_execution_governance_clis()
+    check_governance_dashboard_helpers()
+    check_governance_dashboard_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

@@ -304,6 +304,37 @@ def _cmd_business(argv: list[str]) -> int:
     return 2
 
 
+def _cmd_governance(argv: list[str]) -> int:
+    """Unified Link governance dashboard previews."""
+    subcommand = argv[0] if argv else ""
+    if subcommand == "dashboard":
+        from link_modes.growth.link_growth_console import governance_dashboard_main as _governance_dashboard_main
+
+        return _governance_dashboard_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "risk":
+        from link_modes.growth.link_growth_console import governance_risk_main as _governance_risk_main
+
+        return _governance_risk_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "readiness":
+        from link_modes.growth.link_growth_console import governance_readiness_main as _governance_readiness_main
+
+        return _governance_readiness_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "review":
+        from link_modes.growth.link_growth_console import governance_review_main as _governance_review_main
+
+        return _governance_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand in ("-h", "--help", "help", ""):
+        print("Governance commands:")
+        print("  dashboard  Preview unified governance dashboard summary")
+        print("  risk       Preview cross-lane governance risk dashboard")
+        print("  readiness  Preview cross-lane governance readiness dashboard")
+        print("  review     Preview executive governance review package")
+        return 0
+    print(f"governance: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py governance --help' for subcommands.", file=sys.stderr)
+    return 2
+
+
 def _cmd_dashboard(argv: list[str]) -> int:
     """Print a compact dashboard/status summary."""
     from link_core.dashboard import collect as _collect
@@ -757,6 +788,7 @@ _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "business-development": (_cmd_business_development, "Business Development governance previews."),
     "business-operations": (_cmd_business_operations, "Business Operations governance previews."),
     "business": (_cmd_business, "Cross-lane business readiness governance previews."),
+    "governance": (_cmd_governance, "Unified Link governance dashboard previews."),
     "dashboard": (_cmd_dashboard, "Compact diagnostics dashboard."),
     "self-test": (_cmd_self_test, "Run canonical architecture smoke checks."),
     "config": (_cmd_config, "Validate Link configuration files against runtime."),
