@@ -10989,6 +10989,24 @@ OPERATIONS_RISK_CATEGORIES = (
     "operational_complexity",
 )
 BUSINESS_READINESS_RECOMMENDATIONS = ("not_ready", "review_before_execution", "ready_for_execution_review")
+BUSINESS_EXECUTION_BOUNDARY_VERSION = "link-business-execution-boundary-v1"
+BUSINESS_EXECUTION_EVIDENCE_CONTRACT_VERSION = "link-business-execution-evidence-contract-v1"
+BUSINESS_EXECUTION_APPROVAL_CHECKLIST_VERSION = "link-business-execution-approval-checklist-v1"
+BUSINESS_EXECUTION_REVIEW_PACKAGE_VERSION = "link-business-execution-review-package-v1"
+BUSINESS_EXECUTION_BLOCKED_ACTIONS = (
+    "vendor contact",
+    "purchasing",
+    "inventory commitment",
+    "marketplace listing",
+    "ecommerce activation",
+    "CRM writes",
+    "customer data storage",
+    "outbound communication",
+    "paid ads",
+    "revenue claims",
+    "automated execution",
+)
+BUSINESS_EXECUTION_RECOMMENDATIONS = ("execution_not_allowed", "review_before_execution", "execution_review_ready")
 
 
 def make_business_development_intake_preview_id(
@@ -13832,6 +13850,575 @@ def parse_business_readiness_review_package_json(text: str) -> dict[str, Any]:
     return package
 
 
+
+def make_business_execution_boundary_id(
+    growth_opportunity_review_package: dict[str, Any],
+    growth_campaign_review_package: dict[str, Any],
+    business_development_review_package: dict[str, Any],
+    business_operations_review_package: dict[str, Any],
+    business_readiness_review_package: dict[str, Any],
+    module_boundary_registry: dict[str, Any],
+    shared_services_registry: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_development_review_package_id": business_development_review_package["business_development_review_package_id"],
+        "business_operations_review_package_id": business_operations_review_package["business_operations_review_package_id"],
+        "business_readiness_review_package_id": business_readiness_review_package["business_readiness_review_package_id"],
+        "growth_campaign_review_package_id": growth_campaign_review_package["growth_campaign_review_package_id"],
+        "growth_opportunity_review_package_id": growth_opportunity_review_package["growth_opportunity_review_package_id"],
+        "link_module_boundary_registry_id": module_boundary_registry["link_module_boundary_registry_id"],
+        "shared_services_registry_id": shared_services_registry["shared_services_registry_id"],
+        "version": BUSINESS_EXECUTION_BOUNDARY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-execution-boundary-{digest}"
+
+
+def collect_business_execution_boundary(
+    growth_opportunity_review_package: dict[str, Any] | None = None,
+    growth_campaign_review_package: dict[str, Any] | None = None,
+    business_development_review_package: dict[str, Any] | None = None,
+    business_operations_review_package: dict[str, Any] | None = None,
+    business_readiness_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    shared_services_registry: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Determine whether future business execution could ever be allowed."""
+    growth_review = growth_opportunity_review_package or collect_growth_opportunity_review_package()
+    validate_growth_opportunity_review_package(growth_review)
+    campaign_review = growth_campaign_review_package or collect_growth_campaign_review_package()
+    validate_growth_campaign_review_package(campaign_review)
+    development_review = business_development_review_package or collect_business_development_review_package()
+    validate_business_development_review_package(development_review)
+    operations_review = business_operations_review_package or collect_business_operations_review_package()
+    validate_business_operations_review_package(operations_review)
+    readiness = business_readiness_review_package or collect_business_readiness_review_package(growth_review, development_review, operations_review)
+    validate_business_readiness_review_package(readiness, growth_review, development_review, operations_review)
+    module_registry = module_boundary_registry or collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(module_registry)
+    services = shared_services_registry or collect_link_shared_services_registry()
+    validate_link_shared_services_registry(services)
+    blockers = _normalize_implementation_branch_refs(
+        list(growth_review["blockers"]) + list(campaign_review["blockers"]) + list(development_review["blockers"]) +
+        list(operations_review["blockers"]) + list(readiness["blockers"])
+    )
+    warnings = _normalize_implementation_branch_refs(
+        list(growth_review["warnings"]) + list(campaign_review["warnings"]) + list(development_review["warnings"]) +
+        list(operations_review["warnings"]) + list(readiness["warnings"])
+    )
+    required_evidence = _normalize_implementation_branch_refs([
+        "business readiness review passes",
+        "execution evidence contract satisfied",
+    ])
+    required_approvals = _normalize_implementation_branch_refs(list(readiness["required_human_actions"]) + [
+        "explicit human approval before any future business execution runtime",
+        "module boundary approval before cross-lane execution",
+        "shared service approval before external effect",
+    ])
+    execution_allowed = (
+        readiness["readiness_status"] == "ready_for_review" and
+        readiness["evidence_status"] == "pass" and
+        readiness["approval_status"] == "pass" and
+        readiness["risk_status"] in {"pass", "review"} and
+        not blockers
+    )
+    boundary = {
+        "business_execution_boundary_version": BUSINESS_EXECUTION_BOUNDARY_VERSION,
+        "business_execution_boundary_id": make_business_execution_boundary_id(growth_review, campaign_review, development_review, operations_review, readiness, module_registry, services),
+        "readiness_review_package_id": readiness["business_readiness_review_package_id"],
+        "growth_opportunity_review_package_id": growth_review["growth_opportunity_review_package_id"],
+        "growth_campaign_review_package_id": campaign_review["growth_campaign_review_package_id"],
+        "business_development_review_package_id": development_review["business_development_review_package_id"],
+        "business_operations_review_package_id": operations_review["business_operations_review_package_id"],
+        "link_module_boundary_registry_id": module_registry["link_module_boundary_registry_id"],
+        "shared_services_registry_id": services["shared_services_registry_id"],
+        "execution_allowed": execution_allowed,
+        "execution_blockers": blockers,
+        "execution_warnings": warnings,
+        "required_evidence": required_evidence,
+        "required_approvals": required_approvals,
+        "recommended_next_action": "Do not add business execution runtime until readiness, evidence, approvals, and risks pass this boundary.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_execution_boundary(boundary, growth_review, campaign_review, development_review, operations_review, readiness, module_registry, services)
+    return boundary
+
+
+def validate_business_execution_boundary(
+    boundary: dict[str, Any],
+    growth_opportunity_review_package: dict[str, Any] | None = None,
+    growth_campaign_review_package: dict[str, Any] | None = None,
+    business_development_review_package: dict[str, Any] | None = None,
+    business_operations_review_package: dict[str, Any] | None = None,
+    business_readiness_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    shared_services_registry: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_execution_boundary_version", "business_execution_boundary_id", "readiness_review_package_id",
+        "growth_opportunity_review_package_id", "growth_campaign_review_package_id",
+        "business_development_review_package_id", "business_operations_review_package_id",
+        "link_module_boundary_registry_id", "shared_services_registry_id", "execution_allowed",
+        "execution_blockers", "execution_warnings", "required_evidence", "required_approvals",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in boundary:
+            raise ValueError(f"business execution boundary missing required field: {key}")
+    if boundary["business_execution_boundary_version"] != BUSINESS_EXECUTION_BOUNDARY_VERSION:
+        raise ValueError("invalid business execution boundary version")
+    if not isinstance(boundary["business_execution_boundary_id"], str) or not boundary["business_execution_boundary_id"].startswith("business-execution-boundary-"):
+        raise ValueError("invalid business execution boundary id")
+    if not isinstance(boundary["execution_allowed"], bool):
+        raise TypeError("business execution boundary execution_allowed must be bool")
+    for field in ("execution_blockers", "execution_warnings", "required_evidence", "required_approvals"):
+        normalized = _normalize_implementation_branch_refs(boundary[field])
+        if normalized != boundary[field]:
+            raise ValueError(f"business execution boundary {field} must be normalized and sorted")
+    if boundary["execution_allowed"] and (boundary["execution_blockers"] or boundary["required_approvals"]):
+        raise ValueError("business execution cannot be allowed with blockers or pending approvals")
+    if boundary["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business execution boundary safety metadata mismatch")
+    if boundary["dry_run"] is not True or boundary["write_allowed"] is not False:
+        raise ValueError("business execution boundary must be read-only")
+    if boundary["automation_allowed"] is not False or boundary["writes"] != []:
+        raise ValueError("business execution boundary must not allow automation or writes")
+    if growth_opportunity_review_package is not None:
+        validate_growth_opportunity_review_package(growth_opportunity_review_package)
+        if boundary["growth_opportunity_review_package_id"] != growth_opportunity_review_package["growth_opportunity_review_package_id"]:
+            raise ValueError("business execution boundary growth review id mismatch")
+    if growth_campaign_review_package is not None:
+        validate_growth_campaign_review_package(growth_campaign_review_package)
+        if boundary["growth_campaign_review_package_id"] != growth_campaign_review_package["growth_campaign_review_package_id"]:
+            raise ValueError("business execution boundary campaign review id mismatch")
+    if business_development_review_package is not None:
+        validate_business_development_review_package(business_development_review_package)
+        if boundary["business_development_review_package_id"] != business_development_review_package["business_development_review_package_id"]:
+            raise ValueError("business execution boundary development review id mismatch")
+    if business_operations_review_package is not None:
+        validate_business_operations_review_package(business_operations_review_package)
+        if boundary["business_operations_review_package_id"] != business_operations_review_package["business_operations_review_package_id"]:
+            raise ValueError("business execution boundary operations review id mismatch")
+    if business_readiness_review_package is not None:
+        validate_business_readiness_review_package(business_readiness_review_package, growth_opportunity_review_package, business_development_review_package, business_operations_review_package)
+        if boundary["readiness_review_package_id"] != business_readiness_review_package["business_readiness_review_package_id"]:
+            raise ValueError("business execution boundary readiness id mismatch")
+        expected_allowed = (
+            business_readiness_review_package["readiness_status"] == "ready_for_review" and
+            business_readiness_review_package["evidence_status"] == "pass" and
+            business_readiness_review_package["approval_status"] == "pass" and
+            business_readiness_review_package["risk_status"] in {"pass", "review"} and
+            not boundary["execution_blockers"]
+        )
+        if boundary["execution_allowed"] != expected_allowed:
+            raise ValueError("business execution boundary execution_allowed does not match readiness rules")
+    if module_boundary_registry is not None:
+        validate_link_module_boundary_registry(module_boundary_registry)
+        if boundary["link_module_boundary_registry_id"] != module_boundary_registry["link_module_boundary_registry_id"]:
+            raise ValueError("business execution boundary module registry id mismatch")
+    if shared_services_registry is not None:
+        validate_link_shared_services_registry(shared_services_registry)
+        if boundary["shared_services_registry_id"] != shared_services_registry["shared_services_registry_id"]:
+            raise ValueError("business execution boundary shared services id mismatch")
+    if all(item is not None for item in (growth_opportunity_review_package, growth_campaign_review_package, business_development_review_package, business_operations_review_package, business_readiness_review_package, module_boundary_registry, shared_services_registry)):
+        expected_id = make_business_execution_boundary_id(growth_opportunity_review_package, growth_campaign_review_package, business_development_review_package, business_operations_review_package, business_readiness_review_package, module_boundary_registry, shared_services_registry)
+        if boundary["business_execution_boundary_id"] != expected_id:
+            raise ValueError("business execution boundary id is not deterministic")
+
+
+def stable_business_execution_boundary_json(boundary: dict[str, Any]) -> str:
+    validate_business_execution_boundary(boundary)
+    return _stable_ruflo_json(boundary, indent=2) + "\n"
+
+
+def parse_business_execution_boundary_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    boundary = _json.loads(text)
+    validate_business_execution_boundary(boundary)
+    return boundary
+
+
+def make_business_execution_evidence_contract_id(boundary: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_execution_boundary_id": boundary["business_execution_boundary_id"],
+        "version": BUSINESS_EXECUTION_EVIDENCE_CONTRACT_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-execution-evidence-contract-{digest}"
+
+
+def collect_business_execution_evidence_contract(
+    business_execution_boundary: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Define evidence required before any future business execution runtime."""
+    boundary = business_execution_boundary or collect_business_execution_boundary()
+    validate_business_execution_boundary(boundary)
+    required_evidence = _normalize_implementation_branch_refs(list(boundary["required_evidence"]) + [
+        "business execution boundary passes",
+        "human approval receipt before external effect",
+        "source and claim evidence reviewed",
+        "risk mitigation evidence complete",
+    ])
+    contract = {
+        "business_execution_evidence_contract_version": BUSINESS_EXECUTION_EVIDENCE_CONTRACT_VERSION,
+        "business_execution_evidence_contract_id": make_business_execution_evidence_contract_id(boundary),
+        "business_execution_boundary_id": boundary["business_execution_boundary_id"],
+        "required_sources": _normalize_implementation_branch_refs([
+            boundary["readiness_review_package_id"],
+            boundary["growth_opportunity_review_package_id"],
+            boundary["growth_campaign_review_package_id"],
+            boundary["business_development_review_package_id"],
+            boundary["business_operations_review_package_id"],
+            boundary["link_module_boundary_registry_id"],
+            boundary["shared_services_registry_id"],
+        ]),
+        "required_evidence": required_evidence,
+        "confidence_thresholds": {
+            "minimum_evidence_strength": 80,
+            "minimum_confidence_score": 80,
+            "maximum_risk_score_without_review": 20,
+            "minimum_independent_source_count": 3,
+        },
+        "missing_evidence": list(required_evidence),
+        "blocked_actions": _normalize_implementation_branch_refs(list(BUSINESS_EXECUTION_BLOCKED_ACTIONS)),
+        "recommended_next_action": "Satisfy execution evidence and approvals before considering any future business execution runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_execution_evidence_contract(contract, boundary)
+    return contract
+
+
+def validate_business_execution_evidence_contract(
+    contract: dict[str, Any],
+    business_execution_boundary: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_execution_evidence_contract_version", "business_execution_evidence_contract_id",
+        "business_execution_boundary_id", "required_sources", "required_evidence",
+        "confidence_thresholds", "missing_evidence", "blocked_actions", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in contract:
+            raise ValueError(f"business execution evidence contract missing required field: {key}")
+    if contract["business_execution_evidence_contract_version"] != BUSINESS_EXECUTION_EVIDENCE_CONTRACT_VERSION:
+        raise ValueError("invalid business execution evidence contract version")
+    if not isinstance(contract["business_execution_evidence_contract_id"], str) or not contract["business_execution_evidence_contract_id"].startswith("business-execution-evidence-contract-"):
+        raise ValueError("invalid business execution evidence contract id")
+    for field in ("required_sources", "required_evidence", "missing_evidence", "blocked_actions"):
+        normalized = _normalize_implementation_branch_refs(contract[field])
+        if not normalized or normalized != contract[field]:
+            raise ValueError(f"business execution evidence contract {field} must be normalized and non-empty")
+    if contract["blocked_actions"] != _normalize_implementation_branch_refs(list(BUSINESS_EXECUTION_BLOCKED_ACTIONS)):
+        raise ValueError("business execution evidence contract blocked actions mismatch")
+    _validate_growth_business_confidence_thresholds(contract["confidence_thresholds"])
+    if contract["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business execution evidence contract safety metadata mismatch")
+    if contract["dry_run"] is not True or contract["write_allowed"] is not False:
+        raise ValueError("business execution evidence contract must be read-only")
+    if contract["automation_allowed"] is not False or contract["writes"] != []:
+        raise ValueError("business execution evidence contract must not allow automation or writes")
+    if business_execution_boundary is not None:
+        validate_business_execution_boundary(business_execution_boundary)
+        if contract["business_execution_boundary_id"] != business_execution_boundary["business_execution_boundary_id"]:
+            raise ValueError("business execution evidence contract boundary id mismatch")
+        expected_id = make_business_execution_evidence_contract_id(business_execution_boundary)
+        if contract["business_execution_evidence_contract_id"] != expected_id:
+            raise ValueError("business execution evidence contract id is not deterministic")
+
+
+def stable_business_execution_evidence_contract_json(contract: dict[str, Any]) -> str:
+    validate_business_execution_evidence_contract(contract)
+    return _stable_ruflo_json(contract, indent=2) + "\n"
+
+
+def parse_business_execution_evidence_contract_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    contract = _json.loads(text)
+    validate_business_execution_evidence_contract(contract)
+    return contract
+
+
+def make_business_execution_approval_checklist_id(
+    boundary: dict[str, Any],
+    evidence_contract: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_execution_boundary_id": boundary["business_execution_boundary_id"],
+        "business_execution_evidence_contract_id": evidence_contract["business_execution_evidence_contract_id"],
+        "version": BUSINESS_EXECUTION_APPROVAL_CHECKLIST_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-execution-approval-checklist-{digest}"
+
+
+def collect_business_execution_approval_checklist(
+    business_execution_boundary: dict[str, Any] | None = None,
+    business_execution_evidence_contract: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create final human gates before any future business execution runtime."""
+    boundary = business_execution_boundary or collect_business_execution_boundary()
+    validate_business_execution_boundary(boundary)
+    contract = business_execution_evidence_contract or collect_business_execution_evidence_contract(boundary)
+    validate_business_execution_evidence_contract(contract, boundary)
+    required_approvals = _normalize_implementation_branch_refs(list(boundary["required_approvals"]) + [
+        "approve final execution boundary",
+        "approve external effect plan",
+        "approve customer data and claims policy",
+    ])
+    blockers = _normalize_implementation_branch_refs(list(boundary["execution_blockers"]) + [
+        f"missing execution evidence: {item}" for item in contract["missing_evidence"]
+    ])
+    checklist = {
+        "business_execution_approval_checklist_version": BUSINESS_EXECUTION_APPROVAL_CHECKLIST_VERSION,
+        "business_execution_approval_checklist_id": make_business_execution_approval_checklist_id(boundary, contract),
+        "business_execution_boundary_id": boundary["business_execution_boundary_id"],
+        "business_execution_evidence_contract_id": contract["business_execution_evidence_contract_id"],
+        "required_approvals": required_approvals,
+        "approval_status": "block" if blockers or required_approvals else "pass",
+        "blockers": blockers,
+        "required_human_actions": required_approvals,
+        "recommended_next_action": "Resolve final execution approval blockers before any execution runtime can be considered.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_execution_approval_checklist(checklist, boundary, contract)
+    return checklist
+
+
+def validate_business_execution_approval_checklist(
+    checklist: dict[str, Any],
+    business_execution_boundary: dict[str, Any] | None = None,
+    business_execution_evidence_contract: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_execution_approval_checklist_version", "business_execution_approval_checklist_id",
+        "business_execution_boundary_id", "business_execution_evidence_contract_id",
+        "required_approvals", "approval_status", "blockers", "required_human_actions",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in checklist:
+            raise ValueError(f"business execution approval checklist missing required field: {key}")
+    if checklist["business_execution_approval_checklist_version"] != BUSINESS_EXECUTION_APPROVAL_CHECKLIST_VERSION:
+        raise ValueError("invalid business execution approval checklist version")
+    if not isinstance(checklist["business_execution_approval_checklist_id"], str) or not checklist["business_execution_approval_checklist_id"].startswith("business-execution-approval-checklist-"):
+        raise ValueError("invalid business execution approval checklist id")
+    for field in ("required_approvals", "blockers", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(checklist[field])
+        if not normalized or normalized != checklist[field]:
+            raise ValueError(f"business execution approval checklist {field} must be normalized and non-empty")
+    if checklist["approval_status"] not in BUSINESS_OPERATIONS_STATUSES:
+        raise ValueError("invalid business execution approval status")
+    if checklist["approval_status"] == "block" and not checklist["blockers"]:
+        raise ValueError("blocked business execution approval must include blockers")
+    if checklist["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business execution approval checklist safety metadata mismatch")
+    if checklist["dry_run"] is not True or checklist["write_allowed"] is not False:
+        raise ValueError("business execution approval checklist must be read-only")
+    if checklist["automation_allowed"] is not False or checklist["writes"] != []:
+        raise ValueError("business execution approval checklist must not allow automation or writes")
+    if business_execution_boundary is not None:
+        validate_business_execution_boundary(business_execution_boundary)
+        if checklist["business_execution_boundary_id"] != business_execution_boundary["business_execution_boundary_id"]:
+            raise ValueError("business execution approval checklist boundary id mismatch")
+    if business_execution_evidence_contract is not None:
+        validate_business_execution_evidence_contract(business_execution_evidence_contract, business_execution_boundary)
+        if checklist["business_execution_evidence_contract_id"] != business_execution_evidence_contract["business_execution_evidence_contract_id"]:
+            raise ValueError("business execution approval checklist evidence id mismatch")
+    if business_execution_boundary is not None and business_execution_evidence_contract is not None:
+        expected_id = make_business_execution_approval_checklist_id(business_execution_boundary, business_execution_evidence_contract)
+        if checklist["business_execution_approval_checklist_id"] != expected_id:
+            raise ValueError("business execution approval checklist id is not deterministic")
+
+
+def stable_business_execution_approval_checklist_json(checklist: dict[str, Any]) -> str:
+    validate_business_execution_approval_checklist(checklist)
+    return _stable_ruflo_json(checklist, indent=2) + "\n"
+
+
+def parse_business_execution_approval_checklist_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    checklist = _json.loads(text)
+    validate_business_execution_approval_checklist(checklist)
+    return checklist
+
+
+def make_business_execution_review_package_id(
+    boundary: dict[str, Any],
+    evidence_contract: dict[str, Any],
+    approval_checklist: dict[str, Any],
+    readiness_review_package: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_execution_approval_checklist_id": approval_checklist["business_execution_approval_checklist_id"],
+        "business_execution_boundary_id": boundary["business_execution_boundary_id"],
+        "business_execution_evidence_contract_id": evidence_contract["business_execution_evidence_contract_id"],
+        "business_readiness_review_package_id": readiness_review_package["business_readiness_review_package_id"],
+        "version": BUSINESS_EXECUTION_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-execution-review-package-{digest}"
+
+
+def collect_business_execution_review_package(
+    business_execution_boundary: dict[str, Any] | None = None,
+    business_execution_evidence_contract: dict[str, Any] | None = None,
+    business_execution_approval_checklist: dict[str, Any] | None = None,
+    business_readiness_review_package: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aggregate final business execution authorization state for review."""
+    boundary = business_execution_boundary or collect_business_execution_boundary()
+    validate_business_execution_boundary(boundary)
+    readiness = business_readiness_review_package or collect_business_readiness_review_package()
+    validate_business_readiness_review_package(readiness)
+    contract = business_execution_evidence_contract or collect_business_execution_evidence_contract(boundary)
+    validate_business_execution_evidence_contract(contract, boundary)
+    checklist = business_execution_approval_checklist or collect_business_execution_approval_checklist(boundary, contract)
+    validate_business_execution_approval_checklist(checklist, boundary, contract)
+    blockers = _normalize_implementation_branch_refs(list(boundary["execution_blockers"]) + list(checklist["blockers"]))
+    warnings = _normalize_implementation_branch_refs(list(boundary["execution_warnings"]))
+    evidence_status = "block" if contract["missing_evidence"] else "pass"
+    approval_status = checklist["approval_status"]
+    readiness_status = readiness["readiness_status"]
+    execution_status = "pass" if boundary["execution_allowed"] and evidence_status == "pass" and approval_status == "pass" else "block"
+    package = {
+        "business_execution_review_package_version": BUSINESS_EXECUTION_REVIEW_PACKAGE_VERSION,
+        "business_execution_review_package_id": make_business_execution_review_package_id(boundary, contract, checklist, readiness),
+        "execution_boundary_id": boundary["business_execution_boundary_id"],
+        "execution_evidence_contract_id": contract["business_execution_evidence_contract_id"],
+        "execution_approval_checklist_id": checklist["business_execution_approval_checklist_id"],
+        "readiness_review_package_id": readiness["business_readiness_review_package_id"],
+        "execution_status": execution_status,
+        "evidence_status": evidence_status,
+        "approval_status": approval_status,
+        "readiness_status": readiness_status,
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": list(checklist["required_human_actions"]),
+        "review_recommendation": "execution_not_allowed" if execution_status == "block" else "review_before_execution",
+        "recommended_next_action": "Keep business execution disabled until final boundary, evidence, approvals, and readiness all pass.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_execution_review_package(package, boundary, contract, checklist, readiness)
+    return package
+
+
+def validate_business_execution_review_package(
+    package: dict[str, Any],
+    business_execution_boundary: dict[str, Any] | None = None,
+    business_execution_evidence_contract: dict[str, Any] | None = None,
+    business_execution_approval_checklist: dict[str, Any] | None = None,
+    business_readiness_review_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_execution_review_package_version", "business_execution_review_package_id",
+        "execution_boundary_id", "execution_evidence_contract_id", "execution_approval_checklist_id",
+        "readiness_review_package_id", "execution_status", "evidence_status", "approval_status",
+        "readiness_status", "blockers", "warnings", "required_human_actions",
+        "review_recommendation", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"business execution review package missing required field: {key}")
+    if package["business_execution_review_package_version"] != BUSINESS_EXECUTION_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid business execution review package version")
+    if not isinstance(package["business_execution_review_package_id"], str) or not package["business_execution_review_package_id"].startswith("business-execution-review-package-"):
+        raise ValueError("invalid business execution review package id")
+    for field in ("execution_status", "evidence_status", "approval_status"):
+        if package[field] not in BUSINESS_OPERATIONS_STATUSES:
+            raise ValueError(f"invalid business execution review {field}")
+    if package["readiness_status"] not in BUSINESS_OPERATIONS_READINESS_STATUSES:
+        raise ValueError("invalid business execution readiness status")
+    if package["review_recommendation"] not in BUSINESS_EXECUTION_RECOMMENDATIONS:
+        raise ValueError("invalid business execution review recommendation")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"business execution review package {field} must be normalized and sorted")
+    if package["execution_status"] == "block" and not package["blockers"]:
+        raise ValueError("blocked business execution review must include blockers")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business execution review package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("business execution review package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("business execution review package must not allow automation or writes")
+    if business_execution_boundary is not None:
+        validate_business_execution_boundary(business_execution_boundary)
+        if package["execution_boundary_id"] != business_execution_boundary["business_execution_boundary_id"]:
+            raise ValueError("business execution review boundary id mismatch")
+    if business_execution_evidence_contract is not None:
+        validate_business_execution_evidence_contract(business_execution_evidence_contract, business_execution_boundary)
+        if package["execution_evidence_contract_id"] != business_execution_evidence_contract["business_execution_evidence_contract_id"]:
+            raise ValueError("business execution review evidence id mismatch")
+    if business_execution_approval_checklist is not None:
+        validate_business_execution_approval_checklist(business_execution_approval_checklist, business_execution_boundary, business_execution_evidence_contract)
+        if package["execution_approval_checklist_id"] != business_execution_approval_checklist["business_execution_approval_checklist_id"]:
+            raise ValueError("business execution review approval id mismatch")
+    if business_readiness_review_package is not None:
+        validate_business_readiness_review_package(business_readiness_review_package)
+        if package["readiness_review_package_id"] != business_readiness_review_package["business_readiness_review_package_id"]:
+            raise ValueError("business execution review readiness id mismatch")
+    if all(item is not None for item in (business_execution_boundary, business_execution_evidence_contract, business_execution_approval_checklist, business_readiness_review_package)):
+        expected_id = make_business_execution_review_package_id(business_execution_boundary, business_execution_evidence_contract, business_execution_approval_checklist, business_readiness_review_package)
+        if package["business_execution_review_package_id"] != expected_id:
+            raise ValueError("business execution review package id is not deterministic")
+
+
+def stable_business_execution_review_package_json(package: dict[str, Any]) -> str:
+    validate_business_execution_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_business_execution_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_business_execution_review_package(package)
+    return package
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -16362,6 +16949,154 @@ def business_readiness_review_main(argv: list[str] | None = None) -> int:
         print(stable_business_readiness_review_package_json(package), end="")
         return 0
     render_business_readiness_review_plain(package)
+    return 0
+
+
+
+def render_business_execution_boundary_plain(boundary: dict[str, Any]) -> None:
+    validate_business_execution_boundary(boundary)
+    print("Business execution boundary")
+    print(f"business_execution_boundary_id: {boundary['business_execution_boundary_id']}")
+    print(f"readiness_review_package_id: {boundary['readiness_review_package_id']}")
+    print(f"execution_allowed: {boundary['execution_allowed']}")
+    print(f"execution_blocker_count: {len(boundary['execution_blockers'])}")
+    print(f"execution_warning_count: {len(boundary['execution_warnings'])}")
+    print(f"required_evidence_count: {len(boundary['required_evidence'])}")
+    print(f"required_approval_count: {len(boundary['required_approvals'])}")
+    print(f"next_action: {boundary['recommended_next_action']}")
+
+
+def business_execution_boundary_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business execution-boundary: final execution authorization boundary")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business execution-boundary")
+        print("  python3 link.py business execution-boundary --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business execution-boundary is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    boundary = collect_business_execution_boundary()
+    validate_business_execution_boundary(boundary)
+    if "--json" in args:
+        print(stable_business_execution_boundary_json(boundary), end="")
+        return 0
+    render_business_execution_boundary_plain(boundary)
+    return 0
+
+
+def render_business_execution_evidence_contract_plain(contract: dict[str, Any]) -> None:
+    validate_business_execution_evidence_contract(contract)
+    print("Business execution evidence contract")
+    print(f"business_execution_evidence_contract_id: {contract['business_execution_evidence_contract_id']}")
+    print(f"business_execution_boundary_id: {contract['business_execution_boundary_id']}")
+    print(f"required_source_count: {len(contract['required_sources'])}")
+    print(f"required_evidence_count: {len(contract['required_evidence'])}")
+    print(f"missing_evidence_count: {len(contract['missing_evidence'])}")
+    print(f"blocked_action_count: {len(contract['blocked_actions'])}")
+    print(f"next_action: {contract['recommended_next_action']}")
+
+
+def business_execution_evidence_contract_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business execution-evidence-contract: final execution evidence contract")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business execution-evidence-contract")
+        print("  python3 link.py business execution-evidence-contract --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business execution-evidence-contract is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    contract = collect_business_execution_evidence_contract()
+    validate_business_execution_evidence_contract(contract)
+    if "--json" in args:
+        print(stable_business_execution_evidence_contract_json(contract), end="")
+        return 0
+    render_business_execution_evidence_contract_plain(contract)
+    return 0
+
+
+def render_business_execution_approval_checklist_plain(checklist: dict[str, Any]) -> None:
+    validate_business_execution_approval_checklist(checklist)
+    print("Business execution approval checklist")
+    print(f"business_execution_approval_checklist_id: {checklist['business_execution_approval_checklist_id']}")
+    print(f"business_execution_boundary_id: {checklist['business_execution_boundary_id']}")
+    print(f"required_approval_count: {len(checklist['required_approvals'])}")
+    print(f"approval_status: {checklist['approval_status']}")
+    print(f"blocker_count: {len(checklist['blockers'])}")
+    print(f"required_human_action_count: {len(checklist['required_human_actions'])}")
+    print(f"next_action: {checklist['recommended_next_action']}")
+
+
+def business_execution_approval_checklist_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business execution-approval-checklist: final execution approval checklist")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business execution-approval-checklist")
+        print("  python3 link.py business execution-approval-checklist --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business execution-approval-checklist is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    checklist = collect_business_execution_approval_checklist()
+    validate_business_execution_approval_checklist(checklist)
+    if "--json" in args:
+        print(stable_business_execution_approval_checklist_json(checklist), end="")
+        return 0
+    render_business_execution_approval_checklist_plain(checklist)
+    return 0
+
+
+def render_business_execution_review_plain(package: dict[str, Any]) -> None:
+    validate_business_execution_review_package(package)
+    print("Business execution review")
+    print(f"business_execution_review_package_id: {package['business_execution_review_package_id']}")
+    print(f"execution_boundary_id: {package['execution_boundary_id']}")
+    print(f"execution_evidence_contract_id: {package['execution_evidence_contract_id']}")
+    print(f"execution_approval_checklist_id: {package['execution_approval_checklist_id']}")
+    print(f"execution_status: {package['execution_status']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"approval_status: {package['approval_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def business_execution_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Business execution-review: final execution review package")
+        print("")
+        print("Usage:")
+        print("  python3 link.py business execution-review")
+        print("  python3 link.py business execution-review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: business execution-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_business_execution_review_package()
+    validate_business_execution_review_package(package)
+    if "--json" in args:
+        print(stable_business_execution_review_package_json(package), end="")
+        return 0
+    render_business_execution_review_plain(package)
     return 0
 
 

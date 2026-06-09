@@ -275,9 +275,29 @@ def _cmd_business(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import business_readiness_review_main as _business_readiness_review_main
 
         return _business_readiness_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "execution-boundary":
+        from link_modes.growth.link_growth_console import business_execution_boundary_main as _business_execution_boundary_main
+
+        return _business_execution_boundary_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "execution-evidence-contract":
+        from link_modes.growth.link_growth_console import business_execution_evidence_contract_main as _business_execution_evidence_contract_main
+
+        return _business_execution_evidence_contract_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "execution-approval-checklist":
+        from link_modes.growth.link_growth_console import business_execution_approval_checklist_main as _business_execution_approval_checklist_main
+
+        return _business_execution_approval_checklist_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "execution-review":
+        from link_modes.growth.link_growth_console import business_execution_review_main as _business_execution_review_main
+
+        return _business_execution_review_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Business commands:")
-        print("  readiness-review  Preview cross-lane business readiness")
+        print("  readiness-review              Preview cross-lane business readiness")
+        print("  execution-boundary            Preview final business execution boundary")
+        print("  execution-evidence-contract   Preview final business execution evidence contract")
+        print("  execution-approval-checklist  Preview final business execution approval checklist")
+        print("  execution-review              Preview final business execution review")
         return 0
     print(f"business: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py business --help' for subcommands.", file=sys.stderr)

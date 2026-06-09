@@ -14108,6 +14108,235 @@ def check_business_readiness_governance_clis() -> None:
     _require(write_out.getvalue() == "", "business readiness-review --write must not print normal output")
     print("business readiness governance CLIs OK")
 
+
+# ---------------------------------------------------------------------------
+# 62o. Business Execution governance helpers and CLI
+# ---------------------------------------------------------------------------
+
+def check_business_execution_governance_helpers() -> None:
+    """Business Execution governance answers whether execution could be allowed read-only."""
+    from link_modes.growth.link_growth_console import (
+        BUSINESS_EXECUTION_BLOCKED_ACTIONS,
+        collect_business_development_review_package,
+        collect_business_execution_approval_checklist,
+        collect_business_execution_boundary,
+        collect_business_execution_evidence_contract,
+        collect_business_execution_review_package,
+        collect_business_operations_review_package,
+        collect_business_readiness_review_package,
+        collect_growth_campaign_review_package,
+        collect_growth_opportunity_review_package,
+        collect_link_module_boundary_registry,
+        collect_link_shared_services_registry,
+        parse_business_execution_approval_checklist_json,
+        parse_business_execution_boundary_json,
+        parse_business_execution_evidence_contract_json,
+        parse_business_execution_review_package_json,
+        stable_business_execution_approval_checklist_json,
+        stable_business_execution_boundary_json,
+        stable_business_execution_evidence_contract_json,
+        stable_business_execution_review_package_json,
+        validate_business_execution_approval_checklist,
+        validate_business_execution_boundary,
+        validate_business_execution_evidence_contract,
+        validate_business_execution_review_package,
+    )
+
+    growth_review = collect_growth_opportunity_review_package()
+    campaign_review = collect_growth_campaign_review_package()
+    development_review = collect_business_development_review_package()
+    operations_review = collect_business_operations_review_package()
+    readiness = collect_business_readiness_review_package(growth_review, development_review, operations_review)
+    module_registry = collect_link_module_boundary_registry()
+    services = collect_link_shared_services_registry()
+
+    boundary = collect_business_execution_boundary(
+        growth_review, campaign_review, development_review, operations_review, readiness, module_registry, services
+    )
+    same_boundary = collect_business_execution_boundary(
+        growth_review, campaign_review, development_review, operations_review, readiness, module_registry, services
+    )
+    validate_business_execution_boundary(
+        boundary, growth_review, campaign_review, development_review, operations_review, readiness, module_registry, services
+    )
+    _require(boundary["business_execution_boundary_id"] == same_boundary["business_execution_boundary_id"],
+             "Business execution boundary id must be deterministic")
+    _require(boundary["readiness_review_package_id"] == readiness["business_readiness_review_package_id"],
+             "Business execution boundary must preserve readiness id")
+    _require(boundary["execution_allowed"] is False,
+             "Business execution boundary must deny execution by default")
+    _require(boundary["execution_blockers"] and boundary["required_approvals"],
+             "Business execution boundary must include blockers and approvals")
+    _require(parse_business_execution_boundary_json(stable_business_execution_boundary_json(boundary)) == boundary,
+             "Business execution boundary JSON must round trip")
+
+    contract = collect_business_execution_evidence_contract(boundary)
+    same_contract = collect_business_execution_evidence_contract(boundary)
+    validate_business_execution_evidence_contract(contract, boundary)
+    _require(contract["business_execution_evidence_contract_id"] == same_contract["business_execution_evidence_contract_id"],
+             "Business execution evidence contract id must be deterministic")
+    _require(contract["business_execution_boundary_id"] == boundary["business_execution_boundary_id"],
+             "Business execution evidence contract must preserve boundary id")
+    _require(contract["blocked_actions"] == sorted(BUSINESS_EXECUTION_BLOCKED_ACTIONS),
+             "Business execution evidence contract must include blocked actions")
+    _require(contract["missing_evidence"], "Business execution evidence contract must require missing evidence")
+    _require(parse_business_execution_evidence_contract_json(stable_business_execution_evidence_contract_json(contract)) == contract,
+             "Business execution evidence contract JSON must round trip")
+
+    approval = collect_business_execution_approval_checklist(boundary, contract)
+    same_approval = collect_business_execution_approval_checklist(boundary, contract)
+    validate_business_execution_approval_checklist(approval, boundary, contract)
+    _require(approval["business_execution_approval_checklist_id"] == same_approval["business_execution_approval_checklist_id"],
+             "Business execution approval id must be deterministic")
+    _require(approval["business_execution_boundary_id"] == boundary["business_execution_boundary_id"],
+             "Business execution approval must preserve boundary id")
+    _require(approval["approval_status"] == "block", "Business execution approval must block by default")
+    _require(approval["blockers"] and approval["required_human_actions"],
+             "Business execution approval must include blockers and actions")
+    _require(parse_business_execution_approval_checklist_json(stable_business_execution_approval_checklist_json(approval)) == approval,
+             "Business execution approval JSON must round trip")
+
+    review = collect_business_execution_review_package(boundary, contract, approval, readiness)
+    same_review = collect_business_execution_review_package(boundary, contract, approval, readiness)
+    validate_business_execution_review_package(review, boundary, contract, approval, readiness)
+    _require(review["business_execution_review_package_id"] == same_review["business_execution_review_package_id"],
+             "Business execution review id must be deterministic")
+    _require(review["execution_boundary_id"] == boundary["business_execution_boundary_id"],
+             "Business execution review must preserve boundary id")
+    _require(review["execution_evidence_contract_id"] == contract["business_execution_evidence_contract_id"],
+             "Business execution review must preserve evidence id")
+    _require(review["execution_approval_checklist_id"] == approval["business_execution_approval_checklist_id"],
+             "Business execution review must preserve approval id")
+    _require(review["readiness_review_package_id"] == readiness["business_readiness_review_package_id"],
+             "Business execution review must preserve readiness id")
+    _require(review["execution_status"] == "block", "Business execution review must block by default")
+    _require(review["review_recommendation"] == "execution_not_allowed",
+             "Business execution review must recommend execution not allowed")
+    _require(parse_business_execution_review_package_json(stable_business_execution_review_package_json(review)) == review,
+             "Business execution review JSON must round trip")
+
+    for payload in (boundary, contract, approval, review):
+        _require(payload["dry_run"] is True and payload["write_allowed"] is False,
+                 "Business execution payloads must be read-only")
+        _require(payload["automation_allowed"] is False and payload["writes"] == [],
+                 "Business execution payloads must not allow automation or writes")
+        _require(payload["safety_metadata"] == {
+            "dry_run": True, "write_allowed": False, "automation_allowed": False, "writes": [],
+        }, "Business execution payloads must include safety metadata")
+
+    bad_boundary = dict(boundary)
+    bad_boundary["execution_allowed"] = True
+    try:
+        validate_business_execution_boundary(bad_boundary, business_readiness_review_package=readiness)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business execution boundary validation must reject unsafe execution_allowed")
+
+    bad_contract = dict(contract)
+    bad_contract["blocked_actions"] = []
+    try:
+        validate_business_execution_evidence_contract(bad_contract)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business execution evidence validation must reject missing blocked actions")
+
+    bad_approval = dict(approval)
+    bad_approval["approval_status"] = "approved"
+    try:
+        validate_business_execution_approval_checklist(bad_approval)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business execution approval validation must reject invalid status")
+
+    bad_review = dict(review)
+    bad_review["readiness_status"] = "ready"
+    try:
+        validate_business_execution_review_package(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Business execution review validation must reject invalid readiness")
+    print("business execution governance helpers OK")
+
+
+def check_business_execution_governance_clis() -> None:
+    """Business execution CLIs expose only object payloads and reject writes."""
+    from link import _cmd_business
+    from link_modes.growth.link_growth_console import (
+        business_execution_approval_checklist_main,
+        business_execution_boundary_main,
+        business_execution_evidence_contract_main,
+        business_execution_review_main,
+        parse_business_execution_approval_checklist_json,
+        parse_business_execution_boundary_json,
+        parse_business_execution_evidence_contract_json,
+        parse_business_execution_review_package_json,
+    )
+
+    expected = [
+        ("execution-boundary", business_execution_boundary_main, parse_business_execution_boundary_json,
+         "business_execution_boundary_id", "Business execution boundary"),
+        ("execution-evidence-contract", business_execution_evidence_contract_main, parse_business_execution_evidence_contract_json,
+         "business_execution_evidence_contract_id", "Business execution evidence contract"),
+        ("execution-approval-checklist", business_execution_approval_checklist_main, parse_business_execution_approval_checklist_json,
+         "business_execution_approval_checklist_id", "Business execution approval checklist"),
+        ("execution-review", business_execution_review_main, parse_business_execution_review_package_json,
+         "business_execution_review_package_id", "Business execution review"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_business(["--help"])
+    _require(help_rc == 0, "business --help must return 0 for execution CLIs")
+    for command, main_func, parse_func, id_key, title in expected:
+        _require(command in help_out.getvalue(), f"business help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"business {command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"business {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"business {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"business {command} must not allow automation or writes")
+        for full_payload_key in (
+            "business_execution_boundary",
+            "business_execution_evidence_contract",
+            "business_execution_approval_checklist",
+            "business_execution_review_package",
+            "business_readiness_review_package",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"business {command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_business([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"business {command} route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"business {command} route must preserve id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"business {command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"business {command} human mode must include title and id")
+        _require(len(human.splitlines()) <= 14, f"business {command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"business {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"business {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"business {command} --write must not print normal output")
+    print("business execution governance CLIs OK")
+
 # ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
@@ -15137,6 +15366,8 @@ def main() -> None:
     check_business_operations_governance_clis()
     check_business_readiness_governance_helpers()
     check_business_readiness_governance_clis()
+    check_business_execution_governance_helpers()
+    check_business_execution_governance_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()
