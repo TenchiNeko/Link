@@ -11014,6 +11014,21 @@ GOVERNANCE_EXECUTIVE_REVIEW_PACKAGE_VERSION = "link-governance-executive-review-
 GOVERNANCE_STATUSES = ("pass", "review", "block")
 GOVERNANCE_OVERALL_STATUSES = ("ready_for_review", "blocked")
 GOVERNANCE_RECOMMENDATIONS = ("resolve_blockers", "review_before_action", "ready_for_operator_review")
+LINK_SHARED_SERVICES_DASHBOARD_VERSION = "link-shared-services-dashboard-v1"
+LINK_CONTROL_PLANE_DASHBOARD_VERSION = "link-control-plane-dashboard-v1"
+CONTROL_PLANE_HEALTH_PACKAGE_VERSION = "link-control-plane-health-package-v1"
+CONTROL_PLANE_REVIEW_PACKAGE_VERSION = "link-control-plane-review-package-v1"
+CONTROL_PLANE_STATUSES = ("pass", "review", "block")
+CONTROL_PLANE_RECOMMENDATIONS = ("resolve_blockers", "review_before_runtime", "healthy_for_review")
+CONTROL_PLANE_MODULE_IDS = (
+    "engineering",
+    "growth",
+    "business_development",
+    "business_operations",
+    "readiness",
+    "execution_governance",
+    "shared_services",
+)
 
 
 def make_business_development_intake_preview_id(
@@ -14986,6 +15001,552 @@ def parse_governance_executive_review_package_json(text: str) -> dict[str, Any]:
     return package
 
 
+
+def make_link_shared_services_dashboard_id(shared_services_registry: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "service_ids": [service["service_id"] for service in shared_services_registry["services"]],
+        "shared_services_registry_id": shared_services_registry["shared_services_registry_id"],
+        "version": LINK_SHARED_SERVICES_DASHBOARD_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"link-shared-services-dashboard-{digest}"
+
+
+def collect_link_shared_services_dashboard(
+    shared_services_registry: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize Link shared services without invoking service runtimes."""
+    registry = shared_services_registry or collect_link_shared_services_registry()
+    validate_link_shared_services_registry(registry)
+    service_ids = [service["service_id"] for service in registry["services"]]
+    expected_services = list(LINK_SHARED_SERVICE_IDS_V2)
+    missing_services = _normalize_implementation_branch_refs([
+        service_id for service_id in expected_services if service_id not in service_ids
+    ])
+    degraded_services = _normalize_implementation_branch_refs([
+        service_id for service_id in service_ids
+        if service_id in {"queues", "source governance"}
+    ])
+    blockers = _normalize_implementation_branch_refs([
+        f"missing shared service: {service_id}" for service_id in missing_services
+    ])
+    warnings = _normalize_implementation_branch_refs([
+        f"shared service requires operator review before runtime use: {service_id}"
+        for service_id in degraded_services
+    ])
+    service_statuses = [
+        {
+            "service_id": service["service_id"],
+            "service_status": "block" if service["service_id"] in missing_services else ("review" if service["service_id"] in degraded_services else "pass"),
+            "required_by_modules": list(CONTROL_PLANE_MODULE_IDS),
+            "contract_present": True,
+        }
+        for service in registry["services"]
+    ]
+    dashboard = {
+        "link_shared_services_dashboard_version": LINK_SHARED_SERVICES_DASHBOARD_VERSION,
+        "shared_services_dashboard_id": make_link_shared_services_dashboard_id(registry),
+        "shared_services_registry_id": registry["shared_services_registry_id"],
+        "service_statuses": service_statuses,
+        "missing_services": missing_services,
+        "degraded_services": degraded_services,
+        "blockers": blockers,
+        "warnings": warnings,
+        "recommended_next_action": "Review degraded shared services before enabling runtime automation or cross-lane execution.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_link_shared_services_dashboard(dashboard, registry)
+    return dashboard
+
+
+def validate_link_shared_services_dashboard(
+    dashboard: dict[str, Any],
+    shared_services_registry: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "link_shared_services_dashboard_version", "shared_services_dashboard_id",
+        "shared_services_registry_id", "service_statuses", "missing_services",
+        "degraded_services", "blockers", "warnings", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in dashboard:
+            raise ValueError(f"link shared services dashboard missing required field: {key}")
+    if dashboard["link_shared_services_dashboard_version"] != LINK_SHARED_SERVICES_DASHBOARD_VERSION:
+        raise ValueError("invalid link shared services dashboard version")
+    if not isinstance(dashboard["shared_services_dashboard_id"], str) or not dashboard["shared_services_dashboard_id"].startswith("link-shared-services-dashboard-"):
+        raise ValueError("invalid link shared services dashboard id")
+    if not isinstance(dashboard["shared_services_registry_id"], str) or not dashboard["shared_services_registry_id"].startswith("link-shared-services-registry-"):
+        raise ValueError("invalid shared services registry id in dashboard")
+    if not isinstance(dashboard["service_statuses"], list) or not dashboard["service_statuses"]:
+        raise ValueError("link shared services dashboard service_statuses must be non-empty")
+    seen: set[str] = set()
+    for item in dashboard["service_statuses"]:
+        if not isinstance(item, dict):
+            raise TypeError("link shared service status item must be a dict")
+        for field in ("service_id", "service_status", "required_by_modules", "contract_present"):
+            if field not in item:
+                raise ValueError(f"link shared service status missing {field}")
+        if item["service_id"] in seen:
+            raise ValueError("duplicate link shared service status item")
+        seen.add(item["service_id"])
+        if item["service_status"] not in CONTROL_PLANE_STATUSES:
+            raise ValueError("invalid link shared service status")
+        if item["required_by_modules"] != list(CONTROL_PLANE_MODULE_IDS):
+            raise ValueError("link shared service required modules mismatch")
+        if item["contract_present"] is not True:
+            raise ValueError("link shared service contract must be present")
+    for field in ("missing_services", "degraded_services", "blockers", "warnings"):
+        normalized = _normalize_implementation_branch_refs(dashboard[field])
+        if normalized != dashboard[field]:
+            raise ValueError(f"link shared services dashboard {field} must be normalized and sorted")
+    if dashboard["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("link shared services dashboard safety metadata mismatch")
+    if dashboard["dry_run"] is not True or dashboard["write_allowed"] is not False:
+        raise ValueError("link shared services dashboard must be read-only")
+    if dashboard["automation_allowed"] is not False or dashboard["writes"] != []:
+        raise ValueError("link shared services dashboard must not allow automation or writes")
+    if shared_services_registry is not None:
+        validate_link_shared_services_registry(shared_services_registry)
+        if dashboard["shared_services_registry_id"] != shared_services_registry["shared_services_registry_id"]:
+            raise ValueError("link shared services dashboard registry id mismatch")
+        expected_id = make_link_shared_services_dashboard_id(shared_services_registry)
+        if dashboard["shared_services_dashboard_id"] != expected_id:
+            raise ValueError("link shared services dashboard id is not deterministic")
+
+
+def stable_link_shared_services_dashboard_json(dashboard: dict[str, Any]) -> str:
+    validate_link_shared_services_dashboard(dashboard)
+    return _stable_ruflo_json(dashboard, indent=2) + "\n"
+
+
+def parse_link_shared_services_dashboard_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    dashboard = _json.loads(text)
+    validate_link_shared_services_dashboard(dashboard)
+    return dashboard
+
+
+def make_link_control_plane_dashboard_id(
+    governance_dashboard: dict[str, Any],
+    governance_risk_dashboard: dict[str, Any],
+    governance_readiness_dashboard: dict[str, Any],
+    governance_review_package: dict[str, Any],
+    module_boundary_registry: dict[str, Any],
+    shared_services_registry: dict[str, Any],
+    shared_services_dashboard: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "governance_dashboard_summary_id": governance_dashboard["governance_dashboard_summary_id"],
+        "governance_executive_review_package_id": governance_review_package["governance_executive_review_package_id"],
+        "governance_readiness_dashboard_id": governance_readiness_dashboard["governance_readiness_dashboard_id"],
+        "governance_risk_dashboard_id": governance_risk_dashboard["governance_risk_dashboard_id"],
+        "link_module_boundary_registry_id": module_boundary_registry["link_module_boundary_registry_id"],
+        "shared_services_dashboard_id": shared_services_dashboard["shared_services_dashboard_id"],
+        "shared_services_registry_id": shared_services_registry["shared_services_registry_id"],
+        "version": LINK_CONTROL_PLANE_DASHBOARD_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"link-control-plane-dashboard-{digest}"
+
+
+def collect_link_control_plane_dashboard(
+    governance_dashboard: dict[str, Any] | None = None,
+    governance_risk_dashboard: dict[str, Any] | None = None,
+    governance_readiness_dashboard: dict[str, Any] | None = None,
+    governance_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    shared_services_registry: dict[str, Any] | None = None,
+    shared_services_dashboard: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aggregate Link governance into a single read-only control-plane dashboard."""
+    summary = governance_dashboard or collect_governance_dashboard_summary()
+    validate_governance_dashboard_summary(summary)
+    risk = governance_risk_dashboard or collect_governance_risk_dashboard(summary)
+    validate_governance_risk_dashboard(risk, governance_dashboard_summary=summary)
+    readiness = governance_readiness_dashboard or collect_governance_readiness_dashboard(summary)
+    validate_governance_readiness_dashboard(readiness, governance_dashboard_summary=summary)
+    review = governance_review_package or collect_governance_executive_review_package(summary, risk, readiness)
+    validate_governance_executive_review_package(review, summary, risk, readiness)
+    modules = module_boundary_registry or collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(modules)
+    services = shared_services_registry or collect_link_shared_services_registry()
+    validate_link_shared_services_registry(services)
+    service_dashboard = shared_services_dashboard or collect_link_shared_services_dashboard(services)
+    validate_link_shared_services_dashboard(service_dashboard, services)
+    module_statuses = [
+        {"module_id": "engineering", "status": summary["engineering_status"]},
+        {"module_id": "growth", "status": summary["growth_status"]},
+        {"module_id": "business_development", "status": summary["business_development_status"]},
+        {"module_id": "business_operations", "status": summary["business_operations_status"]},
+        {"module_id": "readiness", "status": summary["readiness_status"]},
+        {"module_id": "execution_governance", "status": summary["execution_governance_status"]},
+        {"module_id": "shared_services", "status": summary["shared_services_status"]},
+    ]
+    blockers = _normalize_implementation_branch_refs(list(risk["blockers"]) + list(review["blockers"]) + list(service_dashboard["blockers"]))
+    warnings = _normalize_implementation_branch_refs(list(risk["warnings"]) + list(review["warnings"]) + list(service_dashboard["warnings"]))
+    dashboard = {
+        "link_control_plane_dashboard_version": LINK_CONTROL_PLANE_DASHBOARD_VERSION,
+        "control_plane_dashboard_id": make_link_control_plane_dashboard_id(summary, risk, readiness, review, modules, services, service_dashboard),
+        "governance_dashboard_summary_id": summary["governance_dashboard_summary_id"],
+        "governance_risk_dashboard_id": risk["governance_risk_dashboard_id"],
+        "governance_readiness_dashboard_id": readiness["governance_readiness_dashboard_id"],
+        "governance_executive_review_package_id": review["governance_executive_review_package_id"],
+        "link_module_boundary_registry_id": modules["link_module_boundary_registry_id"],
+        "shared_services_registry_id": services["shared_services_registry_id"],
+        "shared_services_dashboard_id": service_dashboard["shared_services_dashboard_id"],
+        "module_statuses": module_statuses,
+        "governance_status": "block" if summary["overall_status"] == "blocked" else "review",
+        "readiness_status": summary["readiness_status"],
+        "execution_status": summary["execution_governance_status"],
+        "blockers": blockers,
+        "warnings": warnings,
+        "recommended_next_action": "Use the control-plane dashboard to resolve blockers before enabling any runtime or automation layer.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_link_control_plane_dashboard(dashboard, summary, risk, readiness, review, modules, services, service_dashboard)
+    return dashboard
+
+
+def validate_link_control_plane_dashboard(
+    dashboard: dict[str, Any],
+    governance_dashboard: dict[str, Any] | None = None,
+    governance_risk_dashboard: dict[str, Any] | None = None,
+    governance_readiness_dashboard: dict[str, Any] | None = None,
+    governance_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    shared_services_registry: dict[str, Any] | None = None,
+    shared_services_dashboard: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "link_control_plane_dashboard_version", "control_plane_dashboard_id",
+        "governance_dashboard_summary_id", "governance_risk_dashboard_id",
+        "governance_readiness_dashboard_id", "governance_executive_review_package_id",
+        "link_module_boundary_registry_id", "shared_services_registry_id",
+        "shared_services_dashboard_id", "module_statuses", "governance_status",
+        "readiness_status", "execution_status", "blockers", "warnings",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in dashboard:
+            raise ValueError(f"link control-plane dashboard missing required field: {key}")
+    if dashboard["link_control_plane_dashboard_version"] != LINK_CONTROL_PLANE_DASHBOARD_VERSION:
+        raise ValueError("invalid link control-plane dashboard version")
+    if not isinstance(dashboard["control_plane_dashboard_id"], str) or not dashboard["control_plane_dashboard_id"].startswith("link-control-plane-dashboard-"):
+        raise ValueError("invalid link control-plane dashboard id")
+    if dashboard["governance_status"] not in CONTROL_PLANE_STATUSES:
+        raise ValueError("invalid control-plane governance status")
+    if dashboard["readiness_status"] not in GOVERNANCE_OVERALL_STATUSES:
+        raise ValueError("invalid control-plane readiness status")
+    if dashboard["execution_status"] not in CONTROL_PLANE_STATUSES:
+        raise ValueError("invalid control-plane execution status")
+    if not isinstance(dashboard["module_statuses"], list) or len(dashboard["module_statuses"]) != len(CONTROL_PLANE_MODULE_IDS):
+        raise ValueError("control-plane module_statuses must cover all control-plane modules")
+    seen_modules: set[str] = set()
+    for item in dashboard["module_statuses"]:
+        if not isinstance(item, dict) or item.get("module_id") not in CONTROL_PLANE_MODULE_IDS or not item.get("status"):
+            raise ValueError("invalid control-plane module status item")
+        if item["module_id"] in seen_modules:
+            raise ValueError("duplicate control-plane module status item")
+        seen_modules.add(item["module_id"])
+    for field in ("blockers", "warnings"):
+        normalized = _normalize_implementation_branch_refs(dashboard[field])
+        if normalized != dashboard[field]:
+            raise ValueError(f"control-plane dashboard {field} must be normalized and sorted")
+    if dashboard["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("control-plane dashboard safety metadata mismatch")
+    if dashboard["dry_run"] is not True or dashboard["write_allowed"] is not False:
+        raise ValueError("control-plane dashboard must be read-only")
+    if dashboard["automation_allowed"] is not False or dashboard["writes"] != []:
+        raise ValueError("control-plane dashboard must not allow automation or writes")
+    if all(item is not None for item in (governance_dashboard, governance_risk_dashboard, governance_readiness_dashboard, governance_review_package, module_boundary_registry, shared_services_registry, shared_services_dashboard)):
+        expected_id = make_link_control_plane_dashboard_id(governance_dashboard, governance_risk_dashboard, governance_readiness_dashboard, governance_review_package, module_boundary_registry, shared_services_registry, shared_services_dashboard)
+        if dashboard["control_plane_dashboard_id"] != expected_id:
+            raise ValueError("control-plane dashboard id is not deterministic")
+
+
+def stable_link_control_plane_dashboard_json(dashboard: dict[str, Any]) -> str:
+    validate_link_control_plane_dashboard(dashboard)
+    return _stable_ruflo_json(dashboard, indent=2) + "\n"
+
+
+def parse_link_control_plane_dashboard_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    dashboard = _json.loads(text)
+    validate_link_control_plane_dashboard(dashboard)
+    return dashboard
+
+
+def make_control_plane_health_package_id(
+    control_plane_dashboard: dict[str, Any],
+    shared_services_dashboard: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "control_plane_dashboard_id": control_plane_dashboard["control_plane_dashboard_id"],
+        "shared_services_dashboard_id": shared_services_dashboard["shared_services_dashboard_id"],
+        "version": CONTROL_PLANE_HEALTH_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"control-plane-health-package-{digest}"
+
+
+def collect_control_plane_health_package(
+    control_plane_dashboard: dict[str, Any] | None = None,
+    shared_services_dashboard: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Track control-plane dependency and validation health without executing checks."""
+    services = shared_services_dashboard or collect_link_shared_services_dashboard()
+    validate_link_shared_services_dashboard(services)
+    dashboard = control_plane_dashboard or collect_link_control_plane_dashboard(shared_services_dashboard=services)
+    validate_link_control_plane_dashboard(dashboard)
+    failed_dependencies = _normalize_implementation_branch_refs(
+        [f"missing service dependency: {item}" for item in services["missing_services"]] +
+        [f"blocked control-plane module: {item['module_id']}" for item in dashboard["module_statuses"] if item["status"] in {"block", "blocked"}]
+    )
+    blockers = _normalize_implementation_branch_refs(list(dashboard["blockers"]) + failed_dependencies)
+    warnings = _normalize_implementation_branch_refs(
+        list(dashboard["warnings"]) +
+        ["dashboard freshness is live-generated and has no persisted freshness receipt"]
+    )
+    package = {
+        "control_plane_health_package_version": CONTROL_PLANE_HEALTH_PACKAGE_VERSION,
+        "control_plane_health_package_id": make_control_plane_health_package_id(dashboard, services),
+        "control_plane_dashboard_id": dashboard["control_plane_dashboard_id"],
+        "shared_services_dashboard_id": services["shared_services_dashboard_id"],
+        "health_status": "block" if blockers or failed_dependencies else ("review" if warnings else "pass"),
+        "blockers": blockers,
+        "warnings": warnings,
+        "failed_dependencies": failed_dependencies,
+        "recommended_next_action": "Resolve failed dependencies and warnings before promoting control-plane runtime health claims.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_control_plane_health_package(package, dashboard, services)
+    return package
+
+
+def validate_control_plane_health_package(
+    package: dict[str, Any],
+    control_plane_dashboard: dict[str, Any] | None = None,
+    shared_services_dashboard: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "control_plane_health_package_version", "control_plane_health_package_id",
+        "control_plane_dashboard_id", "shared_services_dashboard_id", "health_status",
+        "blockers", "warnings", "failed_dependencies", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"control-plane health package missing required field: {key}")
+    if package["control_plane_health_package_version"] != CONTROL_PLANE_HEALTH_PACKAGE_VERSION:
+        raise ValueError("invalid control-plane health package version")
+    if not isinstance(package["control_plane_health_package_id"], str) or not package["control_plane_health_package_id"].startswith("control-plane-health-package-"):
+        raise ValueError("invalid control-plane health package id")
+    if package["health_status"] not in CONTROL_PLANE_STATUSES:
+        raise ValueError("invalid control-plane health status")
+    for field in ("blockers", "warnings", "failed_dependencies"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"control-plane health package {field} must be normalized and sorted")
+    if package["health_status"] == "block" and not package["blockers"] and not package["failed_dependencies"]:
+        raise ValueError("blocked control-plane health package must include blockers or failed dependencies")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("control-plane health package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("control-plane health package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("control-plane health package must not allow automation or writes")
+    if control_plane_dashboard is not None:
+        validate_link_control_plane_dashboard(control_plane_dashboard)
+        if package["control_plane_dashboard_id"] != control_plane_dashboard["control_plane_dashboard_id"]:
+            raise ValueError("control-plane health package dashboard id mismatch")
+    if shared_services_dashboard is not None:
+        validate_link_shared_services_dashboard(shared_services_dashboard)
+        if package["shared_services_dashboard_id"] != shared_services_dashboard["shared_services_dashboard_id"]:
+            raise ValueError("control-plane health package services dashboard id mismatch")
+    if control_plane_dashboard is not None and shared_services_dashboard is not None:
+        expected_id = make_control_plane_health_package_id(control_plane_dashboard, shared_services_dashboard)
+        if package["control_plane_health_package_id"] != expected_id:
+            raise ValueError("control-plane health package id is not deterministic")
+
+
+def stable_control_plane_health_package_json(package: dict[str, Any]) -> str:
+    validate_control_plane_health_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_control_plane_health_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_control_plane_health_package(package)
+    return package
+
+
+def make_control_plane_review_package_id(
+    control_plane_dashboard: dict[str, Any],
+    shared_services_dashboard: dict[str, Any],
+    health_package: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "control_plane_dashboard_id": control_plane_dashboard["control_plane_dashboard_id"],
+        "control_plane_health_package_id": health_package["control_plane_health_package_id"],
+        "shared_services_dashboard_id": shared_services_dashboard["shared_services_dashboard_id"],
+        "version": CONTROL_PLANE_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"control-plane-review-package-{digest}"
+
+
+def collect_control_plane_review_package(
+    control_plane_dashboard: dict[str, Any] | None = None,
+    shared_services_dashboard: dict[str, Any] | None = None,
+    health_package: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Answer whether Link is healthy from the read-only control plane."""
+    services = shared_services_dashboard or collect_link_shared_services_dashboard()
+    validate_link_shared_services_dashboard(services)
+    dashboard = control_plane_dashboard or collect_link_control_plane_dashboard(shared_services_dashboard=services)
+    validate_link_control_plane_dashboard(dashboard)
+    health = health_package or collect_control_plane_health_package(dashboard, services)
+    validate_control_plane_health_package(health, dashboard, services)
+    blockers = _normalize_implementation_branch_refs(list(dashboard["blockers"]) + list(health["blockers"]))
+    warnings = _normalize_implementation_branch_refs(list(dashboard["warnings"]) + list(health["warnings"]) + list(services["warnings"]))
+    required_actions = _normalize_implementation_branch_refs([
+        "review control-plane blockers before runtime expansion",
+        "review degraded shared services before automation enablement",
+    ] if blockers or warnings else ["confirm control-plane dashboard before next governance slice"])
+    package = {
+        "control_plane_review_package_version": CONTROL_PLANE_REVIEW_PACKAGE_VERSION,
+        "control_plane_review_package_id": make_control_plane_review_package_id(dashboard, services, health),
+        "control_plane_dashboard_id": dashboard["control_plane_dashboard_id"],
+        "shared_services_dashboard_id": services["shared_services_dashboard_id"],
+        "control_plane_health_package_id": health["control_plane_health_package_id"],
+        "dashboard_status": dashboard["governance_status"],
+        "health_status": health["health_status"],
+        "readiness_status": dashboard["readiness_status"],
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": required_actions,
+        "review_recommendation": "resolve_blockers" if blockers or health["health_status"] == "block" else ("review_before_runtime" if warnings else "healthy_for_review"),
+        "recommended_next_action": "Use this control-plane review to decide the next read-only governance or dashboard slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_control_plane_review_package(package, dashboard, services, health)
+    return package
+
+
+def validate_control_plane_review_package(
+    package: dict[str, Any],
+    control_plane_dashboard: dict[str, Any] | None = None,
+    shared_services_dashboard: dict[str, Any] | None = None,
+    health_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "control_plane_review_package_version", "control_plane_review_package_id",
+        "control_plane_dashboard_id", "shared_services_dashboard_id",
+        "control_plane_health_package_id", "dashboard_status", "health_status",
+        "readiness_status", "blockers", "warnings", "required_human_actions",
+        "review_recommendation", "recommended_next_action", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"control-plane review package missing required field: {key}")
+    if package["control_plane_review_package_version"] != CONTROL_PLANE_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid control-plane review package version")
+    if not isinstance(package["control_plane_review_package_id"], str) or not package["control_plane_review_package_id"].startswith("control-plane-review-package-"):
+        raise ValueError("invalid control-plane review package id")
+    if package["dashboard_status"] not in CONTROL_PLANE_STATUSES:
+        raise ValueError("invalid control-plane review dashboard status")
+    if package["health_status"] not in CONTROL_PLANE_STATUSES:
+        raise ValueError("invalid control-plane review health status")
+    if package["readiness_status"] not in GOVERNANCE_OVERALL_STATUSES:
+        raise ValueError("invalid control-plane review readiness status")
+    if package["review_recommendation"] not in CONTROL_PLANE_RECOMMENDATIONS:
+        raise ValueError("invalid control-plane review recommendation")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"control-plane review package {field} must be normalized and sorted")
+    if package["review_recommendation"] == "resolve_blockers" and not package["blockers"] and package["health_status"] != "block":
+        raise ValueError("resolve_blockers recommendation requires blockers or blocked health")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("control-plane review package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("control-plane review package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("control-plane review package must not allow automation or writes")
+    if control_plane_dashboard is not None:
+        validate_link_control_plane_dashboard(control_plane_dashboard)
+        if package["control_plane_dashboard_id"] != control_plane_dashboard["control_plane_dashboard_id"]:
+            raise ValueError("control-plane review dashboard id mismatch")
+    if shared_services_dashboard is not None:
+        validate_link_shared_services_dashboard(shared_services_dashboard)
+        if package["shared_services_dashboard_id"] != shared_services_dashboard["shared_services_dashboard_id"]:
+            raise ValueError("control-plane review services id mismatch")
+    if health_package is not None:
+        validate_control_plane_health_package(health_package)
+        if package["control_plane_health_package_id"] != health_package["control_plane_health_package_id"]:
+            raise ValueError("control-plane review health id mismatch")
+    if control_plane_dashboard is not None and shared_services_dashboard is not None and health_package is not None:
+        expected_id = make_control_plane_review_package_id(control_plane_dashboard, shared_services_dashboard, health_package)
+        if package["control_plane_review_package_id"] != expected_id:
+            raise ValueError("control-plane review package id is not deterministic")
+
+
+def stable_control_plane_review_package_json(package: dict[str, Any]) -> str:
+    validate_control_plane_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_control_plane_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_control_plane_review_package(package)
+    return package
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -17818,6 +18379,154 @@ def governance_review_main(argv: list[str] | None = None) -> int:
         print(stable_governance_executive_review_package_json(package), end="")
         return 0
     render_governance_executive_review_plain(package)
+    return 0
+
+
+
+def render_link_shared_services_dashboard_plain(dashboard: dict[str, Any]) -> None:
+    validate_link_shared_services_dashboard(dashboard)
+    print("Link shared services dashboard")
+    print(f"shared_services_dashboard_id: {dashboard['shared_services_dashboard_id']}")
+    print(f"shared_services_registry_id: {dashboard['shared_services_registry_id']}")
+    print(f"service_status_count: {len(dashboard['service_statuses'])}")
+    print(f"missing_service_count: {len(dashboard['missing_services'])}")
+    print(f"degraded_service_count: {len(dashboard['degraded_services'])}")
+    print(f"blocker_count: {len(dashboard['blockers'])}")
+    print(f"warning_count: {len(dashboard['warnings'])}")
+    print(f"next_action: {dashboard['recommended_next_action']}")
+
+
+def control_plane_services_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Control plane services: Link shared services dashboard")
+        print("")
+        print("Usage:")
+        print("  python3 link.py control-plane services")
+        print("  python3 link.py control-plane services --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: control-plane services is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    dashboard = collect_link_shared_services_dashboard()
+    validate_link_shared_services_dashboard(dashboard)
+    if "--json" in args:
+        print(stable_link_shared_services_dashboard_json(dashboard), end="")
+        return 0
+    render_link_shared_services_dashboard_plain(dashboard)
+    return 0
+
+
+def render_link_control_plane_dashboard_plain(dashboard: dict[str, Any]) -> None:
+    validate_link_control_plane_dashboard(dashboard)
+    print("Link control-plane dashboard")
+    print(f"control_plane_dashboard_id: {dashboard['control_plane_dashboard_id']}")
+    print(f"governance_status: {dashboard['governance_status']}")
+    print(f"readiness_status: {dashboard['readiness_status']}")
+    print(f"execution_status: {dashboard['execution_status']}")
+    print(f"module_status_count: {len(dashboard['module_statuses'])}")
+    print(f"blocker_count: {len(dashboard['blockers'])}")
+    print(f"warning_count: {len(dashboard['warnings'])}")
+    print(f"next_action: {dashboard['recommended_next_action']}")
+
+
+def control_plane_dashboard_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Control plane dashboard: Link control-plane status dashboard")
+        print("")
+        print("Usage:")
+        print("  python3 link.py control-plane dashboard")
+        print("  python3 link.py control-plane dashboard --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: control-plane dashboard is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    dashboard = collect_link_control_plane_dashboard()
+    validate_link_control_plane_dashboard(dashboard)
+    if "--json" in args:
+        print(stable_link_control_plane_dashboard_json(dashboard), end="")
+        return 0
+    render_link_control_plane_dashboard_plain(dashboard)
+    return 0
+
+
+def render_control_plane_health_package_plain(package: dict[str, Any]) -> None:
+    validate_control_plane_health_package(package)
+    print("Control plane health package")
+    print(f"control_plane_health_package_id: {package['control_plane_health_package_id']}")
+    print(f"control_plane_dashboard_id: {package['control_plane_dashboard_id']}")
+    print(f"shared_services_dashboard_id: {package['shared_services_dashboard_id']}")
+    print(f"health_status: {package['health_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"failed_dependency_count: {len(package['failed_dependencies'])}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def control_plane_health_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Control plane health: Link control-plane health package")
+        print("")
+        print("Usage:")
+        print("  python3 link.py control-plane health")
+        print("  python3 link.py control-plane health --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: control-plane health is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_control_plane_health_package()
+    validate_control_plane_health_package(package)
+    if "--json" in args:
+        print(stable_control_plane_health_package_json(package), end="")
+        return 0
+    render_control_plane_health_package_plain(package)
+    return 0
+
+
+def render_control_plane_review_package_plain(package: dict[str, Any]) -> None:
+    validate_control_plane_review_package(package)
+    print("Control plane review package")
+    print(f"control_plane_review_package_id: {package['control_plane_review_package_id']}")
+    print(f"control_plane_dashboard_id: {package['control_plane_dashboard_id']}")
+    print(f"control_plane_health_package_id: {package['control_plane_health_package_id']}")
+    print(f"dashboard_status: {package['dashboard_status']}")
+    print(f"health_status: {package['health_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def control_plane_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Control plane review: Link control-plane review package")
+        print("")
+        print("Usage:")
+        print("  python3 link.py control-plane review")
+        print("  python3 link.py control-plane review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: control-plane review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_control_plane_review_package()
+    validate_control_plane_review_package(package)
+    if "--json" in args:
+        print(stable_control_plane_review_package_json(package), end="")
+        return 0
+    render_control_plane_review_package_plain(package)
     return 0
 
 

@@ -14564,6 +14564,230 @@ def check_governance_dashboard_clis() -> None:
         _require(write_out.getvalue() == "", f"governance {command} --write must not print normal output")
     print("governance dashboard CLIs OK")
 
+
+# ---------------------------------------------------------------------------
+# 62j. Link control-plane dashboard and shared services governance
+# ---------------------------------------------------------------------------
+
+def check_control_plane_dashboard_helpers() -> None:
+    """Control-plane helpers aggregate Link health read-only."""
+    from link_modes.growth.link_growth_console import (
+        collect_control_plane_health_package,
+        collect_control_plane_review_package,
+        collect_governance_dashboard_summary,
+        collect_governance_executive_review_package,
+        collect_governance_readiness_dashboard,
+        collect_governance_risk_dashboard,
+        collect_link_control_plane_dashboard,
+        collect_link_module_boundary_registry,
+        collect_link_shared_services_dashboard,
+        collect_link_shared_services_registry,
+        parse_control_plane_health_package_json,
+        parse_control_plane_review_package_json,
+        parse_link_control_plane_dashboard_json,
+        parse_link_shared_services_dashboard_json,
+        stable_control_plane_health_package_json,
+        stable_control_plane_review_package_json,
+        stable_link_control_plane_dashboard_json,
+        stable_link_shared_services_dashboard_json,
+        validate_control_plane_health_package,
+        validate_control_plane_review_package,
+        validate_link_control_plane_dashboard,
+        validate_link_shared_services_dashboard,
+    )
+
+    services_registry = collect_link_shared_services_registry()
+    services_dashboard = collect_link_shared_services_dashboard(services_registry)
+    same_services_dashboard = collect_link_shared_services_dashboard(services_registry)
+    validate_link_shared_services_dashboard(services_dashboard, services_registry)
+    _require(services_dashboard["shared_services_dashboard_id"] == same_services_dashboard["shared_services_dashboard_id"],
+             "shared services dashboard id must be deterministic")
+    _require(services_dashboard["shared_services_registry_id"] == services_registry["shared_services_registry_id"],
+             "shared services dashboard must preserve registry id")
+    _require(services_dashboard["service_statuses"],
+             "shared services dashboard must include service statuses")
+    _require(services_dashboard["degraded_services"],
+             "shared services dashboard must identify degraded review-only services")
+    _require(services_dashboard["safety_metadata"] == {
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+    }, "shared services dashboard must include read-only safety metadata")
+    _require(parse_link_shared_services_dashboard_json(stable_link_shared_services_dashboard_json(services_dashboard)) == services_dashboard,
+             "shared services dashboard JSON must round trip")
+
+    governance = collect_governance_dashboard_summary(shared_services_registry=services_registry)
+    risk = collect_governance_risk_dashboard(governance)
+    readiness = collect_governance_readiness_dashboard(governance)
+    executive = collect_governance_executive_review_package(governance, risk, readiness)
+    modules = collect_link_module_boundary_registry()
+    control = collect_link_control_plane_dashboard(
+        governance, risk, readiness, executive, modules, services_registry, services_dashboard)
+    same_control = collect_link_control_plane_dashboard(
+        governance, risk, readiness, executive, modules, services_registry, services_dashboard)
+    validate_link_control_plane_dashboard(control, governance, risk, readiness, executive, modules, services_registry, services_dashboard)
+    _require(control["control_plane_dashboard_id"] == same_control["control_plane_dashboard_id"],
+             "control-plane dashboard id must be deterministic")
+    _require(control["governance_dashboard_summary_id"] == governance["governance_dashboard_summary_id"],
+             "control-plane dashboard must preserve governance dashboard id")
+    _require(control["shared_services_dashboard_id"] == services_dashboard["shared_services_dashboard_id"],
+             "control-plane dashboard must preserve services dashboard id")
+    _require(len(control["module_statuses"]) == 7,
+             "control-plane dashboard must include all governed lanes")
+    _require(control["dry_run"] is True and control["write_allowed"] is False,
+             "control-plane dashboard must be read-only")
+    _require(control["automation_allowed"] is False and control["writes"] == [],
+             "control-plane dashboard must not allow automation or writes")
+    _require(parse_link_control_plane_dashboard_json(stable_link_control_plane_dashboard_json(control)) == control,
+             "control-plane dashboard JSON must round trip")
+
+    health = collect_control_plane_health_package(control, services_dashboard)
+    same_health = collect_control_plane_health_package(control, services_dashboard)
+    validate_control_plane_health_package(health, control, services_dashboard)
+    _require(health["control_plane_health_package_id"] == same_health["control_plane_health_package_id"],
+             "control-plane health package id must be deterministic")
+    _require(health["control_plane_dashboard_id"] == control["control_plane_dashboard_id"],
+             "control-plane health must preserve dashboard id")
+    _require(health["failed_dependencies"],
+             "control-plane health must track blocked dependencies")
+    _require(parse_control_plane_health_package_json(stable_control_plane_health_package_json(health)) == health,
+             "control-plane health package JSON must round trip")
+
+    review = collect_control_plane_review_package(control, services_dashboard, health)
+    same_review = collect_control_plane_review_package(control, services_dashboard, health)
+    validate_control_plane_review_package(review, control, services_dashboard, health)
+    _require(review["control_plane_review_package_id"] == same_review["control_plane_review_package_id"],
+             "control-plane review package id must be deterministic")
+    _require(review["control_plane_health_package_id"] == health["control_plane_health_package_id"],
+             "control-plane review must preserve health package id")
+    _require(review["required_human_actions"],
+             "control-plane review must include required human actions")
+    _require(review["review_recommendation"] in {"resolve_blockers", "review_before_runtime", "healthy_for_review"},
+             "control-plane review recommendation must be valid")
+    _require(review["dry_run"] is True and review["write_allowed"] is False,
+             "control-plane review must be read-only")
+    _require(review["automation_allowed"] is False and review["writes"] == [],
+             "control-plane review must not allow automation or writes")
+    _require(parse_control_plane_review_package_json(stable_control_plane_review_package_json(review)) == review,
+             "control-plane review package JSON must round trip")
+
+    bad_services = json.loads(stable_link_shared_services_dashboard_json(services_dashboard))
+    bad_services["service_statuses"][0]["service_status"] = "maybe"
+    try:
+        validate_link_shared_services_dashboard(bad_services)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("shared services dashboard validation must reject invalid service status")
+
+    bad_control = json.loads(stable_link_control_plane_dashboard_json(control))
+    bad_control["module_statuses"].pop()
+    try:
+        validate_link_control_plane_dashboard(bad_control)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("control-plane dashboard validation must reject missing module statuses")
+
+    bad_health = json.loads(stable_control_plane_health_package_json(health))
+    bad_health["health_status"] = "maybe"
+    try:
+        validate_control_plane_health_package(bad_health)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("control-plane health validation must reject invalid health status")
+
+    bad_review = json.loads(stable_control_plane_review_package_json(review))
+    bad_review["write_allowed"] = True
+    try:
+        validate_control_plane_review_package(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("control-plane review validation must reject unsafe safety metadata")
+
+    print("control-plane dashboard helper OK")
+
+
+def check_control_plane_dashboard_clis() -> None:
+    """control-plane commands expose only their compact payloads."""
+    from link import _cmd_control_plane
+    from link_modes.growth.link_growth_console import (
+        control_plane_dashboard_main,
+        control_plane_health_main,
+        control_plane_review_main,
+        control_plane_services_main,
+        parse_control_plane_health_package_json,
+        parse_control_plane_review_package_json,
+        parse_link_control_plane_dashboard_json,
+        parse_link_shared_services_dashboard_json,
+    )
+
+    expected = [
+        ("dashboard", control_plane_dashboard_main, parse_link_control_plane_dashboard_json,
+         "control_plane_dashboard_id", "Link control-plane dashboard"),
+        ("services", control_plane_services_main, parse_link_shared_services_dashboard_json,
+         "shared_services_dashboard_id", "Link shared services dashboard"),
+        ("health", control_plane_health_main, parse_control_plane_health_package_json,
+         "control_plane_health_package_id", "Control plane health package"),
+        ("review", control_plane_review_main, parse_control_plane_review_package_json,
+         "control_plane_review_package_id", "Control plane review package"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_control_plane(["--help"])
+    _require(help_rc == 0, "control-plane --help must return 0")
+    for command, main_func, parse_func, id_key, title in expected:
+        _require(command in help_out.getvalue(), f"control-plane help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"control-plane {command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"control-plane {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"control-plane {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"control-plane {command} must not allow automation or writes")
+        for full_payload_key in (
+            "governance_dashboard_summary",
+            "governance_risk_dashboard",
+            "governance_readiness_dashboard",
+            "governance_executive_review_package",
+            "shared_services_dashboard",
+            "control_plane_dashboard",
+            "control_plane_health_package",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"control-plane {command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_control_plane([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"control-plane {command} route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"control-plane {command} route must preserve id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"control-plane {command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"control-plane {command} human mode must include title and id")
+        _require(len(human.splitlines()) <= 12, f"control-plane {command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"control-plane {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"control-plane {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"control-plane {command} --write must not print normal output")
+    print("control-plane dashboard CLIs OK")
+
 # ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
@@ -15597,6 +15821,8 @@ def main() -> None:
     check_business_execution_governance_clis()
     check_governance_dashboard_helpers()
     check_governance_dashboard_clis()
+    check_control_plane_dashboard_helpers()
+    check_control_plane_dashboard_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

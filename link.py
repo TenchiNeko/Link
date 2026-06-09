@@ -42,11 +42,6 @@ _DELEGATED_COMMANDS: dict[str, tuple[str, str, str]] = {
         "main",
         "Deterministic pre-run route intelligence.",
     ),
-    "control-plane": (
-        "link_core.control_plane.link_control_plane_cli",
-        "main",
-        "Link control-plane report/status CLI.",
-    ),
     "grade": (
         "link_core.ops.link_grade",
         "main",
@@ -332,6 +327,37 @@ def _cmd_governance(argv: list[str]) -> int:
         return 0
     print(f"governance: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py governance --help' for subcommands.", file=sys.stderr)
+    return 2
+
+
+def _cmd_control_plane(argv: list[str]) -> int:
+    """Link control-plane dashboard and health previews."""
+    subcommand = argv[0] if argv else ""
+    if subcommand == "dashboard":
+        from link_modes.growth.link_growth_console import control_plane_dashboard_main as _control_plane_dashboard_main
+
+        return _control_plane_dashboard_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "services":
+        from link_modes.growth.link_growth_console import control_plane_services_main as _control_plane_services_main
+
+        return _control_plane_services_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "health":
+        from link_modes.growth.link_growth_console import control_plane_health_main as _control_plane_health_main
+
+        return _control_plane_health_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "review":
+        from link_modes.growth.link_growth_console import control_plane_review_main as _control_plane_review_main
+
+        return _control_plane_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand in ("-h", "--help", "help", ""):
+        print("Control-plane commands:")
+        print("  dashboard  Preview Link control-plane dashboard")
+        print("  services   Preview Link shared services dashboard")
+        print("  health     Preview Link control-plane health package")
+        print("  review     Preview Link control-plane review package")
+        return 0
+    print(f"control-plane: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py control-plane --help' for subcommands.", file=sys.stderr)
     return 2
 
 
@@ -789,6 +815,7 @@ _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "business-operations": (_cmd_business_operations, "Business Operations governance previews."),
     "business": (_cmd_business, "Cross-lane business readiness governance previews."),
     "governance": (_cmd_governance, "Unified Link governance dashboard previews."),
+    "control-plane": (_cmd_control_plane, "Link control-plane dashboard and health previews."),
     "dashboard": (_cmd_dashboard, "Compact diagnostics dashboard."),
     "self-test": (_cmd_self_test, "Run canonical architecture smoke checks."),
     "config": (_cmd_config, "Validate Link configuration files against runtime."),
