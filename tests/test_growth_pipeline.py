@@ -15667,8 +15667,222 @@ def check_simulation_remediation_planning_clis() -> None:
         _require(write_out.getvalue() == "", f"simulation {command} --write must not print normal output")
     print("simulation remediation planning CLIs OK")
 
+
 # ---------------------------------------------------------------------------
-# 62n. Growth supervised-execution-review CLI
+# 62n. Execution readiness sandbox projections
+# ---------------------------------------------------------------------------
+
+def check_execution_readiness_sandbox_helpers() -> None:
+    """Sandbox projections model post-remediation readiness without execution."""
+    from link_modes.growth.link_growth_console import (
+        collect_business_execution_review_package,
+        collect_business_readiness_review_package,
+        collect_operator_remediation_review,
+        collect_remediation_dependency_graph,
+        collect_remediation_priority_queue,
+        collect_sandbox_approval_projection,
+        collect_sandbox_evidence_projection,
+        collect_sandbox_outcome_projection,
+        collect_sandbox_readiness_projection,
+        collect_sandbox_review_package,
+        collect_simulation_remediation_plan,
+        parse_sandbox_approval_projection_json,
+        parse_sandbox_evidence_projection_json,
+        parse_sandbox_outcome_projection_json,
+        parse_sandbox_readiness_projection_json,
+        parse_sandbox_review_package_json,
+        stable_sandbox_approval_projection_json,
+        stable_sandbox_evidence_projection_json,
+        stable_sandbox_outcome_projection_json,
+        stable_sandbox_readiness_projection_json,
+        stable_sandbox_review_package_json,
+        validate_sandbox_approval_projection,
+        validate_sandbox_evidence_projection,
+        validate_sandbox_outcome_projection,
+        validate_sandbox_readiness_projection,
+        validate_sandbox_review_package,
+    )
+
+    plan = collect_simulation_remediation_plan()
+    graph = collect_remediation_dependency_graph(plan)
+    queue = collect_remediation_priority_queue(plan, graph)
+    remediation_review = collect_operator_remediation_review(plan, graph, queue)
+    readiness_review = collect_business_readiness_review_package()
+    execution_review = collect_business_execution_review_package(business_readiness_review_package=readiness_review)
+
+    readiness = collect_sandbox_readiness_projection(plan, queue, remediation_review, execution_review, readiness_review)
+    same_readiness = collect_sandbox_readiness_projection(plan, queue, remediation_review, execution_review, readiness_review)
+    validate_sandbox_readiness_projection(readiness, plan, queue, remediation_review, execution_review, readiness_review)
+    _require(readiness["sandbox_readiness_projection_id"] == same_readiness["sandbox_readiness_projection_id"],
+             "sandbox readiness projection id must be deterministic")
+    _require(readiness["current_readiness_status"] == readiness_review["readiness_status"],
+             "sandbox readiness must flow from business readiness review")
+    _require(readiness["projected_warnings_remaining"], "sandbox readiness must include projected warnings")
+    _require(readiness["dry_run"] is True and readiness["write_allowed"] is False,
+             "sandbox readiness must remain read-only")
+    _require(parse_sandbox_readiness_projection_json(stable_sandbox_readiness_projection_json(readiness)) == readiness,
+             "sandbox readiness JSON must round trip")
+
+    evidence = collect_sandbox_evidence_projection(readiness, plan)
+    same_evidence = collect_sandbox_evidence_projection(readiness, plan)
+    validate_sandbox_evidence_projection(evidence, readiness, plan)
+    _require(evidence["sandbox_evidence_projection_id"] == same_evidence["sandbox_evidence_projection_id"],
+             "sandbox evidence projection id must be deterministic")
+    _require(evidence["sandbox_readiness_projection_id"] == readiness["sandbox_readiness_projection_id"],
+             "sandbox evidence must flow from readiness projection")
+    _require(evidence["projected_evidence_satisfied"], "sandbox evidence must project satisfied evidence")
+    _require(parse_sandbox_evidence_projection_json(stable_sandbox_evidence_projection_json(evidence)) == evidence,
+             "sandbox evidence JSON must round trip")
+
+    approvals = collect_sandbox_approval_projection(readiness, plan)
+    same_approvals = collect_sandbox_approval_projection(readiness, plan)
+    validate_sandbox_approval_projection(approvals, readiness, plan)
+    _require(approvals["sandbox_approval_projection_id"] == same_approvals["sandbox_approval_projection_id"],
+             "sandbox approval projection id must be deterministic")
+    _require(approvals["sandbox_readiness_projection_id"] == readiness["sandbox_readiness_projection_id"],
+             "sandbox approvals must flow from readiness projection")
+    _require(approvals["projected_approvals_satisfied"], "sandbox approvals must project satisfied approvals")
+    _require(parse_sandbox_approval_projection_json(stable_sandbox_approval_projection_json(approvals)) == approvals,
+             "sandbox approvals JSON must round trip")
+
+    outcome = collect_sandbox_outcome_projection(readiness, evidence, approvals)
+    same_outcome = collect_sandbox_outcome_projection(readiness, evidence, approvals)
+    validate_sandbox_outcome_projection(outcome, readiness, evidence, approvals)
+    _require(outcome["sandbox_outcome_projection_id"] == same_outcome["sandbox_outcome_projection_id"],
+             "sandbox outcome projection id must be deterministic")
+    _require(outcome["sandbox_readiness_projection_id"] == readiness["sandbox_readiness_projection_id"],
+             "sandbox outcome must flow from readiness projection")
+    _require(outcome["projected_execution_allowed"] is False,
+             "sandbox outcome must keep execution blocked by default")
+    _require(parse_sandbox_outcome_projection_json(stable_sandbox_outcome_projection_json(outcome)) == outcome,
+             "sandbox outcome JSON must round trip")
+
+    package = collect_sandbox_review_package(readiness, evidence, approvals, outcome)
+    same_package = collect_sandbox_review_package(readiness, evidence, approvals, outcome)
+    validate_sandbox_review_package(package, readiness, evidence, approvals, outcome)
+    _require(package["sandbox_review_package_id"] == same_package["sandbox_review_package_id"],
+             "sandbox review package id must be deterministic")
+    _require(package["sandbox_readiness_projection_id"] == readiness["sandbox_readiness_projection_id"],
+             "sandbox review must flow from readiness projection")
+    _require(package["sandbox_evidence_projection_id"] == evidence["sandbox_evidence_projection_id"],
+             "sandbox review must flow from evidence projection")
+    _require(package["sandbox_approval_projection_id"] == approvals["sandbox_approval_projection_id"],
+             "sandbox review must flow from approval projection")
+    _require(package["sandbox_outcome_projection_id"] == outcome["sandbox_outcome_projection_id"],
+             "sandbox review must flow from outcome projection")
+    _require(package["required_human_actions"], "sandbox review must include human actions")
+    _require(parse_sandbox_review_package_json(stable_sandbox_review_package_json(package)) == package,
+             "sandbox review JSON must round trip")
+
+    bad_readiness = json.loads(stable_sandbox_readiness_projection_json(readiness))
+    bad_readiness["write_allowed"] = True
+    try:
+        validate_sandbox_readiness_projection(bad_readiness)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("sandbox readiness validation must reject writes")
+
+    bad_outcome = json.loads(stable_sandbox_outcome_projection_json(outcome))
+    bad_outcome["projected_execution_allowed"] = True
+    bad_outcome["projected_execution_blockers"] = ["execution remains blocked"]
+    try:
+        validate_sandbox_outcome_projection(bad_outcome)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("sandbox outcome validation must reject allowed execution with blockers")
+
+    bad_package = json.loads(stable_sandbox_review_package_json(package))
+    bad_package["required_human_actions"] = []
+    try:
+        validate_sandbox_review_package(bad_package)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("sandbox review validation must reject missing human actions")
+
+    print("execution readiness sandbox helpers OK")
+
+
+def check_execution_readiness_sandbox_clis() -> None:
+    """Sandbox CLIs expose read-only projection payloads."""
+    from link import _cmd_sandbox
+    from link_modes.growth.link_growth_console import (
+        parse_sandbox_approval_projection_json,
+        parse_sandbox_evidence_projection_json,
+        parse_sandbox_outcome_projection_json,
+        parse_sandbox_readiness_projection_json,
+        parse_sandbox_review_package_json,
+        sandbox_approvals_main,
+        sandbox_evidence_main,
+        sandbox_outcome_main,
+        sandbox_readiness_main,
+        sandbox_review_main,
+    )
+
+    expected = [
+        ("readiness", sandbox_readiness_main, parse_sandbox_readiness_projection_json,
+         "sandbox_readiness_projection_id", "Sandbox readiness projection"),
+        ("evidence", sandbox_evidence_main, parse_sandbox_evidence_projection_json,
+         "sandbox_evidence_projection_id", "Sandbox evidence projection"),
+        ("approvals", sandbox_approvals_main, parse_sandbox_approval_projection_json,
+         "sandbox_approval_projection_id", "Sandbox approval projection"),
+        ("outcome", sandbox_outcome_main, parse_sandbox_outcome_projection_json,
+         "sandbox_outcome_projection_id", "Sandbox outcome projection"),
+        ("review", sandbox_review_main, parse_sandbox_review_package_json,
+         "sandbox_review_package_id", "Sandbox review package"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_sandbox(["--help"])
+    _require(help_rc == 0, "sandbox --help must return 0")
+    for command, _, _, _, _ in expected:
+        _require(command in help_out.getvalue(), f"sandbox help must include {command}")
+
+    for command, main_func, parse_func, id_key, _ in expected:
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_sandbox([command, "--json"])
+        parsed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"sandbox {command} route must return 0")
+        _require(id_key in parsed, f"sandbox {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"sandbox {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"sandbox {command} must not allow automation or writes")
+        for full_payload_key in (
+            "simulation_remediation_plan",
+            "remediation_priority_queue",
+            "operator_remediation_review",
+            "business_execution_review_package",
+            "business_readiness_review_package",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"sandbox {command} --json must output only its object payload")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"sandbox {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"sandbox {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"sandbox {command} --write must not print normal output")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = sandbox_readiness_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "sandbox readiness human mode must return 0")
+    _require("Sandbox readiness projection" in human and "sandbox_readiness_projection_id:" in human,
+             "sandbox readiness human mode must include title and id")
+    _require(len(human.splitlines()) <= 12, "sandbox readiness human mode must stay concise")
+    print("execution readiness sandbox CLIs OK")
+
+
+# ---------------------------------------------------------------------------
+# 62o. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
 
 def check_growth_supervised_execution_review_package_cli() -> None:
@@ -16710,6 +16924,8 @@ def main() -> None:
     check_simulation_analysis_clis()
     check_simulation_remediation_planning_helpers()
     check_simulation_remediation_planning_clis()
+    check_execution_readiness_sandbox_helpers()
+    check_execution_readiness_sandbox_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

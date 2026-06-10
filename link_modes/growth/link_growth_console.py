@@ -11045,6 +11045,11 @@ SIMULATION_REMEDIATION_PLAN_VERSION = "link-simulation-remediation-plan-v1"
 REMEDIATION_DEPENDENCY_GRAPH_VERSION = "link-remediation-dependency-graph-v1"
 REMEDIATION_PRIORITY_QUEUE_VERSION = "link-remediation-priority-queue-v1"
 OPERATOR_REMEDIATION_REVIEW_VERSION = "link-operator-remediation-review-v1"
+SANDBOX_READINESS_PROJECTION_VERSION = "link-sandbox-readiness-projection-v1"
+SANDBOX_EVIDENCE_PROJECTION_VERSION = "link-sandbox-evidence-projection-v1"
+SANDBOX_APPROVAL_PROJECTION_VERSION = "link-sandbox-approval-projection-v1"
+SANDBOX_OUTCOME_PROJECTION_VERSION = "link-sandbox-outcome-projection-v1"
+SANDBOX_REVIEW_PACKAGE_VERSION = "link-sandbox-review-package-v1"
 REMEDIATION_PRIORITIES = ("critical", "high", "medium", "low")
 BUSINESS_EXECUTION_SIMULATED_STEPS = (
     "validate opportunity",
@@ -17698,6 +17703,487 @@ def parse_operator_remediation_review_json(text: str) -> dict[str, Any]:
 
 
 
+def _collect_remediation_projection_chain(
+    simulation_remediation_plan: dict[str, Any] | None = None,
+    remediation_priority_queue: dict[str, Any] | None = None,
+    operator_remediation_review: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    plan = simulation_remediation_plan or collect_simulation_remediation_plan()
+    validate_simulation_remediation_plan(plan)
+    graph = collect_remediation_dependency_graph(plan)
+    queue = remediation_priority_queue or collect_remediation_priority_queue(plan, graph)
+    validate_remediation_priority_queue(queue, plan, graph)
+    review = operator_remediation_review or collect_operator_remediation_review(plan, graph, queue)
+    validate_operator_remediation_review(review, plan, graph, queue)
+    return plan, queue, review
+
+
+def make_sandbox_readiness_projection_id(
+    remediation_plan: dict[str, Any],
+    priority_queue: dict[str, Any],
+    remediation_review: dict[str, Any],
+    business_execution_review_package: dict[str, Any],
+    business_readiness_review_package: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_execution_review_package_id": business_execution_review_package["business_execution_review_package_id"],
+        "business_readiness_review_package_id": business_readiness_review_package["business_readiness_review_package_id"],
+        "operator_remediation_review_id": remediation_review["operator_remediation_review_id"],
+        "remediation_priority_queue_id": priority_queue["remediation_priority_queue_id"],
+        "simulation_remediation_plan_id": remediation_plan["simulation_remediation_plan_id"],
+        "version": SANDBOX_READINESS_PROJECTION_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"sandbox-readiness-projection-{digest}"
+
+
+def collect_sandbox_readiness_projection(
+    simulation_remediation_plan: dict[str, Any] | None = None,
+    remediation_priority_queue: dict[str, Any] | None = None,
+    operator_remediation_review: dict[str, Any] | None = None,
+    business_execution_review_package: dict[str, Any] | None = None,
+    business_readiness_review_package: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project readiness after remediation without executing remediation."""
+    plan, queue, remediation_review = _collect_remediation_projection_chain(
+        simulation_remediation_plan,
+        remediation_priority_queue,
+        operator_remediation_review,
+    )
+    readiness_review = business_readiness_review_package or collect_business_readiness_review_package()
+    validate_business_readiness_review_package(readiness_review)
+    execution_review = business_execution_review_package or collect_business_execution_review_package(business_readiness_review_package=readiness_review)
+    validate_business_execution_review_package(execution_review)
+    unresolved_blockers = _normalize_implementation_branch_refs([
+        blocker for blocker in remediation_review["blockers"]
+        if "blocked real action" in blocker or "receipts are intentionally simulated" in blocker
+    ])
+    projected_warnings = _normalize_implementation_branch_refs(list(remediation_review["warnings"]) + [
+        "sandbox projection assumes remediation evidence is completed but not verified by runtime",
+        "sandbox projection does not grant execution permission",
+    ])
+    current_status = readiness_review["readiness_status"]
+    projected_status = "ready_for_review" if not unresolved_blockers else "blocked"
+    projection = {
+        "sandbox_readiness_projection_version": SANDBOX_READINESS_PROJECTION_VERSION,
+        "sandbox_readiness_projection_id": make_sandbox_readiness_projection_id(plan, queue, remediation_review, execution_review, readiness_review),
+        "simulation_remediation_plan_id": plan["simulation_remediation_plan_id"],
+        "remediation_priority_queue_id": queue["remediation_priority_queue_id"],
+        "operator_remediation_review_id": remediation_review["operator_remediation_review_id"],
+        "business_execution_review_package_id": execution_review["business_execution_review_package_id"],
+        "business_readiness_review_package_id": readiness_review["business_readiness_review_package_id"],
+        "current_readiness_status": current_status,
+        "projected_readiness_status": projected_status,
+        "projected_blockers_remaining": unresolved_blockers,
+        "projected_warnings_remaining": projected_warnings,
+        "readiness_delta": "improves_to_review" if projected_status != current_status else "blocked_real_actions_remain",
+        "assumptions": _normalize_implementation_branch_refs([
+            "all remediation steps are completed outside this sandbox projection",
+            "all required remediation evidence is reviewed by a human",
+            "all required approvals are explicitly granted by a human",
+            "no real execution action is attempted by the sandbox projection",
+        ]),
+        "recommended_next_action": "Review remaining projected blockers before deciding whether execution could ever be allowed.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_sandbox_readiness_projection(projection, plan, queue, remediation_review, execution_review, readiness_review)
+    return projection
+
+
+def validate_sandbox_readiness_projection(
+    projection: dict[str, Any],
+    simulation_remediation_plan: dict[str, Any] | None = None,
+    remediation_priority_queue: dict[str, Any] | None = None,
+    operator_remediation_review: dict[str, Any] | None = None,
+    business_execution_review_package: dict[str, Any] | None = None,
+    business_readiness_review_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "sandbox_readiness_projection_version", "sandbox_readiness_projection_id",
+        "current_readiness_status", "projected_readiness_status", "projected_blockers_remaining",
+        "projected_warnings_remaining", "readiness_delta", "assumptions", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in projection:
+            raise ValueError(f"sandbox readiness projection missing required field: {key}")
+    if projection["sandbox_readiness_projection_version"] != SANDBOX_READINESS_PROJECTION_VERSION:
+        raise ValueError("invalid sandbox readiness projection version")
+    if not isinstance(projection["sandbox_readiness_projection_id"], str) or not projection["sandbox_readiness_projection_id"].startswith("sandbox-readiness-projection-"):
+        raise ValueError("invalid sandbox readiness projection id")
+    if projection["current_readiness_status"] not in BUSINESS_READINESS_RECOMMENDATIONS + BUSINESS_OPERATIONS_READINESS_STATUSES + GOVERNANCE_OVERALL_STATUSES:
+        raise ValueError("invalid sandbox current readiness status")
+    if projection["projected_readiness_status"] not in GOVERNANCE_OVERALL_STATUSES:
+        raise ValueError("invalid sandbox projected readiness status")
+    for field in ("projected_warnings_remaining", "assumptions"):
+        normalized = _normalize_implementation_branch_refs(projection[field])
+        if not normalized or normalized != projection[field]:
+            raise ValueError(f"sandbox readiness projection {field} must be normalized and non-empty")
+    if _normalize_implementation_branch_refs(projection["projected_blockers_remaining"]) != projection["projected_blockers_remaining"]:
+        raise ValueError("sandbox readiness projection blockers must be normalized")
+    if projection["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("sandbox readiness projection safety metadata mismatch")
+    if projection["dry_run"] is not True or projection["write_allowed"] is not False:
+        raise ValueError("sandbox readiness projection must be read-only")
+    if projection["automation_allowed"] is not False or projection["writes"] != []:
+        raise ValueError("sandbox readiness projection must not allow automation or writes")
+    if all(item is not None for item in (simulation_remediation_plan, remediation_priority_queue, operator_remediation_review, business_execution_review_package, business_readiness_review_package)):
+        expected_id = make_sandbox_readiness_projection_id(simulation_remediation_plan, remediation_priority_queue, operator_remediation_review, business_execution_review_package, business_readiness_review_package)
+        if projection["sandbox_readiness_projection_id"] != expected_id:
+            raise ValueError("sandbox readiness projection id is not deterministic")
+
+
+def stable_sandbox_readiness_projection_json(projection: dict[str, Any]) -> str:
+    validate_sandbox_readiness_projection(projection)
+    return _stable_ruflo_json(projection, indent=2) + "\n"
+
+
+def parse_sandbox_readiness_projection_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    projection = _json.loads(text)
+    validate_sandbox_readiness_projection(projection)
+    return projection
+
+
+def make_sandbox_evidence_projection_id(readiness_projection: dict[str, Any], remediation_plan: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "sandbox_readiness_projection_id": readiness_projection["sandbox_readiness_projection_id"],
+        "simulation_remediation_plan_id": remediation_plan["simulation_remediation_plan_id"],
+        "version": SANDBOX_EVIDENCE_PROJECTION_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"sandbox-evidence-projection-{digest}"
+
+
+def collect_sandbox_evidence_projection(
+    sandbox_readiness_projection: dict[str, Any] | None = None,
+    simulation_remediation_plan: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project evidence state if remediation evidence steps were completed."""
+    plan = simulation_remediation_plan or collect_simulation_remediation_plan()
+    validate_simulation_remediation_plan(plan)
+    readiness = sandbox_readiness_projection or collect_sandbox_readiness_projection(simulation_remediation_plan=plan)
+    validate_sandbox_readiness_projection(readiness)
+    current_missing = _normalize_implementation_branch_refs([item for item in plan["blockers"] if "evidence" in item.lower() or "receipts" in item.lower()])
+    satisfied = list(plan["required_evidence"])
+    projected_missing = _normalize_implementation_branch_refs([item for item in current_missing if "intentionally simulated" in item])
+    projection = {
+        "sandbox_evidence_projection_version": SANDBOX_EVIDENCE_PROJECTION_VERSION,
+        "sandbox_evidence_projection_id": make_sandbox_evidence_projection_id(readiness, plan),
+        "sandbox_readiness_projection_id": readiness["sandbox_readiness_projection_id"],
+        "current_missing_evidence": current_missing,
+        "projected_evidence_satisfied": satisfied,
+        "projected_missing_evidence": projected_missing,
+        "evidence_delta": len(satisfied) - len(projected_missing),
+        "recommended_next_action": "Confirm projected evidence with human review before treating readiness as improved.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_sandbox_evidence_projection(projection, readiness, plan)
+    return projection
+
+
+def validate_sandbox_evidence_projection(projection: dict[str, Any], sandbox_readiness_projection: dict[str, Any] | None = None, simulation_remediation_plan: dict[str, Any] | None = None) -> None:
+    required = ("sandbox_evidence_projection_version", "sandbox_evidence_projection_id", "sandbox_readiness_projection_id", "current_missing_evidence", "projected_evidence_satisfied", "projected_missing_evidence", "evidence_delta", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in projection:
+            raise ValueError(f"sandbox evidence projection missing required field: {key}")
+    if projection["sandbox_evidence_projection_version"] != SANDBOX_EVIDENCE_PROJECTION_VERSION:
+        raise ValueError("invalid sandbox evidence projection version")
+    if not isinstance(projection["sandbox_evidence_projection_id"], str) or not projection["sandbox_evidence_projection_id"].startswith("sandbox-evidence-projection-"):
+        raise ValueError("invalid sandbox evidence projection id")
+    for field in ("current_missing_evidence", "projected_evidence_satisfied"):
+        normalized = _normalize_implementation_branch_refs(projection[field])
+        if not normalized or normalized != projection[field]:
+            raise ValueError(f"sandbox evidence projection {field} must be normalized and non-empty")
+    if _normalize_implementation_branch_refs(projection["projected_missing_evidence"]) != projection["projected_missing_evidence"]:
+        raise ValueError("sandbox evidence projection projected_missing_evidence must be normalized")
+    if not isinstance(projection["evidence_delta"], int):
+        raise ValueError("sandbox evidence projection delta must be an integer")
+    if projection["safety_metadata"] != _read_only_safety_metadata() or projection["dry_run"] is not True or projection["write_allowed"] is not False or projection["automation_allowed"] is not False or projection["writes"] != []:
+        raise ValueError("sandbox evidence projection must be read-only")
+    if sandbox_readiness_projection is not None and simulation_remediation_plan is not None:
+        if projection["sandbox_evidence_projection_id"] != make_sandbox_evidence_projection_id(sandbox_readiness_projection, simulation_remediation_plan):
+            raise ValueError("sandbox evidence projection id is not deterministic")
+
+
+def stable_sandbox_evidence_projection_json(projection: dict[str, Any]) -> str:
+    validate_sandbox_evidence_projection(projection)
+    return _stable_ruflo_json(projection, indent=2) + "\n"
+
+
+def parse_sandbox_evidence_projection_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    projection = _json.loads(text)
+    validate_sandbox_evidence_projection(projection)
+    return projection
+
+
+def make_sandbox_approval_projection_id(readiness_projection: dict[str, Any], remediation_plan: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "sandbox_readiness_projection_id": readiness_projection["sandbox_readiness_projection_id"],
+        "simulation_remediation_plan_id": remediation_plan["simulation_remediation_plan_id"],
+        "version": SANDBOX_APPROVAL_PROJECTION_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"sandbox-approval-projection-{digest}"
+
+
+def collect_sandbox_approval_projection(sandbox_readiness_projection: dict[str, Any] | None = None, simulation_remediation_plan: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Project approval state if remediation approvals were completed."""
+    plan = simulation_remediation_plan or collect_simulation_remediation_plan()
+    validate_simulation_remediation_plan(plan)
+    readiness = sandbox_readiness_projection or collect_sandbox_readiness_projection(simulation_remediation_plan=plan)
+    validate_sandbox_readiness_projection(readiness)
+    current_missing = _normalize_implementation_branch_refs([item for item in plan["blockers"] if "approval" in item.lower()])
+    satisfied = list(plan["required_approvals"])
+    projected_missing: list[str] = []
+    projection = {
+        "sandbox_approval_projection_version": SANDBOX_APPROVAL_PROJECTION_VERSION,
+        "sandbox_approval_projection_id": make_sandbox_approval_projection_id(readiness, plan),
+        "sandbox_readiness_projection_id": readiness["sandbox_readiness_projection_id"],
+        "current_missing_approvals": current_missing,
+        "projected_approvals_satisfied": satisfied,
+        "projected_missing_approvals": projected_missing,
+        "approval_delta": len(satisfied) - len(projected_missing),
+        "recommended_next_action": "Confirm projected approvals explicitly before treating execution readiness as improved.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_sandbox_approval_projection(projection, readiness, plan)
+    return projection
+
+
+def validate_sandbox_approval_projection(projection: dict[str, Any], sandbox_readiness_projection: dict[str, Any] | None = None, simulation_remediation_plan: dict[str, Any] | None = None) -> None:
+    required = ("sandbox_approval_projection_version", "sandbox_approval_projection_id", "sandbox_readiness_projection_id", "current_missing_approvals", "projected_approvals_satisfied", "projected_missing_approvals", "approval_delta", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in projection:
+            raise ValueError(f"sandbox approval projection missing required field: {key}")
+    if projection["sandbox_approval_projection_version"] != SANDBOX_APPROVAL_PROJECTION_VERSION:
+        raise ValueError("invalid sandbox approval projection version")
+    if not isinstance(projection["sandbox_approval_projection_id"], str) or not projection["sandbox_approval_projection_id"].startswith("sandbox-approval-projection-"):
+        raise ValueError("invalid sandbox approval projection id")
+    for field in ("current_missing_approvals", "projected_approvals_satisfied", "projected_missing_approvals"):
+        normalized = _normalize_implementation_branch_refs(projection[field])
+        if normalized != projection[field]:
+            raise ValueError(f"sandbox approval projection {field} must be normalized")
+    if not projection["current_missing_approvals"] or not projection["projected_approvals_satisfied"]:
+        raise ValueError("sandbox approval projection must include current and projected approvals")
+    if not isinstance(projection["approval_delta"], int):
+        raise ValueError("sandbox approval projection delta must be an integer")
+    if projection["safety_metadata"] != _read_only_safety_metadata() or projection["dry_run"] is not True or projection["write_allowed"] is not False or projection["automation_allowed"] is not False or projection["writes"] != []:
+        raise ValueError("sandbox approval projection must be read-only")
+    if sandbox_readiness_projection is not None and simulation_remediation_plan is not None:
+        if projection["sandbox_approval_projection_id"] != make_sandbox_approval_projection_id(sandbox_readiness_projection, simulation_remediation_plan):
+            raise ValueError("sandbox approval projection id is not deterministic")
+
+
+def stable_sandbox_approval_projection_json(projection: dict[str, Any]) -> str:
+    validate_sandbox_approval_projection(projection)
+    return _stable_ruflo_json(projection, indent=2) + "\n"
+
+
+def parse_sandbox_approval_projection_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    projection = _json.loads(text)
+    validate_sandbox_approval_projection(projection)
+    return projection
+
+
+def make_sandbox_outcome_projection_id(readiness_projection: dict[str, Any], evidence_projection: dict[str, Any], approval_projection: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "sandbox_approval_projection_id": approval_projection["sandbox_approval_projection_id"],
+        "sandbox_evidence_projection_id": evidence_projection["sandbox_evidence_projection_id"],
+        "sandbox_readiness_projection_id": readiness_projection["sandbox_readiness_projection_id"],
+        "version": SANDBOX_OUTCOME_PROJECTION_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"sandbox-outcome-projection-{digest}"
+
+
+def collect_sandbox_outcome_projection(sandbox_readiness_projection: dict[str, Any] | None = None, sandbox_evidence_projection: dict[str, Any] | None = None, sandbox_approval_projection: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Project whether execution could be allowed after remediation assumptions."""
+    readiness = sandbox_readiness_projection or collect_sandbox_readiness_projection()
+    validate_sandbox_readiness_projection(readiness)
+    evidence = sandbox_evidence_projection or collect_sandbox_evidence_projection(readiness)
+    validate_sandbox_evidence_projection(evidence)
+    approvals = sandbox_approval_projection or collect_sandbox_approval_projection(readiness)
+    validate_sandbox_approval_projection(approvals)
+    blockers = _normalize_implementation_branch_refs(list(readiness["projected_blockers_remaining"]) + list(evidence["projected_missing_evidence"]) + list(approvals["projected_missing_approvals"]))
+    allowed = readiness["projected_readiness_status"] == "ready_for_review" and not blockers
+    warnings = list(readiness["projected_warnings_remaining"])
+    outcome = {
+        "sandbox_outcome_projection_version": SANDBOX_OUTCOME_PROJECTION_VERSION,
+        "sandbox_outcome_projection_id": make_sandbox_outcome_projection_id(readiness, evidence, approvals),
+        "sandbox_readiness_projection_id": readiness["sandbox_readiness_projection_id"],
+        "projected_execution_allowed": allowed,
+        "projected_execution_blockers": blockers,
+        "projected_execution_warnings": warnings,
+        "outcome_summary": "execution remains blocked in sandbox projection" if not allowed else "execution could become reviewable after remediation",
+        "recommended_next_action": "Resolve projected blockers before any execution runtime is considered.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_sandbox_outcome_projection(outcome, readiness, evidence, approvals)
+    return outcome
+
+
+def validate_sandbox_outcome_projection(outcome: dict[str, Any], sandbox_readiness_projection: dict[str, Any] | None = None, sandbox_evidence_projection: dict[str, Any] | None = None, sandbox_approval_projection: dict[str, Any] | None = None) -> None:
+    required = ("sandbox_outcome_projection_version", "sandbox_outcome_projection_id", "sandbox_readiness_projection_id", "projected_execution_allowed", "projected_execution_blockers", "projected_execution_warnings", "outcome_summary", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in outcome:
+            raise ValueError(f"sandbox outcome projection missing required field: {key}")
+    if outcome["sandbox_outcome_projection_version"] != SANDBOX_OUTCOME_PROJECTION_VERSION:
+        raise ValueError("invalid sandbox outcome projection version")
+    if not isinstance(outcome["sandbox_outcome_projection_id"], str) or not outcome["sandbox_outcome_projection_id"].startswith("sandbox-outcome-projection-"):
+        raise ValueError("invalid sandbox outcome projection id")
+    if not isinstance(outcome["projected_execution_allowed"], bool):
+        raise ValueError("sandbox outcome projected_execution_allowed must be bool")
+    for field in ("projected_execution_blockers", "projected_execution_warnings"):
+        normalized = _normalize_implementation_branch_refs(outcome[field])
+        if normalized != outcome[field]:
+            raise ValueError(f"sandbox outcome projection {field} must be normalized")
+    if outcome["projected_execution_allowed"] and outcome["projected_execution_blockers"]:
+        raise ValueError("sandbox outcome cannot allow execution with blockers")
+    if outcome["safety_metadata"] != _read_only_safety_metadata() or outcome["dry_run"] is not True or outcome["write_allowed"] is not False or outcome["automation_allowed"] is not False or outcome["writes"] != []:
+        raise ValueError("sandbox outcome projection must be read-only")
+    if sandbox_readiness_projection is not None and sandbox_evidence_projection is not None and sandbox_approval_projection is not None:
+        if outcome["sandbox_outcome_projection_id"] != make_sandbox_outcome_projection_id(sandbox_readiness_projection, sandbox_evidence_projection, sandbox_approval_projection):
+            raise ValueError("sandbox outcome projection id is not deterministic")
+
+
+def stable_sandbox_outcome_projection_json(outcome: dict[str, Any]) -> str:
+    validate_sandbox_outcome_projection(outcome)
+    return _stable_ruflo_json(outcome, indent=2) + "\n"
+
+
+def parse_sandbox_outcome_projection_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    outcome = _json.loads(text)
+    validate_sandbox_outcome_projection(outcome)
+    return outcome
+
+
+def make_sandbox_review_package_id(readiness: dict[str, Any], evidence: dict[str, Any], approvals: dict[str, Any], outcome: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "sandbox_approval_projection_id": approvals["sandbox_approval_projection_id"],
+        "sandbox_evidence_projection_id": evidence["sandbox_evidence_projection_id"],
+        "sandbox_outcome_projection_id": outcome["sandbox_outcome_projection_id"],
+        "sandbox_readiness_projection_id": readiness["sandbox_readiness_projection_id"],
+        "version": SANDBOX_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"sandbox-review-package-{digest}"
+
+
+def collect_sandbox_review_package(sandbox_readiness_projection: dict[str, Any] | None = None, sandbox_evidence_projection: dict[str, Any] | None = None, sandbox_approval_projection: dict[str, Any] | None = None, sandbox_outcome_projection: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Produce an operator-facing sandbox projection review package."""
+    readiness = sandbox_readiness_projection or collect_sandbox_readiness_projection()
+    validate_sandbox_readiness_projection(readiness)
+    evidence = sandbox_evidence_projection or collect_sandbox_evidence_projection(readiness)
+    validate_sandbox_evidence_projection(evidence)
+    approvals = sandbox_approval_projection or collect_sandbox_approval_projection(readiness)
+    validate_sandbox_approval_projection(approvals)
+    outcome = sandbox_outcome_projection or collect_sandbox_outcome_projection(readiness, evidence, approvals)
+    validate_sandbox_outcome_projection(outcome, readiness, evidence, approvals)
+    blockers = list(outcome["projected_execution_blockers"])
+    warnings = _normalize_implementation_branch_refs(list(outcome["projected_execution_warnings"]) + ["sandbox projection is not execution authorization"])
+    package = {
+        "sandbox_review_package_version": SANDBOX_REVIEW_PACKAGE_VERSION,
+        "sandbox_review_package_id": make_sandbox_review_package_id(readiness, evidence, approvals, outcome),
+        "sandbox_readiness_projection_id": readiness["sandbox_readiness_projection_id"],
+        "sandbox_evidence_projection_id": evidence["sandbox_evidence_projection_id"],
+        "sandbox_approval_projection_id": approvals["sandbox_approval_projection_id"],
+        "sandbox_outcome_projection_id": outcome["sandbox_outcome_projection_id"],
+        "current_status": readiness["current_readiness_status"],
+        "projected_status": readiness["projected_readiness_status"],
+        "blockers_remaining": blockers,
+        "warnings_remaining": warnings,
+        "required_human_actions": _normalize_implementation_branch_refs(["review sandbox assumptions", "verify projected evidence", "verify projected approvals"]),
+        "review_recommendation": "projection_still_blocked" if blockers else "projection_ready_for_boundary_review",
+        "recommended_next_action": "Use sandbox projection to decide which remediation evidence and approvals to verify next.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_sandbox_review_package(package, readiness, evidence, approvals, outcome)
+    return package
+
+
+def validate_sandbox_review_package(package: dict[str, Any], sandbox_readiness_projection: dict[str, Any] | None = None, sandbox_evidence_projection: dict[str, Any] | None = None, sandbox_approval_projection: dict[str, Any] | None = None, sandbox_outcome_projection: dict[str, Any] | None = None) -> None:
+    required = ("sandbox_review_package_version", "sandbox_review_package_id", "sandbox_readiness_projection_id", "sandbox_evidence_projection_id", "sandbox_approval_projection_id", "sandbox_outcome_projection_id", "current_status", "projected_status", "blockers_remaining", "warnings_remaining", "required_human_actions", "review_recommendation", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in package:
+            raise ValueError(f"sandbox review package missing required field: {key}")
+    if package["sandbox_review_package_version"] != SANDBOX_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid sandbox review package version")
+    if not isinstance(package["sandbox_review_package_id"], str) or not package["sandbox_review_package_id"].startswith("sandbox-review-package-"):
+        raise ValueError("invalid sandbox review package id")
+    for field in ("blockers_remaining", "warnings_remaining", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field] or not package[field]:
+            raise ValueError(f"sandbox review package {field} must be normalized and non-empty")
+    if package["review_recommendation"] not in {"projection_still_blocked", "projection_ready_for_boundary_review"}:
+        raise ValueError("invalid sandbox review recommendation")
+    if package["safety_metadata"] != _read_only_safety_metadata() or package["dry_run"] is not True or package["write_allowed"] is not False or package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("sandbox review package must be read-only")
+    if all(item is not None for item in (sandbox_readiness_projection, sandbox_evidence_projection, sandbox_approval_projection, sandbox_outcome_projection)):
+        if package["sandbox_review_package_id"] != make_sandbox_review_package_id(sandbox_readiness_projection, sandbox_evidence_projection, sandbox_approval_projection, sandbox_outcome_projection):
+            raise ValueError("sandbox review package id is not deterministic")
+
+
+def stable_sandbox_review_package_json(package: dict[str, Any]) -> str:
+    validate_sandbox_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_sandbox_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_sandbox_review_package(package)
+    return package
+
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -21239,6 +21725,155 @@ def operator_remediation_review_main(argv: list[str] | None = None) -> int:
         print(stable_operator_remediation_review_json(review), end="")
         return 0
     render_operator_remediation_review_plain(review)
+    return 0
+
+
+
+def render_sandbox_readiness_projection_plain(projection: dict[str, Any]) -> None:
+    validate_sandbox_readiness_projection(projection)
+    print("Sandbox readiness projection")
+    print(f"sandbox_readiness_projection_id: {projection['sandbox_readiness_projection_id']}")
+    print(f"current_readiness_status: {projection['current_readiness_status']}")
+    print(f"projected_readiness_status: {projection['projected_readiness_status']}")
+    print(f"projected_blocker_count: {len(projection['projected_blockers_remaining'])}")
+    print(f"projected_warning_count: {len(projection['projected_warnings_remaining'])}")
+    print(f"readiness_delta: {projection['readiness_delta']}")
+    print(f"next_action: {projection['recommended_next_action']}")
+
+
+def sandbox_readiness_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Sandbox readiness: projected readiness after remediation")
+        print("Read-only sandbox projection. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: sandbox readiness is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    projection = collect_sandbox_readiness_projection()
+    validate_sandbox_readiness_projection(projection)
+    if "--json" in args:
+        print(stable_sandbox_readiness_projection_json(projection), end="")
+        return 0
+    render_sandbox_readiness_projection_plain(projection)
+    return 0
+
+
+def render_sandbox_evidence_projection_plain(projection: dict[str, Any]) -> None:
+    validate_sandbox_evidence_projection(projection)
+    print("Sandbox evidence projection")
+    print(f"sandbox_evidence_projection_id: {projection['sandbox_evidence_projection_id']}")
+    print(f"current_missing_evidence_count: {len(projection['current_missing_evidence'])}")
+    print(f"projected_evidence_satisfied_count: {len(projection['projected_evidence_satisfied'])}")
+    print(f"projected_missing_evidence_count: {len(projection['projected_missing_evidence'])}")
+    print(f"evidence_delta: {projection['evidence_delta']}")
+    print(f"next_action: {projection['recommended_next_action']}")
+
+
+def sandbox_evidence_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Sandbox evidence: projected evidence after remediation")
+        print("Read-only sandbox projection. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: sandbox evidence is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    projection = collect_sandbox_evidence_projection()
+    validate_sandbox_evidence_projection(projection)
+    if "--json" in args:
+        print(stable_sandbox_evidence_projection_json(projection), end="")
+        return 0
+    render_sandbox_evidence_projection_plain(projection)
+    return 0
+
+
+def render_sandbox_approval_projection_plain(projection: dict[str, Any]) -> None:
+    validate_sandbox_approval_projection(projection)
+    print("Sandbox approval projection")
+    print(f"sandbox_approval_projection_id: {projection['sandbox_approval_projection_id']}")
+    print(f"current_missing_approval_count: {len(projection['current_missing_approvals'])}")
+    print(f"projected_approval_satisfied_count: {len(projection['projected_approvals_satisfied'])}")
+    print(f"projected_missing_approval_count: {len(projection['projected_missing_approvals'])}")
+    print(f"approval_delta: {projection['approval_delta']}")
+    print(f"next_action: {projection['recommended_next_action']}")
+
+
+def sandbox_approvals_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Sandbox approvals: projected approvals after remediation")
+        print("Read-only sandbox projection. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: sandbox approvals is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    projection = collect_sandbox_approval_projection()
+    validate_sandbox_approval_projection(projection)
+    if "--json" in args:
+        print(stable_sandbox_approval_projection_json(projection), end="")
+        return 0
+    render_sandbox_approval_projection_plain(projection)
+    return 0
+
+
+def render_sandbox_outcome_projection_plain(outcome: dict[str, Any]) -> None:
+    validate_sandbox_outcome_projection(outcome)
+    print("Sandbox outcome projection")
+    print(f"sandbox_outcome_projection_id: {outcome['sandbox_outcome_projection_id']}")
+    print(f"projected_execution_allowed: {outcome['projected_execution_allowed']}")
+    print(f"projected_execution_blocker_count: {len(outcome['projected_execution_blockers'])}")
+    print(f"projected_execution_warning_count: {len(outcome['projected_execution_warnings'])}")
+    print(f"outcome_summary: {outcome['outcome_summary']}")
+    print(f"next_action: {outcome['recommended_next_action']}")
+
+
+def sandbox_outcome_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Sandbox outcome: projected execution outcome")
+        print("Read-only sandbox projection. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: sandbox outcome is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    outcome = collect_sandbox_outcome_projection()
+    validate_sandbox_outcome_projection(outcome)
+    if "--json" in args:
+        print(stable_sandbox_outcome_projection_json(outcome), end="")
+        return 0
+    render_sandbox_outcome_projection_plain(outcome)
+    return 0
+
+
+def render_sandbox_review_package_plain(package: dict[str, Any]) -> None:
+    validate_sandbox_review_package(package)
+    print("Sandbox review package")
+    print(f"sandbox_review_package_id: {package['sandbox_review_package_id']}")
+    print(f"current_status: {package['current_status']}")
+    print(f"projected_status: {package['projected_status']}")
+    print(f"blocker_count: {len(package['blockers_remaining'])}")
+    print(f"warning_count: {len(package['warnings_remaining'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def sandbox_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Sandbox review: operator projection review")
+        print("Read-only sandbox projection. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: sandbox review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_sandbox_review_package()
+    validate_sandbox_review_package(package)
+    if "--json" in args:
+        print(stable_sandbox_review_package_json(package), end="")
+        return 0
+    render_sandbox_review_package_plain(package)
     return 0
 
 

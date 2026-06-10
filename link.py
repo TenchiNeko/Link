@@ -452,6 +452,42 @@ def _cmd_simulation(argv: list[str]) -> int:
     return 2
 
 
+def _cmd_sandbox(argv: list[str]) -> int:
+    """Read-only execution readiness sandbox projections."""
+    subcommand = argv[0] if argv else ""
+    if subcommand == "readiness":
+        from link_modes.growth.link_growth_console import sandbox_readiness_main as _sandbox_readiness_main
+
+        return _sandbox_readiness_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "evidence":
+        from link_modes.growth.link_growth_console import sandbox_evidence_main as _sandbox_evidence_main
+
+        return _sandbox_evidence_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "approvals":
+        from link_modes.growth.link_growth_console import sandbox_approvals_main as _sandbox_approvals_main
+
+        return _sandbox_approvals_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "outcome":
+        from link_modes.growth.link_growth_console import sandbox_outcome_main as _sandbox_outcome_main
+
+        return _sandbox_outcome_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "review":
+        from link_modes.growth.link_growth_console import sandbox_review_main as _sandbox_review_main
+
+        return _sandbox_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand in ("-h", "--help", "help", ""):
+        print("Sandbox commands:")
+        print("  readiness  Preview projected readiness after remediation")
+        print("  evidence   Preview projected evidence after remediation")
+        print("  approvals  Preview projected approvals after remediation")
+        print("  outcome    Preview projected execution outcome")
+        print("  review     Preview operator sandbox review package")
+        return 0
+    print(f"sandbox: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py sandbox --help' for subcommands.", file=sys.stderr)
+    return 2
+
+
 def _cmd_dashboard(argv: list[str]) -> int:
     """Print a compact dashboard/status summary."""
     from link_core.dashboard import collect as _collect
@@ -908,6 +944,7 @@ _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "governance": (_cmd_governance, "Unified Link governance dashboard previews."),
     "control-plane": (_cmd_control_plane, "Link control-plane dashboard and health previews."),
     "simulation": (_cmd_simulation, "Dry-run business execution simulation previews."),
+    "sandbox": (_cmd_sandbox, "Read-only execution readiness sandbox projections."),
     "dashboard": (_cmd_dashboard, "Compact diagnostics dashboard."),
     "self-test": (_cmd_self_test, "Run canonical architecture smoke checks."),
     "config": (_cmd_config, "Validate Link configuration files against runtime."),
