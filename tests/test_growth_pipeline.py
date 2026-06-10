@@ -15243,8 +15243,223 @@ def check_business_execution_simulation_clis() -> None:
         _require(write_out.getvalue() == "", f"simulation {command} --write must not print normal output")
     print("business execution simulation CLIs OK")
 
+
 # ---------------------------------------------------------------------------
-# 62l. Growth supervised-execution-review CLI
+# 62l. Simulation analysis layer
+# ---------------------------------------------------------------------------
+
+def check_simulation_analysis_helpers() -> None:
+    """Simulation analysis helpers identify blockers without real execution."""
+    from link_modes.growth.link_growth_console import (
+        collect_business_execution_simulation_evidence_package,
+        collect_business_execution_simulation_plan,
+        collect_business_execution_simulation_readiness,
+        collect_business_execution_simulation_review,
+        collect_execution_gap_analysis,
+        collect_execution_readiness_score,
+        collect_operator_simulation_review_package,
+        collect_simulation_dashboard,
+        parse_execution_gap_analysis_json,
+        parse_execution_readiness_score_json,
+        parse_operator_simulation_review_package_json,
+        parse_simulation_dashboard_json,
+        stable_execution_gap_analysis_json,
+        stable_execution_readiness_score_json,
+        stable_operator_simulation_review_package_json,
+        stable_simulation_dashboard_json,
+        validate_execution_gap_analysis,
+        validate_execution_readiness_score,
+        validate_operator_simulation_review_package,
+        validate_simulation_dashboard,
+    )
+
+    plan = collect_business_execution_simulation_plan()
+    evidence = collect_business_execution_simulation_evidence_package(plan)
+    review = collect_business_execution_simulation_review(plan, evidence)
+    readiness = collect_business_execution_simulation_readiness(review)
+
+    dashboard = collect_simulation_dashboard(plan, evidence, review, readiness)
+    same_dashboard = collect_simulation_dashboard(plan, evidence, review, readiness)
+    validate_simulation_dashboard(dashboard, plan, evidence, review, readiness)
+    _require(dashboard["simulation_dashboard_id"] == same_dashboard["simulation_dashboard_id"],
+             "simulation dashboard id must be deterministic")
+    _require(dashboard["simulation_status"] == review["simulation_status"],
+             "simulation dashboard must preserve review status")
+    _require(dashboard["readiness_status"] == readiness["readiness_status"],
+             "simulation dashboard must preserve readiness status")
+    _require(dashboard["blocker_count"] > 0, "simulation dashboard must count blockers")
+    _require(dashboard["safety_metadata"] == {
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+    }, "simulation dashboard must include read-only safety metadata")
+    _require(parse_simulation_dashboard_json(stable_simulation_dashboard_json(dashboard)) == dashboard,
+             "simulation dashboard JSON must round trip")
+
+    gaps = collect_execution_gap_analysis(review, readiness)
+    same_gaps = collect_execution_gap_analysis(review, readiness)
+    validate_execution_gap_analysis(gaps, review, readiness)
+    _require(gaps["execution_gap_analysis_id"] == same_gaps["execution_gap_analysis_id"],
+             "execution gap analysis id must be deterministic")
+    _require(gaps["critical_gaps"], "execution gap analysis must include critical gaps")
+    _require(any("approval" in gap.lower() for gap in gaps["critical_gaps"]),
+             "execution gap analysis must include missing approval gap")
+    _require(gaps["recommended_fixes"], "execution gap analysis must include recommended fixes")
+    _require(parse_execution_gap_analysis_json(stable_execution_gap_analysis_json(gaps)) == gaps,
+             "execution gap analysis JSON must round trip")
+
+    score = collect_execution_readiness_score(dashboard, gaps)
+    same_score = collect_execution_readiness_score(dashboard, gaps)
+    validate_execution_readiness_score(score, dashboard, gaps)
+    _require(score["execution_readiness_score_id"] == same_score["execution_readiness_score_id"],
+             "execution readiness score id must be deterministic")
+    _require(isinstance(score["readiness_score"], int) and 0 <= score["readiness_score"] <= 100,
+             "execution readiness score must be bounded integer")
+    _require(score["readiness_grade"] in {"A", "B", "C", "D", "F"},
+             "execution readiness score must include grade")
+    _require(score["readiness_score"] <= 39,
+             "blocked simulation readiness must cap score below passing")
+    _require(score["blockers"] == gaps["critical_gaps"],
+             "execution readiness score blockers must flow from critical gaps")
+    _require(parse_execution_readiness_score_json(stable_execution_readiness_score_json(score)) == score,
+             "execution readiness score JSON must round trip")
+
+    package = collect_operator_simulation_review_package(dashboard, gaps, score, review)
+    same_package = collect_operator_simulation_review_package(dashboard, gaps, score, review)
+    validate_operator_simulation_review_package(package, dashboard, gaps, score)
+    _require(package["operator_simulation_review_package_id"] == same_package["operator_simulation_review_package_id"],
+             "operator simulation review package id must be deterministic")
+    _require(package["simulation_dashboard_id"] == dashboard["simulation_dashboard_id"],
+             "operator simulation review must flow from dashboard")
+    _require(package["execution_gap_analysis_id"] == gaps["execution_gap_analysis_id"],
+             "operator simulation review must flow from gap analysis")
+    _require(package["execution_readiness_score_id"] == score["execution_readiness_score_id"],
+             "operator simulation review must flow from readiness score")
+    _require(package["overall_status"] == "block", "operator simulation review must block by default")
+    _require(package["predicted_failures"] == review["predicted_failures"],
+             "operator simulation review must preserve predicted failures")
+    _require(package["required_human_actions"], "operator simulation review must include human actions")
+    _require(parse_operator_simulation_review_package_json(stable_operator_simulation_review_package_json(package)) == package,
+             "operator simulation review JSON must round trip")
+
+    bad_dashboard = json.loads(stable_simulation_dashboard_json(dashboard))
+    bad_dashboard["blocker_count"] = -1
+    try:
+        validate_simulation_dashboard(bad_dashboard)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("simulation dashboard validation must reject negative blocker count")
+
+    bad_gaps = json.loads(stable_execution_gap_analysis_json(gaps))
+    bad_gaps["critical_gaps"] = []
+    try:
+        validate_execution_gap_analysis(bad_gaps)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("execution gap analysis validation must reject missing critical gaps")
+
+    bad_score = json.loads(stable_execution_readiness_score_json(score))
+    bad_score["readiness_score"] = 101
+    try:
+        validate_execution_readiness_score(bad_score)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("execution readiness score validation must reject out-of-range score")
+
+    bad_package = json.loads(stable_operator_simulation_review_package_json(package))
+    bad_package["write_allowed"] = True
+    try:
+        validate_operator_simulation_review_package(bad_package)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator simulation review validation must reject unsafe safety metadata")
+
+    print("simulation analysis helpers OK")
+
+
+def check_simulation_analysis_clis() -> None:
+    """Simulation analysis CLIs expose compact read-only analysis payloads."""
+    from link import _cmd_simulation
+    from link_modes.growth.link_growth_console import (
+        execution_gap_analysis_main,
+        execution_readiness_score_main,
+        operator_simulation_review_main,
+        parse_execution_gap_analysis_json,
+        parse_execution_readiness_score_json,
+        parse_operator_simulation_review_package_json,
+        parse_simulation_dashboard_json,
+        simulation_dashboard_main,
+    )
+
+    expected = [
+        ("dashboard", simulation_dashboard_main, parse_simulation_dashboard_json,
+         "simulation_dashboard_id", "Simulation dashboard"),
+        ("gaps", execution_gap_analysis_main, parse_execution_gap_analysis_json,
+         "execution_gap_analysis_id", "Execution gap analysis"),
+        ("score", execution_readiness_score_main, parse_execution_readiness_score_json,
+         "execution_readiness_score_id", "Execution readiness score"),
+        ("operator-review", operator_simulation_review_main, parse_operator_simulation_review_package_json,
+         "operator_simulation_review_package_id", "Operator simulation review"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_simulation(["--help"])
+    _require(help_rc == 0, "simulation --help must return 0")
+    for command, main_func, parse_func, id_key, title in expected:
+        _require(command in help_out.getvalue(), f"simulation help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"simulation {command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"simulation {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"simulation {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"simulation {command} must not allow automation or writes")
+        for full_payload_key in (
+            "business_execution_simulation_plan",
+            "business_execution_simulation_review",
+            "simulation_dashboard",
+            "execution_gap_analysis",
+            "execution_readiness_score",
+            "operator_simulation_review_package",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"simulation {command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_simulation([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"simulation {command} route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"simulation {command} route must preserve id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"simulation {command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"simulation {command} human mode must include title and id")
+        _require(len(human.splitlines()) <= 12, f"simulation {command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"simulation {command} --write must be rejected")
+        _require("read-only simulation" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"simulation {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"simulation {command} --write must not print normal output")
+    print("simulation analysis CLIs OK")
+
+# ---------------------------------------------------------------------------
+# 62m. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
 
 def check_growth_supervised_execution_review_package_cli() -> None:
@@ -16282,6 +16497,8 @@ def main() -> None:
     check_control_plane_operator_ux_clis()
     check_business_execution_simulation_helpers()
     check_business_execution_simulation_clis()
+    check_simulation_analysis_helpers()
+    check_simulation_analysis_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

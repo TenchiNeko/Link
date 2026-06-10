@@ -11037,6 +11037,10 @@ BUSINESS_EXECUTION_SIMULATION_PLAN_VERSION = "link-business-execution-simulation
 BUSINESS_EXECUTION_SIMULATION_EVIDENCE_PACKAGE_VERSION = "link-business-execution-simulation-evidence-package-v1"
 BUSINESS_EXECUTION_SIMULATION_REVIEW_VERSION = "link-business-execution-simulation-review-v1"
 BUSINESS_EXECUTION_SIMULATION_READINESS_VERSION = "link-business-execution-simulation-readiness-v1"
+SIMULATION_DASHBOARD_VERSION = "link-simulation-dashboard-v1"
+EXECUTION_GAP_ANALYSIS_VERSION = "link-execution-gap-analysis-v1"
+EXECUTION_READINESS_SCORE_VERSION = "link-execution-readiness-score-v1"
+OPERATOR_SIMULATION_REVIEW_PACKAGE_VERSION = "link-operator-simulation-review-package-v1"
 BUSINESS_EXECUTION_SIMULATED_STEPS = (
     "validate opportunity",
     "validate evidence",
@@ -16657,6 +16661,512 @@ def parse_business_execution_simulation_readiness_json(text: str) -> dict[str, A
 
 
 
+def make_simulation_dashboard_id(
+    plan: dict[str, Any],
+    evidence_package: dict[str, Any],
+    review: dict[str, Any],
+    readiness: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_execution_simulation_evidence_package_id": evidence_package["business_execution_simulation_evidence_package_id"],
+        "business_execution_simulation_plan_id": plan["business_execution_simulation_plan_id"],
+        "business_execution_simulation_readiness_id": readiness["business_execution_simulation_readiness_id"],
+        "business_execution_simulation_review_id": review["business_execution_simulation_review_id"],
+        "version": SIMULATION_DASHBOARD_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"simulation-dashboard-{digest}"
+
+
+def _collect_simulation_chain(
+    plan: dict[str, Any] | None = None,
+    evidence_package: dict[str, Any] | None = None,
+    review: dict[str, Any] | None = None,
+    readiness: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    selected_plan = plan or collect_business_execution_simulation_plan()
+    validate_business_execution_simulation_plan(selected_plan)
+    selected_evidence = evidence_package or collect_business_execution_simulation_evidence_package(selected_plan)
+    validate_business_execution_simulation_evidence_package(selected_evidence, selected_plan)
+    selected_review = review or collect_business_execution_simulation_review(selected_plan, selected_evidence)
+    validate_business_execution_simulation_review(selected_review, selected_plan, selected_evidence)
+    selected_readiness = readiness or collect_business_execution_simulation_readiness(selected_review)
+    validate_business_execution_simulation_readiness(selected_readiness, selected_review)
+    return selected_plan, selected_evidence, selected_review, selected_readiness
+
+
+def collect_simulation_dashboard(
+    business_execution_simulation_plan: dict[str, Any] | None = None,
+    business_execution_simulation_evidence_package: dict[str, Any] | None = None,
+    business_execution_simulation_review: dict[str, Any] | None = None,
+    business_execution_simulation_readiness: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize the business execution simulation state without executing anything."""
+    plan, evidence, review, readiness = _collect_simulation_chain(
+        business_execution_simulation_plan,
+        business_execution_simulation_evidence_package,
+        business_execution_simulation_review,
+        business_execution_simulation_readiness,
+    )
+    blockers = _normalize_implementation_branch_refs(
+        list(review["predicted_failures"]) +
+        list(review["missing_evidence"]) +
+        list(review["missing_approvals"]) +
+        list(readiness["blockers"])
+    )
+    warnings = _normalize_implementation_branch_refs(list(review["warnings"]) + list(readiness["warnings"]))
+    dashboard = {
+        "simulation_dashboard_version": SIMULATION_DASHBOARD_VERSION,
+        "simulation_dashboard_id": make_simulation_dashboard_id(plan, evidence, review, readiness),
+        "business_execution_simulation_plan_id": plan["business_execution_simulation_plan_id"],
+        "business_execution_simulation_evidence_package_id": evidence["business_execution_simulation_evidence_package_id"],
+        "business_execution_simulation_review_id": review["business_execution_simulation_review_id"],
+        "business_execution_simulation_readiness_id": readiness["business_execution_simulation_readiness_id"],
+        "simulation_status": review["simulation_status"],
+        "readiness_status": readiness["readiness_status"],
+        "blocker_count": len(blockers),
+        "warning_count": len(warnings),
+        "recommended_next_action": "Resolve simulation blockers before designing any real execution runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_simulation_dashboard(dashboard, plan, evidence, review, readiness)
+    return dashboard
+
+
+def validate_simulation_dashboard(
+    dashboard: dict[str, Any],
+    business_execution_simulation_plan: dict[str, Any] | None = None,
+    business_execution_simulation_evidence_package: dict[str, Any] | None = None,
+    business_execution_simulation_review: dict[str, Any] | None = None,
+    business_execution_simulation_readiness: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "simulation_dashboard_version", "simulation_dashboard_id",
+        "business_execution_simulation_plan_id", "business_execution_simulation_evidence_package_id",
+        "business_execution_simulation_review_id", "business_execution_simulation_readiness_id",
+        "simulation_status", "readiness_status", "blocker_count", "warning_count",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in dashboard:
+            raise ValueError(f"simulation dashboard missing required field: {key}")
+    if dashboard["simulation_dashboard_version"] != SIMULATION_DASHBOARD_VERSION:
+        raise ValueError("invalid simulation dashboard version")
+    if not isinstance(dashboard["simulation_dashboard_id"], str) or not dashboard["simulation_dashboard_id"].startswith("simulation-dashboard-"):
+        raise ValueError("invalid simulation dashboard id")
+    if dashboard["simulation_status"] not in BUSINESS_EXECUTION_SIMULATION_STATUSES:
+        raise ValueError("invalid simulation dashboard status")
+    if dashboard["readiness_status"] not in BUSINESS_EXECUTION_SIMULATION_READINESS_STATUSES:
+        raise ValueError("invalid simulation dashboard readiness status")
+    for field in ("blocker_count", "warning_count"):
+        if not isinstance(dashboard[field], int) or dashboard[field] < 0:
+            raise ValueError(f"simulation dashboard {field} must be non-negative")
+    if dashboard["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("simulation dashboard safety metadata mismatch")
+    if dashboard["dry_run"] is not True or dashboard["write_allowed"] is not False:
+        raise ValueError("simulation dashboard must be read-only")
+    if dashboard["automation_allowed"] is not False or dashboard["writes"] != []:
+        raise ValueError("simulation dashboard must not allow automation or writes")
+    if all(item is not None for item in (
+        business_execution_simulation_plan,
+        business_execution_simulation_evidence_package,
+        business_execution_simulation_review,
+        business_execution_simulation_readiness,
+    )):
+        validate_business_execution_simulation_plan(business_execution_simulation_plan)
+        validate_business_execution_simulation_evidence_package(business_execution_simulation_evidence_package, business_execution_simulation_plan)
+        validate_business_execution_simulation_review(business_execution_simulation_review, business_execution_simulation_plan, business_execution_simulation_evidence_package)
+        validate_business_execution_simulation_readiness(business_execution_simulation_readiness, business_execution_simulation_review)
+        expected_id = make_simulation_dashboard_id(
+            business_execution_simulation_plan,
+            business_execution_simulation_evidence_package,
+            business_execution_simulation_review,
+            business_execution_simulation_readiness,
+        )
+        if dashboard["simulation_dashboard_id"] != expected_id:
+            raise ValueError("simulation dashboard id is not deterministic")
+
+
+def stable_simulation_dashboard_json(dashboard: dict[str, Any]) -> str:
+    validate_simulation_dashboard(dashboard)
+    return _stable_ruflo_json(dashboard, indent=2) + "\n"
+
+
+def parse_simulation_dashboard_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    dashboard = _json.loads(text)
+    validate_simulation_dashboard(dashboard)
+    return dashboard
+
+
+def make_execution_gap_analysis_id(review: dict[str, Any], readiness: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_execution_simulation_readiness_id": readiness["business_execution_simulation_readiness_id"],
+        "business_execution_simulation_review_id": review["business_execution_simulation_review_id"],
+        "version": EXECUTION_GAP_ANALYSIS_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"execution-gap-analysis-{digest}"
+
+
+def collect_execution_gap_analysis(
+    business_execution_simulation_review: dict[str, Any] | None = None,
+    business_execution_simulation_readiness: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Identify what prevents execution in the current simulation."""
+    review = business_execution_simulation_review or collect_business_execution_simulation_review()
+    validate_business_execution_simulation_review(review)
+    readiness = business_execution_simulation_readiness or collect_business_execution_simulation_readiness(review)
+    validate_business_execution_simulation_readiness(readiness, review)
+    critical_gaps = _normalize_implementation_branch_refs(
+        list(review["missing_evidence"]) +
+        list(review["missing_approvals"]) +
+        [item for item in readiness["blockers"] if "blocked real action" in item]
+    )
+    moderate_gaps = _normalize_implementation_branch_refs([
+        "missing execution review confirmation",
+        "missing real source collection evidence",
+        "missing final operator approval trail",
+    ])
+    minor_gaps = _normalize_implementation_branch_refs([
+        "missing simulation freshness marker",
+        "missing dashboard refresh note",
+    ])
+    recommended = _normalize_implementation_branch_refs([
+        "close missing evidence before runtime design",
+        "collect explicit final approvals before external effects",
+        "keep blocked real actions disabled until separate boundaries exist",
+        "refresh simulation dashboard after upstream governance changes",
+    ])
+    analysis = {
+        "execution_gap_analysis_version": EXECUTION_GAP_ANALYSIS_VERSION,
+        "execution_gap_analysis_id": make_execution_gap_analysis_id(review, readiness),
+        "business_execution_simulation_review_id": review["business_execution_simulation_review_id"],
+        "business_execution_simulation_readiness_id": readiness["business_execution_simulation_readiness_id"],
+        "critical_gaps": critical_gaps,
+        "moderate_gaps": moderate_gaps,
+        "minor_gaps": minor_gaps,
+        "recommended_fixes": recommended,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_gap_analysis(analysis, review, readiness)
+    return analysis
+
+
+def validate_execution_gap_analysis(
+    analysis: dict[str, Any],
+    business_execution_simulation_review: dict[str, Any] | None = None,
+    business_execution_simulation_readiness: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "execution_gap_analysis_version", "execution_gap_analysis_id",
+        "critical_gaps", "moderate_gaps", "minor_gaps", "recommended_fixes",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in analysis:
+            raise ValueError(f"execution gap analysis missing required field: {key}")
+    if analysis["execution_gap_analysis_version"] != EXECUTION_GAP_ANALYSIS_VERSION:
+        raise ValueError("invalid execution gap analysis version")
+    if not isinstance(analysis["execution_gap_analysis_id"], str) or not analysis["execution_gap_analysis_id"].startswith("execution-gap-analysis-"):
+        raise ValueError("invalid execution gap analysis id")
+    for field in ("critical_gaps", "moderate_gaps", "minor_gaps", "recommended_fixes"):
+        normalized = _normalize_implementation_branch_refs(analysis[field])
+        if not normalized or normalized != analysis[field]:
+            raise ValueError(f"execution gap analysis {field} must be normalized and non-empty")
+    if analysis["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("execution gap analysis safety metadata mismatch")
+    if analysis["dry_run"] is not True or analysis["write_allowed"] is not False:
+        raise ValueError("execution gap analysis must be read-only")
+    if analysis["automation_allowed"] is not False or analysis["writes"] != []:
+        raise ValueError("execution gap analysis must not allow automation or writes")
+    if business_execution_simulation_review is not None and business_execution_simulation_readiness is not None:
+        validate_business_execution_simulation_review(business_execution_simulation_review)
+        validate_business_execution_simulation_readiness(business_execution_simulation_readiness, business_execution_simulation_review)
+        expected_id = make_execution_gap_analysis_id(business_execution_simulation_review, business_execution_simulation_readiness)
+        if analysis["execution_gap_analysis_id"] != expected_id:
+            raise ValueError("execution gap analysis id is not deterministic")
+
+
+def stable_execution_gap_analysis_json(analysis: dict[str, Any]) -> str:
+    validate_execution_gap_analysis(analysis)
+    return _stable_ruflo_json(analysis, indent=2) + "\n"
+
+
+def parse_execution_gap_analysis_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    analysis = _json.loads(text)
+    validate_execution_gap_analysis(analysis)
+    return analysis
+
+
+def make_execution_readiness_score_id(dashboard: dict[str, Any], gap_analysis: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "execution_gap_analysis_id": gap_analysis["execution_gap_analysis_id"],
+        "simulation_dashboard_id": dashboard["simulation_dashboard_id"],
+        "version": EXECUTION_READINESS_SCORE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"execution-readiness-score-{digest}"
+
+
+def _execution_readiness_grade(score: int) -> str:
+    if score >= 90:
+        return "A"
+    if score >= 75:
+        return "B"
+    if score >= 60:
+        return "C"
+    if score >= 40:
+        return "D"
+    return "F"
+
+
+def collect_execution_readiness_score(
+    simulation_dashboard: dict[str, Any] | None = None,
+    execution_gap_analysis: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Score simulated execution readiness deterministically from governance state."""
+    dashboard = simulation_dashboard or collect_simulation_dashboard()
+    validate_simulation_dashboard(dashboard)
+    gaps = execution_gap_analysis or collect_execution_gap_analysis()
+    validate_execution_gap_analysis(gaps)
+    penalty = min(100, len(gaps["critical_gaps"]) * 10 + len(gaps["moderate_gaps"]) * 5 + len(gaps["minor_gaps"]) * 2)
+    score_value = max(0, 100 - penalty)
+    if dashboard["readiness_status"] == "blocked":
+        score_value = min(score_value, 39)
+    factors = [
+        {"factor_id": "critical_gaps", "value": len(gaps["critical_gaps"]), "impact": "high"},
+        {"factor_id": "moderate_gaps", "value": len(gaps["moderate_gaps"]), "impact": "medium"},
+        {"factor_id": "minor_gaps", "value": len(gaps["minor_gaps"]), "impact": "low"},
+        {"factor_id": "simulation_blockers", "value": dashboard["blocker_count"], "impact": "high"},
+        {"factor_id": "simulation_warnings", "value": dashboard["warning_count"], "impact": "medium"},
+    ]
+    payload = {
+        "execution_readiness_score_version": EXECUTION_READINESS_SCORE_VERSION,
+        "execution_readiness_score_id": make_execution_readiness_score_id(dashboard, gaps),
+        "simulation_dashboard_id": dashboard["simulation_dashboard_id"],
+        "execution_gap_analysis_id": gaps["execution_gap_analysis_id"],
+        "readiness_score": score_value,
+        "readiness_grade": _execution_readiness_grade(score_value),
+        "readiness_factors": factors,
+        "blockers": list(gaps["critical_gaps"]),
+        "recommended_next_action": "Fix critical execution gaps before any real execution runtime is considered.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_execution_readiness_score(payload, dashboard, gaps)
+    return payload
+
+
+def validate_execution_readiness_score(
+    score: dict[str, Any],
+    simulation_dashboard: dict[str, Any] | None = None,
+    execution_gap_analysis: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "execution_readiness_score_version", "execution_readiness_score_id", "readiness_score",
+        "readiness_grade", "readiness_factors", "blockers", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in score:
+            raise ValueError(f"execution readiness score missing required field: {key}")
+    if score["execution_readiness_score_version"] != EXECUTION_READINESS_SCORE_VERSION:
+        raise ValueError("invalid execution readiness score version")
+    if not isinstance(score["execution_readiness_score_id"], str) or not score["execution_readiness_score_id"].startswith("execution-readiness-score-"):
+        raise ValueError("invalid execution readiness score id")
+    if not isinstance(score["readiness_score"], int) or not 0 <= score["readiness_score"] <= 100:
+        raise ValueError("execution readiness score must be an integer between 0 and 100")
+    if score["readiness_grade"] != _execution_readiness_grade(score["readiness_score"]):
+        raise ValueError("execution readiness grade does not match score")
+    if not isinstance(score["readiness_factors"], list) or not score["readiness_factors"]:
+        raise ValueError("execution readiness score must include factors")
+    for factor in score["readiness_factors"]:
+        if not isinstance(factor, dict):
+            raise TypeError("execution readiness factor must be a dict")
+        for field in ("factor_id", "value", "impact"):
+            if field not in factor:
+                raise ValueError(f"execution readiness factor missing {field}")
+        if not isinstance(factor["value"], int) or factor["value"] < 0:
+            raise ValueError("execution readiness factor value must be non-negative")
+    if _normalize_implementation_branch_refs(score["blockers"]) != score["blockers"]:
+        raise ValueError("execution readiness score blockers must be normalized")
+    if score["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("execution readiness score safety metadata mismatch")
+    if score["dry_run"] is not True or score["write_allowed"] is not False:
+        raise ValueError("execution readiness score must be read-only")
+    if score["automation_allowed"] is not False or score["writes"] != []:
+        raise ValueError("execution readiness score must not allow automation or writes")
+    if simulation_dashboard is not None and execution_gap_analysis is not None:
+        validate_simulation_dashboard(simulation_dashboard)
+        validate_execution_gap_analysis(execution_gap_analysis)
+        expected_id = make_execution_readiness_score_id(simulation_dashboard, execution_gap_analysis)
+        if score["execution_readiness_score_id"] != expected_id:
+            raise ValueError("execution readiness score id is not deterministic")
+
+
+def stable_execution_readiness_score_json(score: dict[str, Any]) -> str:
+    validate_execution_readiness_score(score)
+    return _stable_ruflo_json(score, indent=2) + "\n"
+
+
+def parse_execution_readiness_score_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    score = _json.loads(text)
+    validate_execution_readiness_score(score)
+    return score
+
+
+def make_operator_simulation_review_package_id(
+    dashboard: dict[str, Any],
+    gap_analysis: dict[str, Any],
+    readiness_score: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "execution_gap_analysis_id": gap_analysis["execution_gap_analysis_id"],
+        "execution_readiness_score_id": readiness_score["execution_readiness_score_id"],
+        "simulation_dashboard_id": dashboard["simulation_dashboard_id"],
+        "version": OPERATOR_SIMULATION_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-simulation-review-package-{digest}"
+
+
+def collect_operator_simulation_review_package(
+    simulation_dashboard: dict[str, Any] | None = None,
+    execution_gap_analysis: dict[str, Any] | None = None,
+    execution_readiness_score: dict[str, Any] | None = None,
+    business_execution_simulation_review: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Produce one operator-facing package for the simulation analysis layer."""
+    dashboard = simulation_dashboard or collect_simulation_dashboard()
+    validate_simulation_dashboard(dashboard)
+    gaps = execution_gap_analysis or collect_execution_gap_analysis()
+    validate_execution_gap_analysis(gaps)
+    score = execution_readiness_score or collect_execution_readiness_score(dashboard, gaps)
+    validate_execution_readiness_score(score, dashboard, gaps)
+    review = business_execution_simulation_review or collect_business_execution_simulation_review()
+    validate_business_execution_simulation_review(review)
+    blockers = _normalize_implementation_branch_refs(list(gaps["critical_gaps"]) + list(score["blockers"]))
+    warnings = _normalize_implementation_branch_refs(list(gaps["moderate_gaps"]) + list(gaps["minor_gaps"]) + list(review["warnings"]))
+    required_actions = _normalize_implementation_branch_refs(list(review["required_human_actions"]) + list(gaps["recommended_fixes"]))
+    overall = "block" if blockers or dashboard["simulation_status"] == "block" else "review"
+    package = {
+        "operator_simulation_review_package_version": OPERATOR_SIMULATION_REVIEW_PACKAGE_VERSION,
+        "operator_simulation_review_package_id": make_operator_simulation_review_package_id(dashboard, gaps, score),
+        "simulation_dashboard_id": dashboard["simulation_dashboard_id"],
+        "execution_gap_analysis_id": gaps["execution_gap_analysis_id"],
+        "execution_readiness_score_id": score["execution_readiness_score_id"],
+        "overall_status": overall,
+        "predicted_failures": list(review["predicted_failures"]),
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": required_actions,
+        "review_recommendation": "execution_not_ready" if overall == "block" else "review_simulation_findings",
+        "recommended_next_action": "Address the critical simulation gaps before any real execution capability is designed.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_simulation_review_package(package, dashboard, gaps, score)
+    return package
+
+
+def validate_operator_simulation_review_package(
+    package: dict[str, Any],
+    simulation_dashboard: dict[str, Any] | None = None,
+    execution_gap_analysis: dict[str, Any] | None = None,
+    execution_readiness_score: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "operator_simulation_review_package_version", "operator_simulation_review_package_id",
+        "simulation_dashboard_id", "execution_gap_analysis_id", "execution_readiness_score_id",
+        "overall_status", "predicted_failures", "blockers", "warnings", "required_human_actions",
+        "review_recommendation", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"operator simulation review package missing required field: {key}")
+    if package["operator_simulation_review_package_version"] != OPERATOR_SIMULATION_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid operator simulation review package version")
+    if not isinstance(package["operator_simulation_review_package_id"], str) or not package["operator_simulation_review_package_id"].startswith("operator-simulation-review-package-"):
+        raise ValueError("invalid operator simulation review package id")
+    if package["overall_status"] not in BUSINESS_EXECUTION_SIMULATION_STATUSES:
+        raise ValueError("invalid operator simulation overall status")
+    for field in ("predicted_failures", "blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if not normalized or normalized != package[field]:
+            raise ValueError(f"operator simulation review package {field} must be normalized and non-empty")
+    if package["review_recommendation"] not in {"execution_not_ready", "review_simulation_findings"}:
+        raise ValueError("invalid operator simulation review recommendation")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("operator simulation review package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("operator simulation review package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("operator simulation review package must not allow automation or writes")
+    if simulation_dashboard is not None and execution_gap_analysis is not None and execution_readiness_score is not None:
+        validate_simulation_dashboard(simulation_dashboard)
+        validate_execution_gap_analysis(execution_gap_analysis)
+        validate_execution_readiness_score(execution_readiness_score, simulation_dashboard, execution_gap_analysis)
+        expected_id = make_operator_simulation_review_package_id(simulation_dashboard, execution_gap_analysis, execution_readiness_score)
+        if package["operator_simulation_review_package_id"] != expected_id:
+            raise ValueError("operator simulation review package id is not deterministic")
+
+
+def stable_operator_simulation_review_package_json(package: dict[str, Any]) -> str:
+    validate_operator_simulation_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_operator_simulation_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_operator_simulation_review_package(package)
+    return package
+
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -19921,6 +20431,144 @@ def business_execution_simulation_readiness_main(argv: list[str] | None = None) 
         print(stable_business_execution_simulation_readiness_json(readiness), end="")
         return 0
     render_business_execution_simulation_readiness_plain(readiness)
+    return 0
+
+
+
+def render_simulation_dashboard_plain(dashboard: dict[str, Any]) -> None:
+    validate_simulation_dashboard(dashboard)
+    print("Simulation dashboard")
+    print(f"simulation_dashboard_id: {dashboard['simulation_dashboard_id']}")
+    print(f"simulation_status: {dashboard['simulation_status']}")
+    print(f"readiness_status: {dashboard['readiness_status']}")
+    print(f"blocker_count: {dashboard['blocker_count']}")
+    print(f"warning_count: {dashboard['warning_count']}")
+    print(f"next_action: {dashboard['recommended_next_action']}")
+
+
+def simulation_dashboard_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation dashboard: compact simulation status")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation dashboard")
+        print("  python3 link.py simulation dashboard --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation dashboard is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    dashboard = collect_simulation_dashboard()
+    validate_simulation_dashboard(dashboard)
+    if "--json" in args:
+        print(stable_simulation_dashboard_json(dashboard), end="")
+        return 0
+    render_simulation_dashboard_plain(dashboard)
+    return 0
+
+
+def render_execution_gap_analysis_plain(analysis: dict[str, Any]) -> None:
+    validate_execution_gap_analysis(analysis)
+    print("Execution gap analysis")
+    print(f"execution_gap_analysis_id: {analysis['execution_gap_analysis_id']}")
+    print(f"critical_gap_count: {len(analysis['critical_gaps'])}")
+    print(f"moderate_gap_count: {len(analysis['moderate_gaps'])}")
+    print(f"minor_gap_count: {len(analysis['minor_gaps'])}")
+    print(f"recommended_fix_count: {len(analysis['recommended_fixes'])}")
+
+
+def execution_gap_analysis_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation gaps: execution gap analysis")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation gaps")
+        print("  python3 link.py simulation gaps --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation gaps is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    analysis = collect_execution_gap_analysis()
+    validate_execution_gap_analysis(analysis)
+    if "--json" in args:
+        print(stable_execution_gap_analysis_json(analysis), end="")
+        return 0
+    render_execution_gap_analysis_plain(analysis)
+    return 0
+
+
+def render_execution_readiness_score_plain(score: dict[str, Any]) -> None:
+    validate_execution_readiness_score(score)
+    print("Execution readiness score")
+    print(f"execution_readiness_score_id: {score['execution_readiness_score_id']}")
+    print(f"readiness_score: {score['readiness_score']}")
+    print(f"readiness_grade: {score['readiness_grade']}")
+    print(f"readiness_factor_count: {len(score['readiness_factors'])}")
+    print(f"blocker_count: {len(score['blockers'])}")
+    print(f"next_action: {score['recommended_next_action']}")
+
+
+def execution_readiness_score_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation score: deterministic execution readiness score")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation score")
+        print("  python3 link.py simulation score --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation score is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    score = collect_execution_readiness_score()
+    validate_execution_readiness_score(score)
+    if "--json" in args:
+        print(stable_execution_readiness_score_json(score), end="")
+        return 0
+    render_execution_readiness_score_plain(score)
+    return 0
+
+
+def render_operator_simulation_review_package_plain(package: dict[str, Any]) -> None:
+    validate_operator_simulation_review_package(package)
+    print("Operator simulation review")
+    print(f"operator_simulation_review_package_id: {package['operator_simulation_review_package_id']}")
+    print(f"overall_status: {package['overall_status']}")
+    print(f"predicted_failure_count: {len(package['predicted_failures'])}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"review_recommendation: {package['review_recommendation']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def operator_simulation_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation operator-review: operator-facing simulation analysis package")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation operator-review")
+        print("  python3 link.py simulation operator-review --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation operator-review is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_operator_simulation_review_package()
+    validate_operator_simulation_review_package(package)
+    if "--json" in args:
+        print(stable_operator_simulation_review_package_json(package), end="")
+        return 0
+    render_operator_simulation_review_package_plain(package)
     return 0
 
 

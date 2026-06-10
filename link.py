@@ -400,12 +400,32 @@ def _cmd_simulation(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import business_execution_simulation_readiness_main as _simulation_readiness_main
 
         return _simulation_readiness_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "dashboard":
+        from link_modes.growth.link_growth_console import simulation_dashboard_main as _simulation_dashboard_main
+
+        return _simulation_dashboard_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "gaps":
+        from link_modes.growth.link_growth_console import execution_gap_analysis_main as _simulation_gaps_main
+
+        return _simulation_gaps_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "score":
+        from link_modes.growth.link_growth_console import execution_readiness_score_main as _simulation_score_main
+
+        return _simulation_score_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "operator-review":
+        from link_modes.growth.link_growth_console import operator_simulation_review_main as _simulation_operator_review_main
+
+        return _simulation_operator_review_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Simulation commands:")
-        print("  plan       Preview dry-run business execution simulation plan")
-        print("  evidence   Preview simulated execution evidence package")
-        print("  review     Preview simulated execution review")
-        print("  readiness  Preview simulated execution readiness check")
+        print("  plan             Preview dry-run business execution simulation plan")
+        print("  evidence         Preview simulated execution evidence package")
+        print("  review           Preview simulated execution review")
+        print("  readiness        Preview simulated execution readiness check")
+        print("  dashboard        Preview compact simulation dashboard")
+        print("  gaps             Preview execution gap analysis")
+        print("  score            Preview deterministic execution readiness score")
+        print("  operator-review  Preview operator-facing simulation analysis package")
         return 0
     print(f"simulation: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py simulation --help' for subcommands.", file=sys.stderr)
