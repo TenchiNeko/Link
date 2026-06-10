@@ -507,12 +507,32 @@ def _cmd_decision(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import operator_decision_review_main as _operator_decision_review_main
 
         return _operator_decision_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "score-breakdown":
+        from link_modes.growth.link_growth_console import decision_score_breakdown_main as _decision_score_breakdown_main
+
+        return _decision_score_breakdown_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "rejected-alternatives":
+        from link_modes.growth.link_growth_console import rejected_alternative_analysis_main as _rejected_alternative_analysis_main
+
+        return _rejected_alternative_analysis_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "assumptions":
+        from link_modes.growth.link_growth_console import decision_assumption_ledger_main as _decision_assumption_ledger_main
+
+        return _decision_assumption_ledger_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "trace":
+        from link_modes.growth.link_growth_console import operator_decision_trace_package_main as _operator_decision_trace_package_main
+
+        return _operator_decision_trace_package_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Decision commands:")
-        print("  candidates  Preview remediation decision candidates")
-        print("  impact      Preview deterministic candidate impact analysis")
-        print("  ranking     Preview deterministic candidate ranking")
-        print("  review      Preview operator decision recommendation")
+        print("  candidates              Preview remediation decision candidates")
+        print("  impact                  Preview deterministic candidate impact analysis")
+        print("  ranking                 Preview deterministic candidate ranking")
+        print("  review                  Preview operator decision recommendation")
+        print("  score-breakdown         Explain score components for each candidate")
+        print("  rejected-alternatives   Explain why non-top candidates lost")
+        print("  assumptions             Preview recommendation assumption ledger")
+        print("  trace                   Preview operator decision trace package")
         return 0
     print(f"decision: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py decision --help' for subcommands.", file=sys.stderr)

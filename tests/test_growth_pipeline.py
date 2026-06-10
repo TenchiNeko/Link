@@ -16065,7 +16065,183 @@ def check_operator_decision_engine_clis() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 62p. Growth supervised-execution-review CLI
+# 62p. Operator decision trace explainability
+# ---------------------------------------------------------------------------
+
+def check_operator_decision_trace_helpers() -> None:
+    """Decision trace explains why the recommendation won without execution."""
+    from link_modes.growth.link_growth_console import (
+        collect_decision_assumption_ledger,
+        collect_decision_candidate_set,
+        collect_decision_impact_analysis,
+        collect_decision_ranking,
+        collect_decision_score_breakdown,
+        collect_operator_decision_review,
+        collect_operator_decision_trace_package,
+        collect_rejected_alternative_analysis,
+        parse_decision_assumption_ledger_json,
+        parse_decision_score_breakdown_json,
+        parse_operator_decision_trace_package_json,
+        parse_rejected_alternative_analysis_json,
+        stable_decision_assumption_ledger_json,
+        stable_decision_score_breakdown_json,
+        stable_operator_decision_trace_package_json,
+        stable_rejected_alternative_analysis_json,
+        validate_decision_assumption_ledger,
+        validate_decision_score_breakdown,
+        validate_operator_decision_trace_package,
+        validate_rejected_alternative_analysis,
+    )
+
+    candidate_set = collect_decision_candidate_set()
+    impact = collect_decision_impact_analysis(candidate_set)
+    ranking = collect_decision_ranking(candidate_set, impact)
+    decision_review = collect_operator_decision_review(candidate_set, impact, ranking)
+
+    breakdown = collect_decision_score_breakdown(candidate_set, impact, ranking)
+    same_breakdown = collect_decision_score_breakdown(candidate_set, impact, ranking)
+    validate_decision_score_breakdown(breakdown, candidate_set, impact, ranking)
+    _require(breakdown["decision_score_breakdown_id"] == same_breakdown["decision_score_breakdown_id"],
+             "decision score breakdown id must be deterministic")
+    _require(breakdown["decision_ranking_id"] == ranking["decision_ranking_id"],
+             "decision score breakdown must flow from ranking")
+    _require(breakdown["top_candidate_id"] == ranking["top_candidate_id"],
+             "decision score breakdown must preserve top candidate")
+    for score in breakdown["candidate_scores"]:
+        expected_total = (score["readiness_gain_score"] + score["risk_reduction_score"] +
+                          score["evidence_gain_score"] + score["approval_gain_score"] +
+                          score["effort_penalty"] + score["blocker_penalty"])
+        _require(score["total_score"] == expected_total, "decision score total must match components")
+    _require(parse_decision_score_breakdown_json(stable_decision_score_breakdown_json(breakdown)) == breakdown,
+             "decision score breakdown JSON must round trip")
+
+    rejected = collect_rejected_alternative_analysis(candidate_set, ranking, breakdown)
+    same_rejected = collect_rejected_alternative_analysis(candidate_set, ranking, breakdown)
+    validate_rejected_alternative_analysis(rejected, candidate_set, ranking, breakdown)
+    _require(rejected["rejected_alternative_analysis_id"] == same_rejected["rejected_alternative_analysis_id"],
+             "rejected alternative analysis id must be deterministic")
+    _require(rejected["top_candidate_id"] == ranking["top_candidate_id"],
+             "rejected alternative analysis must preserve top candidate")
+    _require(ranking["top_candidate_id"] not in rejected["rejected_candidates"],
+             "rejected alternatives must exclude the top candidate")
+    _require(len(rejected["rejection_reasons"]) == len(rejected["rejected_candidates"]),
+             "rejected alternatives must explain every rejection")
+    _require(parse_rejected_alternative_analysis_json(stable_rejected_alternative_analysis_json(rejected)) == rejected,
+             "rejected alternative analysis JSON must round trip")
+
+    ledger = collect_decision_assumption_ledger(candidate_set, ranking, decision_review)
+    same_ledger = collect_decision_assumption_ledger(candidate_set, ranking, decision_review)
+    validate_decision_assumption_ledger(ledger, candidate_set, ranking, decision_review)
+    _require(ledger["decision_assumption_ledger_id"] == same_ledger["decision_assumption_ledger_id"],
+             "decision assumption ledger id must be deterministic")
+    _require(ledger["assumptions"] and ledger["weak_assumptions"] and ledger["required_validation"],
+             "decision assumption ledger must include assumptions, weak assumptions, and validation requirements")
+    _require(parse_decision_assumption_ledger_json(stable_decision_assumption_ledger_json(ledger)) == ledger,
+             "decision assumption ledger JSON must round trip")
+
+    trace = collect_operator_decision_trace_package(ranking, breakdown, rejected, ledger, decision_review, candidate_set, impact)
+    same_trace = collect_operator_decision_trace_package(ranking, breakdown, rejected, ledger, decision_review, candidate_set, impact)
+    validate_operator_decision_trace_package(trace, ranking, breakdown, rejected, ledger, decision_review)
+    _require(trace["operator_decision_trace_package_id"] == same_trace["operator_decision_trace_package_id"],
+             "operator decision trace id must be deterministic")
+    _require(trace["decision_ranking_id"] == ranking["decision_ranking_id"],
+             "operator decision trace must flow from ranking")
+    _require(trace["score_breakdown_id"] == breakdown["decision_score_breakdown_id"],
+             "operator decision trace must flow from score breakdown")
+    _require(trace["rejected_alternative_analysis_id"] == rejected["rejected_alternative_analysis_id"],
+             "operator decision trace must flow from rejected alternatives")
+    _require(trace["assumption_ledger_id"] == ledger["decision_assumption_ledger_id"],
+             "operator decision trace must flow from assumption ledger")
+    _require("won with score" in trace["explanation_summary"],
+             "operator decision trace must explain why the recommendation won")
+    _require(parse_operator_decision_trace_package_json(stable_operator_decision_trace_package_json(trace)) == trace,
+             "operator decision trace JSON must round trip")
+
+    bad_breakdown = json.loads(stable_decision_score_breakdown_json(breakdown))
+    bad_breakdown["candidate_scores"][0]["total_score"] += 1
+    try:
+        validate_decision_score_breakdown(bad_breakdown)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("decision score breakdown validation must reject score drift")
+
+    bad_ledger = json.loads(stable_decision_assumption_ledger_json(ledger))
+    bad_ledger["weak_assumptions"] = []
+    try:
+        validate_decision_assumption_ledger(bad_ledger)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("decision assumption ledger validation must reject missing weak assumptions")
+
+    bad_trace = json.loads(stable_operator_decision_trace_package_json(trace))
+    bad_trace["write_allowed"] = True
+    try:
+        validate_operator_decision_trace_package(bad_trace)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator decision trace validation must reject writes")
+
+    print("operator decision trace helpers OK")
+
+
+def check_operator_decision_trace_clis() -> None:
+    """Decision trace CLIs expose read-only explainability payloads."""
+    from link import _cmd_decision
+    from link_modes.growth.link_growth_console import (
+        decision_assumption_ledger_main,
+        decision_score_breakdown_main,
+        operator_decision_trace_package_main,
+        parse_decision_score_breakdown_json,
+        rejected_alternative_analysis_main,
+    )
+
+    commands = [
+        ("score-breakdown", decision_score_breakdown_main),
+        ("rejected-alternatives", rejected_alternative_analysis_main),
+        ("assumptions", decision_assumption_ledger_main),
+        ("trace", operator_decision_trace_package_main),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_decision(["--help"])
+    _require(help_rc == 0, "decision --help must return 0 for trace commands")
+    for command, main_func in commands:
+        _require(command in help_out.getvalue(), f"decision help must include {command}")
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"decision {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"decision {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"decision {command} --write must not print normal output")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = _cmd_decision(["score-breakdown", "--json"])
+    parsed = parse_decision_score_breakdown_json(json_out.getvalue())
+    _require(json_rc == 0, "decision score-breakdown route must return 0")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "decision score-breakdown CLI must remain read-only")
+    _require("decision_ranking" not in parsed and "decision_candidate_set" not in parsed,
+             "decision score-breakdown --json must output only its object payload")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = decision_score_breakdown_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "decision score-breakdown human mode must return 0")
+    _require("Decision score breakdown" in human and "decision_score_breakdown_id:" in human,
+             "decision score-breakdown human mode must include title and id")
+    _require(len(human.splitlines()) <= 12, "decision score-breakdown human mode must stay concise")
+    print("operator decision trace CLIs OK")
+
+
+# ---------------------------------------------------------------------------
+# 62q. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
 
 def check_growth_supervised_execution_review_package_cli() -> None:
@@ -17111,6 +17287,8 @@ def main() -> None:
     check_execution_readiness_sandbox_clis()
     check_operator_decision_engine_helpers()
     check_operator_decision_engine_clis()
+    check_operator_decision_trace_helpers()
+    check_operator_decision_trace_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

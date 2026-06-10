@@ -11054,6 +11054,10 @@ DECISION_CANDIDATE_SET_VERSION = "link-decision-candidate-set-v1"
 DECISION_IMPACT_ANALYSIS_VERSION = "link-decision-impact-analysis-v1"
 DECISION_RANKING_VERSION = "link-decision-ranking-v1"
 OPERATOR_DECISION_REVIEW_VERSION = "link-operator-decision-review-v1"
+DECISION_SCORE_BREAKDOWN_VERSION = "link-decision-score-breakdown-v1"
+REJECTED_ALTERNATIVE_ANALYSIS_VERSION = "link-rejected-alternative-analysis-v1"
+DECISION_ASSUMPTION_LEDGER_VERSION = "link-decision-assumption-ledger-v1"
+OPERATOR_DECISION_TRACE_PACKAGE_VERSION = "link-operator-decision-trace-package-v1"
 REMEDIATION_PRIORITIES = ("critical", "high", "medium", "low")
 BUSINESS_EXECUTION_SIMULATED_STEPS = (
     "validate opportunity",
@@ -18673,6 +18677,408 @@ def parse_operator_decision_review_json(text: str) -> dict[str, Any]:
 
 
 
+def make_decision_score_breakdown_id(candidate_set: dict[str, Any], impact: dict[str, Any], ranking: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "decision_impact_analysis_id": impact["decision_impact_analysis_id"],
+        "decision_ranking_id": ranking["decision_ranking_id"],
+        "version": DECISION_SCORE_BREAKDOWN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"decision-score-breakdown-{digest}"
+
+
+def _decision_candidate_score(candidate: dict[str, Any]) -> dict[str, Any]:
+    readiness = candidate["expected_readiness_gain"] * 4
+    risk = candidate["expected_risk_reduction"] * 3
+    evidence = candidate["expected_evidence_gain"] * 2
+    approval = candidate["expected_approval_gain"]
+    effort = candidate["effort_score"] * -2
+    blockers = len(candidate["blockers"]) * -5
+    total = readiness + risk + evidence + approval + effort + blockers
+    return {
+        "decision_candidate_id": candidate["decision_candidate_id"],
+        "readiness_gain_score": readiness,
+        "risk_reduction_score": risk,
+        "evidence_gain_score": evidence,
+        "approval_gain_score": approval,
+        "effort_penalty": effort,
+        "blocker_penalty": blockers,
+        "total_score": total,
+        "score_explanation": f"{candidate['title']} scored {total} from readiness, risk, evidence, approval, effort, and blocker factors.",
+    }
+
+
+def collect_decision_score_breakdown(decision_candidate_set: dict[str, Any] | None = None, decision_impact_analysis: dict[str, Any] | None = None, decision_ranking: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    candidate_set = decision_candidate_set or collect_decision_candidate_set()
+    validate_decision_candidate_set(candidate_set)
+    impact = decision_impact_analysis or collect_decision_impact_analysis(candidate_set)
+    validate_decision_impact_analysis(impact, candidate_set)
+    ranking = decision_ranking or collect_decision_ranking(candidate_set, impact)
+    validate_decision_ranking(ranking, candidate_set, impact)
+    scores = [_decision_candidate_score(candidate) for candidate in candidate_set["candidates"]]
+    ranking_scores = {item["decision_candidate_id"]: item["score"] for item in ranking["ranked_candidates"]}
+    scores.sort(key=lambda item: (-item["total_score"], item["decision_candidate_id"]))
+    breakdown = {
+        "decision_score_breakdown_version": DECISION_SCORE_BREAKDOWN_VERSION,
+        "decision_score_breakdown_id": make_decision_score_breakdown_id(candidate_set, impact, ranking),
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "decision_impact_analysis_id": impact["decision_impact_analysis_id"],
+        "decision_ranking_id": ranking["decision_ranking_id"],
+        "scoring_formula": dict(ranking["ranking_formula"]),
+        "candidate_scores": scores,
+        "top_candidate_id": ranking["top_candidate_id"],
+        "recommended_next_action": "Review the score breakdown to understand why the top recommendation won.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": {**dict(metadata or {}), "ranking_scores": ranking_scores},
+        "writes": [],
+    }
+    validate_decision_score_breakdown(breakdown, candidate_set, impact, ranking)
+    return breakdown
+
+
+def validate_decision_score_breakdown(breakdown: dict[str, Any], decision_candidate_set: dict[str, Any] | None = None, decision_impact_analysis: dict[str, Any] | None = None, decision_ranking: dict[str, Any] | None = None) -> None:
+    required = ("decision_score_breakdown_version", "decision_score_breakdown_id", "decision_ranking_id", "scoring_formula", "candidate_scores", "top_candidate_id", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in breakdown:
+            raise ValueError(f"decision score breakdown missing required field: {key}")
+    if breakdown["decision_score_breakdown_version"] != DECISION_SCORE_BREAKDOWN_VERSION:
+        raise ValueError("invalid decision score breakdown version")
+    if not isinstance(breakdown["decision_score_breakdown_id"], str) or not breakdown["decision_score_breakdown_id"].startswith("decision-score-breakdown-"):
+        raise ValueError("invalid decision score breakdown id")
+    expected_formula = {
+        "readiness_gain_weight": 4,
+        "risk_reduction_weight": 3,
+        "evidence_gain_weight": 2,
+        "approval_gain_weight": 1,
+        "effort_penalty_weight": -2,
+        "blocker_penalty": -5,
+    }
+    if breakdown["scoring_formula"] != expected_formula:
+        raise ValueError("decision score breakdown formula mismatch")
+    if not isinstance(breakdown["candidate_scores"], list) or not breakdown["candidate_scores"]:
+        raise ValueError("decision score breakdown must include candidate scores")
+    for item in breakdown["candidate_scores"]:
+        for field in ("decision_candidate_id", "readiness_gain_score", "risk_reduction_score", "evidence_gain_score", "approval_gain_score", "effort_penalty", "blocker_penalty", "total_score", "score_explanation"):
+            if field not in item:
+                raise ValueError(f"decision candidate score missing {field}")
+        expected_total = item["readiness_gain_score"] + item["risk_reduction_score"] + item["evidence_gain_score"] + item["approval_gain_score"] + item["effort_penalty"] + item["blocker_penalty"]
+        if item["total_score"] != expected_total:
+            raise ValueError("decision candidate score total mismatch")
+    if breakdown["safety_metadata"] != _read_only_safety_metadata() or breakdown["dry_run"] is not True or breakdown["write_allowed"] is not False or breakdown["automation_allowed"] is not False or breakdown["writes"] != []:
+        raise ValueError("decision score breakdown must be read-only")
+    if all(item is not None for item in (decision_candidate_set, decision_impact_analysis, decision_ranking)):
+        validate_decision_candidate_set(decision_candidate_set)
+        validate_decision_impact_analysis(decision_impact_analysis, decision_candidate_set)
+        validate_decision_ranking(decision_ranking, decision_candidate_set, decision_impact_analysis)
+        if breakdown["decision_score_breakdown_id"] != make_decision_score_breakdown_id(decision_candidate_set, decision_impact_analysis, decision_ranking):
+            raise ValueError("decision score breakdown id is not deterministic")
+        if breakdown["top_candidate_id"] != decision_ranking["top_candidate_id"]:
+            raise ValueError("decision score breakdown top candidate mismatch")
+
+
+def stable_decision_score_breakdown_json(breakdown: dict[str, Any]) -> str:
+    validate_decision_score_breakdown(breakdown)
+    return _stable_ruflo_json(breakdown, indent=2) + "\n"
+
+
+def parse_decision_score_breakdown_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    breakdown = _json.loads(text)
+    validate_decision_score_breakdown(breakdown)
+    return breakdown
+
+
+def make_rejected_alternative_analysis_id(candidate_set: dict[str, Any], ranking: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "decision_ranking_id": ranking["decision_ranking_id"],
+        "top_candidate_id": ranking["top_candidate_id"],
+        "version": REJECTED_ALTERNATIVE_ANALYSIS_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"rejected-alternative-analysis-{digest}"
+
+
+def collect_rejected_alternative_analysis(decision_candidate_set: dict[str, Any] | None = None, decision_ranking: dict[str, Any] | None = None, decision_score_breakdown: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    candidate_set = decision_candidate_set or collect_decision_candidate_set()
+    validate_decision_candidate_set(candidate_set)
+    impact = collect_decision_impact_analysis(candidate_set)
+    ranking = decision_ranking or collect_decision_ranking(candidate_set, impact)
+    validate_decision_ranking(ranking, candidate_set, impact)
+    breakdown = decision_score_breakdown or collect_decision_score_breakdown(candidate_set, impact, ranking)
+    validate_decision_score_breakdown(breakdown, candidate_set, impact, ranking)
+    score_map = {item["decision_candidate_id"]: item["total_score"] for item in breakdown["candidate_scores"]}
+    top_score = score_map[ranking["top_candidate_id"]]
+    rejected = [candidate for candidate in candidate_set["candidates"] if candidate["decision_candidate_id"] != ranking["top_candidate_id"]]
+    reasons = [
+        {
+            "decision_candidate_id": candidate["decision_candidate_id"],
+            "reason": f"scored {top_score - score_map[candidate['decision_candidate_id']]} points below the top candidate",
+        }
+        for candidate in rejected
+    ]
+    blocker_impacts = [
+        {
+            "decision_candidate_id": candidate["decision_candidate_id"],
+            "blocker_count": len(candidate["blockers"]),
+            "blocker_penalty": len(candidate["blockers"]) * -5,
+        }
+        for candidate in rejected
+    ]
+    analysis = {
+        "rejected_alternative_analysis_version": REJECTED_ALTERNATIVE_ANALYSIS_VERSION,
+        "rejected_alternative_analysis_id": make_rejected_alternative_analysis_id(candidate_set, ranking),
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "decision_ranking_id": ranking["decision_ranking_id"],
+        "decision_score_breakdown_id": breakdown["decision_score_breakdown_id"],
+        "top_candidate_id": ranking["top_candidate_id"],
+        "rejected_candidates": [candidate["decision_candidate_id"] for candidate in rejected],
+        "rejection_reasons": reasons,
+        "blocker_impacts": blocker_impacts,
+        "recommended_next_action": "Review rejected alternatives to confirm the top recommendation is still the right next step.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_rejected_alternative_analysis(analysis, candidate_set, ranking, breakdown)
+    return analysis
+
+
+def validate_rejected_alternative_analysis(analysis: dict[str, Any], decision_candidate_set: dict[str, Any] | None = None, decision_ranking: dict[str, Any] | None = None, decision_score_breakdown: dict[str, Any] | None = None) -> None:
+    required = ("rejected_alternative_analysis_version", "rejected_alternative_analysis_id", "top_candidate_id", "rejected_candidates", "rejection_reasons", "blocker_impacts", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in analysis:
+            raise ValueError(f"rejected alternative analysis missing required field: {key}")
+    if analysis["rejected_alternative_analysis_version"] != REJECTED_ALTERNATIVE_ANALYSIS_VERSION:
+        raise ValueError("invalid rejected alternative analysis version")
+    if not isinstance(analysis["rejected_alternative_analysis_id"], str) or not analysis["rejected_alternative_analysis_id"].startswith("rejected-alternative-analysis-"):
+        raise ValueError("invalid rejected alternative analysis id")
+    if not isinstance(analysis["rejected_candidates"], list) or not analysis["rejected_candidates"]:
+        raise ValueError("rejected alternative analysis must include rejected candidates")
+    if not isinstance(analysis["rejection_reasons"], list) or len(analysis["rejection_reasons"]) != len(analysis["rejected_candidates"]):
+        raise ValueError("rejected alternative reasons must match rejected candidates")
+    if not isinstance(analysis["blocker_impacts"], list) or len(analysis["blocker_impacts"]) != len(analysis["rejected_candidates"]):
+        raise ValueError("rejected alternative blocker impacts must match rejected candidates")
+    if analysis["safety_metadata"] != _read_only_safety_metadata() or analysis["dry_run"] is not True or analysis["write_allowed"] is not False or analysis["automation_allowed"] is not False or analysis["writes"] != []:
+        raise ValueError("rejected alternative analysis must be read-only")
+    if all(item is not None for item in (decision_candidate_set, decision_ranking, decision_score_breakdown)):
+        validate_decision_candidate_set(decision_candidate_set)
+        validate_decision_ranking(decision_ranking, decision_candidate_set)
+        validate_decision_score_breakdown(decision_score_breakdown)
+        if analysis["rejected_alternative_analysis_id"] != make_rejected_alternative_analysis_id(decision_candidate_set, decision_ranking):
+            raise ValueError("rejected alternative analysis id is not deterministic")
+        if analysis["top_candidate_id"] != decision_ranking["top_candidate_id"]:
+            raise ValueError("rejected alternative top candidate mismatch")
+
+
+def stable_rejected_alternative_analysis_json(analysis: dict[str, Any]) -> str:
+    validate_rejected_alternative_analysis(analysis)
+    return _stable_ruflo_json(analysis, indent=2) + "\n"
+
+
+def parse_rejected_alternative_analysis_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    analysis = _json.loads(text)
+    validate_rejected_alternative_analysis(analysis)
+    return analysis
+
+
+def make_decision_assumption_ledger_id(candidate_set: dict[str, Any], ranking: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "decision_ranking_id": ranking["decision_ranking_id"],
+        "version": DECISION_ASSUMPTION_LEDGER_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"decision-assumption-ledger-{digest}"
+
+
+def collect_decision_assumption_ledger(decision_candidate_set: dict[str, Any] | None = None, decision_ranking: dict[str, Any] | None = None, operator_decision_review: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    candidate_set = decision_candidate_set or collect_decision_candidate_set()
+    validate_decision_candidate_set(candidate_set)
+    impact = collect_decision_impact_analysis(candidate_set)
+    ranking = decision_ranking or collect_decision_ranking(candidate_set, impact)
+    validate_decision_ranking(ranking, candidate_set, impact)
+    review = operator_decision_review or collect_operator_decision_review(candidate_set, impact, ranking)
+    validate_operator_decision_review(review, candidate_set, impact, ranking)
+    ledger = {
+        "decision_assumption_ledger_version": DECISION_ASSUMPTION_LEDGER_VERSION,
+        "decision_assumption_ledger_id": make_decision_assumption_ledger_id(candidate_set, ranking),
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "decision_ranking_id": ranking["decision_ranking_id"],
+        "operator_decision_review_id": review["operator_decision_review_id"],
+        "assumptions": _normalize_implementation_branch_refs([
+            "readiness gain estimates come from the remediation priority queue",
+            "risk reduction is deterministic by remediation priority",
+            "evidence and approval gains use required item counts",
+            "blocked real actions remain prohibited",
+        ]),
+        "weak_assumptions": _normalize_implementation_branch_refs([
+            "readiness gain estimates are planning estimates only",
+            "no live market or execution evidence is collected",
+        ]),
+        "required_validation": _normalize_implementation_branch_refs([
+            "human review of top candidate",
+            "confirm remediation remains non-executable",
+            "refresh decision ranking after evidence changes",
+        ]),
+        "recommended_next_action": "Validate assumptions before using the recommendation to plan remediation work.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_decision_assumption_ledger(ledger, candidate_set, ranking, review)
+    return ledger
+
+
+def validate_decision_assumption_ledger(ledger: dict[str, Any], decision_candidate_set: dict[str, Any] | None = None, decision_ranking: dict[str, Any] | None = None, operator_decision_review: dict[str, Any] | None = None) -> None:
+    required = ("decision_assumption_ledger_version", "decision_assumption_ledger_id", "assumptions", "weak_assumptions", "required_validation", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in ledger:
+            raise ValueError(f"decision assumption ledger missing required field: {key}")
+    if ledger["decision_assumption_ledger_version"] != DECISION_ASSUMPTION_LEDGER_VERSION:
+        raise ValueError("invalid decision assumption ledger version")
+    if not isinstance(ledger["decision_assumption_ledger_id"], str) or not ledger["decision_assumption_ledger_id"].startswith("decision-assumption-ledger-"):
+        raise ValueError("invalid decision assumption ledger id")
+    for field in ("assumptions", "weak_assumptions", "required_validation"):
+        normalized = _normalize_implementation_branch_refs(ledger[field])
+        if normalized != ledger[field] or not ledger[field]:
+            raise ValueError(f"decision assumption ledger {field} must be normalized and non-empty")
+    if ledger["safety_metadata"] != _read_only_safety_metadata() or ledger["dry_run"] is not True or ledger["write_allowed"] is not False or ledger["automation_allowed"] is not False or ledger["writes"] != []:
+        raise ValueError("decision assumption ledger must be read-only")
+    if decision_candidate_set is not None and decision_ranking is not None:
+        validate_decision_candidate_set(decision_candidate_set)
+        validate_decision_ranking(decision_ranking, decision_candidate_set)
+        if ledger["decision_assumption_ledger_id"] != make_decision_assumption_ledger_id(decision_candidate_set, decision_ranking):
+            raise ValueError("decision assumption ledger id is not deterministic")
+    if operator_decision_review is not None:
+        validate_operator_decision_review(operator_decision_review)
+
+
+def stable_decision_assumption_ledger_json(ledger: dict[str, Any]) -> str:
+    validate_decision_assumption_ledger(ledger)
+    return _stable_ruflo_json(ledger, indent=2) + "\n"
+
+
+def parse_decision_assumption_ledger_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    ledger = _json.loads(text)
+    validate_decision_assumption_ledger(ledger)
+    return ledger
+
+
+def make_operator_decision_trace_package_id(ranking: dict[str, Any], breakdown: dict[str, Any], rejected: dict[str, Any], ledger: dict[str, Any], review: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "assumption_ledger_id": ledger["decision_assumption_ledger_id"],
+        "decision_ranking_id": ranking["decision_ranking_id"],
+        "operator_decision_review_id": review["operator_decision_review_id"],
+        "rejected_alternative_analysis_id": rejected["rejected_alternative_analysis_id"],
+        "score_breakdown_id": breakdown["decision_score_breakdown_id"],
+        "version": OPERATOR_DECISION_TRACE_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-decision-trace-package-{digest}"
+
+
+def collect_operator_decision_trace_package(decision_ranking: dict[str, Any] | None = None, decision_score_breakdown: dict[str, Any] | None = None, rejected_alternative_analysis: dict[str, Any] | None = None, decision_assumption_ledger: dict[str, Any] | None = None, operator_decision_review: dict[str, Any] | None = None, decision_candidate_set: dict[str, Any] | None = None, decision_impact_analysis: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    candidate_set = decision_candidate_set or collect_decision_candidate_set()
+    validate_decision_candidate_set(candidate_set)
+    impact = decision_impact_analysis or collect_decision_impact_analysis(candidate_set)
+    validate_decision_impact_analysis(impact, candidate_set)
+    ranking = decision_ranking or collect_decision_ranking(candidate_set, impact)
+    validate_decision_ranking(ranking, candidate_set, impact)
+    breakdown = decision_score_breakdown or collect_decision_score_breakdown(candidate_set, impact, ranking)
+    validate_decision_score_breakdown(breakdown, candidate_set, impact, ranking)
+    rejected = rejected_alternative_analysis or collect_rejected_alternative_analysis(candidate_set, ranking, breakdown)
+    validate_rejected_alternative_analysis(rejected, candidate_set, ranking, breakdown)
+    review = operator_decision_review or collect_operator_decision_review(candidate_set, impact, ranking)
+    validate_operator_decision_review(review, candidate_set, impact, ranking)
+    ledger = decision_assumption_ledger or collect_decision_assumption_ledger(candidate_set, ranking, review)
+    validate_decision_assumption_ledger(ledger, candidate_set, ranking, review)
+    top_score = next(item for item in breakdown["candidate_scores"] if item["decision_candidate_id"] == ranking["top_candidate_id"])
+    package = {
+        "operator_decision_trace_package_version": OPERATOR_DECISION_TRACE_PACKAGE_VERSION,
+        "operator_decision_trace_package_id": make_operator_decision_trace_package_id(ranking, breakdown, rejected, ledger, review),
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "decision_ranking_id": ranking["decision_ranking_id"],
+        "score_breakdown_id": breakdown["decision_score_breakdown_id"],
+        "rejected_alternative_analysis_id": rejected["rejected_alternative_analysis_id"],
+        "assumption_ledger_id": ledger["decision_assumption_ledger_id"],
+        "operator_decision_review_id": review["operator_decision_review_id"],
+        "top_candidate_id": ranking["top_candidate_id"],
+        "explanation_summary": f"The top candidate won with score {top_score['total_score']} because readiness and risk gains outweighed effort and blocker penalties.",
+        "blockers": list(review["blockers"]),
+        "warnings": _normalize_implementation_branch_refs(list(review["warnings"]) + list(ledger["weak_assumptions"])),
+        "required_human_actions": _normalize_implementation_branch_refs(list(review["required_human_actions"]) + list(ledger["required_validation"])),
+        "recommended_next_action": "Use this trace to review why Link recommended the top remediation decision.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_decision_trace_package(package, ranking, breakdown, rejected, ledger, review)
+    return package
+
+
+def validate_operator_decision_trace_package(package: dict[str, Any], decision_ranking: dict[str, Any] | None = None, decision_score_breakdown: dict[str, Any] | None = None, rejected_alternative_analysis: dict[str, Any] | None = None, decision_assumption_ledger: dict[str, Any] | None = None, operator_decision_review: dict[str, Any] | None = None) -> None:
+    required = ("operator_decision_trace_package_version", "operator_decision_trace_package_id", "decision_ranking_id", "score_breakdown_id", "rejected_alternative_analysis_id", "assumption_ledger_id", "top_candidate_id", "explanation_summary", "blockers", "warnings", "required_human_actions", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in package:
+            raise ValueError(f"operator decision trace package missing required field: {key}")
+    if package["operator_decision_trace_package_version"] != OPERATOR_DECISION_TRACE_PACKAGE_VERSION:
+        raise ValueError("invalid operator decision trace package version")
+    if not isinstance(package["operator_decision_trace_package_id"], str) or not package["operator_decision_trace_package_id"].startswith("operator-decision-trace-package-"):
+        raise ValueError("invalid operator decision trace package id")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field] or not package[field]:
+            raise ValueError(f"operator decision trace package {field} must be normalized and non-empty")
+    if package["safety_metadata"] != _read_only_safety_metadata() or package["dry_run"] is not True or package["write_allowed"] is not False or package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("operator decision trace package must be read-only")
+    if all(item is not None for item in (decision_ranking, decision_score_breakdown, rejected_alternative_analysis, decision_assumption_ledger, operator_decision_review)):
+        if package["operator_decision_trace_package_id"] != make_operator_decision_trace_package_id(decision_ranking, decision_score_breakdown, rejected_alternative_analysis, decision_assumption_ledger, operator_decision_review):
+            raise ValueError("operator decision trace package id is not deterministic")
+        if package["top_candidate_id"] != decision_ranking["top_candidate_id"]:
+            raise ValueError("operator decision trace top candidate mismatch")
+
+
+def stable_operator_decision_trace_package_json(package: dict[str, Any]) -> str:
+    validate_operator_decision_trace_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_operator_decision_trace_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_operator_decision_trace_package(package)
+    return package
+
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -22484,6 +22890,125 @@ def operator_decision_review_main(argv: list[str] | None = None) -> int:
         print(stable_operator_decision_review_json(review), end="")
         return 0
     render_operator_decision_review_plain(review)
+    return 0
+
+
+
+def render_decision_score_breakdown_plain(breakdown: dict[str, Any]) -> None:
+    validate_decision_score_breakdown(breakdown)
+    top = next(item for item in breakdown["candidate_scores"] if item["decision_candidate_id"] == breakdown["top_candidate_id"])
+    print("Decision score breakdown")
+    print(f"decision_score_breakdown_id: {breakdown['decision_score_breakdown_id']}")
+    print(f"decision_ranking_id: {breakdown['decision_ranking_id']}")
+    print(f"candidate_score_count: {len(breakdown['candidate_scores'])}")
+    print(f"top_candidate_id: {breakdown['top_candidate_id']}")
+    print(f"top_candidate_score: {top['total_score']}")
+    print(f"next_action: {breakdown['recommended_next_action']}")
+
+
+def decision_score_breakdown_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Decision score-breakdown: read-only score explanation")
+        print("Read-only decision trace. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: decision score-breakdown is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    breakdown = collect_decision_score_breakdown()
+    validate_decision_score_breakdown(breakdown)
+    if "--json" in args:
+        print(stable_decision_score_breakdown_json(breakdown), end="")
+        return 0
+    render_decision_score_breakdown_plain(breakdown)
+    return 0
+
+
+def render_rejected_alternative_analysis_plain(analysis: dict[str, Any]) -> None:
+    validate_rejected_alternative_analysis(analysis)
+    print("Rejected alternative analysis")
+    print(f"rejected_alternative_analysis_id: {analysis['rejected_alternative_analysis_id']}")
+    print(f"top_candidate_id: {analysis['top_candidate_id']}")
+    print(f"rejected_candidate_count: {len(analysis['rejected_candidates'])}")
+    print(f"rejection_reason_count: {len(analysis['rejection_reasons'])}")
+    print(f"blocker_impact_count: {len(analysis['blocker_impacts'])}")
+    print(f"next_action: {analysis['recommended_next_action']}")
+
+
+def rejected_alternative_analysis_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Decision rejected-alternatives: read-only rejected alternative analysis")
+        print("Read-only decision trace. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: decision rejected-alternatives is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    analysis = collect_rejected_alternative_analysis()
+    validate_rejected_alternative_analysis(analysis)
+    if "--json" in args:
+        print(stable_rejected_alternative_analysis_json(analysis), end="")
+        return 0
+    render_rejected_alternative_analysis_plain(analysis)
+    return 0
+
+
+def render_decision_assumption_ledger_plain(ledger: dict[str, Any]) -> None:
+    validate_decision_assumption_ledger(ledger)
+    print("Decision assumption ledger")
+    print(f"decision_assumption_ledger_id: {ledger['decision_assumption_ledger_id']}")
+    print(f"decision_ranking_id: {ledger['decision_ranking_id']}")
+    print(f"assumption_count: {len(ledger['assumptions'])}")
+    print(f"weak_assumption_count: {len(ledger['weak_assumptions'])}")
+    print(f"required_validation_count: {len(ledger['required_validation'])}")
+    print(f"next_action: {ledger['recommended_next_action']}")
+
+
+def decision_assumption_ledger_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Decision assumptions: read-only assumption ledger")
+        print("Read-only decision trace. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: decision assumptions is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    ledger = collect_decision_assumption_ledger()
+    validate_decision_assumption_ledger(ledger)
+    if "--json" in args:
+        print(stable_decision_assumption_ledger_json(ledger), end="")
+        return 0
+    render_decision_assumption_ledger_plain(ledger)
+    return 0
+
+
+def render_operator_decision_trace_package_plain(package: dict[str, Any]) -> None:
+    validate_operator_decision_trace_package(package)
+    print("Operator decision trace package")
+    print(f"operator_decision_trace_package_id: {package['operator_decision_trace_package_id']}")
+    print(f"decision_ranking_id: {package['decision_ranking_id']}")
+    print(f"score_breakdown_id: {package['score_breakdown_id']}")
+    print(f"rejected_alternative_analysis_id: {package['rejected_alternative_analysis_id']}")
+    print(f"assumption_ledger_id: {package['assumption_ledger_id']}")
+    print(f"top_candidate_id: {package['top_candidate_id']}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def operator_decision_trace_package_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Decision trace: read-only operator decision trace package")
+        print("Read-only decision trace. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: decision trace is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_operator_decision_trace_package()
+    validate_operator_decision_trace_package(package)
+    if "--json" in args:
+        print(stable_operator_decision_trace_package_json(package), end="")
+        return 0
+    render_operator_decision_trace_package_plain(package)
     return 0
 
 
