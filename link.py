@@ -488,6 +488,38 @@ def _cmd_sandbox(argv: list[str]) -> int:
     return 2
 
 
+def _cmd_decision(argv: list[str]) -> int:
+    """Read-only operator decision support previews."""
+    subcommand = argv[0] if argv else ""
+    if subcommand == "candidates":
+        from link_modes.growth.link_growth_console import decision_candidate_set_main as _decision_candidate_set_main
+
+        return _decision_candidate_set_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "impact":
+        from link_modes.growth.link_growth_console import decision_impact_analysis_main as _decision_impact_analysis_main
+
+        return _decision_impact_analysis_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "ranking":
+        from link_modes.growth.link_growth_console import decision_ranking_main as _decision_ranking_main
+
+        return _decision_ranking_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "review":
+        from link_modes.growth.link_growth_console import operator_decision_review_main as _operator_decision_review_main
+
+        return _operator_decision_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand in ("-h", "--help", "help", ""):
+        print("Decision commands:")
+        print("  candidates  Preview remediation decision candidates")
+        print("  impact      Preview deterministic candidate impact analysis")
+        print("  ranking     Preview deterministic candidate ranking")
+        print("  review      Preview operator decision recommendation")
+        return 0
+    print(f"decision: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py decision --help' for subcommands.", file=sys.stderr)
+    return 2
+
+
+
 def _cmd_dashboard(argv: list[str]) -> int:
     """Print a compact dashboard/status summary."""
     from link_core.dashboard import collect as _collect
@@ -945,6 +977,7 @@ _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "control-plane": (_cmd_control_plane, "Link control-plane dashboard and health previews."),
     "simulation": (_cmd_simulation, "Dry-run business execution simulation previews."),
     "sandbox": (_cmd_sandbox, "Read-only execution readiness sandbox projections."),
+    "decision": (_cmd_decision, "Read-only operator decision support previews."),
     "dashboard": (_cmd_dashboard, "Compact diagnostics dashboard."),
     "self-test": (_cmd_self_test, "Run canonical architecture smoke checks."),
     "config": (_cmd_config, "Validate Link configuration files against runtime."),

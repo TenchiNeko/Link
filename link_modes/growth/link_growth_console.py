@@ -11050,6 +11050,10 @@ SANDBOX_EVIDENCE_PROJECTION_VERSION = "link-sandbox-evidence-projection-v1"
 SANDBOX_APPROVAL_PROJECTION_VERSION = "link-sandbox-approval-projection-v1"
 SANDBOX_OUTCOME_PROJECTION_VERSION = "link-sandbox-outcome-projection-v1"
 SANDBOX_REVIEW_PACKAGE_VERSION = "link-sandbox-review-package-v1"
+DECISION_CANDIDATE_SET_VERSION = "link-decision-candidate-set-v1"
+DECISION_IMPACT_ANALYSIS_VERSION = "link-decision-impact-analysis-v1"
+DECISION_RANKING_VERSION = "link-decision-ranking-v1"
+OPERATOR_DECISION_REVIEW_VERSION = "link-operator-decision-review-v1"
 REMEDIATION_PRIORITIES = ("critical", "high", "medium", "low")
 BUSINESS_EXECUTION_SIMULATED_STEPS = (
     "validate opportunity",
@@ -18184,6 +18188,491 @@ def parse_sandbox_review_package_json(text: str) -> dict[str, Any]:
 
 
 
+def _decision_priority_effort(priority: str) -> int:
+    return {"critical": 3, "high": 2, "medium": 1, "low": 1}.get(priority, 3)
+
+
+def make_decision_candidate_id(step: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "remediation_step_id": step["remediation_step_id"],
+        "priority": step["priority"],
+        "version": DECISION_CANDIDATE_SET_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"decision-candidate-{digest}"
+
+
+def _decision_candidate_from_step(step: dict[str, Any], queue: dict[str, Any], sandbox_review: dict[str, Any], gaps: dict[str, Any], remediation_review: dict[str, Any]) -> dict[str, Any]:
+    gain_map = {
+        item["remediation_step_id"]: item["estimated_readiness_gain"]
+        for item in queue["readiness_gain_estimates"]
+    }
+    priority_item = next((item for item in queue["priority_items"] if item["remediation_step_id"] == step["remediation_step_id"]), {})
+    blockers = []
+    if priority_item.get("blocked"):
+        blockers.append(f"prerequisites remain for {step['remediation_step_id']}")
+    blockers.extend(item for item in remediation_review["blockers"] if "blocked real action" in item)
+    blockers = _normalize_implementation_branch_refs(blockers[:5])
+    evidence_gain = len(step["required_evidence"]) * 5
+    approval_gain = len(step["required_approvals"]) * 5
+    risk_reduction = 12 if step["priority"] == "critical" else 9 if step["priority"] == "high" else 5 if step["priority"] == "medium" else 2
+    return {
+        "decision_candidate_id": make_decision_candidate_id(step),
+        "title": step["description"],
+        "description": f"Complete {step['remediation_step_id']} to improve projected execution readiness.",
+        "source_refs": _normalize_implementation_branch_refs([
+            step["remediation_step_id"],
+            queue["remediation_priority_queue_id"],
+            sandbox_review["sandbox_review_package_id"],
+            gaps["execution_gap_analysis_id"],
+            remediation_review["operator_remediation_review_id"],
+        ]),
+        "expected_readiness_gain": gain_map.get(step["remediation_step_id"], 0),
+        "expected_risk_reduction": risk_reduction,
+        "expected_evidence_gain": evidence_gain,
+        "expected_approval_gain": approval_gain,
+        "effort_score": _decision_priority_effort(step["priority"]),
+        "priority": step["priority"],
+        "blockers": blockers,
+        "execution_allowed": False,
+    }
+
+
+def make_decision_candidate_set_id(candidates: list[dict[str, Any]], sandbox_review: dict[str, Any], gaps: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "candidate_ids": [candidate["decision_candidate_id"] for candidate in candidates],
+        "execution_gap_analysis_id": gaps["execution_gap_analysis_id"],
+        "sandbox_review_package_id": sandbox_review["sandbox_review_package_id"],
+        "version": DECISION_CANDIDATE_SET_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"decision-candidate-set-{digest}"
+
+
+def collect_decision_candidate_set(
+    simulation_remediation_plan: dict[str, Any] | None = None,
+    remediation_priority_queue: dict[str, Any] | None = None,
+    sandbox_review_package: dict[str, Any] | None = None,
+    execution_gap_analysis: dict[str, Any] | None = None,
+    operator_remediation_review: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build deterministic read-only remediation decision candidates."""
+    plan = simulation_remediation_plan or collect_simulation_remediation_plan()
+    validate_simulation_remediation_plan(plan)
+    graph = collect_remediation_dependency_graph(plan)
+    queue = remediation_priority_queue or collect_remediation_priority_queue(plan, graph)
+    validate_remediation_priority_queue(queue, plan, graph)
+    remediation_review = operator_remediation_review or collect_operator_remediation_review(plan, graph, queue)
+    validate_operator_remediation_review(remediation_review, plan, graph, queue)
+    if sandbox_review_package is None:
+        readiness_review = collect_business_readiness_review_package()
+        execution_review = collect_business_execution_review_package(business_readiness_review_package=readiness_review)
+        readiness = collect_sandbox_readiness_projection(plan, queue, remediation_review, execution_review, readiness_review)
+        evidence = collect_sandbox_evidence_projection(readiness, plan)
+        approvals = collect_sandbox_approval_projection(readiness, plan)
+        outcome = collect_sandbox_outcome_projection(readiness, evidence, approvals)
+        sandbox_review = collect_sandbox_review_package(readiness, evidence, approvals, outcome)
+    else:
+        sandbox_review = sandbox_review_package
+    validate_sandbox_review_package(sandbox_review)
+    gaps = execution_gap_analysis or collect_execution_gap_analysis()
+    validate_execution_gap_analysis(gaps)
+    candidates = [_decision_candidate_from_step(step, queue, sandbox_review, gaps, remediation_review) for step in plan["remediation_steps"]]
+    blocked = [candidate for candidate in candidates if candidate["blockers"]]
+    candidate_set = {
+        "decision_candidate_set_version": DECISION_CANDIDATE_SET_VERSION,
+        "decision_candidate_set_id": make_decision_candidate_set_id(candidates, sandbox_review, gaps),
+        "simulation_remediation_plan_id": plan["simulation_remediation_plan_id"],
+        "remediation_priority_queue_id": queue["remediation_priority_queue_id"],
+        "sandbox_review_package_id": sandbox_review["sandbox_review_package_id"],
+        "execution_gap_analysis_id": gaps["execution_gap_analysis_id"],
+        "operator_remediation_review_id": remediation_review["operator_remediation_review_id"],
+        "candidates": candidates,
+        "blocked_candidates": blocked,
+        "decision_context": {
+            "question": "If we only do one thing next, what should it be?",
+            "candidate_count": len(candidates),
+            "blocked_candidate_count": len(blocked),
+            "execution_allowed": False,
+        },
+        "recommended_next_action": "Rank remediation candidates and choose the highest-value read-only next action.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_decision_candidate_set(candidate_set, plan, queue, sandbox_review, gaps, remediation_review)
+    return candidate_set
+
+
+def validate_decision_candidate(candidate: dict[str, Any]) -> None:
+    required = ("decision_candidate_id", "title", "description", "source_refs", "expected_readiness_gain", "expected_risk_reduction", "expected_evidence_gain", "expected_approval_gain", "effort_score", "priority", "blockers", "execution_allowed")
+    for key in required:
+        if key not in candidate:
+            raise ValueError(f"decision candidate missing required field: {key}")
+    if not isinstance(candidate["decision_candidate_id"], str) or not candidate["decision_candidate_id"].startswith("decision-candidate-"):
+        raise ValueError("invalid decision candidate id")
+    if candidate["priority"] not in REMEDIATION_PRIORITIES:
+        raise ValueError("invalid decision candidate priority")
+    for field in ("source_refs", "blockers"):
+        if _normalize_implementation_branch_refs(candidate[field]) != candidate[field]:
+            raise ValueError(f"decision candidate {field} must be normalized")
+    for field in ("expected_readiness_gain", "expected_risk_reduction", "expected_evidence_gain", "expected_approval_gain", "effort_score"):
+        if not isinstance(candidate[field], int) or candidate[field] < 0:
+            raise ValueError(f"decision candidate {field} must be non-negative integer")
+    if candidate["execution_allowed"] is not False:
+        raise ValueError("decision candidates must not allow execution")
+
+
+def validate_decision_candidate_set(candidate_set: dict[str, Any], simulation_remediation_plan: dict[str, Any] | None = None, remediation_priority_queue: dict[str, Any] | None = None, sandbox_review_package: dict[str, Any] | None = None, execution_gap_analysis: dict[str, Any] | None = None, operator_remediation_review: dict[str, Any] | None = None) -> None:
+    required = ("decision_candidate_set_version", "decision_candidate_set_id", "candidates", "blocked_candidates", "decision_context", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in candidate_set:
+            raise ValueError(f"decision candidate set missing required field: {key}")
+    if candidate_set["decision_candidate_set_version"] != DECISION_CANDIDATE_SET_VERSION:
+        raise ValueError("invalid decision candidate set version")
+    if not isinstance(candidate_set["decision_candidate_set_id"], str) or not candidate_set["decision_candidate_set_id"].startswith("decision-candidate-set-"):
+        raise ValueError("invalid decision candidate set id")
+    if not isinstance(candidate_set["candidates"], list) or not candidate_set["candidates"]:
+        raise ValueError("decision candidate set must include candidates")
+    for candidate in candidate_set["candidates"]:
+        validate_decision_candidate(candidate)
+    if not isinstance(candidate_set["blocked_candidates"], list):
+        raise TypeError("blocked decision candidates must be a list")
+    for candidate in candidate_set["blocked_candidates"]:
+        validate_decision_candidate(candidate)
+        if not candidate["blockers"]:
+            raise ValueError("blocked decision candidates must include blockers")
+    if not isinstance(candidate_set["decision_context"], dict) or candidate_set["decision_context"].get("execution_allowed") is not False:
+        raise ValueError("decision context must keep execution disabled")
+    if candidate_set["safety_metadata"] != _read_only_safety_metadata() or candidate_set["dry_run"] is not True or candidate_set["write_allowed"] is not False or candidate_set["automation_allowed"] is not False or candidate_set["writes"] != []:
+        raise ValueError("decision candidate set must be read-only")
+    if all(item is not None for item in (simulation_remediation_plan, remediation_priority_queue, sandbox_review_package, execution_gap_analysis, operator_remediation_review)):
+        expected_id = make_decision_candidate_set_id(candidate_set["candidates"], sandbox_review_package, execution_gap_analysis)
+        if candidate_set["decision_candidate_set_id"] != expected_id:
+            raise ValueError("decision candidate set id is not deterministic")
+
+
+def stable_decision_candidate_set_json(candidate_set: dict[str, Any]) -> str:
+    validate_decision_candidate_set(candidate_set)
+    return _stable_ruflo_json(candidate_set, indent=2) + "\n"
+
+
+def parse_decision_candidate_set_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    candidate_set = _json.loads(text)
+    validate_decision_candidate_set(candidate_set)
+    return candidate_set
+
+
+def make_decision_impact_analysis_id(candidate_set: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "candidate_ids": [candidate["decision_candidate_id"] for candidate in candidate_set["candidates"]],
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "version": DECISION_IMPACT_ANALYSIS_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"decision-impact-analysis-{digest}"
+
+
+def collect_decision_impact_analysis(decision_candidate_set: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    candidate_set = decision_candidate_set or collect_decision_candidate_set()
+    validate_decision_candidate_set(candidate_set)
+    candidates = candidate_set["candidates"]
+    impact_items = [
+        {
+            "decision_candidate_id": candidate["decision_candidate_id"],
+            "readiness_gain": candidate["expected_readiness_gain"],
+            "risk_reduction": candidate["expected_risk_reduction"],
+            "evidence_gain": candidate["expected_evidence_gain"],
+            "approval_gain": candidate["expected_approval_gain"],
+            "effort_score": candidate["effort_score"],
+            "blocker_count": len(candidate["blockers"]),
+        }
+        for candidate in candidates
+    ]
+    highest_readiness = max(candidates, key=lambda candidate: (candidate["expected_readiness_gain"], candidate["decision_candidate_id"]))
+    highest_risk = max(candidates, key=lambda candidate: (candidate["expected_risk_reduction"], candidate["decision_candidate_id"]))
+    lowest_effort = min(candidates, key=lambda candidate: (candidate["effort_score"], candidate["decision_candidate_id"]))
+    analysis = {
+        "decision_impact_analysis_version": DECISION_IMPACT_ANALYSIS_VERSION,
+        "decision_impact_analysis_id": make_decision_impact_analysis_id(candidate_set),
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "impact_items": impact_items,
+        "highest_readiness_gain_candidate_id": highest_readiness["decision_candidate_id"],
+        "highest_risk_reduction_candidate_id": highest_risk["decision_candidate_id"],
+        "lowest_effort_candidate_id": lowest_effort["decision_candidate_id"],
+        "recommended_next_action": "Use deterministic impact analysis as input to candidate ranking.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_decision_impact_analysis(analysis, candidate_set)
+    return analysis
+
+
+def validate_decision_impact_analysis(analysis: dict[str, Any], decision_candidate_set: dict[str, Any] | None = None) -> None:
+    required = ("decision_impact_analysis_version", "decision_impact_analysis_id", "decision_candidate_set_id", "impact_items", "highest_readiness_gain_candidate_id", "highest_risk_reduction_candidate_id", "lowest_effort_candidate_id", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in analysis:
+            raise ValueError(f"decision impact analysis missing required field: {key}")
+    if analysis["decision_impact_analysis_version"] != DECISION_IMPACT_ANALYSIS_VERSION:
+        raise ValueError("invalid decision impact analysis version")
+    if not isinstance(analysis["decision_impact_analysis_id"], str) or not analysis["decision_impact_analysis_id"].startswith("decision-impact-analysis-"):
+        raise ValueError("invalid decision impact analysis id")
+    if not isinstance(analysis["impact_items"], list) or not analysis["impact_items"]:
+        raise ValueError("decision impact analysis must include impact items")
+    for item in analysis["impact_items"]:
+        for field in ("decision_candidate_id", "readiness_gain", "risk_reduction", "evidence_gain", "approval_gain", "effort_score", "blocker_count"):
+            if field not in item:
+                raise ValueError(f"decision impact item missing {field}")
+        for field in ("readiness_gain", "risk_reduction", "evidence_gain", "approval_gain", "effort_score", "blocker_count"):
+            if not isinstance(item[field], int) or item[field] < 0:
+                raise ValueError("decision impact numeric fields must be non-negative integers")
+    if analysis["safety_metadata"] != _read_only_safety_metadata() or analysis["dry_run"] is not True or analysis["write_allowed"] is not False or analysis["automation_allowed"] is not False or analysis["writes"] != []:
+        raise ValueError("decision impact analysis must be read-only")
+    if decision_candidate_set is not None:
+        validate_decision_candidate_set(decision_candidate_set)
+        if analysis["decision_candidate_set_id"] != decision_candidate_set["decision_candidate_set_id"]:
+            raise ValueError("decision impact analysis candidate set id mismatch")
+        if analysis["decision_impact_analysis_id"] != make_decision_impact_analysis_id(decision_candidate_set):
+            raise ValueError("decision impact analysis id is not deterministic")
+
+
+def stable_decision_impact_analysis_json(analysis: dict[str, Any]) -> str:
+    validate_decision_impact_analysis(analysis)
+    return _stable_ruflo_json(analysis, indent=2) + "\n"
+
+
+def parse_decision_impact_analysis_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    analysis = _json.loads(text)
+    validate_decision_impact_analysis(analysis)
+    return analysis
+
+
+def _decision_ranking_score(candidate: dict[str, Any]) -> int:
+    return (
+        candidate["expected_readiness_gain"] * 4 +
+        candidate["expected_risk_reduction"] * 3 +
+        candidate["expected_evidence_gain"] * 2 +
+        candidate["expected_approval_gain"] * 1 -
+        candidate["effort_score"] * 2 -
+        len(candidate["blockers"]) * 5
+    )
+
+
+def make_decision_ranking_id(candidate_set: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "formula": "readiness*4+risk*3+evidence*2+approval*1-effort*2-blockers*5",
+        "version": DECISION_RANKING_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"decision-ranking-{digest}"
+
+
+def collect_decision_ranking(decision_candidate_set: dict[str, Any] | None = None, decision_impact_analysis: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    candidate_set = decision_candidate_set or collect_decision_candidate_set()
+    validate_decision_candidate_set(candidate_set)
+    impact = decision_impact_analysis or collect_decision_impact_analysis(candidate_set)
+    validate_decision_impact_analysis(impact, candidate_set)
+    ranked = sorted(candidate_set["candidates"], key=lambda candidate: (-_decision_ranking_score(candidate), candidate["effort_score"], candidate["decision_candidate_id"]))
+    ranked_candidates = [
+        {
+            "rank": index,
+            "decision_candidate_id": candidate["decision_candidate_id"],
+            "score": _decision_ranking_score(candidate),
+            "priority": candidate["priority"],
+            "title": candidate["title"],
+            "execution_allowed": False,
+        }
+        for index, candidate in enumerate(ranked, start=1)
+    ]
+    ranking = {
+        "decision_ranking_version": DECISION_RANKING_VERSION,
+        "decision_ranking_id": make_decision_ranking_id(candidate_set),
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "decision_impact_analysis_id": impact["decision_impact_analysis_id"],
+        "ranked_candidates": ranked_candidates,
+        "top_candidate_id": ranked_candidates[0]["decision_candidate_id"],
+        "ranking_formula": {
+            "readiness_gain_weight": 4,
+            "risk_reduction_weight": 3,
+            "evidence_gain_weight": 2,
+            "approval_gain_weight": 1,
+            "effort_penalty_weight": -2,
+            "blocker_penalty": -5,
+        },
+        "recommended_next_action": "Review the top-ranked candidate before taking any remediation action.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_decision_ranking(ranking, candidate_set, impact)
+    return ranking
+
+
+def validate_decision_ranking(ranking: dict[str, Any], decision_candidate_set: dict[str, Any] | None = None, decision_impact_analysis: dict[str, Any] | None = None) -> None:
+    required = ("decision_ranking_version", "decision_ranking_id", "decision_candidate_set_id", "ranked_candidates", "top_candidate_id", "ranking_formula", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in ranking:
+            raise ValueError(f"decision ranking missing required field: {key}")
+    if ranking["decision_ranking_version"] != DECISION_RANKING_VERSION:
+        raise ValueError("invalid decision ranking version")
+    if not isinstance(ranking["decision_ranking_id"], str) or not ranking["decision_ranking_id"].startswith("decision-ranking-"):
+        raise ValueError("invalid decision ranking id")
+    if not isinstance(ranking["ranked_candidates"], list) or not ranking["ranked_candidates"]:
+        raise ValueError("decision ranking must include ranked candidates")
+    if ranking["top_candidate_id"] != ranking["ranked_candidates"][0]["decision_candidate_id"]:
+        raise ValueError("decision ranking top candidate must match first ranked candidate")
+    for item in ranking["ranked_candidates"]:
+        for field in ("rank", "decision_candidate_id", "score", "priority", "title", "execution_allowed"):
+            if field not in item:
+                raise ValueError(f"ranked decision candidate missing {field}")
+        if item["execution_allowed"] is not False:
+            raise ValueError("ranked decision candidates must not allow execution")
+    formula = ranking["ranking_formula"]
+    expected_formula = {
+        "readiness_gain_weight": 4,
+        "risk_reduction_weight": 3,
+        "evidence_gain_weight": 2,
+        "approval_gain_weight": 1,
+        "effort_penalty_weight": -2,
+        "blocker_penalty": -5,
+    }
+    if formula != expected_formula:
+        raise ValueError("decision ranking formula mismatch")
+    if ranking["safety_metadata"] != _read_only_safety_metadata() or ranking["dry_run"] is not True or ranking["write_allowed"] is not False or ranking["automation_allowed"] is not False or ranking["writes"] != []:
+        raise ValueError("decision ranking must be read-only")
+    if decision_candidate_set is not None:
+        validate_decision_candidate_set(decision_candidate_set)
+        if ranking["decision_candidate_set_id"] != decision_candidate_set["decision_candidate_set_id"]:
+            raise ValueError("decision ranking candidate set id mismatch")
+        if ranking["decision_ranking_id"] != make_decision_ranking_id(decision_candidate_set):
+            raise ValueError("decision ranking id is not deterministic")
+    if decision_impact_analysis is not None:
+        validate_decision_impact_analysis(decision_impact_analysis, decision_candidate_set)
+
+
+def stable_decision_ranking_json(ranking: dict[str, Any]) -> str:
+    validate_decision_ranking(ranking)
+    return _stable_ruflo_json(ranking, indent=2) + "\n"
+
+
+def parse_decision_ranking_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    ranking = _json.loads(text)
+    validate_decision_ranking(ranking)
+    return ranking
+
+
+def make_operator_decision_review_id(candidate_set: dict[str, Any], impact: dict[str, Any], ranking: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "decision_impact_analysis_id": impact["decision_impact_analysis_id"],
+        "decision_ranking_id": ranking["decision_ranking_id"],
+        "version": OPERATOR_DECISION_REVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-decision-review-{digest}"
+
+
+def collect_operator_decision_review(decision_candidate_set: dict[str, Any] | None = None, decision_impact_analysis: dict[str, Any] | None = None, decision_ranking: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    candidate_set = decision_candidate_set or collect_decision_candidate_set()
+    validate_decision_candidate_set(candidate_set)
+    impact = decision_impact_analysis or collect_decision_impact_analysis(candidate_set)
+    validate_decision_impact_analysis(impact, candidate_set)
+    ranking = decision_ranking or collect_decision_ranking(candidate_set, impact)
+    validate_decision_ranking(ranking, candidate_set, impact)
+    top = next(candidate for candidate in candidate_set["candidates"] if candidate["decision_candidate_id"] == ranking["top_candidate_id"])
+    blockers = _normalize_implementation_branch_refs(list(top["blockers"]) + ["decision support does not authorize execution"])
+    warnings = _normalize_implementation_branch_refs(["ranking is deterministic and local-only", "human review required before remediation action"])
+    review = {
+        "operator_decision_review_version": OPERATOR_DECISION_REVIEW_VERSION,
+        "operator_decision_review_id": make_operator_decision_review_id(candidate_set, impact, ranking),
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "decision_impact_analysis_id": impact["decision_impact_analysis_id"],
+        "decision_ranking_id": ranking["decision_ranking_id"],
+        "top_candidate_id": ranking["top_candidate_id"],
+        "decision_recommendation": f"Focus next on: {top['title']}",
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": _normalize_implementation_branch_refs(["review top decision candidate", "confirm remediation remains non-executable"]),
+        "recommended_next_action": "Review the top-ranked remediation decision and decide whether to commit to that planning work next.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_decision_review(review, candidate_set, impact, ranking)
+    return review
+
+
+def validate_operator_decision_review(review: dict[str, Any], decision_candidate_set: dict[str, Any] | None = None, decision_impact_analysis: dict[str, Any] | None = None, decision_ranking: dict[str, Any] | None = None) -> None:
+    required = ("operator_decision_review_version", "operator_decision_review_id", "decision_candidate_set_id", "decision_impact_analysis_id", "decision_ranking_id", "top_candidate_id", "decision_recommendation", "blockers", "warnings", "required_human_actions", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in review:
+            raise ValueError(f"operator decision review missing required field: {key}")
+    if review["operator_decision_review_version"] != OPERATOR_DECISION_REVIEW_VERSION:
+        raise ValueError("invalid operator decision review version")
+    if not isinstance(review["operator_decision_review_id"], str) or not review["operator_decision_review_id"].startswith("operator-decision-review-"):
+        raise ValueError("invalid operator decision review id")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(review[field])
+        if normalized != review[field] or not review[field]:
+            raise ValueError(f"operator decision review {field} must be normalized and non-empty")
+    if review["safety_metadata"] != _read_only_safety_metadata() or review["dry_run"] is not True or review["write_allowed"] is not False or review["automation_allowed"] is not False or review["writes"] != []:
+        raise ValueError("operator decision review must be read-only")
+    if all(item is not None for item in (decision_candidate_set, decision_impact_analysis, decision_ranking)):
+        validate_decision_candidate_set(decision_candidate_set)
+        validate_decision_impact_analysis(decision_impact_analysis, decision_candidate_set)
+        validate_decision_ranking(decision_ranking, decision_candidate_set, decision_impact_analysis)
+        if review["operator_decision_review_id"] != make_operator_decision_review_id(decision_candidate_set, decision_impact_analysis, decision_ranking):
+            raise ValueError("operator decision review id is not deterministic")
+        if review["top_candidate_id"] != decision_ranking["top_candidate_id"]:
+            raise ValueError("operator decision review top candidate mismatch")
+
+
+def stable_operator_decision_review_json(review: dict[str, Any]) -> str:
+    validate_operator_decision_review(review)
+    return _stable_ruflo_json(review, indent=2) + "\n"
+
+
+def parse_operator_decision_review_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    review = _json.loads(text)
+    validate_operator_decision_review(review)
+    return review
+
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -21874,6 +22363,127 @@ def sandbox_review_main(argv: list[str] | None = None) -> int:
         print(stable_sandbox_review_package_json(package), end="")
         return 0
     render_sandbox_review_package_plain(package)
+    return 0
+
+
+
+def render_decision_candidate_set_plain(candidate_set: dict[str, Any]) -> None:
+    validate_decision_candidate_set(candidate_set)
+    top = candidate_set["candidates"][0]
+    print("Decision candidate set")
+    print(f"decision_candidate_set_id: {candidate_set['decision_candidate_set_id']}")
+    print(f"candidate_count: {len(candidate_set['candidates'])}")
+    print(f"blocked_candidate_count: {len(candidate_set['blocked_candidates'])}")
+    print(f"first_candidate_id: {top['decision_candidate_id']}")
+    print(f"first_candidate_priority: {top['priority']}")
+    print(f"next_action: {candidate_set['recommended_next_action']}")
+
+
+def decision_candidate_set_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Decision candidates: read-only remediation decision candidate set")
+        print("Read-only decision support. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: decision candidates is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    candidate_set = collect_decision_candidate_set()
+    validate_decision_candidate_set(candidate_set)
+    if "--json" in args:
+        print(stable_decision_candidate_set_json(candidate_set), end="")
+        return 0
+    render_decision_candidate_set_plain(candidate_set)
+    return 0
+
+
+def render_decision_impact_analysis_plain(analysis: dict[str, Any]) -> None:
+    validate_decision_impact_analysis(analysis)
+    print("Decision impact analysis")
+    print(f"decision_impact_analysis_id: {analysis['decision_impact_analysis_id']}")
+    print(f"decision_candidate_set_id: {analysis['decision_candidate_set_id']}")
+    print(f"impact_item_count: {len(analysis['impact_items'])}")
+    print(f"highest_readiness_gain_candidate_id: {analysis['highest_readiness_gain_candidate_id']}")
+    print(f"highest_risk_reduction_candidate_id: {analysis['highest_risk_reduction_candidate_id']}")
+    print(f"lowest_effort_candidate_id: {analysis['lowest_effort_candidate_id']}")
+    print(f"next_action: {analysis['recommended_next_action']}")
+
+
+def decision_impact_analysis_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Decision impact: read-only deterministic impact analysis")
+        print("Read-only decision support. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: decision impact is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    analysis = collect_decision_impact_analysis()
+    validate_decision_impact_analysis(analysis)
+    if "--json" in args:
+        print(stable_decision_impact_analysis_json(analysis), end="")
+        return 0
+    render_decision_impact_analysis_plain(analysis)
+    return 0
+
+
+def render_decision_ranking_plain(ranking: dict[str, Any]) -> None:
+    validate_decision_ranking(ranking)
+    print("Decision ranking")
+    print(f"decision_ranking_id: {ranking['decision_ranking_id']}")
+    print(f"decision_candidate_set_id: {ranking['decision_candidate_set_id']}")
+    print(f"ranked_candidate_count: {len(ranking['ranked_candidates'])}")
+    print(f"top_candidate_id: {ranking['top_candidate_id']}")
+    print(f"top_candidate_score: {ranking['ranked_candidates'][0]['score']}")
+    print(f"next_action: {ranking['recommended_next_action']}")
+
+
+def decision_ranking_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Decision ranking: read-only deterministic candidate ranking")
+        print("Read-only decision support. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: decision ranking is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    ranking = collect_decision_ranking()
+    validate_decision_ranking(ranking)
+    if "--json" in args:
+        print(stable_decision_ranking_json(ranking), end="")
+        return 0
+    render_decision_ranking_plain(ranking)
+    return 0
+
+
+def render_operator_decision_review_plain(review: dict[str, Any]) -> None:
+    validate_operator_decision_review(review)
+    print("Operator decision review")
+    print(f"operator_decision_review_id: {review['operator_decision_review_id']}")
+    print(f"decision_candidate_set_id: {review['decision_candidate_set_id']}")
+    print(f"decision_impact_analysis_id: {review['decision_impact_analysis_id']}")
+    print(f"decision_ranking_id: {review['decision_ranking_id']}")
+    print(f"top_candidate_id: {review['top_candidate_id']}")
+    print(f"blocker_count: {len(review['blockers'])}")
+    print(f"warning_count: {len(review['warnings'])}")
+    print(f"next_action: {review['recommended_next_action']}")
+
+
+def operator_decision_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Decision review: read-only operator decision recommendation")
+        print("Read-only decision support. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: decision review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    review = collect_operator_decision_review()
+    validate_operator_decision_review(review)
+    if "--json" in args:
+        print(stable_operator_decision_review_json(review), end="")
+        return 0
+    render_operator_decision_review_plain(review)
     return 0
 
 

@@ -15882,7 +15882,190 @@ def check_execution_readiness_sandbox_clis() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 62o. Growth supervised-execution-review CLI
+# 62o. Operator decision engine
+# ---------------------------------------------------------------------------
+
+def check_operator_decision_engine_helpers() -> None:
+    """Decision engine ranks remediation candidates without execution."""
+    from link_modes.growth.link_growth_console import (
+        collect_business_execution_review_package,
+        collect_business_readiness_review_package,
+        collect_decision_candidate_set,
+        collect_decision_impact_analysis,
+        collect_decision_ranking,
+        collect_execution_gap_analysis,
+        collect_operator_decision_review,
+        collect_operator_remediation_review,
+        collect_remediation_dependency_graph,
+        collect_remediation_priority_queue,
+        collect_sandbox_approval_projection,
+        collect_sandbox_evidence_projection,
+        collect_sandbox_outcome_projection,
+        collect_sandbox_readiness_projection,
+        collect_sandbox_review_package,
+        collect_simulation_remediation_plan,
+        parse_decision_candidate_set_json,
+        parse_decision_impact_analysis_json,
+        parse_decision_ranking_json,
+        parse_operator_decision_review_json,
+        stable_decision_candidate_set_json,
+        stable_decision_impact_analysis_json,
+        stable_decision_ranking_json,
+        stable_operator_decision_review_json,
+        validate_decision_candidate_set,
+        validate_decision_impact_analysis,
+        validate_decision_ranking,
+        validate_operator_decision_review,
+    )
+
+    plan = collect_simulation_remediation_plan()
+    graph = collect_remediation_dependency_graph(plan)
+    queue = collect_remediation_priority_queue(plan, graph)
+    remediation_review = collect_operator_remediation_review(plan, graph, queue)
+    readiness_review = collect_business_readiness_review_package()
+    execution_review = collect_business_execution_review_package(business_readiness_review_package=readiness_review)
+    readiness = collect_sandbox_readiness_projection(plan, queue, remediation_review, execution_review, readiness_review)
+    evidence = collect_sandbox_evidence_projection(readiness, plan)
+    approvals = collect_sandbox_approval_projection(readiness, plan)
+    outcome = collect_sandbox_outcome_projection(readiness, evidence, approvals)
+    sandbox_review = collect_sandbox_review_package(readiness, evidence, approvals, outcome)
+    gaps = collect_execution_gap_analysis()
+
+    candidate_set = collect_decision_candidate_set(plan, queue, sandbox_review, gaps, remediation_review)
+    same_candidate_set = collect_decision_candidate_set(plan, queue, sandbox_review, gaps, remediation_review)
+    validate_decision_candidate_set(candidate_set, plan, queue, sandbox_review, gaps, remediation_review)
+    _require(candidate_set["decision_candidate_set_id"] == same_candidate_set["decision_candidate_set_id"],
+             "decision candidate set id must be deterministic")
+    _require(len(candidate_set["candidates"]) == len(plan["remediation_steps"]),
+             "decision candidate set must flow from remediation steps")
+    _require(all(candidate["execution_allowed"] is False for candidate in candidate_set["candidates"]),
+             "decision candidates must never allow execution")
+    _require(candidate_set["decision_context"]["execution_allowed"] is False,
+             "decision context must remain non-executable")
+    _require(parse_decision_candidate_set_json(stable_decision_candidate_set_json(candidate_set)) == candidate_set,
+             "decision candidate set JSON must round trip")
+
+    impact = collect_decision_impact_analysis(candidate_set)
+    same_impact = collect_decision_impact_analysis(candidate_set)
+    validate_decision_impact_analysis(impact, candidate_set)
+    _require(impact["decision_impact_analysis_id"] == same_impact["decision_impact_analysis_id"],
+             "decision impact analysis id must be deterministic")
+    _require(impact["decision_candidate_set_id"] == candidate_set["decision_candidate_set_id"],
+             "decision impact analysis must flow from candidate set")
+    _require(impact["highest_readiness_gain_candidate_id"] in {candidate["decision_candidate_id"] for candidate in candidate_set["candidates"]},
+             "decision impact must reference a known candidate")
+    _require(parse_decision_impact_analysis_json(stable_decision_impact_analysis_json(impact)) == impact,
+             "decision impact analysis JSON must round trip")
+
+    ranking = collect_decision_ranking(candidate_set, impact)
+    same_ranking = collect_decision_ranking(candidate_set, impact)
+    validate_decision_ranking(ranking, candidate_set, impact)
+    _require(ranking["decision_ranking_id"] == same_ranking["decision_ranking_id"],
+             "decision ranking id must be deterministic")
+    _require(ranking["top_candidate_id"] == ranking["ranked_candidates"][0]["decision_candidate_id"],
+             "decision ranking top candidate must be first ranked candidate")
+    _require(ranking["ranking_formula"]["readiness_gain_weight"] == 4,
+             "decision ranking must expose deterministic formula")
+    _require(parse_decision_ranking_json(stable_decision_ranking_json(ranking)) == ranking,
+             "decision ranking JSON must round trip")
+
+    review = collect_operator_decision_review(candidate_set, impact, ranking)
+    same_review = collect_operator_decision_review(candidate_set, impact, ranking)
+    validate_operator_decision_review(review, candidate_set, impact, ranking)
+    _require(review["operator_decision_review_id"] == same_review["operator_decision_review_id"],
+             "operator decision review id must be deterministic")
+    _require(review["top_candidate_id"] == ranking["top_candidate_id"],
+             "operator decision review must flow from ranking")
+    _require("decision support does not authorize execution" in review["blockers"],
+             "operator decision review must keep execution blocked")
+    _require(parse_operator_decision_review_json(stable_operator_decision_review_json(review)) == review,
+             "operator decision review JSON must round trip")
+
+    bad_candidate_set = json.loads(stable_decision_candidate_set_json(candidate_set))
+    bad_candidate_set["candidates"][0]["execution_allowed"] = True
+    try:
+        validate_decision_candidate_set(bad_candidate_set)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("decision candidate set validation must reject executable candidate")
+
+    bad_ranking = json.loads(stable_decision_ranking_json(ranking))
+    bad_ranking["ranking_formula"]["readiness_gain_weight"] = 5
+    try:
+        validate_decision_ranking(bad_ranking)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("decision ranking validation must reject formula drift")
+
+    bad_review = json.loads(stable_operator_decision_review_json(review))
+    bad_review["write_allowed"] = True
+    try:
+        validate_operator_decision_review(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator decision review validation must reject writes")
+
+    print("operator decision engine helpers OK")
+
+
+def check_operator_decision_engine_clis() -> None:
+    """Decision CLIs expose read-only recommendation payloads."""
+    from link import _cmd_decision
+    from link_modes.growth.link_growth_console import (
+        decision_candidate_set_main,
+        decision_impact_analysis_main,
+        decision_ranking_main,
+        operator_decision_review_main,
+        parse_decision_candidate_set_json,
+    )
+
+    commands = [
+        ("candidates", decision_candidate_set_main),
+        ("impact", decision_impact_analysis_main),
+        ("ranking", decision_ranking_main),
+        ("review", operator_decision_review_main),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_decision(["--help"])
+    _require(help_rc == 0, "decision --help must return 0")
+    for command, main_func in commands:
+        _require(command in help_out.getvalue(), f"decision help must include {command}")
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"decision {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"decision {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"decision {command} --write must not print normal output")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = _cmd_decision(["candidates", "--json"])
+    parsed = parse_decision_candidate_set_json(json_out.getvalue())
+    _require(json_rc == 0, "decision candidates route must return 0")
+    _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "decision candidates CLI must remain read-only")
+    _require("simulation_remediation_plan" not in parsed and "sandbox_review_package" not in parsed,
+             "decision candidates --json must output only candidate set payload")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = decision_candidate_set_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "decision candidates human mode must return 0")
+    _require("Decision candidate set" in human and "decision_candidate_set_id:" in human,
+             "decision candidates human mode must include title and id")
+    _require(len(human.splitlines()) <= 12, "decision candidates human mode must stay concise")
+    print("operator decision engine CLIs OK")
+
+
+# ---------------------------------------------------------------------------
+# 62p. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
 
 def check_growth_supervised_execution_review_package_cli() -> None:
@@ -16926,6 +17109,8 @@ def main() -> None:
     check_simulation_remediation_planning_clis()
     check_execution_readiness_sandbox_helpers()
     check_execution_readiness_sandbox_clis()
+    check_operator_decision_engine_helpers()
+    check_operator_decision_engine_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()
