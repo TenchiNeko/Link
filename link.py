@@ -416,16 +416,36 @@ def _cmd_simulation(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import operator_simulation_review_main as _simulation_operator_review_main
 
         return _simulation_operator_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "remediation-plan":
+        from link_modes.growth.link_growth_console import simulation_remediation_plan_main as _simulation_remediation_plan_main
+
+        return _simulation_remediation_plan_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "dependency-graph":
+        from link_modes.growth.link_growth_console import remediation_dependency_graph_main as _simulation_dependency_graph_main
+
+        return _simulation_dependency_graph_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "priority-queue":
+        from link_modes.growth.link_growth_console import remediation_priority_queue_main as _simulation_priority_queue_main
+
+        return _simulation_priority_queue_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "remediation-review":
+        from link_modes.growth.link_growth_console import operator_remediation_review_main as _simulation_remediation_review_main
+
+        return _simulation_remediation_review_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Simulation commands:")
-        print("  plan             Preview dry-run business execution simulation plan")
-        print("  evidence         Preview simulated execution evidence package")
-        print("  review           Preview simulated execution review")
-        print("  readiness        Preview simulated execution readiness check")
-        print("  dashboard        Preview compact simulation dashboard")
-        print("  gaps             Preview execution gap analysis")
-        print("  score            Preview deterministic execution readiness score")
-        print("  operator-review  Preview operator-facing simulation analysis package")
+        print("  plan                Preview dry-run business execution simulation plan")
+        print("  evidence            Preview simulated execution evidence package")
+        print("  review              Preview simulated execution review")
+        print("  readiness           Preview simulated execution readiness check")
+        print("  dashboard           Preview compact simulation dashboard")
+        print("  gaps                Preview execution gap analysis")
+        print("  score               Preview deterministic execution readiness score")
+        print("  operator-review     Preview operator-facing simulation analysis package")
+        print("  remediation-plan    Preview simulation remediation plan")
+        print("  dependency-graph    Preview remediation dependency graph")
+        print("  priority-queue      Preview remediation priority queue")
+        print("  remediation-review  Preview operator remediation review")
         return 0
     print(f"simulation: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py simulation --help' for subcommands.", file=sys.stderr)

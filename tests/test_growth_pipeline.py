@@ -15458,8 +15458,217 @@ def check_simulation_analysis_clis() -> None:
         _require(write_out.getvalue() == "", f"simulation {command} --write must not print normal output")
     print("simulation analysis CLIs OK")
 
+
 # ---------------------------------------------------------------------------
-# 62m. Growth supervised-execution-review CLI
+# 62m. Simulation remediation planning layer
+# ---------------------------------------------------------------------------
+
+def check_simulation_remediation_planning_helpers() -> None:
+    """Simulation remediation planning ranks non-executable fixes."""
+    from link_modes.growth.link_growth_console import (
+        collect_execution_gap_analysis,
+        collect_execution_readiness_score,
+        collect_operator_remediation_review,
+        collect_operator_simulation_review_package,
+        collect_remediation_dependency_graph,
+        collect_remediation_priority_queue,
+        collect_simulation_dashboard,
+        collect_simulation_remediation_plan,
+        parse_operator_remediation_review_json,
+        parse_remediation_dependency_graph_json,
+        parse_remediation_priority_queue_json,
+        parse_simulation_remediation_plan_json,
+        stable_operator_remediation_review_json,
+        stable_remediation_dependency_graph_json,
+        stable_remediation_priority_queue_json,
+        stable_simulation_remediation_plan_json,
+        validate_operator_remediation_review,
+        validate_remediation_dependency_graph,
+        validate_remediation_priority_queue,
+        validate_simulation_remediation_plan,
+    )
+
+    dashboard = collect_simulation_dashboard()
+    gaps = collect_execution_gap_analysis()
+    score = collect_execution_readiness_score(dashboard, gaps)
+    simulation_review = collect_operator_simulation_review_package(dashboard, gaps, score)
+
+    plan = collect_simulation_remediation_plan(dashboard, gaps, score, simulation_review)
+    same_plan = collect_simulation_remediation_plan(dashboard, gaps, score, simulation_review)
+    validate_simulation_remediation_plan(plan, dashboard, gaps, score, simulation_review)
+    _require(plan["simulation_remediation_plan_id"] == same_plan["simulation_remediation_plan_id"],
+             "simulation remediation plan id must be deterministic")
+    _require(len(plan["remediation_steps"]) >= 4, "simulation remediation plan must include steps")
+    _require(plan["priority_levels"] == ["critical", "high", "medium", "low"],
+             "simulation remediation plan must expose priority levels")
+    _require(plan["required_evidence"], "simulation remediation plan must include required evidence")
+    _require(plan["required_approvals"], "simulation remediation plan must include required approvals")
+    _require(all(step["execution_allowed"] is False for step in plan["remediation_steps"]),
+             "simulation remediation steps must never allow execution")
+    _require(parse_simulation_remediation_plan_json(stable_simulation_remediation_plan_json(plan)) == plan,
+             "simulation remediation plan JSON must round trip")
+
+    graph = collect_remediation_dependency_graph(plan)
+    same_graph = collect_remediation_dependency_graph(plan)
+    validate_remediation_dependency_graph(graph, plan)
+    _require(graph["remediation_dependency_graph_id"] == same_graph["remediation_dependency_graph_id"],
+             "remediation dependency graph id must be deterministic")
+    _require(graph["dependency_edges"], "remediation dependency graph must include edges")
+    _require(graph["critical_path"] == [step["remediation_step_id"] for step in plan["remediation_steps"]],
+             "remediation dependency graph critical path must follow plan order")
+    _require(graph["blocked_items"], "remediation dependency graph must include blocked items")
+    _require(parse_remediation_dependency_graph_json(stable_remediation_dependency_graph_json(graph)) == graph,
+             "remediation dependency graph JSON must round trip")
+
+    queue = collect_remediation_priority_queue(plan, graph)
+    same_queue = collect_remediation_priority_queue(plan, graph)
+    validate_remediation_priority_queue(queue, plan, graph)
+    _require(queue["remediation_priority_queue_id"] == same_queue["remediation_priority_queue_id"],
+             "remediation priority queue id must be deterministic")
+    _require(queue["queue_order"], "remediation priority queue must include order")
+    _require(queue["queue_order"][0].startswith("remediation-step-01"),
+             "remediation priority queue must start with critical evidence fix")
+    _require(len(queue["readiness_gain_estimates"]) == len(queue["priority_items"]),
+             "remediation priority queue gain estimates must match item count")
+    _require(all(item["estimated_readiness_gain"] > 0 for item in queue["readiness_gain_estimates"]),
+             "remediation readiness gains must be positive")
+    _require(parse_remediation_priority_queue_json(stable_remediation_priority_queue_json(queue)) == queue,
+             "remediation priority queue JSON must round trip")
+
+    review = collect_operator_remediation_review(plan, graph, queue)
+    same_review = collect_operator_remediation_review(plan, graph, queue)
+    validate_operator_remediation_review(review, plan, graph, queue)
+    _require(review["operator_remediation_review_id"] == same_review["operator_remediation_review_id"],
+             "operator remediation review id must be deterministic")
+    _require(review["remediation_plan_id"] == plan["simulation_remediation_plan_id"],
+             "operator remediation review must flow from remediation plan")
+    _require(review["dependency_graph_id"] == graph["remediation_dependency_graph_id"],
+             "operator remediation review must flow from dependency graph")
+    _require(review["priority_queue_id"] == queue["remediation_priority_queue_id"],
+             "operator remediation review must flow from priority queue")
+    _require(review["review_recommendation"] == "fix_critical_evidence_first",
+             "operator remediation review must recommend first fix")
+    _require(parse_operator_remediation_review_json(stable_operator_remediation_review_json(review)) == review,
+             "operator remediation review JSON must round trip")
+
+    bad_plan = json.loads(stable_simulation_remediation_plan_json(plan))
+    bad_plan["remediation_steps"][0]["execution_allowed"] = True
+    try:
+        validate_simulation_remediation_plan(bad_plan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("simulation remediation plan validation must reject executable step")
+
+    bad_graph = json.loads(stable_remediation_dependency_graph_json(graph))
+    bad_graph["critical_path"] = []
+    try:
+        validate_remediation_dependency_graph(bad_graph)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("remediation dependency graph validation must reject missing critical path")
+
+    bad_queue = json.loads(stable_remediation_priority_queue_json(queue))
+    bad_queue["readiness_gain_estimates"][0]["estimated_readiness_gain"] = 0
+    try:
+        validate_remediation_priority_queue(bad_queue)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("remediation priority queue validation must reject zero readiness gain")
+
+    bad_review = json.loads(stable_operator_remediation_review_json(review))
+    bad_review["write_allowed"] = True
+    try:
+        validate_operator_remediation_review(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator remediation review validation must reject unsafe metadata")
+
+    print("simulation remediation planning helpers OK")
+
+
+def check_simulation_remediation_planning_clis() -> None:
+    """Simulation remediation CLIs expose read-only remediation payloads."""
+    from link import _cmd_simulation
+    from link_modes.growth.link_growth_console import (
+        operator_remediation_review_main,
+        parse_operator_remediation_review_json,
+        parse_remediation_dependency_graph_json,
+        parse_remediation_priority_queue_json,
+        parse_simulation_remediation_plan_json,
+        remediation_dependency_graph_main,
+        remediation_priority_queue_main,
+        simulation_remediation_plan_main,
+    )
+
+    expected = [
+        ("remediation-plan", simulation_remediation_plan_main, parse_simulation_remediation_plan_json,
+         "simulation_remediation_plan_id", "Simulation remediation plan"),
+        ("dependency-graph", remediation_dependency_graph_main, parse_remediation_dependency_graph_json,
+         "remediation_dependency_graph_id", "Remediation dependency graph"),
+        ("priority-queue", remediation_priority_queue_main, parse_remediation_priority_queue_json,
+         "remediation_priority_queue_id", "Remediation priority queue"),
+        ("remediation-review", operator_remediation_review_main, parse_operator_remediation_review_json,
+         "operator_remediation_review_id", "Operator remediation review"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_simulation(["--help"])
+    _require(help_rc == 0, "simulation --help must return 0")
+    for command, main_func, parse_func, id_key, title in expected:
+        _require(command in help_out.getvalue(), f"simulation help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"simulation {command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"simulation {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"simulation {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"simulation {command} must not allow automation or writes")
+        for full_payload_key in (
+            "simulation_dashboard",
+            "execution_gap_analysis",
+            "execution_readiness_score",
+            "operator_simulation_review_package",
+            "simulation_remediation_plan",
+            "remediation_dependency_graph",
+            "remediation_priority_queue",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"simulation {command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_simulation([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"simulation {command} route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"simulation {command} route must preserve id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"simulation {command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"simulation {command} human mode must include title and id")
+        _require(len(human.splitlines()) <= 12, f"simulation {command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"simulation {command} --write must be rejected")
+        _require("read-only simulation" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"simulation {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"simulation {command} --write must not print normal output")
+    print("simulation remediation planning CLIs OK")
+
+# ---------------------------------------------------------------------------
+# 62n. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
 
 def check_growth_supervised_execution_review_package_cli() -> None:
@@ -16499,6 +16708,8 @@ def main() -> None:
     check_business_execution_simulation_clis()
     check_simulation_analysis_helpers()
     check_simulation_analysis_clis()
+    check_simulation_remediation_planning_helpers()
+    check_simulation_remediation_planning_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

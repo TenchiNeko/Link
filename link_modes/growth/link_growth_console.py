@@ -11041,6 +11041,11 @@ SIMULATION_DASHBOARD_VERSION = "link-simulation-dashboard-v1"
 EXECUTION_GAP_ANALYSIS_VERSION = "link-execution-gap-analysis-v1"
 EXECUTION_READINESS_SCORE_VERSION = "link-execution-readiness-score-v1"
 OPERATOR_SIMULATION_REVIEW_PACKAGE_VERSION = "link-operator-simulation-review-package-v1"
+SIMULATION_REMEDIATION_PLAN_VERSION = "link-simulation-remediation-plan-v1"
+REMEDIATION_DEPENDENCY_GRAPH_VERSION = "link-remediation-dependency-graph-v1"
+REMEDIATION_PRIORITY_QUEUE_VERSION = "link-remediation-priority-queue-v1"
+OPERATOR_REMEDIATION_REVIEW_VERSION = "link-operator-remediation-review-v1"
+REMEDIATION_PRIORITIES = ("critical", "high", "medium", "low")
 BUSINESS_EXECUTION_SIMULATED_STEPS = (
     "validate opportunity",
     "validate evidence",
@@ -17167,6 +17172,532 @@ def parse_operator_simulation_review_package_json(text: str) -> dict[str, Any]:
 
 
 
+def make_simulation_remediation_plan_id(
+    simulation_dashboard: dict[str, Any],
+    execution_gap_analysis: dict[str, Any],
+    execution_readiness_score: dict[str, Any],
+    operator_simulation_review_package: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "execution_gap_analysis_id": execution_gap_analysis["execution_gap_analysis_id"],
+        "execution_readiness_score_id": execution_readiness_score["execution_readiness_score_id"],
+        "operator_simulation_review_package_id": operator_simulation_review_package["operator_simulation_review_package_id"],
+        "simulation_dashboard_id": simulation_dashboard["simulation_dashboard_id"],
+        "version": SIMULATION_REMEDIATION_PLAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"simulation-remediation-plan-{digest}"
+
+
+def _collect_simulation_analysis_chain(
+    simulation_dashboard: dict[str, Any] | None = None,
+    execution_gap_analysis: dict[str, Any] | None = None,
+    execution_readiness_score: dict[str, Any] | None = None,
+    operator_simulation_review_package: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    if all(item is None for item in (
+        simulation_dashboard,
+        execution_gap_analysis,
+        execution_readiness_score,
+        operator_simulation_review_package,
+    )):
+        plan, evidence, simulation_review, readiness = _collect_simulation_chain()
+        dashboard = collect_simulation_dashboard(plan, evidence, simulation_review, readiness)
+        gaps = collect_execution_gap_analysis(simulation_review, readiness)
+        score = collect_execution_readiness_score(dashboard, gaps)
+        review = collect_operator_simulation_review_package(dashboard, gaps, score, simulation_review)
+        return dashboard, gaps, score, review
+    dashboard = simulation_dashboard or collect_simulation_dashboard()
+    validate_simulation_dashboard(dashboard)
+    gaps = execution_gap_analysis or collect_execution_gap_analysis()
+    validate_execution_gap_analysis(gaps)
+    score = execution_readiness_score or collect_execution_readiness_score(dashboard, gaps)
+    validate_execution_readiness_score(score, dashboard, gaps)
+    review = operator_simulation_review_package or collect_operator_simulation_review_package(dashboard, gaps, score)
+    validate_operator_simulation_review_package(review, dashboard, gaps, score)
+    return dashboard, gaps, score, review
+
+
+def _remediation_step(step_id: str, description: str, priority: str, impact: str, dependencies: list[str], evidence: list[str], approvals: list[str]) -> dict[str, Any]:
+    return {
+        "remediation_step_id": step_id,
+        "description": description,
+        "priority": priority,
+        "expected_impact": impact,
+        "dependencies": _normalize_implementation_branch_refs(dependencies),
+        "required_evidence": _normalize_implementation_branch_refs(evidence),
+        "required_approvals": _normalize_implementation_branch_refs(approvals),
+        "execution_allowed": False,
+    }
+
+
+def collect_simulation_remediation_plan(
+    simulation_dashboard: dict[str, Any] | None = None,
+    execution_gap_analysis: dict[str, Any] | None = None,
+    execution_readiness_score: dict[str, Any] | None = None,
+    operator_simulation_review_package: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Convert simulation analysis findings into non-executable remediation steps."""
+    dashboard, gaps, score, review = _collect_simulation_analysis_chain(
+        simulation_dashboard,
+        execution_gap_analysis,
+        execution_readiness_score,
+        operator_simulation_review_package,
+    )
+    steps = [
+        _remediation_step(
+            "remediation-step-01-evidence",
+            "Close missing real evidence before any future execution runtime design.",
+            "critical",
+            "removes evidence blockers and improves execution confidence",
+            [],
+            list(gaps["critical_gaps"][:3]),
+            [],
+        ),
+        _remediation_step(
+            "remediation-step-02-approvals",
+            "Collect explicit final human approvals for any future external effects.",
+            "critical",
+            "removes approval blockers and preserves human control",
+            ["remediation-step-01-evidence"],
+            ["final approval evidence trail"],
+            ["operator approval for external effects", "human approval for real business execution"],
+        ),
+        _remediation_step(
+            "remediation-step-03-boundaries",
+            "Design separate boundaries for real source, campaign, operations, and execution runtimes.",
+            "high",
+            "keeps blocked real actions disabled until governed boundaries exist",
+            ["remediation-step-01-evidence", "remediation-step-02-approvals"],
+            ["runtime boundary review evidence", "blocked action safety review"],
+            ["operator approval for runtime boundary design"],
+        ),
+        _remediation_step(
+            "remediation-step-04-refresh",
+            "Refresh simulation dashboards after upstream governance and evidence changes.",
+            "medium",
+            "improves operator visibility and stale artifact confidence",
+            ["remediation-step-03-boundaries"],
+            ["fresh simulation dashboard", "fresh operator simulation review"],
+            ["operator review of refreshed simulation"],
+        ),
+    ]
+    required_evidence = _normalize_implementation_branch_refs([item for step in steps for item in step["required_evidence"]])
+    required_approvals = _normalize_implementation_branch_refs([item for step in steps for item in step["required_approvals"]])
+    expected_impact = _normalize_implementation_branch_refs([step["expected_impact"] for step in steps])
+    plan = {
+        "simulation_remediation_plan_version": SIMULATION_REMEDIATION_PLAN_VERSION,
+        "simulation_remediation_plan_id": make_simulation_remediation_plan_id(dashboard, gaps, score, review),
+        "simulation_dashboard_id": dashboard["simulation_dashboard_id"],
+        "execution_gap_analysis_id": gaps["execution_gap_analysis_id"],
+        "execution_readiness_score_id": score["execution_readiness_score_id"],
+        "operator_simulation_review_package_id": review["operator_simulation_review_package_id"],
+        "remediation_steps": steps,
+        "priority_levels": list(REMEDIATION_PRIORITIES),
+        "required_evidence": required_evidence,
+        "required_approvals": required_approvals,
+        "expected_impact": expected_impact,
+        "blockers": list(review["blockers"]),
+        "warnings": list(review["warnings"]),
+        "recommended_next_action": "Start with critical evidence remediation, then approvals, before any runtime boundary design.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_simulation_remediation_plan(plan, dashboard, gaps, score, review)
+    return plan
+
+
+def validate_simulation_remediation_plan(
+    plan: dict[str, Any],
+    simulation_dashboard: dict[str, Any] | None = None,
+    execution_gap_analysis: dict[str, Any] | None = None,
+    execution_readiness_score: dict[str, Any] | None = None,
+    operator_simulation_review_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "simulation_remediation_plan_version", "simulation_remediation_plan_id",
+        "remediation_steps", "priority_levels", "required_evidence", "required_approvals",
+        "expected_impact", "blockers", "warnings", "recommended_next_action", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in plan:
+            raise ValueError(f"simulation remediation plan missing required field: {key}")
+    if plan["simulation_remediation_plan_version"] != SIMULATION_REMEDIATION_PLAN_VERSION:
+        raise ValueError("invalid simulation remediation plan version")
+    if not isinstance(plan["simulation_remediation_plan_id"], str) or not plan["simulation_remediation_plan_id"].startswith("simulation-remediation-plan-"):
+        raise ValueError("invalid simulation remediation plan id")
+    if plan["priority_levels"] != list(REMEDIATION_PRIORITIES):
+        raise ValueError("simulation remediation priority levels mismatch")
+    steps = plan["remediation_steps"]
+    if not isinstance(steps, list) or not steps:
+        raise ValueError("simulation remediation plan must include steps")
+    seen: set[str] = set()
+    for step in steps:
+        if not isinstance(step, dict):
+            raise TypeError("simulation remediation step must be a dict")
+        for field in ("remediation_step_id", "description", "priority", "expected_impact", "dependencies", "required_evidence", "required_approvals", "execution_allowed"):
+            if field not in step:
+                raise ValueError(f"simulation remediation step missing {field}")
+        if step["remediation_step_id"] in seen:
+            raise ValueError("duplicate simulation remediation step id")
+        seen.add(step["remediation_step_id"])
+        if step["priority"] not in REMEDIATION_PRIORITIES:
+            raise ValueError("invalid simulation remediation priority")
+        if step["execution_allowed"] is not False:
+            raise ValueError("simulation remediation steps must not allow execution")
+        for field in ("dependencies", "required_evidence", "required_approvals"):
+            if _normalize_implementation_branch_refs(step[field]) != step[field]:
+                raise ValueError(f"simulation remediation step {field} must be normalized")
+    for field in ("required_evidence", "expected_impact", "blockers", "warnings"):
+        normalized = _normalize_implementation_branch_refs(plan[field])
+        if not normalized or normalized != plan[field]:
+            raise ValueError(f"simulation remediation plan {field} must be normalized and non-empty")
+    if _normalize_implementation_branch_refs(plan["required_approvals"]) != plan["required_approvals"]:
+        raise ValueError("simulation remediation plan required_approvals must be normalized")
+    if plan["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("simulation remediation plan safety metadata mismatch")
+    if plan["dry_run"] is not True or plan["write_allowed"] is not False:
+        raise ValueError("simulation remediation plan must be read-only")
+    if plan["automation_allowed"] is not False or plan["writes"] != []:
+        raise ValueError("simulation remediation plan must not allow automation or writes")
+    if all(item is not None for item in (simulation_dashboard, execution_gap_analysis, execution_readiness_score, operator_simulation_review_package)):
+        expected_id = make_simulation_remediation_plan_id(simulation_dashboard, execution_gap_analysis, execution_readiness_score, operator_simulation_review_package)
+        if plan["simulation_remediation_plan_id"] != expected_id:
+            raise ValueError("simulation remediation plan id is not deterministic")
+
+
+def stable_simulation_remediation_plan_json(plan: dict[str, Any]) -> str:
+    validate_simulation_remediation_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def parse_simulation_remediation_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    plan = _json.loads(text)
+    validate_simulation_remediation_plan(plan)
+    return plan
+
+
+def make_remediation_dependency_graph_id(plan: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "simulation_remediation_plan_id": plan["simulation_remediation_plan_id"],
+        "steps": [step["remediation_step_id"] for step in plan["remediation_steps"]],
+        "version": REMEDIATION_DEPENDENCY_GRAPH_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"remediation-dependency-graph-{digest}"
+
+
+def collect_remediation_dependency_graph(
+    simulation_remediation_plan: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Model remediation prerequisites and blocked items without execution."""
+    plan = simulation_remediation_plan or collect_simulation_remediation_plan()
+    validate_simulation_remediation_plan(plan)
+    edges = []
+    for step in plan["remediation_steps"]:
+        for dep in step["dependencies"]:
+            edges.append({"from": dep, "to": step["remediation_step_id"], "relationship": "prerequisite"})
+    critical_path = [step["remediation_step_id"] for step in plan["remediation_steps"]]
+    blocked = [step["remediation_step_id"] for step in plan["remediation_steps"] if step["dependencies"] or step["priority"] in {"critical", "high"}]
+    graph = {
+        "remediation_dependency_graph_version": REMEDIATION_DEPENDENCY_GRAPH_VERSION,
+        "remediation_dependency_graph_id": make_remediation_dependency_graph_id(plan),
+        "simulation_remediation_plan_id": plan["simulation_remediation_plan_id"],
+        "dependency_edges": edges,
+        "critical_path": critical_path,
+        "blocked_items": _normalize_implementation_branch_refs(blocked),
+        "recommended_next_action": "Follow the critical path from evidence remediation through approvals before runtime boundary design.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_remediation_dependency_graph(graph, plan)
+    return graph
+
+
+def validate_remediation_dependency_graph(graph: dict[str, Any], simulation_remediation_plan: dict[str, Any] | None = None) -> None:
+    required = (
+        "remediation_dependency_graph_version", "remediation_dependency_graph_id",
+        "dependency_edges", "critical_path", "blocked_items", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in graph:
+            raise ValueError(f"remediation dependency graph missing required field: {key}")
+    if graph["remediation_dependency_graph_version"] != REMEDIATION_DEPENDENCY_GRAPH_VERSION:
+        raise ValueError("invalid remediation dependency graph version")
+    if not isinstance(graph["remediation_dependency_graph_id"], str) or not graph["remediation_dependency_graph_id"].startswith("remediation-dependency-graph-"):
+        raise ValueError("invalid remediation dependency graph id")
+    if not isinstance(graph["dependency_edges"], list):
+        raise TypeError("remediation dependency graph edges must be a list")
+    for edge in graph["dependency_edges"]:
+        if not isinstance(edge, dict) or set(edge) != {"from", "to", "relationship"}:
+            raise ValueError("invalid remediation dependency edge")
+        if edge["relationship"] != "prerequisite":
+            raise ValueError("invalid remediation dependency relationship")
+    for field in ("critical_path", "blocked_items"):
+        normalized = _normalize_implementation_branch_refs(graph[field])
+        if not normalized or normalized != graph[field]:
+            raise ValueError(f"remediation dependency graph {field} must be normalized and non-empty")
+    if graph["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("remediation dependency graph safety metadata mismatch")
+    if graph["dry_run"] is not True or graph["write_allowed"] is not False:
+        raise ValueError("remediation dependency graph must be read-only")
+    if graph["automation_allowed"] is not False or graph["writes"] != []:
+        raise ValueError("remediation dependency graph must not allow automation or writes")
+    if simulation_remediation_plan is not None:
+        validate_simulation_remediation_plan(simulation_remediation_plan)
+        if graph["simulation_remediation_plan_id"] != simulation_remediation_plan["simulation_remediation_plan_id"]:
+            raise ValueError("remediation dependency graph plan id mismatch")
+        if graph["remediation_dependency_graph_id"] != make_remediation_dependency_graph_id(simulation_remediation_plan):
+            raise ValueError("remediation dependency graph id is not deterministic")
+
+
+def stable_remediation_dependency_graph_json(graph: dict[str, Any]) -> str:
+    validate_remediation_dependency_graph(graph)
+    return _stable_ruflo_json(graph, indent=2) + "\n"
+
+
+def parse_remediation_dependency_graph_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    graph = _json.loads(text)
+    validate_remediation_dependency_graph(graph)
+    return graph
+
+
+def make_remediation_priority_queue_id(plan: dict[str, Any], graph: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "remediation_dependency_graph_id": graph["remediation_dependency_graph_id"],
+        "simulation_remediation_plan_id": plan["simulation_remediation_plan_id"],
+        "version": REMEDIATION_PRIORITY_QUEUE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"remediation-priority-queue-{digest}"
+
+
+def collect_remediation_priority_queue(
+    simulation_remediation_plan: dict[str, Any] | None = None,
+    remediation_dependency_graph: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Rank remediation fixes by priority, dependency order, and readiness gain."""
+    plan = simulation_remediation_plan or collect_simulation_remediation_plan()
+    validate_simulation_remediation_plan(plan)
+    graph = remediation_dependency_graph or collect_remediation_dependency_graph(plan)
+    validate_remediation_dependency_graph(graph, plan)
+    priority_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    ordered_steps = sorted(plan["remediation_steps"], key=lambda step: (priority_rank[step["priority"]], len(step["dependencies"]), step["remediation_step_id"]))
+    queue_order = [step["remediation_step_id"] for step in ordered_steps]
+    gain_map = {"critical": 25, "high": 18, "medium": 10, "low": 5}
+    estimates = [
+        {"remediation_step_id": step["remediation_step_id"], "estimated_readiness_gain": gain_map[step["priority"]]}
+        for step in ordered_steps
+    ]
+    items = [
+        {
+            "priority_item_id": f"priority-item-{index:02d}",
+            "remediation_step_id": step["remediation_step_id"],
+            "priority": step["priority"],
+            "description": step["description"],
+            "blocked": step["remediation_step_id"] in graph["blocked_items"],
+        }
+        for index, step in enumerate(ordered_steps, start=1)
+    ]
+    queue = {
+        "remediation_priority_queue_version": REMEDIATION_PRIORITY_QUEUE_VERSION,
+        "remediation_priority_queue_id": make_remediation_priority_queue_id(plan, graph),
+        "simulation_remediation_plan_id": plan["simulation_remediation_plan_id"],
+        "remediation_dependency_graph_id": graph["remediation_dependency_graph_id"],
+        "priority_items": items,
+        "queue_order": queue_order,
+        "readiness_gain_estimates": estimates,
+        "recommended_next_action": "Work the queue from critical evidence and approval items before boundary design.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_remediation_priority_queue(queue, plan, graph)
+    return queue
+
+
+def validate_remediation_priority_queue(queue: dict[str, Any], simulation_remediation_plan: dict[str, Any] | None = None, remediation_dependency_graph: dict[str, Any] | None = None) -> None:
+    required = (
+        "remediation_priority_queue_version", "remediation_priority_queue_id",
+        "priority_items", "queue_order", "readiness_gain_estimates", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in queue:
+            raise ValueError(f"remediation priority queue missing required field: {key}")
+    if queue["remediation_priority_queue_version"] != REMEDIATION_PRIORITY_QUEUE_VERSION:
+        raise ValueError("invalid remediation priority queue version")
+    if not isinstance(queue["remediation_priority_queue_id"], str) or not queue["remediation_priority_queue_id"].startswith("remediation-priority-queue-"):
+        raise ValueError("invalid remediation priority queue id")
+    if not isinstance(queue["priority_items"], list) or not queue["priority_items"]:
+        raise ValueError("remediation priority queue must include priority items")
+    if _normalize_implementation_branch_refs(queue["queue_order"]) != queue["queue_order"]:
+        raise ValueError("remediation priority queue order must be normalized")
+    if len(queue["queue_order"]) != len(queue["priority_items"]):
+        raise ValueError("remediation priority queue order must match item count")
+    seen = {item["remediation_step_id"] for item in queue["priority_items"] if isinstance(item, dict) and "remediation_step_id" in item}
+    if seen != set(queue["queue_order"]):
+        raise ValueError("remediation priority queue items must match queue order")
+    if not isinstance(queue["readiness_gain_estimates"], list) or len(queue["readiness_gain_estimates"]) != len(queue["priority_items"]):
+        raise ValueError("remediation priority queue gain estimates must match item count")
+    for estimate in queue["readiness_gain_estimates"]:
+        if not isinstance(estimate, dict) or "estimated_readiness_gain" not in estimate:
+            raise ValueError("invalid remediation readiness gain estimate")
+        if not isinstance(estimate["estimated_readiness_gain"], int) or estimate["estimated_readiness_gain"] <= 0:
+            raise ValueError("readiness gain estimate must be positive")
+    if queue["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("remediation priority queue safety metadata mismatch")
+    if queue["dry_run"] is not True or queue["write_allowed"] is not False:
+        raise ValueError("remediation priority queue must be read-only")
+    if queue["automation_allowed"] is not False or queue["writes"] != []:
+        raise ValueError("remediation priority queue must not allow automation or writes")
+    if simulation_remediation_plan is not None and remediation_dependency_graph is not None:
+        validate_simulation_remediation_plan(simulation_remediation_plan)
+        validate_remediation_dependency_graph(remediation_dependency_graph, simulation_remediation_plan)
+        if queue["remediation_priority_queue_id"] != make_remediation_priority_queue_id(simulation_remediation_plan, remediation_dependency_graph):
+            raise ValueError("remediation priority queue id is not deterministic")
+
+
+def stable_remediation_priority_queue_json(queue: dict[str, Any]) -> str:
+    validate_remediation_priority_queue(queue)
+    return _stable_ruflo_json(queue, indent=2) + "\n"
+
+
+def parse_remediation_priority_queue_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    queue = _json.loads(text)
+    validate_remediation_priority_queue(queue)
+    return queue
+
+
+def make_operator_remediation_review_id(plan: dict[str, Any], graph: dict[str, Any], queue: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "remediation_dependency_graph_id": graph["remediation_dependency_graph_id"],
+        "remediation_priority_queue_id": queue["remediation_priority_queue_id"],
+        "simulation_remediation_plan_id": plan["simulation_remediation_plan_id"],
+        "version": OPERATOR_REMEDIATION_REVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-remediation-review-{digest}"
+
+
+def collect_operator_remediation_review(
+    simulation_remediation_plan: dict[str, Any] | None = None,
+    remediation_dependency_graph: dict[str, Any] | None = None,
+    remediation_priority_queue: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summarize what should be fixed first in the simulation remediation plan."""
+    plan = simulation_remediation_plan or collect_simulation_remediation_plan()
+    validate_simulation_remediation_plan(plan)
+    graph = remediation_dependency_graph or collect_remediation_dependency_graph(plan)
+    validate_remediation_dependency_graph(graph, plan)
+    queue = remediation_priority_queue or collect_remediation_priority_queue(plan, graph)
+    validate_remediation_priority_queue(queue, plan, graph)
+    first = queue["queue_order"][0]
+    review = {
+        "operator_remediation_review_version": OPERATOR_REMEDIATION_REVIEW_VERSION,
+        "operator_remediation_review_id": make_operator_remediation_review_id(plan, graph, queue),
+        "remediation_plan_id": plan["simulation_remediation_plan_id"],
+        "dependency_graph_id": graph["remediation_dependency_graph_id"],
+        "priority_queue_id": queue["remediation_priority_queue_id"],
+        "blockers": list(plan["blockers"]),
+        "warnings": list(plan["warnings"]),
+        "required_human_actions": _normalize_implementation_branch_refs(list(plan["required_approvals"]) + [f"review first remediation step: {first}"]),
+        "review_recommendation": "fix_critical_evidence_first",
+        "recommended_next_action": f"Start with {first}, then follow the remediation priority queue.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_remediation_review(review, plan, graph, queue)
+    return review
+
+
+def validate_operator_remediation_review(review: dict[str, Any], simulation_remediation_plan: dict[str, Any] | None = None, remediation_dependency_graph: dict[str, Any] | None = None, remediation_priority_queue: dict[str, Any] | None = None) -> None:
+    required = (
+        "operator_remediation_review_version", "operator_remediation_review_id", "remediation_plan_id",
+        "dependency_graph_id", "priority_queue_id", "blockers", "warnings", "required_human_actions",
+        "review_recommendation", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in review:
+            raise ValueError(f"operator remediation review missing required field: {key}")
+    if review["operator_remediation_review_version"] != OPERATOR_REMEDIATION_REVIEW_VERSION:
+        raise ValueError("invalid operator remediation review version")
+    if not isinstance(review["operator_remediation_review_id"], str) or not review["operator_remediation_review_id"].startswith("operator-remediation-review-"):
+        raise ValueError("invalid operator remediation review id")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(review[field])
+        if not normalized or normalized != review[field]:
+            raise ValueError(f"operator remediation review {field} must be normalized and non-empty")
+    if review["review_recommendation"] != "fix_critical_evidence_first":
+        raise ValueError("invalid operator remediation recommendation")
+    if review["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("operator remediation review safety metadata mismatch")
+    if review["dry_run"] is not True or review["write_allowed"] is not False:
+        raise ValueError("operator remediation review must be read-only")
+    if review["automation_allowed"] is not False or review["writes"] != []:
+        raise ValueError("operator remediation review must not allow automation or writes")
+    if simulation_remediation_plan is not None and remediation_dependency_graph is not None and remediation_priority_queue is not None:
+        validate_simulation_remediation_plan(simulation_remediation_plan)
+        validate_remediation_dependency_graph(remediation_dependency_graph, simulation_remediation_plan)
+        validate_remediation_priority_queue(remediation_priority_queue, simulation_remediation_plan, remediation_dependency_graph)
+        if review["operator_remediation_review_id"] != make_operator_remediation_review_id(simulation_remediation_plan, remediation_dependency_graph, remediation_priority_queue):
+            raise ValueError("operator remediation review id is not deterministic")
+
+
+def stable_operator_remediation_review_json(review: dict[str, Any]) -> str:
+    validate_operator_remediation_review(review)
+    return _stable_ruflo_json(review, indent=2) + "\n"
+
+
+def parse_operator_remediation_review_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    review = _json.loads(text)
+    validate_operator_remediation_review(review)
+    return review
+
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -20569,6 +21100,145 @@ def operator_simulation_review_main(argv: list[str] | None = None) -> int:
         print(stable_operator_simulation_review_package_json(package), end="")
         return 0
     render_operator_simulation_review_package_plain(package)
+    return 0
+
+
+
+def render_simulation_remediation_plan_plain(plan: dict[str, Any]) -> None:
+    validate_simulation_remediation_plan(plan)
+    print("Simulation remediation plan")
+    print(f"simulation_remediation_plan_id: {plan['simulation_remediation_plan_id']}")
+    print(f"remediation_step_count: {len(plan['remediation_steps'])}")
+    print(f"required_evidence_count: {len(plan['required_evidence'])}")
+    print(f"required_approval_count: {len(plan['required_approvals'])}")
+    print(f"blocker_count: {len(plan['blockers'])}")
+    print(f"warning_count: {len(plan['warnings'])}")
+    print(f"next_action: {plan['recommended_next_action']}")
+
+
+def simulation_remediation_plan_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation remediation-plan: read-only remediation plan")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation remediation-plan")
+        print("  python3 link.py simulation remediation-plan --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation remediation-plan is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    plan = collect_simulation_remediation_plan()
+    validate_simulation_remediation_plan(plan)
+    if "--json" in args:
+        print(stable_simulation_remediation_plan_json(plan), end="")
+        return 0
+    render_simulation_remediation_plan_plain(plan)
+    return 0
+
+
+def render_remediation_dependency_graph_plain(graph: dict[str, Any]) -> None:
+    validate_remediation_dependency_graph(graph)
+    print("Remediation dependency graph")
+    print(f"remediation_dependency_graph_id: {graph['remediation_dependency_graph_id']}")
+    print(f"dependency_edge_count: {len(graph['dependency_edges'])}")
+    print(f"critical_path_count: {len(graph['critical_path'])}")
+    print(f"blocked_item_count: {len(graph['blocked_items'])}")
+    print(f"next_action: {graph['recommended_next_action']}")
+
+
+def remediation_dependency_graph_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation dependency-graph: read-only remediation dependency graph")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation dependency-graph")
+        print("  python3 link.py simulation dependency-graph --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation dependency-graph is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    graph = collect_remediation_dependency_graph()
+    validate_remediation_dependency_graph(graph)
+    if "--json" in args:
+        print(stable_remediation_dependency_graph_json(graph), end="")
+        return 0
+    render_remediation_dependency_graph_plain(graph)
+    return 0
+
+
+def render_remediation_priority_queue_plain(queue: dict[str, Any]) -> None:
+    validate_remediation_priority_queue(queue)
+    print("Remediation priority queue")
+    print(f"remediation_priority_queue_id: {queue['remediation_priority_queue_id']}")
+    print(f"priority_item_count: {len(queue['priority_items'])}")
+    print(f"queue_order_count: {len(queue['queue_order'])}")
+    print(f"readiness_gain_estimate_count: {len(queue['readiness_gain_estimates'])}")
+    print(f"next_action: {queue['recommended_next_action']}")
+
+
+def remediation_priority_queue_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation priority-queue: read-only remediation priority queue")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation priority-queue")
+        print("  python3 link.py simulation priority-queue --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation priority-queue is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    queue = collect_remediation_priority_queue()
+    validate_remediation_priority_queue(queue)
+    if "--json" in args:
+        print(stable_remediation_priority_queue_json(queue), end="")
+        return 0
+    render_remediation_priority_queue_plain(queue)
+    return 0
+
+
+def render_operator_remediation_review_plain(review: dict[str, Any]) -> None:
+    validate_operator_remediation_review(review)
+    print("Operator remediation review")
+    print(f"operator_remediation_review_id: {review['operator_remediation_review_id']}")
+    print(f"remediation_plan_id: {review['remediation_plan_id']}")
+    print(f"dependency_graph_id: {review['dependency_graph_id']}")
+    print(f"priority_queue_id: {review['priority_queue_id']}")
+    print(f"blocker_count: {len(review['blockers'])}")
+    print(f"warning_count: {len(review['warnings'])}")
+    print(f"required_human_action_count: {len(review['required_human_actions'])}")
+    print(f"review_recommendation: {review['review_recommendation']}")
+    print(f"next_action: {review['recommended_next_action']}")
+
+
+def operator_remediation_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation remediation-review: read-only operator remediation review")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation remediation-review")
+        print("  python3 link.py simulation remediation-review --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation remediation-review is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    review = collect_operator_remediation_review()
+    validate_operator_remediation_review(review)
+    if "--json" in args:
+        print(stable_operator_remediation_review_json(review), end="")
+        return 0
+    render_operator_remediation_review_plain(review)
     return 0
 
 
