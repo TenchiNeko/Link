@@ -349,12 +349,32 @@ def _cmd_control_plane(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import control_plane_review_main as _control_plane_review_main
 
         return _control_plane_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "status":
+        from link_modes.growth.link_growth_console import control_plane_status_main as _control_plane_status_main
+
+        return _control_plane_status_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "operator-cards":
+        from link_modes.growth.link_growth_console import control_plane_operator_cards_main as _control_plane_operator_cards_main
+
+        return _control_plane_operator_cards_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "stale-artifacts":
+        from link_modes.growth.link_growth_console import control_plane_stale_artifacts_main as _control_plane_stale_artifacts_main
+
+        return _control_plane_stale_artifacts_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "operator-review":
+        from link_modes.growth.link_growth_console import control_plane_operator_review_main as _control_plane_operator_review_main
+
+        return _control_plane_operator_review_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Control-plane commands:")
-        print("  dashboard  Preview Link control-plane dashboard")
-        print("  services   Preview Link shared services dashboard")
-        print("  health     Preview Link control-plane health package")
-        print("  review     Preview Link control-plane review package")
+        print("  dashboard        Preview Link control-plane dashboard")
+        print("  services         Preview Link shared services dashboard")
+        print("  health           Preview Link control-plane health package")
+        print("  review           Preview Link control-plane review package")
+        print("  status           Preview compact operator status summary")
+        print("  operator-cards   Preview operator-facing lane cards")
+        print("  stale-artifacts  Preview stale generated artifact report")
+        print("  operator-review  Preview operator status review package")
         return 0
     print(f"control-plane: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py control-plane --help' for subcommands.", file=sys.stderr)

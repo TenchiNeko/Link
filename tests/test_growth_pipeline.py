@@ -14788,6 +14788,217 @@ def check_control_plane_dashboard_clis() -> None:
         _require(write_out.getvalue() == "", f"control-plane {command} --write must not print normal output")
     print("control-plane dashboard CLIs OK")
 
+
+# ---------------------------------------------------------------------------
+# 62j. Control-plane operator UX layer
+# ---------------------------------------------------------------------------
+
+def check_control_plane_operator_ux_helpers() -> None:
+    """Operator UX helpers compress control-plane state read-only."""
+    from link_modes.growth.link_growth_console import (
+        collect_control_plane_health_package,
+        collect_control_plane_review_package,
+        collect_control_plane_status_summary,
+        collect_link_control_plane_dashboard,
+        collect_operator_cards,
+        collect_operator_status_package,
+        collect_stale_artifact_report,
+        parse_control_plane_status_summary_json,
+        parse_operator_cards_json,
+        parse_operator_status_package_json,
+        parse_stale_artifact_report_json,
+        stable_control_plane_status_summary_json,
+        stable_operator_cards_json,
+        stable_operator_status_package_json,
+        stable_stale_artifact_report_json,
+        validate_control_plane_status_summary,
+        validate_operator_cards,
+        validate_operator_status_package,
+        validate_stale_artifact_report,
+    )
+
+    dashboard = collect_link_control_plane_dashboard()
+    health = collect_control_plane_health_package(dashboard)
+    review = collect_control_plane_review_package(dashboard, health_package=health)
+
+    summary = collect_control_plane_status_summary(dashboard, health, review)
+    same_summary = collect_control_plane_status_summary(dashboard, health, review)
+    validate_control_plane_status_summary(summary, dashboard, health, review)
+    _require(summary["control_plane_status_summary_id"] == same_summary["control_plane_status_summary_id"],
+             "control-plane status summary id must be deterministic")
+    _require(summary["overall_status"] in {"pass", "review", "block"},
+             "control-plane status summary must expose valid overall status")
+    _require(summary["blocker_count"] == len(review["blockers"]),
+             "control-plane status summary blocker count must match review")
+    _require(summary["warning_count"] == len(review["warnings"]),
+             "control-plane status summary warning count must match review")
+    _require(summary["safety_metadata"] == {
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+    }, "control-plane status summary must include read-only safety metadata")
+    _require(parse_control_plane_status_summary_json(stable_control_plane_status_summary_json(summary)) == summary,
+             "control-plane status summary JSON must round trip")
+
+    stale = collect_stale_artifact_report(dashboard, review)
+    same_stale = collect_stale_artifact_report(dashboard, review)
+    validate_stale_artifact_report(stale, dashboard, review)
+    _require(stale["stale_artifact_report_id"] == same_stale["stale_artifact_report_id"],
+             "stale artifact report id must be deterministic")
+    _require(stale["warning_count"] == len(stale["stale_items"]),
+             "stale artifact warning count must match stale item count")
+    _require(stale["recommended_refreshes"],
+             "stale artifact report must include recommended refreshes")
+    _require(parse_stale_artifact_report_json(stable_stale_artifact_report_json(stale)) == stale,
+             "stale artifact report JSON must round trip")
+
+    cards = collect_operator_cards(dashboard, review)
+    same_cards = collect_operator_cards(dashboard, review)
+    validate_operator_cards(cards, dashboard, review)
+    _require(cards["operator_cards_id"] == same_cards["operator_cards_id"],
+             "operator cards id must be deterministic")
+    _require(len(cards["cards"]) == 4,
+             "operator cards must include four operator lane cards")
+    _require({card["lane_id"] for card in cards["cards"]} == {"engineering", "growth", "business_development", "business_operations"},
+             "operator cards must cover expected lanes")
+    _require(cards["recommended_next_actions"],
+             "operator cards must include recommended actions")
+    _require(parse_operator_cards_json(stable_operator_cards_json(cards)) == cards,
+             "operator cards JSON must round trip")
+
+    package = collect_operator_status_package(summary, stale, cards)
+    same_package = collect_operator_status_package(summary, stale, cards)
+    validate_operator_status_package(package, summary, stale, cards)
+    _require(package["operator_status_package_id"] == same_package["operator_status_package_id"],
+             "operator status package id must be deterministic")
+    _require(package["overall_status"] == summary["overall_status"],
+             "operator status package must preserve summary status")
+    _require(package["stale_items"] == stale["stale_items"],
+             "operator status package must include stale items")
+    _require(package["recommended_next_actions"],
+             "operator status package must include recommended actions")
+    _require(package["dry_run"] is True and package["write_allowed"] is False,
+             "operator status package must be read-only")
+    _require(package["automation_allowed"] is False and package["writes"] == [],
+             "operator status package must not allow automation or writes")
+    _require(parse_operator_status_package_json(stable_operator_status_package_json(package)) == package,
+             "operator status package JSON must round trip")
+
+    bad_summary = json.loads(stable_control_plane_status_summary_json(summary))
+    bad_summary["overall_status"] = "maybe"
+    try:
+        validate_control_plane_status_summary(bad_summary)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("control-plane status summary validation must reject invalid status")
+
+    bad_stale = json.loads(stable_stale_artifact_report_json(stale))
+    bad_stale["warning_count"] = 0
+    try:
+        validate_stale_artifact_report(bad_stale)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("stale artifact validation must reject warning count mismatch")
+
+    bad_cards = json.loads(stable_operator_cards_json(cards))
+    bad_cards["cards"].pop()
+    try:
+        validate_operator_cards(bad_cards)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator cards validation must reject missing card")
+
+    bad_package = json.loads(stable_operator_status_package_json(package))
+    bad_package["write_allowed"] = True
+    try:
+        validate_operator_status_package(bad_package)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator status package validation must reject unsafe safety metadata")
+
+    print("control-plane operator UX helpers OK")
+
+
+def check_control_plane_operator_ux_clis() -> None:
+    """Operator UX CLIs expose compact read-only control-plane payloads."""
+    from link import _cmd_control_plane
+    from link_modes.growth.link_growth_console import (
+        control_plane_operator_cards_main,
+        control_plane_operator_review_main,
+        control_plane_stale_artifacts_main,
+        control_plane_status_main,
+        parse_control_plane_status_summary_json,
+        parse_operator_cards_json,
+        parse_operator_status_package_json,
+        parse_stale_artifact_report_json,
+    )
+
+    expected = [
+        ("status", control_plane_status_main, parse_control_plane_status_summary_json,
+         "control_plane_status_summary_id", "Control plane status summary"),
+        ("operator-cards", control_plane_operator_cards_main, parse_operator_cards_json,
+         "operator_cards_id", "Control plane operator cards"),
+        ("stale-artifacts", control_plane_stale_artifacts_main, parse_stale_artifact_report_json,
+         "stale_artifact_report_id", "Control plane stale artifact report"),
+        ("operator-review", control_plane_operator_review_main, parse_operator_status_package_json,
+         "operator_status_package_id", "Control plane operator review"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_control_plane(["--help"])
+    _require(help_rc == 0, "control-plane --help must return 0")
+    for command, main_func, parse_func, id_key, title in expected:
+        _require(command in help_out.getvalue(), f"control-plane help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"control-plane {command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"control-plane {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"control-plane {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"control-plane {command} must not allow automation or writes")
+        for full_payload_key in (
+            "control_plane_dashboard",
+            "control_plane_status_summary",
+            "stale_artifact_report",
+            "operator_cards",
+            "operator_status_package",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"control-plane {command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_control_plane([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"control-plane {command} route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"control-plane {command} route must preserve id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"control-plane {command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"control-plane {command} human mode must include title and id")
+        _require(len(human.splitlines()) <= 12, f"control-plane {command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"control-plane {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"control-plane {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"control-plane {command} --write must not print normal output")
+    print("control-plane operator UX CLIs OK")
+
 # ---------------------------------------------------------------------------
 # 62k. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
@@ -15823,6 +16034,8 @@ def main() -> None:
     check_governance_dashboard_clis()
     check_control_plane_dashboard_helpers()
     check_control_plane_dashboard_clis()
+    check_control_plane_operator_ux_helpers()
+    check_control_plane_operator_ux_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

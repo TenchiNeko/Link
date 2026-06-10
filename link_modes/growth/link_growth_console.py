@@ -9121,6 +9121,9 @@ GROWTH_BUSINESS_OPPORTUNITY_CATEGORIES = (
 )
 
 
+_GROWTH_BUSINESS_SOURCE_REF_AVAILABLE_CACHE: dict[str, bool] = {}
+
+
 def _growth_business_source_ref_available(source_ref: str) -> bool:
     from pathlib import Path
     import zipfile
@@ -9128,15 +9131,23 @@ def _growth_business_source_ref_available(source_ref: str) -> bool:
     ref = str(source_ref or "").strip()
     if not ref:
         return False
+    if ref in _GROWTH_BUSINESS_SOURCE_REF_AVAILABLE_CACHE:
+        return _GROWTH_BUSINESS_SOURCE_REF_AVAILABLE_CACHE[ref]
     if "!" not in ref:
-        return Path(ref).is_file()
+        available = Path(ref).is_file()
+        _GROWTH_BUSINESS_SOURCE_REF_AVAILABLE_CACHE[ref] = available
+        return available
     archive, member = ref.split("!", 1)
     if not archive or not member or not Path(archive).is_file():
+        _GROWTH_BUSINESS_SOURCE_REF_AVAILABLE_CACHE[ref] = False
         return False
     try:
         with zipfile.ZipFile(archive) as zf:
-            return member in zf.namelist()
+            available = member in zf.namelist()
+            _GROWTH_BUSINESS_SOURCE_REF_AVAILABLE_CACHE[ref] = available
+            return available
     except (OSError, zipfile.BadZipFile):
+        _GROWTH_BUSINESS_SOURCE_REF_AVAILABLE_CACHE[ref] = False
         return False
 
 
@@ -11018,8 +11029,13 @@ LINK_SHARED_SERVICES_DASHBOARD_VERSION = "link-shared-services-dashboard-v1"
 LINK_CONTROL_PLANE_DASHBOARD_VERSION = "link-control-plane-dashboard-v1"
 CONTROL_PLANE_HEALTH_PACKAGE_VERSION = "link-control-plane-health-package-v1"
 CONTROL_PLANE_REVIEW_PACKAGE_VERSION = "link-control-plane-review-package-v1"
+CONTROL_PLANE_STATUS_SUMMARY_VERSION = "link-control-plane-status-summary-v1"
+STALE_ARTIFACT_REPORT_VERSION = "link-stale-artifact-report-v1"
+OPERATOR_CARDS_VERSION = "link-operator-cards-v1"
+OPERATOR_STATUS_PACKAGE_VERSION = "link-operator-status-package-v1"
 CONTROL_PLANE_STATUSES = ("pass", "review", "block")
 CONTROL_PLANE_RECOMMENDATIONS = ("resolve_blockers", "review_before_runtime", "healthy_for_review")
+OPERATOR_LANE_IDS = ("engineering", "growth", "business_development", "business_operations")
 CONTROL_PLANE_MODULE_IDS = (
     "engineering",
     "growth",
@@ -15547,6 +15563,515 @@ def parse_control_plane_review_package_json(text: str) -> dict[str, Any]:
     return package
 
 
+
+def make_control_plane_status_summary_id(
+    control_plane_dashboard: dict[str, Any],
+    control_plane_health_package: dict[str, Any],
+    control_plane_review_package: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "control_plane_dashboard_id": control_plane_dashboard["control_plane_dashboard_id"],
+        "control_plane_health_package_id": control_plane_health_package["control_plane_health_package_id"],
+        "control_plane_review_package_id": control_plane_review_package["control_plane_review_package_id"],
+        "version": CONTROL_PLANE_STATUS_SUMMARY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"control-plane-status-summary-{digest}"
+
+
+def collect_control_plane_status_summary(
+    control_plane_dashboard: dict[str, Any] | None = None,
+    control_plane_health_package: dict[str, Any] | None = None,
+    control_plane_review_package: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compress the whole control plane into a compact operator status object."""
+    dashboard = control_plane_dashboard or collect_link_control_plane_dashboard()
+    validate_link_control_plane_dashboard(dashboard)
+    health = control_plane_health_package or collect_control_plane_health_package(dashboard)
+    validate_control_plane_health_package(health, control_plane_dashboard=dashboard)
+    review = control_plane_review_package or collect_control_plane_review_package(dashboard, health_package=health)
+    validate_control_plane_review_package(review, control_plane_dashboard=dashboard, health_package=health)
+    summary = {
+        "control_plane_status_summary_version": CONTROL_PLANE_STATUS_SUMMARY_VERSION,
+        "control_plane_status_summary_id": make_control_plane_status_summary_id(dashboard, health, review),
+        "control_plane_dashboard_id": dashboard["control_plane_dashboard_id"],
+        "control_plane_health_package_id": health["control_plane_health_package_id"],
+        "control_plane_review_package_id": review["control_plane_review_package_id"],
+        "overall_status": "block" if review["review_recommendation"] == "resolve_blockers" else ("review" if review["warnings"] else "pass"),
+        "health_status": health["health_status"],
+        "readiness_status": dashboard["readiness_status"],
+        "blocker_count": len(review["blockers"]),
+        "warning_count": len(review["warnings"]),
+        "recommended_next_action": review["recommended_next_action"],
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_control_plane_status_summary(summary, dashboard, health, review)
+    return summary
+
+
+def validate_control_plane_status_summary(
+    summary: dict[str, Any],
+    control_plane_dashboard: dict[str, Any] | None = None,
+    control_plane_health_package: dict[str, Any] | None = None,
+    control_plane_review_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "control_plane_status_summary_version", "control_plane_status_summary_id",
+        "control_plane_dashboard_id", "control_plane_health_package_id",
+        "control_plane_review_package_id", "overall_status", "health_status",
+        "readiness_status", "blocker_count", "warning_count", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in summary:
+            raise ValueError(f"control-plane status summary missing required field: {key}")
+    if summary["control_plane_status_summary_version"] != CONTROL_PLANE_STATUS_SUMMARY_VERSION:
+        raise ValueError("invalid control-plane status summary version")
+    if not isinstance(summary["control_plane_status_summary_id"], str) or not summary["control_plane_status_summary_id"].startswith("control-plane-status-summary-"):
+        raise ValueError("invalid control-plane status summary id")
+    if summary["overall_status"] not in CONTROL_PLANE_STATUSES:
+        raise ValueError("invalid control-plane status summary overall status")
+    if summary["health_status"] not in CONTROL_PLANE_STATUSES:
+        raise ValueError("invalid control-plane status summary health status")
+    if summary["readiness_status"] not in GOVERNANCE_OVERALL_STATUSES:
+        raise ValueError("invalid control-plane status summary readiness status")
+    for field in ("blocker_count", "warning_count"):
+        if not isinstance(summary[field], int) or summary[field] < 0:
+            raise ValueError(f"control-plane status summary {field} must be non-negative")
+    if summary["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("control-plane status summary safety metadata mismatch")
+    if summary["dry_run"] is not True or summary["write_allowed"] is not False:
+        raise ValueError("control-plane status summary must be read-only")
+    if summary["automation_allowed"] is not False or summary["writes"] != []:
+        raise ValueError("control-plane status summary must not allow automation or writes")
+    if all(item is not None for item in (control_plane_dashboard, control_plane_health_package, control_plane_review_package)):
+        expected_id = make_control_plane_status_summary_id(control_plane_dashboard, control_plane_health_package, control_plane_review_package)
+        if summary["control_plane_status_summary_id"] != expected_id:
+            raise ValueError("control-plane status summary id is not deterministic")
+
+
+def stable_control_plane_status_summary_json(summary: dict[str, Any]) -> str:
+    validate_control_plane_status_summary(summary)
+    return _stable_ruflo_json(summary, indent=2) + "\n"
+
+
+def parse_control_plane_status_summary_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    summary = _json.loads(text)
+    validate_control_plane_status_summary(summary)
+    return summary
+
+
+def make_stale_artifact_report_id(control_plane_dashboard: dict[str, Any], control_plane_review_package: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "control_plane_dashboard_id": control_plane_dashboard["control_plane_dashboard_id"],
+        "control_plane_review_package_id": control_plane_review_package["control_plane_review_package_id"],
+        "version": STALE_ARTIFACT_REPORT_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"stale-artifact-report-{digest}"
+
+
+def collect_stale_artifact_report(
+    control_plane_dashboard: dict[str, Any] | None = None,
+    control_plane_review_package: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Report stale generated dashboard/review artifacts without reading runtime state."""
+    dashboard = control_plane_dashboard or collect_link_control_plane_dashboard()
+    validate_link_control_plane_dashboard(dashboard)
+    review = control_plane_review_package or collect_control_plane_review_package(dashboard)
+    validate_control_plane_review_package(review, control_plane_dashboard=dashboard)
+    stale_items = [
+        {
+            "artifact_id": dashboard["control_plane_dashboard_id"],
+            "artifact_type": "control_plane_dashboard",
+            "stale_reason": "live generated; no persisted freshness receipt",
+            "recommended_refresh": "refresh control-plane dashboard before operator review",
+        },
+        {
+            "artifact_id": review["control_plane_review_package_id"],
+            "artifact_type": "control_plane_review_package",
+            "stale_reason": "live generated; no persisted operator acknowledgement",
+            "recommended_refresh": "refresh control-plane review before prioritizing runtime work",
+        },
+        {
+            "artifact_id": dashboard["governance_executive_review_package_id"],
+            "artifact_type": "governance_executive_review_package",
+            "stale_reason": "upstream governance package should be refreshed with control-plane status",
+            "recommended_refresh": "refresh governance review after operator UX changes",
+        },
+    ]
+    recommended = _normalize_implementation_branch_refs([item["recommended_refresh"] for item in stale_items])
+    report = {
+        "stale_artifact_report_version": STALE_ARTIFACT_REPORT_VERSION,
+        "stale_artifact_report_id": make_stale_artifact_report_id(dashboard, review),
+        "control_plane_dashboard_id": dashboard["control_plane_dashboard_id"],
+        "control_plane_review_package_id": review["control_plane_review_package_id"],
+        "stale_items": stale_items,
+        "warning_count": len(stale_items),
+        "recommended_refreshes": recommended,
+        "recommended_next_action": "Refresh stale generated summaries before using them as operator decision evidence.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_stale_artifact_report(report, dashboard, review)
+    return report
+
+
+def validate_stale_artifact_report(
+    report: dict[str, Any],
+    control_plane_dashboard: dict[str, Any] | None = None,
+    control_plane_review_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "stale_artifact_report_version", "stale_artifact_report_id",
+        "control_plane_dashboard_id", "control_plane_review_package_id", "stale_items",
+        "warning_count", "recommended_refreshes", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in report:
+            raise ValueError(f"stale artifact report missing required field: {key}")
+    if report["stale_artifact_report_version"] != STALE_ARTIFACT_REPORT_VERSION:
+        raise ValueError("invalid stale artifact report version")
+    if not isinstance(report["stale_artifact_report_id"], str) or not report["stale_artifact_report_id"].startswith("stale-artifact-report-"):
+        raise ValueError("invalid stale artifact report id")
+    if not isinstance(report["stale_items"], list) or not report["stale_items"]:
+        raise ValueError("stale artifact report stale_items must be non-empty")
+    for item in report["stale_items"]:
+        if not isinstance(item, dict):
+            raise TypeError("stale artifact item must be a dict")
+        for field in ("artifact_id", "artifact_type", "stale_reason", "recommended_refresh"):
+            if field not in item or not isinstance(item[field], str) or not item[field].strip():
+                raise ValueError(f"stale artifact item missing valid {field}")
+    if report["warning_count"] != len(report["stale_items"]):
+        raise ValueError("stale artifact warning_count must match stale_items")
+    if _normalize_implementation_branch_refs(report["recommended_refreshes"]) != report["recommended_refreshes"]:
+        raise ValueError("stale artifact recommended_refreshes must be normalized and sorted")
+    if report["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("stale artifact report safety metadata mismatch")
+    if report["dry_run"] is not True or report["write_allowed"] is not False:
+        raise ValueError("stale artifact report must be read-only")
+    if report["automation_allowed"] is not False or report["writes"] != []:
+        raise ValueError("stale artifact report must not allow automation or writes")
+    if control_plane_dashboard is not None:
+        validate_link_control_plane_dashboard(control_plane_dashboard)
+        if report["control_plane_dashboard_id"] != control_plane_dashboard["control_plane_dashboard_id"]:
+            raise ValueError("stale artifact report dashboard id mismatch")
+    if control_plane_review_package is not None:
+        validate_control_plane_review_package(control_plane_review_package)
+        if report["control_plane_review_package_id"] != control_plane_review_package["control_plane_review_package_id"]:
+            raise ValueError("stale artifact report review id mismatch")
+    if control_plane_dashboard is not None and control_plane_review_package is not None:
+        expected_id = make_stale_artifact_report_id(control_plane_dashboard, control_plane_review_package)
+        if report["stale_artifact_report_id"] != expected_id:
+            raise ValueError("stale artifact report id is not deterministic")
+
+
+def stable_stale_artifact_report_json(report: dict[str, Any]) -> str:
+    validate_stale_artifact_report(report)
+    return _stable_ruflo_json(report, indent=2) + "\n"
+
+
+def parse_stale_artifact_report_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    report = _json.loads(text)
+    validate_stale_artifact_report(report)
+    return report
+
+
+def make_operator_cards_id(control_plane_dashboard: dict[str, Any], control_plane_review_package: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "control_plane_dashboard_id": control_plane_dashboard["control_plane_dashboard_id"],
+        "control_plane_review_package_id": control_plane_review_package["control_plane_review_package_id"],
+        "lanes": list(OPERATOR_LANE_IDS),
+        "version": OPERATOR_CARDS_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-cards-{digest}"
+
+
+def _operator_lane_status(control_plane_dashboard: dict[str, Any], lane_id: str) -> str:
+    for item in control_plane_dashboard["module_statuses"]:
+        if item["module_id"] == lane_id:
+            status = item["status"]
+            return "block" if status == "blocked" else status
+    return "review"
+
+
+def collect_operator_cards(
+    control_plane_dashboard: dict[str, Any] | None = None,
+    control_plane_review_package: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create concise operator cards for the main Link lanes."""
+    dashboard = control_plane_dashboard or collect_link_control_plane_dashboard()
+    validate_link_control_plane_dashboard(dashboard)
+    review = control_plane_review_package or collect_control_plane_review_package(dashboard)
+    validate_control_plane_review_package(review, control_plane_dashboard=dashboard)
+    labels = {
+        "engineering": "Engineering",
+        "growth": "Growth",
+        "business_development": "Business Development",
+        "business_operations": "Business Operations",
+    }
+    cards = []
+    for lane_id in OPERATOR_LANE_IDS:
+        status = _operator_lane_status(dashboard, lane_id)
+        lane_blockers = [item for item in review["blockers"] if lane_id.replace("_", " ") in item.lower() or lane_id.split("_")[0] in item.lower()]
+        lane_warnings = [item for item in review["warnings"] if lane_id.replace("_", " ") in item.lower() or lane_id.split("_")[0] in item.lower()]
+        if not lane_blockers and status == "block":
+            lane_blockers = [f"{labels[lane_id]} lane has unresolved control-plane blockers"]
+        cards.append({
+            "card_id": f"operator-card-{lane_id}",
+            "lane_id": lane_id,
+            "title": labels[lane_id],
+            "status": status,
+            "blocker_count": len(lane_blockers),
+            "warning_count": len(lane_warnings),
+            "recommended_next_action": f"Review {labels[lane_id]} blockers and warnings before operator approval.",
+        })
+    blockers = _normalize_implementation_branch_refs(list(review["blockers"]))
+    warnings = _normalize_implementation_branch_refs(list(review["warnings"]))
+    actions = _normalize_implementation_branch_refs([card["recommended_next_action"] for card in cards])
+    payload = {
+        "operator_cards_version": OPERATOR_CARDS_VERSION,
+        "operator_cards_id": make_operator_cards_id(dashboard, review),
+        "control_plane_dashboard_id": dashboard["control_plane_dashboard_id"],
+        "control_plane_review_package_id": review["control_plane_review_package_id"],
+        "cards": cards,
+        "blockers": blockers,
+        "warnings": warnings,
+        "recommended_next_actions": actions,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_cards(payload, dashboard, review)
+    return payload
+
+
+def validate_operator_cards(
+    payload: dict[str, Any],
+    control_plane_dashboard: dict[str, Any] | None = None,
+    control_plane_review_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "operator_cards_version", "operator_cards_id", "control_plane_dashboard_id",
+        "control_plane_review_package_id", "cards", "blockers", "warnings",
+        "recommended_next_actions", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"operator cards missing required field: {key}")
+    if payload["operator_cards_version"] != OPERATOR_CARDS_VERSION:
+        raise ValueError("invalid operator cards version")
+    if not isinstance(payload["operator_cards_id"], str) or not payload["operator_cards_id"].startswith("operator-cards-"):
+        raise ValueError("invalid operator cards id")
+    if not isinstance(payload["cards"], list) or len(payload["cards"]) != len(OPERATOR_LANE_IDS):
+        raise ValueError("operator cards must include all operator lanes")
+    seen: set[str] = set()
+    for card in payload["cards"]:
+        if not isinstance(card, dict):
+            raise TypeError("operator card must be a dict")
+        for field in ("card_id", "lane_id", "title", "status", "blocker_count", "warning_count", "recommended_next_action"):
+            if field not in card:
+                raise ValueError(f"operator card missing {field}")
+        if card["lane_id"] not in OPERATOR_LANE_IDS or card["lane_id"] in seen:
+            raise ValueError("invalid or duplicate operator card lane")
+        seen.add(card["lane_id"])
+        if card["status"] not in CONTROL_PLANE_STATUSES:
+            raise ValueError("invalid operator card status")
+        for field in ("blocker_count", "warning_count"):
+            if not isinstance(card[field], int) or card[field] < 0:
+                raise ValueError(f"operator card {field} must be non-negative")
+    for field in ("blockers", "warnings", "recommended_next_actions"):
+        normalized = _normalize_implementation_branch_refs(payload[field])
+        if normalized != payload[field]:
+            raise ValueError(f"operator cards {field} must be normalized and sorted")
+    if payload["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("operator cards safety metadata mismatch")
+    if payload["dry_run"] is not True or payload["write_allowed"] is not False:
+        raise ValueError("operator cards must be read-only")
+    if payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("operator cards must not allow automation or writes")
+    if control_plane_dashboard is not None:
+        validate_link_control_plane_dashboard(control_plane_dashboard)
+        if payload["control_plane_dashboard_id"] != control_plane_dashboard["control_plane_dashboard_id"]:
+            raise ValueError("operator cards dashboard id mismatch")
+    if control_plane_review_package is not None:
+        validate_control_plane_review_package(control_plane_review_package)
+        if payload["control_plane_review_package_id"] != control_plane_review_package["control_plane_review_package_id"]:
+            raise ValueError("operator cards review id mismatch")
+    if control_plane_dashboard is not None and control_plane_review_package is not None:
+        expected_id = make_operator_cards_id(control_plane_dashboard, control_plane_review_package)
+        if payload["operator_cards_id"] != expected_id:
+            raise ValueError("operator cards id is not deterministic")
+
+
+def stable_operator_cards_json(payload: dict[str, Any]) -> str:
+    validate_operator_cards(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_operator_cards_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    payload = _json.loads(text)
+    validate_operator_cards(payload)
+    return payload
+
+
+def make_operator_status_package_id(
+    status_summary: dict[str, Any],
+    stale_artifact_report: dict[str, Any],
+    operator_cards: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "control_plane_status_summary_id": status_summary["control_plane_status_summary_id"],
+        "operator_cards_id": operator_cards["operator_cards_id"],
+        "stale_artifact_report_id": stale_artifact_report["stale_artifact_report_id"],
+        "version": OPERATOR_STATUS_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-status-package-{digest}"
+
+
+def collect_operator_status_package(
+    control_plane_status_summary: dict[str, Any] | None = None,
+    stale_artifact_report: dict[str, Any] | None = None,
+    operator_cards: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aggregate the compact operator status surface for Link."""
+    if control_plane_status_summary is None or stale_artifact_report is None or operator_cards is None:
+        dashboard = collect_link_control_plane_dashboard()
+        health = collect_control_plane_health_package(dashboard)
+        review = collect_control_plane_review_package(dashboard, health_package=health)
+    summary = control_plane_status_summary or collect_control_plane_status_summary(dashboard, health, review)
+    validate_control_plane_status_summary(summary)
+    stale = stale_artifact_report or collect_stale_artifact_report(dashboard, review)
+    validate_stale_artifact_report(stale)
+    cards = operator_cards or collect_operator_cards(dashboard, review)
+    validate_operator_cards(cards)
+    blockers = _normalize_implementation_branch_refs(list(cards["blockers"]))
+    warnings = _normalize_implementation_branch_refs(list(cards["warnings"]) + list(stale["recommended_refreshes"]))
+    actions = _normalize_implementation_branch_refs(list(cards["recommended_next_actions"]) + [summary["recommended_next_action"], stale["recommended_next_action"]])
+    package = {
+        "operator_status_package_version": OPERATOR_STATUS_PACKAGE_VERSION,
+        "operator_status_package_id": make_operator_status_package_id(summary, stale, cards),
+        "control_plane_status_summary_id": summary["control_plane_status_summary_id"],
+        "stale_artifact_report_id": stale["stale_artifact_report_id"],
+        "operator_cards_id": cards["operator_cards_id"],
+        "overall_status": summary["overall_status"],
+        "blockers": blockers,
+        "warnings": warnings,
+        "stale_items": list(stale["stale_items"]),
+        "recommended_next_actions": actions,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_status_package(package, summary, stale, cards)
+    return package
+
+
+def validate_operator_status_package(
+    package: dict[str, Any],
+    control_plane_status_summary: dict[str, Any] | None = None,
+    stale_artifact_report: dict[str, Any] | None = None,
+    operator_cards: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "operator_status_package_version", "operator_status_package_id",
+        "control_plane_status_summary_id", "stale_artifact_report_id", "operator_cards_id",
+        "overall_status", "blockers", "warnings", "stale_items", "recommended_next_actions",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"operator status package missing required field: {key}")
+    if package["operator_status_package_version"] != OPERATOR_STATUS_PACKAGE_VERSION:
+        raise ValueError("invalid operator status package version")
+    if not isinstance(package["operator_status_package_id"], str) or not package["operator_status_package_id"].startswith("operator-status-package-"):
+        raise ValueError("invalid operator status package id")
+    if package["overall_status"] not in CONTROL_PLANE_STATUSES:
+        raise ValueError("invalid operator status package overall status")
+    if not isinstance(package["stale_items"], list):
+        raise ValueError("operator status package stale_items must be a list")
+    for field in ("blockers", "warnings", "recommended_next_actions"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if normalized != package[field]:
+            raise ValueError(f"operator status package {field} must be normalized and sorted")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("operator status package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("operator status package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("operator status package must not allow automation or writes")
+    if control_plane_status_summary is not None:
+        validate_control_plane_status_summary(control_plane_status_summary)
+        if package["control_plane_status_summary_id"] != control_plane_status_summary["control_plane_status_summary_id"]:
+            raise ValueError("operator status package summary id mismatch")
+    if stale_artifact_report is not None:
+        validate_stale_artifact_report(stale_artifact_report)
+        if package["stale_artifact_report_id"] != stale_artifact_report["stale_artifact_report_id"]:
+            raise ValueError("operator status package stale report id mismatch")
+    if operator_cards is not None:
+        validate_operator_cards(operator_cards)
+        if package["operator_cards_id"] != operator_cards["operator_cards_id"]:
+            raise ValueError("operator status package cards id mismatch")
+    if control_plane_status_summary is not None and stale_artifact_report is not None and operator_cards is not None:
+        expected_id = make_operator_status_package_id(control_plane_status_summary, stale_artifact_report, operator_cards)
+        if package["operator_status_package_id"] != expected_id:
+            raise ValueError("operator status package id is not deterministic")
+
+
+def stable_operator_status_package_json(package: dict[str, Any]) -> str:
+    validate_operator_status_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_operator_status_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_operator_status_package(package)
+    return package
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -18527,6 +19052,146 @@ def control_plane_review_main(argv: list[str] | None = None) -> int:
         print(stable_control_plane_review_package_json(package), end="")
         return 0
     render_control_plane_review_package_plain(package)
+    return 0
+
+
+
+def render_control_plane_status_summary_plain(summary: dict[str, Any]) -> None:
+    validate_control_plane_status_summary(summary)
+    print("Control plane status summary")
+    print(f"control_plane_status_summary_id: {summary['control_plane_status_summary_id']}")
+    print(f"overall_status: {summary['overall_status']}")
+    print(f"health_status: {summary['health_status']}")
+    print(f"readiness_status: {summary['readiness_status']}")
+    print(f"blocker_count: {summary['blocker_count']}")
+    print(f"warning_count: {summary['warning_count']}")
+    print(f"next_action: {summary['recommended_next_action']}")
+
+
+def control_plane_status_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Control plane status: compact operator status summary")
+        print("")
+        print("Usage:")
+        print("  python3 link.py control-plane status")
+        print("  python3 link.py control-plane status --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: control-plane status is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    summary = collect_control_plane_status_summary()
+    validate_control_plane_status_summary(summary)
+    if "--json" in args:
+        print(stable_control_plane_status_summary_json(summary), end="")
+        return 0
+    render_control_plane_status_summary_plain(summary)
+    return 0
+
+
+def render_stale_artifact_report_plain(report: dict[str, Any]) -> None:
+    validate_stale_artifact_report(report)
+    print("Control plane stale artifact report")
+    print(f"stale_artifact_report_id: {report['stale_artifact_report_id']}")
+    print(f"control_plane_dashboard_id: {report['control_plane_dashboard_id']}")
+    print(f"control_plane_review_package_id: {report['control_plane_review_package_id']}")
+    print(f"stale_item_count: {len(report['stale_items'])}")
+    print(f"warning_count: {report['warning_count']}")
+    print(f"recommended_refresh_count: {len(report['recommended_refreshes'])}")
+    print(f"next_action: {report['recommended_next_action']}")
+
+
+def control_plane_stale_artifacts_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Control plane stale-artifacts: stale generated artifact report")
+        print("")
+        print("Usage:")
+        print("  python3 link.py control-plane stale-artifacts")
+        print("  python3 link.py control-plane stale-artifacts --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: control-plane stale-artifacts is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    report = collect_stale_artifact_report()
+    validate_stale_artifact_report(report)
+    if "--json" in args:
+        print(stable_stale_artifact_report_json(report), end="")
+        return 0
+    render_stale_artifact_report_plain(report)
+    return 0
+
+
+def render_operator_cards_plain(payload: dict[str, Any]) -> None:
+    validate_operator_cards(payload)
+    print("Control plane operator cards")
+    print(f"operator_cards_id: {payload['operator_cards_id']}")
+    print(f"card_count: {len(payload['cards'])}")
+    print(f"blocker_count: {len(payload['blockers'])}")
+    print(f"warning_count: {len(payload['warnings'])}")
+    print(f"recommended_next_action_count: {len(payload['recommended_next_actions'])}")
+    for card in payload["cards"]:
+        print(f"{card['lane_id']}_status: {card['status']}")
+
+
+def control_plane_operator_cards_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Control plane operator-cards: operator-facing lane cards")
+        print("")
+        print("Usage:")
+        print("  python3 link.py control-plane operator-cards")
+        print("  python3 link.py control-plane operator-cards --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: control-plane operator-cards is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    payload = collect_operator_cards()
+    validate_operator_cards(payload)
+    if "--json" in args:
+        print(stable_operator_cards_json(payload), end="")
+        return 0
+    render_operator_cards_plain(payload)
+    return 0
+
+
+def render_operator_status_package_plain(package: dict[str, Any]) -> None:
+    validate_operator_status_package(package)
+    print("Control plane operator review")
+    print(f"operator_status_package_id: {package['operator_status_package_id']}")
+    print(f"overall_status: {package['overall_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"warning_count: {len(package['warnings'])}")
+    print(f"stale_item_count: {len(package['stale_items'])}")
+    print(f"recommended_next_action_count: {len(package['recommended_next_actions'])}")
+
+
+def control_plane_operator_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Control plane operator-review: operator status review package")
+        print("")
+        print("Usage:")
+        print("  python3 link.py control-plane operator-review")
+        print("  python3 link.py control-plane operator-review --json")
+        print("")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: control-plane operator-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_operator_status_package()
+    validate_operator_status_package(package)
+    if "--json" in args:
+        print(stable_operator_status_package_json(package), end="")
+        return 0
+    render_operator_status_package_plain(package)
     return 0
 
 
