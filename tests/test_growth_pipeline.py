@@ -14999,8 +14999,252 @@ def check_control_plane_operator_ux_clis() -> None:
         _require(write_out.getvalue() == "", f"control-plane {command} --write must not print normal output")
     print("control-plane operator UX CLIs OK")
 
+
 # ---------------------------------------------------------------------------
-# 62k. Growth supervised-execution-review CLI
+# 62k. Business execution simulation layer
+# ---------------------------------------------------------------------------
+
+def check_business_execution_simulation_helpers() -> None:
+    """Business execution simulation helpers stay dry-run and deterministic."""
+    from link_modes.growth.link_growth_console import (
+        collect_business_execution_review_package,
+        collect_business_execution_simulation_evidence_package,
+        collect_business_execution_simulation_plan,
+        collect_business_execution_simulation_readiness,
+        collect_business_execution_simulation_review,
+        collect_business_readiness_review_package,
+        collect_control_plane_review_package,
+        collect_governance_executive_review_package,
+        collect_link_module_boundary_registry,
+        collect_link_shared_services_registry,
+        parse_business_execution_simulation_evidence_package_json,
+        parse_business_execution_simulation_plan_json,
+        parse_business_execution_simulation_readiness_json,
+        parse_business_execution_simulation_review_json,
+        stable_business_execution_simulation_evidence_package_json,
+        stable_business_execution_simulation_plan_json,
+        stable_business_execution_simulation_readiness_json,
+        stable_business_execution_simulation_review_json,
+        validate_business_execution_simulation_evidence_package,
+        validate_business_execution_simulation_plan,
+        validate_business_execution_simulation_readiness,
+        validate_business_execution_simulation_review,
+    )
+
+    readiness_review = collect_business_readiness_review_package()
+    execution_review = collect_business_execution_review_package(business_readiness_review_package=readiness_review)
+    governance_review = collect_governance_executive_review_package()
+    control_review = collect_control_plane_review_package()
+    registry = collect_link_module_boundary_registry()
+    services = collect_link_shared_services_registry()
+
+    plan = collect_business_execution_simulation_plan(
+        execution_review,
+        readiness_review,
+        governance_review,
+        control_review,
+        registry,
+        services,
+    )
+    same_plan = collect_business_execution_simulation_plan(
+        execution_review,
+        readiness_review,
+        governance_review,
+        control_review,
+        registry,
+        services,
+    )
+    validate_business_execution_simulation_plan(
+        plan,
+        execution_review,
+        readiness_review,
+        governance_review,
+        control_review,
+        registry,
+        services,
+    )
+    _require(plan["business_execution_simulation_plan_id"] == same_plan["business_execution_simulation_plan_id"],
+             "business execution simulation plan id must be deterministic")
+    _require(plan["business_execution_review_package_id"] == execution_review["business_execution_review_package_id"],
+             "simulation plan must flow from business execution review package")
+    _require(plan["readiness_review_package_id"] == readiness_review["business_readiness_review_package_id"],
+             "simulation plan must flow from readiness review package")
+    _require([step["step_name"] for step in plan["simulated_steps"]] == [
+        "validate opportunity",
+        "validate evidence",
+        "validate approvals",
+        "validate readiness",
+        "validate execution boundary",
+        "simulate source collection",
+        "simulate campaign preparation",
+        "simulate business development handoff",
+        "simulate operations readiness",
+        "simulate final review",
+    ], "simulation plan must include expected simulated steps")
+    _require("network access" in plan["blocked_real_actions"] and "automated execution" in plan["blocked_real_actions"],
+             "simulation plan must block real execution actions")
+    _require(plan["safety_metadata"] == {
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+    }, "simulation plan must include read-only safety metadata")
+    _require(parse_business_execution_simulation_plan_json(stable_business_execution_simulation_plan_json(plan)) == plan,
+             "simulation plan JSON must round trip")
+
+    evidence = collect_business_execution_simulation_evidence_package(plan)
+    same_evidence = collect_business_execution_simulation_evidence_package(plan)
+    validate_business_execution_simulation_evidence_package(evidence, plan)
+    _require(evidence["business_execution_simulation_evidence_package_id"] == same_evidence["business_execution_simulation_evidence_package_id"],
+             "simulation evidence package id must be deterministic")
+    _require(evidence["business_execution_simulation_plan_id"] == plan["business_execution_simulation_plan_id"],
+             "simulation evidence must flow from simulation plan")
+    _require(evidence["missing_real_evidence"], "simulation evidence must expose missing real evidence")
+    _require(evidence["evidence_status"] == "block", "missing real evidence must block simulation evidence")
+    _require(parse_business_execution_simulation_evidence_package_json(stable_business_execution_simulation_evidence_package_json(evidence)) == evidence,
+             "simulation evidence JSON must round trip")
+
+    review = collect_business_execution_simulation_review(plan, evidence)
+    same_review = collect_business_execution_simulation_review(plan, evidence)
+    validate_business_execution_simulation_review(review, plan, evidence)
+    _require(review["business_execution_simulation_review_id"] == same_review["business_execution_simulation_review_id"],
+             "simulation review id must be deterministic")
+    _require(review["business_execution_simulation_plan_id"] == plan["business_execution_simulation_plan_id"],
+             "simulation review must flow from simulation plan")
+    _require(review["simulation_evidence_package_id"] == evidence["business_execution_simulation_evidence_package_id"],
+             "simulation review must flow from simulation evidence")
+    _require(review["simulation_status"] == "block", "simulation review should fail closed by default")
+    _require(review["missing_evidence"] == evidence["missing_real_evidence"],
+             "simulation review must preserve missing evidence")
+    _require(review["missing_approvals"], "simulation review must expose missing approvals")
+    _require(parse_business_execution_simulation_review_json(stable_business_execution_simulation_review_json(review)) == review,
+             "simulation review JSON must round trip")
+
+    simulation_readiness = collect_business_execution_simulation_readiness(review)
+    same_readiness = collect_business_execution_simulation_readiness(review)
+    validate_business_execution_simulation_readiness(simulation_readiness, review)
+    _require(simulation_readiness["business_execution_simulation_readiness_id"] == same_readiness["business_execution_simulation_readiness_id"],
+             "simulation readiness id must be deterministic")
+    _require(simulation_readiness["business_execution_simulation_review_id"] == review["business_execution_simulation_review_id"],
+             "simulation readiness must flow from simulation review")
+    _require(simulation_readiness["readiness_status"] == "blocked",
+             "simulation readiness must remain blocked by default")
+    _require(simulation_readiness["execution_candidate_status"] == "blocked",
+             "simulation execution candidate status must be blocked by default")
+    _require(simulation_readiness["blockers"], "simulation readiness must include blockers")
+    _require(parse_business_execution_simulation_readiness_json(stable_business_execution_simulation_readiness_json(simulation_readiness)) == simulation_readiness,
+             "simulation readiness JSON must round trip")
+
+    bad_plan = json.loads(stable_business_execution_simulation_plan_json(plan))
+    bad_plan["blocked_real_actions"].remove("network access")
+    try:
+        validate_business_execution_simulation_plan(bad_plan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("simulation plan validation must reject missing blocked real action")
+
+    bad_review = json.loads(stable_business_execution_simulation_review_json(review))
+    bad_review["simulation_status"] = "execute"
+    try:
+        validate_business_execution_simulation_review(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("simulation review validation must reject invalid status")
+
+    bad_readiness = json.loads(stable_business_execution_simulation_readiness_json(simulation_readiness))
+    bad_readiness["write_allowed"] = True
+    try:
+        validate_business_execution_simulation_readiness(bad_readiness)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("simulation readiness validation must reject unsafe safety metadata")
+
+    print("business execution simulation helpers OK")
+
+
+def check_business_execution_simulation_clis() -> None:
+    """Simulation CLIs expose only dry-run business execution simulation payloads."""
+    from link import _cmd_simulation
+    from link_modes.growth.link_growth_console import (
+        business_execution_simulation_evidence_main,
+        business_execution_simulation_plan_main,
+        business_execution_simulation_readiness_main,
+        business_execution_simulation_review_main,
+        parse_business_execution_simulation_evidence_package_json,
+        parse_business_execution_simulation_plan_json,
+        parse_business_execution_simulation_readiness_json,
+        parse_business_execution_simulation_review_json,
+    )
+
+    expected = [
+        ("plan", business_execution_simulation_plan_main, parse_business_execution_simulation_plan_json,
+         "business_execution_simulation_plan_id", "Business execution simulation plan"),
+        ("evidence", business_execution_simulation_evidence_main, parse_business_execution_simulation_evidence_package_json,
+         "business_execution_simulation_evidence_package_id", "Business execution simulation evidence package"),
+        ("review", business_execution_simulation_review_main, parse_business_execution_simulation_review_json,
+         "business_execution_simulation_review_id", "Business execution simulation review"),
+        ("readiness", business_execution_simulation_readiness_main, parse_business_execution_simulation_readiness_json,
+         "business_execution_simulation_readiness_id", "Business execution simulation readiness"),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_simulation(["--help"])
+    _require(help_rc == 0, "simulation --help must return 0")
+    for command, main_func, parse_func, id_key, title in expected:
+        _require(command in help_out.getvalue(), f"simulation help must include {command}")
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = main_func(["--json"])
+        _require(json_rc == 0, f"simulation {command} --json must return 0")
+        parsed = parse_func(json_out.getvalue())
+        _require(id_key in parsed, f"simulation {command} JSON must include id")
+        _require(parsed["dry_run"] is True and parsed["write_allowed"] is False,
+                 f"simulation {command} must be read-only")
+        _require(parsed["automation_allowed"] is False and parsed["writes"] == [],
+                 f"simulation {command} must not allow automation or writes")
+        for full_payload_key in (
+            "business_execution_review_package",
+            "business_readiness_review_package",
+            "governance_executive_review_package",
+            "control_plane_review_package",
+            "business_execution_simulation_plan",
+            "business_execution_simulation_evidence_package",
+            "business_execution_simulation_review",
+            "business_execution_simulation_readiness",
+        ):
+            _require(full_payload_key not in parsed,
+                     f"simulation {command} --json must output only its object payload")
+        routed_out = io.StringIO()
+        with contextlib.redirect_stdout(routed_out):
+            routed_rc = _cmd_simulation([command, "--json"])
+        routed = parse_func(routed_out.getvalue())
+        _require(routed_rc == 0, f"simulation {command} route must return 0")
+        _require(routed[id_key] == parsed[id_key], f"simulation {command} route must preserve id")
+
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = main_func([])
+        human = human_out.getvalue()
+        _require(human_rc == 0, f"simulation {command} human mode must return 0")
+        _require(title in human and id_key + ":" in human,
+                 f"simulation {command} human mode must include title and id")
+        _require(len(human.splitlines()) <= 12, f"simulation {command} human mode must stay concise")
+
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"simulation {command} --write must be rejected")
+        _require("read-only simulation" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"simulation {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"simulation {command} --write must not print normal output")
+    print("business execution simulation CLIs OK")
+
+# ---------------------------------------------------------------------------
+# 62l. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
 
 def check_growth_supervised_execution_review_package_cli() -> None:
@@ -16036,6 +16280,8 @@ def main() -> None:
     check_control_plane_dashboard_clis()
     check_control_plane_operator_ux_helpers()
     check_control_plane_operator_ux_clis()
+    check_business_execution_simulation_helpers()
+    check_business_execution_simulation_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

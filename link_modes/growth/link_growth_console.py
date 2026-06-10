@@ -11033,6 +11033,43 @@ CONTROL_PLANE_STATUS_SUMMARY_VERSION = "link-control-plane-status-summary-v1"
 STALE_ARTIFACT_REPORT_VERSION = "link-stale-artifact-report-v1"
 OPERATOR_CARDS_VERSION = "link-operator-cards-v1"
 OPERATOR_STATUS_PACKAGE_VERSION = "link-operator-status-package-v1"
+BUSINESS_EXECUTION_SIMULATION_PLAN_VERSION = "link-business-execution-simulation-plan-v1"
+BUSINESS_EXECUTION_SIMULATION_EVIDENCE_PACKAGE_VERSION = "link-business-execution-simulation-evidence-package-v1"
+BUSINESS_EXECUTION_SIMULATION_REVIEW_VERSION = "link-business-execution-simulation-review-v1"
+BUSINESS_EXECUTION_SIMULATION_READINESS_VERSION = "link-business-execution-simulation-readiness-v1"
+BUSINESS_EXECUTION_SIMULATED_STEPS = (
+    "validate opportunity",
+    "validate evidence",
+    "validate approvals",
+    "validate readiness",
+    "validate execution boundary",
+    "simulate source collection",
+    "simulate campaign preparation",
+    "simulate business development handoff",
+    "simulate operations readiness",
+    "simulate final review",
+)
+BUSINESS_EXECUTION_SIMULATION_BLOCKED_REAL_ACTIONS = (
+    "network access",
+    "scraping",
+    "vendor contact",
+    "outreach",
+    "purchasing",
+    "ecommerce activation",
+    "CRM writes",
+    "customer data storage",
+    "paid ads",
+    "campaign publishing",
+    "automated execution",
+)
+BUSINESS_EXECUTION_SIMULATION_STATUSES = ("pass", "review", "block")
+BUSINESS_EXECUTION_SIMULATION_READINESS_STATUSES = ("ready", "blocked")
+BUSINESS_EXECUTION_SIMULATION_CANDIDATE_STATUSES = ("candidate", "blocked")
+BUSINESS_EXECUTION_SIMULATION_RECOMMENDATIONS = (
+    "simulation_blocked",
+    "review_simulation_findings",
+    "simulation_ready_for_operator_review",
+)
 CONTROL_PLANE_STATUSES = ("pass", "review", "block")
 CONTROL_PLANE_RECOMMENDATIONS = ("resolve_blockers", "review_before_runtime", "healthy_for_review")
 OPERATOR_LANE_IDS = ("engineering", "growth", "business_development", "business_operations")
@@ -16072,6 +16109,554 @@ def parse_operator_status_package_json(text: str) -> dict[str, Any]:
     return package
 
 
+def make_business_execution_simulation_plan_id(
+    business_execution_review_package: dict[str, Any],
+    business_readiness_review_package: dict[str, Any],
+    governance_executive_review_package: dict[str, Any],
+    control_plane_review_package: dict[str, Any],
+    module_boundary_registry: dict[str, Any],
+    shared_services_registry: dict[str, Any],
+) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_execution_review_package_id": business_execution_review_package["business_execution_review_package_id"],
+        "business_readiness_review_package_id": business_readiness_review_package["business_readiness_review_package_id"],
+        "control_plane_review_package_id": control_plane_review_package["control_plane_review_package_id"],
+        "governance_executive_review_package_id": governance_executive_review_package["governance_executive_review_package_id"],
+        "link_module_boundary_registry_id": module_boundary_registry["link_module_boundary_registry_id"],
+        "shared_services_registry_id": shared_services_registry["shared_services_registry_id"],
+        "version": BUSINESS_EXECUTION_SIMULATION_PLAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-execution-simulation-plan-{digest}"
+
+
+def _business_execution_simulated_step_records() -> list[dict[str, Any]]:
+    return [
+        {
+            "step_id": f"simulation-step-{index:02d}",
+            "step_name": step,
+            "simulation_only": True,
+            "real_action_allowed": False,
+        }
+        for index, step in enumerate(BUSINESS_EXECUTION_SIMULATED_STEPS, start=1)
+    ]
+
+
+def collect_business_execution_simulation_plan(
+    business_execution_review_package: dict[str, Any] | None = None,
+    business_readiness_review_package: dict[str, Any] | None = None,
+    governance_executive_review_package: dict[str, Any] | None = None,
+    control_plane_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    shared_services_registry: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Preview a fully simulated business execution path without real action."""
+    registry = module_boundary_registry or collect_link_module_boundary_registry()
+    validate_link_module_boundary_registry(registry)
+    services = shared_services_registry or collect_link_shared_services_registry()
+    validate_link_shared_services_registry(services)
+    readiness = business_readiness_review_package or collect_business_readiness_review_package()
+    validate_business_readiness_review_package(readiness)
+    execution_review = business_execution_review_package or collect_business_execution_review_package(business_readiness_review_package=readiness)
+    validate_business_execution_review_package(execution_review)
+    governance_review = governance_executive_review_package or collect_governance_executive_review_package()
+    validate_governance_executive_review_package(governance_review)
+    control_review = control_plane_review_package or collect_control_plane_review_package()
+    validate_control_plane_review_package(control_review)
+    required_inputs = _normalize_implementation_branch_refs([
+        execution_review["business_execution_review_package_id"],
+        readiness["business_readiness_review_package_id"],
+        governance_review["governance_executive_review_package_id"],
+        control_review["control_plane_review_package_id"],
+        registry["link_module_boundary_registry_id"],
+        services["shared_services_registry_id"],
+    ])
+    expected_outputs = _normalize_implementation_branch_refs([
+        "simulated execution path validation",
+        "simulated evidence requirement inventory",
+        "simulated blocked real action report",
+        "simulated operator review summary",
+    ])
+    expected_artifacts = _normalize_implementation_branch_refs([
+        "simulation evidence package",
+        "simulation review",
+        "simulation readiness check",
+    ])
+    assumptions = _normalize_implementation_branch_refs([
+        "simulation does not contact external parties",
+        "simulation does not collect live market or customer data",
+        "simulation does not create campaigns or business records",
+        "simulation uses existing governance payloads as inputs",
+    ])
+    plan = {
+        "business_execution_simulation_plan_version": BUSINESS_EXECUTION_SIMULATION_PLAN_VERSION,
+        "business_execution_simulation_plan_id": make_business_execution_simulation_plan_id(execution_review, readiness, governance_review, control_review, registry, services),
+        "business_execution_review_package_id": execution_review["business_execution_review_package_id"],
+        "readiness_review_package_id": readiness["business_readiness_review_package_id"],
+        "governance_executive_review_package_id": governance_review["governance_executive_review_package_id"],
+        "control_plane_review_package_id": control_review["control_plane_review_package_id"],
+        "link_module_boundary_registry_id": registry["link_module_boundary_registry_id"],
+        "shared_services_registry_id": services["shared_services_registry_id"],
+        "simulated_steps": _business_execution_simulated_step_records(),
+        "required_inputs": required_inputs,
+        "expected_outputs": expected_outputs,
+        "expected_artifacts": expected_artifacts,
+        "blocked_real_actions": list(BUSINESS_EXECUTION_SIMULATION_BLOCKED_REAL_ACTIONS),
+        "assumptions": assumptions,
+        "recommended_next_action": "Review simulation blockers before designing any real business execution runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_execution_simulation_plan(plan, execution_review, readiness, governance_review, control_review, registry, services)
+    return plan
+
+
+def validate_business_execution_simulation_plan(
+    plan: dict[str, Any],
+    business_execution_review_package: dict[str, Any] | None = None,
+    business_readiness_review_package: dict[str, Any] | None = None,
+    governance_executive_review_package: dict[str, Any] | None = None,
+    control_plane_review_package: dict[str, Any] | None = None,
+    module_boundary_registry: dict[str, Any] | None = None,
+    shared_services_registry: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_execution_simulation_plan_version", "business_execution_simulation_plan_id",
+        "business_execution_review_package_id", "readiness_review_package_id",
+        "simulated_steps", "required_inputs", "expected_outputs", "expected_artifacts",
+        "blocked_real_actions", "assumptions", "recommended_next_action", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in plan:
+            raise ValueError(f"business execution simulation plan missing required field: {key}")
+    if plan["business_execution_simulation_plan_version"] != BUSINESS_EXECUTION_SIMULATION_PLAN_VERSION:
+        raise ValueError("invalid business execution simulation plan version")
+    if not isinstance(plan["business_execution_simulation_plan_id"], str) or not plan["business_execution_simulation_plan_id"].startswith("business-execution-simulation-plan-"):
+        raise ValueError("invalid business execution simulation plan id")
+    if not isinstance(plan["business_execution_review_package_id"], str) or not plan["business_execution_review_package_id"].startswith("business-execution-review-package-"):
+        raise ValueError("invalid business execution review package id in simulation plan")
+    if not isinstance(plan["readiness_review_package_id"], str) or not plan["readiness_review_package_id"].startswith("business-readiness-review-package-"):
+        raise ValueError("invalid readiness review package id in simulation plan")
+    expected_steps = _business_execution_simulated_step_records()
+    if plan["simulated_steps"] != expected_steps:
+        raise ValueError("business execution simulation plan simulated_steps mismatch")
+    for field in ("required_inputs", "expected_outputs", "expected_artifacts", "assumptions"):
+        normalized = _normalize_implementation_branch_refs(plan[field])
+        if not normalized or normalized != plan[field]:
+            raise ValueError(f"business execution simulation plan {field} must be normalized and non-empty")
+    if plan["blocked_real_actions"] != list(BUSINESS_EXECUTION_SIMULATION_BLOCKED_REAL_ACTIONS):
+        raise ValueError("business execution simulation plan blocked_real_actions mismatch")
+    if plan["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business execution simulation plan safety metadata mismatch")
+    if plan["dry_run"] is not True or plan["write_allowed"] is not False:
+        raise ValueError("business execution simulation plan must be read-only")
+    if plan["automation_allowed"] is not False or plan["writes"] != []:
+        raise ValueError("business execution simulation plan must not allow automation or writes")
+    if business_execution_review_package is not None:
+        validate_business_execution_review_package(business_execution_review_package)
+        if plan["business_execution_review_package_id"] != business_execution_review_package["business_execution_review_package_id"]:
+            raise ValueError("business execution simulation plan execution review id mismatch")
+    if business_readiness_review_package is not None:
+        validate_business_readiness_review_package(business_readiness_review_package)
+        if plan["readiness_review_package_id"] != business_readiness_review_package["business_readiness_review_package_id"]:
+            raise ValueError("business execution simulation plan readiness id mismatch")
+    if all(item is not None for item in (
+        business_execution_review_package,
+        business_readiness_review_package,
+        governance_executive_review_package,
+        control_plane_review_package,
+        module_boundary_registry,
+        shared_services_registry,
+    )):
+        expected_id = make_business_execution_simulation_plan_id(
+            business_execution_review_package,
+            business_readiness_review_package,
+            governance_executive_review_package,
+            control_plane_review_package,
+            module_boundary_registry,
+            shared_services_registry,
+        )
+        if plan["business_execution_simulation_plan_id"] != expected_id:
+            raise ValueError("business execution simulation plan id is not deterministic")
+
+
+def stable_business_execution_simulation_plan_json(plan: dict[str, Any]) -> str:
+    validate_business_execution_simulation_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def parse_business_execution_simulation_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    plan = _json.loads(text)
+    validate_business_execution_simulation_plan(plan)
+    return plan
+
+
+def make_business_execution_simulation_evidence_package_id(plan: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_execution_simulation_plan_id": plan["business_execution_simulation_plan_id"],
+        "version": BUSINESS_EXECUTION_SIMULATION_EVIDENCE_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-execution-simulation-evidence-package-{digest}"
+
+
+def collect_business_execution_simulation_evidence_package(
+    business_execution_simulation_plan: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Inventory simulated evidence without creating real receipts or artifacts."""
+    plan = business_execution_simulation_plan or collect_business_execution_simulation_plan()
+    validate_business_execution_simulation_plan(plan)
+    simulated_evidence_refs = _normalize_implementation_branch_refs([
+        f"simulated-evidence:{item}" for item in plan["required_inputs"]
+    ])
+    simulated_receipt_refs = _normalize_implementation_branch_refs([
+        "simulated-receipt:execution-boundary-check",
+        "simulated-receipt:evidence-contract-check",
+        "simulated-receipt:approval-checklist-check",
+        "simulated-receipt:readiness-check",
+    ])
+    simulated_artifact_refs = _normalize_implementation_branch_refs([
+        f"simulated-artifact:{item}" for item in plan["expected_artifacts"]
+    ])
+    missing_real_evidence = _normalize_implementation_branch_refs([
+        "real execution approvals are not present in simulation",
+        "real customer or market evidence is intentionally not collected",
+        "real campaign, source, and operations receipts are intentionally simulated only",
+    ])
+    package = {
+        "business_execution_simulation_evidence_package_version": BUSINESS_EXECUTION_SIMULATION_EVIDENCE_PACKAGE_VERSION,
+        "business_execution_simulation_evidence_package_id": make_business_execution_simulation_evidence_package_id(plan),
+        "business_execution_simulation_plan_id": plan["business_execution_simulation_plan_id"],
+        "simulated_evidence_refs": simulated_evidence_refs,
+        "simulated_receipt_refs": simulated_receipt_refs,
+        "simulated_artifact_refs": simulated_artifact_refs,
+        "missing_real_evidence": missing_real_evidence,
+        "evidence_status": "block" if missing_real_evidence else "pass",
+        "recommended_next_action": "Review missing real evidence before considering any future execution runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_execution_simulation_evidence_package(package, plan)
+    return package
+
+
+def validate_business_execution_simulation_evidence_package(
+    package: dict[str, Any],
+    business_execution_simulation_plan: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_execution_simulation_evidence_package_version", "business_execution_simulation_evidence_package_id",
+        "business_execution_simulation_plan_id", "simulated_evidence_refs", "simulated_receipt_refs",
+        "simulated_artifact_refs", "missing_real_evidence", "evidence_status", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in package:
+            raise ValueError(f"business execution simulation evidence package missing required field: {key}")
+    if package["business_execution_simulation_evidence_package_version"] != BUSINESS_EXECUTION_SIMULATION_EVIDENCE_PACKAGE_VERSION:
+        raise ValueError("invalid business execution simulation evidence package version")
+    if not isinstance(package["business_execution_simulation_evidence_package_id"], str) or not package["business_execution_simulation_evidence_package_id"].startswith("business-execution-simulation-evidence-package-"):
+        raise ValueError("invalid business execution simulation evidence package id")
+    if not isinstance(package["business_execution_simulation_plan_id"], str) or not package["business_execution_simulation_plan_id"].startswith("business-execution-simulation-plan-"):
+        raise ValueError("invalid business execution simulation plan id in evidence package")
+    for field in ("simulated_evidence_refs", "simulated_receipt_refs", "simulated_artifact_refs", "missing_real_evidence"):
+        normalized = _normalize_implementation_branch_refs(package[field])
+        if not normalized or normalized != package[field]:
+            raise ValueError(f"business execution simulation evidence package {field} must be normalized and non-empty")
+    if package["evidence_status"] not in BUSINESS_EXECUTION_SIMULATION_STATUSES:
+        raise ValueError("invalid business execution simulation evidence status")
+    if package["missing_real_evidence"] and package["evidence_status"] != "block":
+        raise ValueError("missing real evidence must block simulation evidence status")
+    if package["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business execution simulation evidence package safety metadata mismatch")
+    if package["dry_run"] is not True or package["write_allowed"] is not False:
+        raise ValueError("business execution simulation evidence package must be read-only")
+    if package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("business execution simulation evidence package must not allow automation or writes")
+    if business_execution_simulation_plan is not None:
+        validate_business_execution_simulation_plan(business_execution_simulation_plan)
+        if package["business_execution_simulation_plan_id"] != business_execution_simulation_plan["business_execution_simulation_plan_id"]:
+            raise ValueError("business execution simulation evidence package plan id mismatch")
+        expected_id = make_business_execution_simulation_evidence_package_id(business_execution_simulation_plan)
+        if package["business_execution_simulation_evidence_package_id"] != expected_id:
+            raise ValueError("business execution simulation evidence package id is not deterministic")
+
+
+def stable_business_execution_simulation_evidence_package_json(package: dict[str, Any]) -> str:
+    validate_business_execution_simulation_evidence_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_business_execution_simulation_evidence_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_business_execution_simulation_evidence_package(package)
+    return package
+
+
+def make_business_execution_simulation_review_id(plan: dict[str, Any], evidence_package: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_execution_simulation_evidence_package_id": evidence_package["business_execution_simulation_evidence_package_id"],
+        "business_execution_simulation_plan_id": plan["business_execution_simulation_plan_id"],
+        "version": BUSINESS_EXECUTION_SIMULATION_REVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-execution-simulation-review-{digest}"
+
+
+def collect_business_execution_simulation_review(
+    business_execution_simulation_plan: dict[str, Any] | None = None,
+    simulation_evidence_package: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Review the dry-run business execution simulation path."""
+    plan = business_execution_simulation_plan or collect_business_execution_simulation_plan()
+    validate_business_execution_simulation_plan(plan)
+    evidence = simulation_evidence_package or collect_business_execution_simulation_evidence_package(plan)
+    validate_business_execution_simulation_evidence_package(evidence, plan)
+    missing_approvals = _normalize_implementation_branch_refs([
+        "human approval for real business execution is absent",
+        "operator approval for external effects is absent",
+    ])
+    blocked_actions = list(plan["blocked_real_actions"])
+    predicted_failures = _normalize_implementation_branch_refs([
+        "simulation would fail closed before real external action",
+        "simulation would fail closed while required real evidence is missing",
+        "simulation would fail closed while final human approvals are missing",
+    ])
+    warnings = _normalize_implementation_branch_refs([
+        "future execution runtime still needs separate safety boundaries",
+        "simulation only validates governance coherence, not live market facts",
+    ])
+    required_actions = _normalize_implementation_branch_refs([
+        "review blocked real actions before runtime design",
+        "review missing final approvals",
+        "review missing real evidence",
+    ])
+    status = "block" if predicted_failures or evidence["missing_real_evidence"] or missing_approvals else "pass"
+    review = {
+        "business_execution_simulation_review_version": BUSINESS_EXECUTION_SIMULATION_REVIEW_VERSION,
+        "business_execution_simulation_review_id": make_business_execution_simulation_review_id(plan, evidence),
+        "business_execution_simulation_plan_id": plan["business_execution_simulation_plan_id"],
+        "simulation_evidence_package_id": evidence["business_execution_simulation_evidence_package_id"],
+        "simulation_status": status,
+        "predicted_failures": predicted_failures,
+        "blocked_actions": blocked_actions,
+        "missing_evidence": list(evidence["missing_real_evidence"]),
+        "missing_approvals": missing_approvals,
+        "warnings": warnings,
+        "required_human_actions": required_actions,
+        "review_recommendation": "simulation_blocked" if status == "block" else "simulation_ready_for_operator_review",
+        "recommended_next_action": "Use simulation findings to close evidence and approval gaps before any real execution design.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_execution_simulation_review(review, plan, evidence)
+    return review
+
+
+def validate_business_execution_simulation_review(
+    review: dict[str, Any],
+    business_execution_simulation_plan: dict[str, Any] | None = None,
+    simulation_evidence_package: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_execution_simulation_review_version", "business_execution_simulation_review_id",
+        "business_execution_simulation_plan_id", "simulation_evidence_package_id", "simulation_status",
+        "predicted_failures", "blocked_actions", "missing_evidence", "missing_approvals",
+        "warnings", "required_human_actions", "review_recommendation", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in review:
+            raise ValueError(f"business execution simulation review missing required field: {key}")
+    if review["business_execution_simulation_review_version"] != BUSINESS_EXECUTION_SIMULATION_REVIEW_VERSION:
+        raise ValueError("invalid business execution simulation review version")
+    if not isinstance(review["business_execution_simulation_review_id"], str) or not review["business_execution_simulation_review_id"].startswith("business-execution-simulation-review-"):
+        raise ValueError("invalid business execution simulation review id")
+    if not isinstance(review["business_execution_simulation_plan_id"], str) or not review["business_execution_simulation_plan_id"].startswith("business-execution-simulation-plan-"):
+        raise ValueError("invalid business execution simulation plan id in review")
+    if not isinstance(review["simulation_evidence_package_id"], str) or not review["simulation_evidence_package_id"].startswith("business-execution-simulation-evidence-package-"):
+        raise ValueError("invalid business execution simulation evidence package id in review")
+    if review["simulation_status"] not in BUSINESS_EXECUTION_SIMULATION_STATUSES:
+        raise ValueError("invalid business execution simulation status")
+    if review["blocked_actions"] != list(BUSINESS_EXECUTION_SIMULATION_BLOCKED_REAL_ACTIONS):
+        raise ValueError("business execution simulation review blocked actions mismatch")
+    for field in ("predicted_failures", "missing_evidence", "missing_approvals", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(review[field])
+        if not normalized or normalized != review[field]:
+            raise ValueError(f"business execution simulation review {field} must be normalized and non-empty")
+    if review["review_recommendation"] not in BUSINESS_EXECUTION_SIMULATION_RECOMMENDATIONS:
+        raise ValueError("invalid business execution simulation review recommendation")
+    if review["simulation_status"] == "block" and not review["predicted_failures"]:
+        raise ValueError("blocked business execution simulation review must include predicted failures")
+    if review["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business execution simulation review safety metadata mismatch")
+    if review["dry_run"] is not True or review["write_allowed"] is not False:
+        raise ValueError("business execution simulation review must be read-only")
+    if review["automation_allowed"] is not False or review["writes"] != []:
+        raise ValueError("business execution simulation review must not allow automation or writes")
+    if business_execution_simulation_plan is not None:
+        validate_business_execution_simulation_plan(business_execution_simulation_plan)
+        if review["business_execution_simulation_plan_id"] != business_execution_simulation_plan["business_execution_simulation_plan_id"]:
+            raise ValueError("business execution simulation review plan id mismatch")
+    if simulation_evidence_package is not None:
+        validate_business_execution_simulation_evidence_package(simulation_evidence_package, business_execution_simulation_plan)
+        if review["simulation_evidence_package_id"] != simulation_evidence_package["business_execution_simulation_evidence_package_id"]:
+            raise ValueError("business execution simulation review evidence id mismatch")
+    if business_execution_simulation_plan is not None and simulation_evidence_package is not None:
+        expected_id = make_business_execution_simulation_review_id(business_execution_simulation_plan, simulation_evidence_package)
+        if review["business_execution_simulation_review_id"] != expected_id:
+            raise ValueError("business execution simulation review id is not deterministic")
+
+
+def stable_business_execution_simulation_review_json(review: dict[str, Any]) -> str:
+    validate_business_execution_simulation_review(review)
+    return _stable_ruflo_json(review, indent=2) + "\n"
+
+
+def parse_business_execution_simulation_review_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    review = _json.loads(text)
+    validate_business_execution_simulation_review(review)
+    return review
+
+
+def make_business_execution_simulation_readiness_id(review: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "business_execution_simulation_review_id": review["business_execution_simulation_review_id"],
+        "version": BUSINESS_EXECUTION_SIMULATION_READINESS_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"business-execution-simulation-readiness-{digest}"
+
+
+def collect_business_execution_simulation_readiness(
+    business_execution_simulation_review: dict[str, Any] | None = None,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Determine whether real business execution could theoretically proceed."""
+    review = business_execution_simulation_review or collect_business_execution_simulation_review()
+    validate_business_execution_simulation_review(review)
+    blockers = _normalize_implementation_branch_refs(
+        list(review["predicted_failures"]) +
+        [f"blocked real action remains prohibited: {item}" for item in review["blocked_actions"]] +
+        list(review["missing_evidence"]) +
+        list(review["missing_approvals"])
+    )
+    readiness_status = "blocked" if blockers or review["simulation_status"] != "pass" else "ready"
+    readiness = {
+        "business_execution_simulation_readiness_version": BUSINESS_EXECUTION_SIMULATION_READINESS_VERSION,
+        "business_execution_simulation_readiness_id": make_business_execution_simulation_readiness_id(review),
+        "business_execution_simulation_review_id": review["business_execution_simulation_review_id"],
+        "readiness_status": readiness_status,
+        "execution_candidate_status": "blocked" if readiness_status == "blocked" else "candidate",
+        "blockers": blockers,
+        "warnings": list(review["warnings"]),
+        "required_human_actions": list(review["required_human_actions"]),
+        "recommended_next_action": "Keep business execution in simulation until evidence, approvals, and blocked real actions are resolved.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_business_execution_simulation_readiness(readiness, review)
+    return readiness
+
+
+def validate_business_execution_simulation_readiness(
+    readiness: dict[str, Any],
+    business_execution_simulation_review: dict[str, Any] | None = None,
+) -> None:
+    required = (
+        "business_execution_simulation_readiness_version", "business_execution_simulation_readiness_id",
+        "business_execution_simulation_review_id", "readiness_status", "execution_candidate_status",
+        "blockers", "warnings", "required_human_actions", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in readiness:
+            raise ValueError(f"business execution simulation readiness missing required field: {key}")
+    if readiness["business_execution_simulation_readiness_version"] != BUSINESS_EXECUTION_SIMULATION_READINESS_VERSION:
+        raise ValueError("invalid business execution simulation readiness version")
+    if not isinstance(readiness["business_execution_simulation_readiness_id"], str) or not readiness["business_execution_simulation_readiness_id"].startswith("business-execution-simulation-readiness-"):
+        raise ValueError("invalid business execution simulation readiness id")
+    if not isinstance(readiness["business_execution_simulation_review_id"], str) or not readiness["business_execution_simulation_review_id"].startswith("business-execution-simulation-review-"):
+        raise ValueError("invalid business execution simulation review id in readiness")
+    if readiness["readiness_status"] not in BUSINESS_EXECUTION_SIMULATION_READINESS_STATUSES:
+        raise ValueError("invalid business execution simulation readiness status")
+    if readiness["execution_candidate_status"] not in BUSINESS_EXECUTION_SIMULATION_CANDIDATE_STATUSES:
+        raise ValueError("invalid business execution simulation candidate status")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        normalized = _normalize_implementation_branch_refs(readiness[field])
+        if not normalized or normalized != readiness[field]:
+            raise ValueError(f"business execution simulation readiness {field} must be normalized and non-empty")
+    if readiness["readiness_status"] == "ready" and readiness["blockers"]:
+        raise ValueError("ready business execution simulation must not include blockers")
+    if readiness["readiness_status"] == "blocked" and not readiness["blockers"]:
+        raise ValueError("blocked business execution simulation readiness must include blockers")
+    if readiness["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("business execution simulation readiness safety metadata mismatch")
+    if readiness["dry_run"] is not True or readiness["write_allowed"] is not False:
+        raise ValueError("business execution simulation readiness must be read-only")
+    if readiness["automation_allowed"] is not False or readiness["writes"] != []:
+        raise ValueError("business execution simulation readiness must not allow automation or writes")
+    if business_execution_simulation_review is not None:
+        validate_business_execution_simulation_review(business_execution_simulation_review)
+        if readiness["business_execution_simulation_review_id"] != business_execution_simulation_review["business_execution_simulation_review_id"]:
+            raise ValueError("business execution simulation readiness review id mismatch")
+        expected_id = make_business_execution_simulation_readiness_id(business_execution_simulation_review)
+        if readiness["business_execution_simulation_readiness_id"] != expected_id:
+            raise ValueError("business execution simulation readiness id is not deterministic")
+
+
+def stable_business_execution_simulation_readiness_json(readiness: dict[str, Any]) -> str:
+    validate_business_execution_simulation_readiness(readiness)
+    return _stable_ruflo_json(readiness, indent=2) + "\n"
+
+
+def parse_business_execution_simulation_readiness_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    readiness = _json.loads(text)
+    validate_business_execution_simulation_readiness(readiness)
+    return readiness
+
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -19193,6 +19778,151 @@ def control_plane_operator_review_main(argv: list[str] | None = None) -> int:
         return 0
     render_operator_status_package_plain(package)
     return 0
+
+
+def render_business_execution_simulation_plan_plain(plan: dict[str, Any]) -> None:
+    validate_business_execution_simulation_plan(plan)
+    print("Business execution simulation plan")
+    print(f"business_execution_simulation_plan_id: {plan['business_execution_simulation_plan_id']}")
+    print(f"business_execution_review_package_id: {plan['business_execution_review_package_id']}")
+    print(f"readiness_review_package_id: {plan['readiness_review_package_id']}")
+    print(f"simulated_step_count: {len(plan['simulated_steps'])}")
+    print(f"blocked_real_action_count: {len(plan['blocked_real_actions'])}")
+    print(f"expected_artifact_count: {len(plan['expected_artifacts'])}")
+    print(f"next_action: {plan['recommended_next_action']}")
+
+
+def business_execution_simulation_plan_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation plan: dry-run business execution simulation plan")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation plan")
+        print("  python3 link.py simulation plan --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation plan is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    plan = collect_business_execution_simulation_plan()
+    validate_business_execution_simulation_plan(plan)
+    if "--json" in args:
+        print(stable_business_execution_simulation_plan_json(plan), end="")
+        return 0
+    render_business_execution_simulation_plan_plain(plan)
+    return 0
+
+
+def render_business_execution_simulation_evidence_package_plain(package: dict[str, Any]) -> None:
+    validate_business_execution_simulation_evidence_package(package)
+    print("Business execution simulation evidence package")
+    print(f"business_execution_simulation_evidence_package_id: {package['business_execution_simulation_evidence_package_id']}")
+    print(f"business_execution_simulation_plan_id: {package['business_execution_simulation_plan_id']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"simulated_evidence_count: {len(package['simulated_evidence_refs'])}")
+    print(f"simulated_receipt_count: {len(package['simulated_receipt_refs'])}")
+    print(f"missing_real_evidence_count: {len(package['missing_real_evidence'])}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def business_execution_simulation_evidence_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation evidence: dry-run business execution evidence package")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation evidence")
+        print("  python3 link.py simulation evidence --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation evidence is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_business_execution_simulation_evidence_package()
+    validate_business_execution_simulation_evidence_package(package)
+    if "--json" in args:
+        print(stable_business_execution_simulation_evidence_package_json(package), end="")
+        return 0
+    render_business_execution_simulation_evidence_package_plain(package)
+    return 0
+
+
+def render_business_execution_simulation_review_plain(review: dict[str, Any]) -> None:
+    validate_business_execution_simulation_review(review)
+    print("Business execution simulation review")
+    print(f"business_execution_simulation_review_id: {review['business_execution_simulation_review_id']}")
+    print(f"business_execution_simulation_plan_id: {review['business_execution_simulation_plan_id']}")
+    print(f"simulation_evidence_package_id: {review['simulation_evidence_package_id']}")
+    print(f"simulation_status: {review['simulation_status']}")
+    print(f"predicted_failure_count: {len(review['predicted_failures'])}")
+    print(f"blocked_action_count: {len(review['blocked_actions'])}")
+    print(f"missing_evidence_count: {len(review['missing_evidence'])}")
+    print(f"missing_approval_count: {len(review['missing_approvals'])}")
+    print(f"review_recommendation: {review['review_recommendation']}")
+    print(f"next_action: {review['recommended_next_action']}")
+
+
+def business_execution_simulation_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation review: dry-run business execution simulation review")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation review")
+        print("  python3 link.py simulation review --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation review is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    review = collect_business_execution_simulation_review()
+    validate_business_execution_simulation_review(review)
+    if "--json" in args:
+        print(stable_business_execution_simulation_review_json(review), end="")
+        return 0
+    render_business_execution_simulation_review_plain(review)
+    return 0
+
+
+def render_business_execution_simulation_readiness_plain(readiness: dict[str, Any]) -> None:
+    validate_business_execution_simulation_readiness(readiness)
+    print("Business execution simulation readiness")
+    print(f"business_execution_simulation_readiness_id: {readiness['business_execution_simulation_readiness_id']}")
+    print(f"business_execution_simulation_review_id: {readiness['business_execution_simulation_review_id']}")
+    print(f"readiness_status: {readiness['readiness_status']}")
+    print(f"execution_candidate_status: {readiness['execution_candidate_status']}")
+    print(f"blocker_count: {len(readiness['blockers'])}")
+    print(f"warning_count: {len(readiness['warnings'])}")
+    print(f"required_human_action_count: {len(readiness['required_human_actions'])}")
+    print(f"next_action: {readiness['recommended_next_action']}")
+
+
+def business_execution_simulation_readiness_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Simulation readiness: dry-run business execution readiness check")
+        print("")
+        print("Usage:")
+        print("  python3 link.py simulation readiness")
+        print("  python3 link.py simulation readiness --json")
+        print("")
+        print("Read-only simulation. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: simulation readiness is read-only simulation; --write is not supported", file=sys.stderr)
+        return 2
+    readiness = collect_business_execution_simulation_readiness()
+    validate_business_execution_simulation_readiness(readiness)
+    if "--json" in args:
+        print(stable_business_execution_simulation_readiness_json(readiness), end="")
+        return 0
+    render_business_execution_simulation_readiness_plain(readiness)
+    return 0
+
 
 
 def render_business_development_source_boundary_plain(boundary: dict[str, Any]) -> None:

@@ -381,6 +381,37 @@ def _cmd_control_plane(argv: list[str]) -> int:
     return 2
 
 
+def _cmd_simulation(argv: list[str]) -> int:
+    """Dry-run business execution simulation previews."""
+    subcommand = argv[0] if argv else ""
+    if subcommand == "plan":
+        from link_modes.growth.link_growth_console import business_execution_simulation_plan_main as _simulation_plan_main
+
+        return _simulation_plan_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "evidence":
+        from link_modes.growth.link_growth_console import business_execution_simulation_evidence_main as _simulation_evidence_main
+
+        return _simulation_evidence_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "review":
+        from link_modes.growth.link_growth_console import business_execution_simulation_review_main as _simulation_review_main
+
+        return _simulation_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "readiness":
+        from link_modes.growth.link_growth_console import business_execution_simulation_readiness_main as _simulation_readiness_main
+
+        return _simulation_readiness_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand in ("-h", "--help", "help", ""):
+        print("Simulation commands:")
+        print("  plan       Preview dry-run business execution simulation plan")
+        print("  evidence   Preview simulated execution evidence package")
+        print("  review     Preview simulated execution review")
+        print("  readiness  Preview simulated execution readiness check")
+        return 0
+    print(f"simulation: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py simulation --help' for subcommands.", file=sys.stderr)
+    return 2
+
+
 def _cmd_dashboard(argv: list[str]) -> int:
     """Print a compact dashboard/status summary."""
     from link_core.dashboard import collect as _collect
@@ -836,6 +867,7 @@ _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "business": (_cmd_business, "Cross-lane business readiness governance previews."),
     "governance": (_cmd_governance, "Unified Link governance dashboard previews."),
     "control-plane": (_cmd_control_plane, "Link control-plane dashboard and health previews."),
+    "simulation": (_cmd_simulation, "Dry-run business execution simulation previews."),
     "dashboard": (_cmd_dashboard, "Compact diagnostics dashboard."),
     "self-test": (_cmd_self_test, "Run canonical architecture smoke checks."),
     "config": (_cmd_config, "Validate Link configuration files against runtime."),
