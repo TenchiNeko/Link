@@ -16611,6 +16611,197 @@ def check_operator_task_draft_clis() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62s. Sandbox executor boundary
+# ---------------------------------------------------------------------------
+
+def check_sandbox_executor_boundary_helpers() -> None:
+    """Sandbox executor boundary decides whether a task could ever execute in sandbox."""
+    from link_modes.growth.link_growth_console import (
+        collect_operator_task_draft,
+        collect_operator_task_review_package,
+        collect_operator_task_scope_review,
+        collect_operator_task_test_plan,
+        collect_sandbox_execution_approval_checklist,
+        collect_sandbox_execution_evidence_contract,
+        collect_sandbox_execution_review_package,
+        collect_sandbox_task_executor_boundary,
+        parse_sandbox_execution_approval_checklist_json,
+        parse_sandbox_execution_evidence_contract_json,
+        parse_sandbox_execution_review_package_json,
+        parse_sandbox_task_executor_boundary_json,
+        stable_sandbox_execution_approval_checklist_json,
+        stable_sandbox_execution_evidence_contract_json,
+        stable_sandbox_execution_review_package_json,
+        stable_sandbox_task_executor_boundary_json,
+        validate_sandbox_execution_approval_checklist,
+        validate_sandbox_execution_evidence_contract,
+        validate_sandbox_execution_review_package,
+        validate_sandbox_task_executor_boundary,
+    )
+
+    draft = collect_operator_task_draft()
+    scope = collect_operator_task_scope_review(draft)
+    tests = collect_operator_task_test_plan(draft)
+    task_review = collect_operator_task_review_package(draft, scope, tests)
+
+    boundary = collect_sandbox_task_executor_boundary(draft, scope, tests, task_review)
+    same_boundary = collect_sandbox_task_executor_boundary(draft, scope, tests, task_review)
+    validate_sandbox_task_executor_boundary(boundary, draft, scope, tests, task_review)
+    _require(boundary["sandbox_task_executor_boundary_id"] == same_boundary["sandbox_task_executor_boundary_id"],
+             "sandbox task executor boundary id must be deterministic")
+    _require(boundary["operator_task_draft_id"] == draft["operator_task_draft_id"],
+             "sandbox task executor boundary must flow from task draft")
+    _require(boundary["execution_candidate_status"] == "blocked",
+             "sandbox task executor boundary must be blocked by default")
+    _require(boundary["max_file_count"] == len(boundary["allowed_file_scope"]),
+             "sandbox task executor max_file_count must match allowed file scope")
+    _require("python3 unit tests" in boundary["allowed_command_families"] and "git push" in boundary["forbidden_command_families"],
+             "sandbox task executor boundary must validate allowed and forbidden command families")
+    _require(".git/" in boundary["forbidden_file_scope"],
+             "sandbox task executor boundary must include forbidden file scope")
+    _require(parse_sandbox_task_executor_boundary_json(stable_sandbox_task_executor_boundary_json(boundary)) == boundary,
+             "sandbox task executor boundary JSON must round trip")
+
+    evidence = collect_sandbox_execution_evidence_contract(boundary)
+    same_evidence = collect_sandbox_execution_evidence_contract(boundary)
+    validate_sandbox_execution_evidence_contract(evidence, boundary)
+    _require(evidence["sandbox_execution_evidence_contract_id"] == same_evidence["sandbox_execution_evidence_contract_id"],
+             "sandbox execution evidence contract id must be deterministic")
+    _require(evidence["sandbox_task_executor_boundary_id"] == boundary["sandbox_task_executor_boundary_id"],
+             "sandbox execution evidence contract must flow from boundary")
+    _require(evidence["missing_evidence"] and evidence["blockers"],
+             "sandbox execution evidence contract must block on missing future evidence")
+    _require(parse_sandbox_execution_evidence_contract_json(stable_sandbox_execution_evidence_contract_json(evidence)) == evidence,
+             "sandbox execution evidence contract JSON must round trip")
+
+    approvals = collect_sandbox_execution_approval_checklist(boundary)
+    same_approvals = collect_sandbox_execution_approval_checklist(boundary)
+    validate_sandbox_execution_approval_checklist(approvals, boundary)
+    _require(approvals["sandbox_execution_approval_checklist_id"] == same_approvals["sandbox_execution_approval_checklist_id"],
+             "sandbox execution approval checklist id must be deterministic")
+    _require(approvals["approval_status"] == "blocked" and approvals["required_approvals"],
+             "sandbox execution approval checklist must block on approvals")
+    _require(parse_sandbox_execution_approval_checklist_json(stable_sandbox_execution_approval_checklist_json(approvals)) == approvals,
+             "sandbox execution approval checklist JSON must round trip")
+
+    review = collect_sandbox_execution_review_package(boundary, evidence, approvals, task_review)
+    same_review = collect_sandbox_execution_review_package(boundary, evidence, approvals, task_review)
+    validate_sandbox_execution_review_package(review, boundary, evidence, approvals, task_review)
+    _require(review["sandbox_execution_review_package_id"] == same_review["sandbox_execution_review_package_id"],
+             "sandbox execution review package id must be deterministic")
+    _require(review["sandbox_task_executor_boundary_id"] == boundary["sandbox_task_executor_boundary_id"],
+             "sandbox execution review package must flow from boundary")
+    _require(review["sandbox_execution_evidence_contract_id"] == evidence["sandbox_execution_evidence_contract_id"],
+             "sandbox execution review package must flow from evidence contract")
+    _require(review["sandbox_execution_approval_checklist_id"] == approvals["sandbox_execution_approval_checklist_id"],
+             "sandbox execution review package must flow from approval checklist")
+    _require(review["readiness_status"] == "blocked" and review["execution_candidate_status"] == "blocked",
+             "sandbox execution review package must remain blocked")
+    _require(parse_sandbox_execution_review_package_json(stable_sandbox_execution_review_package_json(review)) == review,
+             "sandbox execution review package JSON must round trip")
+
+    bad_boundary = json.loads(stable_sandbox_task_executor_boundary_json(boundary))
+    bad_boundary["allowed_command_families"] = ["python3 unit tests"]
+    try:
+        validate_sandbox_task_executor_boundary(bad_boundary)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("sandbox boundary validation must reject missing allowed command families")
+
+    bad_boundary = json.loads(stable_sandbox_task_executor_boundary_json(boundary))
+    bad_boundary["max_file_count"] += 1
+    try:
+        validate_sandbox_task_executor_boundary(bad_boundary)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("sandbox boundary validation must reject max_file_count drift")
+
+    bad_evidence = json.loads(stable_sandbox_execution_evidence_contract_json(evidence))
+    bad_evidence["missing_evidence"] = ["command log"]
+    try:
+        validate_sandbox_execution_evidence_contract(bad_evidence)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("sandbox evidence validation must reject incomplete missing evidence")
+
+    bad_approvals = json.loads(stable_sandbox_execution_approval_checklist_json(approvals))
+    bad_approvals["approval_status"] = "approved"
+    try:
+        validate_sandbox_execution_approval_checklist(bad_approvals)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("sandbox approval validation must reject approval drift")
+
+    bad_review = json.loads(stable_sandbox_execution_review_package_json(review))
+    bad_review["write_allowed"] = True
+    try:
+        validate_sandbox_execution_review_package(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("sandbox execution review validation must reject writes")
+
+    print("sandbox executor boundary helpers OK")
+
+
+def check_sandbox_executor_boundary_clis() -> None:
+    """Sandbox executor CLIs expose read-only boundary payloads."""
+    from link import _cmd_sandbox_executor
+    from link_modes.growth.link_growth_console import (
+        parse_sandbox_task_executor_boundary_json,
+        sandbox_execution_approval_checklist_main,
+        sandbox_execution_evidence_contract_main,
+        sandbox_execution_review_package_main,
+        sandbox_task_executor_boundary_main,
+    )
+
+    commands = [
+        ("boundary", sandbox_task_executor_boundary_main),
+        ("evidence", sandbox_execution_evidence_contract_main),
+        ("approvals", sandbox_execution_approval_checklist_main),
+        ("review", sandbox_execution_review_package_main),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_sandbox_executor(["--help"])
+    _require(help_rc == 0, "sandbox-executor --help must return 0")
+    for command, main_func in commands:
+        _require(command in help_out.getvalue(), f"sandbox-executor help must include {command}")
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"sandbox-executor {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"sandbox-executor {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"sandbox-executor {command} --write must not print normal output")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = _cmd_sandbox_executor(["boundary", "--json"])
+    parsed = parse_sandbox_task_executor_boundary_json(json_out.getvalue())
+    _require(json_rc == 0, "sandbox-executor boundary route must return 0")
+    _require(parsed["execution_candidate_status"] == "blocked" and parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "sandbox-executor boundary CLI must remain read-only and blocked")
+    _require("operator_task_draft" not in parsed and "operator_task_review_package" not in parsed,
+             "sandbox-executor boundary --json must output only its object payload")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = sandbox_task_executor_boundary_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "sandbox-executor boundary human mode must return 0")
+    _require("Sandbox task executor boundary" in human and "sandbox_task_executor_boundary_id:" in human,
+             "sandbox-executor boundary human mode must include title and id")
+    _require(len(human.splitlines()) <= 12, "sandbox-executor boundary human mode must stay concise")
+    print("sandbox executor boundary CLIs OK")
+
+
+# ---------------------------------------------------------------------------
 # 62q. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
 
@@ -17663,6 +17854,8 @@ def main() -> None:
     check_operator_action_plan_clis()
     check_operator_task_draft_helpers()
     check_operator_task_draft_clis()
+    check_sandbox_executor_boundary_helpers()
+    check_sandbox_executor_boundary_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

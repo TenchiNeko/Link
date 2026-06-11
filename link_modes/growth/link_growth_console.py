@@ -11066,6 +11066,10 @@ OPERATOR_TASK_DRAFT_VERSION = "link-operator-task-draft-v1"
 OPERATOR_TASK_SCOPE_REVIEW_VERSION = "link-operator-task-scope-review-v1"
 OPERATOR_TASK_TEST_PLAN_VERSION = "link-operator-task-test-plan-v1"
 OPERATOR_TASK_REVIEW_PACKAGE_VERSION = "link-operator-task-review-package-v1"
+SANDBOX_TASK_EXECUTOR_BOUNDARY_VERSION = "link-sandbox-task-executor-boundary-v1"
+SANDBOX_EXECUTION_EVIDENCE_CONTRACT_VERSION = "link-sandbox-execution-evidence-contract-v1"
+SANDBOX_EXECUTION_APPROVAL_CHECKLIST_VERSION = "link-sandbox-execution-approval-checklist-v1"
+SANDBOX_EXECUTION_REVIEW_PACKAGE_VERSION = "link-sandbox-execution-review-package-v1"
 REMEDIATION_PRIORITIES = ("critical", "high", "medium", "low")
 BUSINESS_EXECUTION_SIMULATED_STEPS = (
     "validate opportunity",
@@ -19820,6 +19824,400 @@ def parse_operator_task_review_package_json(text: str) -> dict[str, Any]:
 
 
 
+SANDBOX_EXECUTOR_ALLOWED_COMMAND_FAMILIES = (
+    "git diff read-only",
+    "git status read-only",
+    "python3 py_compile",
+    "python3 readonly inspection",
+    "python3 scoped source edit",
+    "python3 unit tests",
+)
+SANDBOX_EXECUTOR_FORBIDDEN_COMMAND_FAMILIES = (
+    "bun",
+    "curl",
+    "git branch",
+    "git commit",
+    "git push",
+    "git worktree",
+    "network",
+    "node",
+    "npm",
+    "package install",
+    "rm -rf",
+    "shell pipeline execution unless explicitly approved",
+    "sudo",
+    "wget",
+)
+
+
+def make_sandbox_task_executor_boundary_id(task_draft: dict[str, Any], scope_review: dict[str, Any], test_plan: dict[str, Any], task_review: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "operator_task_draft_id": task_draft["operator_task_draft_id"],
+        "operator_task_review_package_id": task_review["operator_task_review_package_id"],
+        "operator_task_scope_review_id": scope_review["operator_task_scope_review_id"],
+        "operator_task_test_plan_id": test_plan["operator_task_test_plan_id"],
+        "version": SANDBOX_TASK_EXECUTOR_BOUNDARY_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"sandbox-task-executor-boundary-{digest}"
+
+
+def collect_sandbox_task_executor_boundary(operator_task_draft: dict[str, Any] | None = None, operator_task_scope_review: dict[str, Any] | None = None, operator_task_test_plan: dict[str, Any] | None = None, operator_task_review_package: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    draft = operator_task_draft or collect_operator_task_draft()
+    validate_operator_task_draft(draft)
+    scope = operator_task_scope_review or collect_operator_task_scope_review(draft)
+    validate_operator_task_scope_review(scope, draft)
+    tests = operator_task_test_plan or collect_operator_task_test_plan(draft)
+    validate_operator_task_test_plan(tests, draft)
+    action_plan = collect_operator_action_plan_preview()
+    action_evidence = collect_operator_action_evidence_checklist(action_plan)
+    action_approvals = collect_operator_action_approval_checklist(action_plan)
+    review = operator_task_review_package or collect_operator_task_review_package(draft, scope, tests, action_evidence, action_approvals)
+    validate_operator_task_review_package(review, draft, scope, tests, action_evidence, action_approvals)
+    allowed_scope = _normalize_implementation_branch_refs(list(draft["affected_files"]))
+    forbidden_scope = _normalize_implementation_branch_refs([".agents/", ".git/", ".link/", "research/", "secrets", "credentials"])
+    blockers = _normalize_implementation_branch_refs(list(review["blockers"]) + ["sandbox executor runtime does not exist yet"])
+    boundary = {
+        "sandbox_task_executor_boundary_version": SANDBOX_TASK_EXECUTOR_BOUNDARY_VERSION,
+        "sandbox_task_executor_boundary_id": make_sandbox_task_executor_boundary_id(draft, scope, tests, review),
+        "operator_task_draft_id": draft["operator_task_draft_id"],
+        "operator_task_scope_review_id": scope["operator_task_scope_review_id"],
+        "operator_task_test_plan_id": tests["operator_task_test_plan_id"],
+        "operator_task_review_package_id": review["operator_task_review_package_id"],
+        "execution_candidate_status": "blocked",
+        "allowed_file_scope": allowed_scope,
+        "forbidden_file_scope": forbidden_scope,
+        "allowed_command_families": list(SANDBOX_EXECUTOR_ALLOWED_COMMAND_FAMILIES),
+        "forbidden_command_families": list(SANDBOX_EXECUTOR_FORBIDDEN_COMMAND_FAMILIES),
+        "max_file_count": len(allowed_scope),
+        "max_diff_lines": 800,
+        "max_runtime_seconds": 600,
+        "required_approvals": _normalize_implementation_branch_refs(list(draft["required_approvals"]) + ["explicit sandbox executor approval"]),
+        "blockers": blockers,
+        "warnings": _normalize_implementation_branch_refs(list(review["warnings"]) + ["boundary is read-only and does not authorize execution"]),
+        "recommended_next_action": "Review this boundary before designing any tiny local sandbox executor experiment.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_sandbox_task_executor_boundary(boundary, draft, scope, tests, review)
+    return boundary
+
+
+def validate_sandbox_task_executor_boundary(boundary: dict[str, Any], operator_task_draft: dict[str, Any] | None = None, operator_task_scope_review: dict[str, Any] | None = None, operator_task_test_plan: dict[str, Any] | None = None, operator_task_review_package: dict[str, Any] | None = None) -> None:
+    required = ("sandbox_task_executor_boundary_version", "sandbox_task_executor_boundary_id", "operator_task_draft_id", "execution_candidate_status", "allowed_file_scope", "forbidden_file_scope", "allowed_command_families", "forbidden_command_families", "max_file_count", "max_diff_lines", "max_runtime_seconds", "required_approvals", "blockers", "warnings", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in boundary:
+            raise ValueError(f"sandbox task executor boundary missing required field: {key}")
+    if boundary["sandbox_task_executor_boundary_version"] != SANDBOX_TASK_EXECUTOR_BOUNDARY_VERSION:
+        raise ValueError("invalid sandbox task executor boundary version")
+    if not isinstance(boundary["sandbox_task_executor_boundary_id"], str) or not boundary["sandbox_task_executor_boundary_id"].startswith("sandbox-task-executor-boundary-"):
+        raise ValueError("invalid sandbox task executor boundary id")
+    if boundary["execution_candidate_status"] not in {"blocked", "candidate", "denied"}:
+        raise ValueError("invalid sandbox execution candidate status")
+    for field in ("allowed_file_scope", "forbidden_file_scope", "allowed_command_families", "forbidden_command_families", "required_approvals", "blockers", "warnings"):
+        if _normalize_implementation_branch_refs(boundary[field]) != boundary[field] or not boundary[field]:
+            raise ValueError(f"sandbox task executor boundary {field} must be normalized and non-empty")
+    if not set(SANDBOX_EXECUTOR_ALLOWED_COMMAND_FAMILIES).issubset(set(boundary["allowed_command_families"])):
+        raise ValueError("sandbox task executor boundary missing allowed command family")
+    if not set(SANDBOX_EXECUTOR_FORBIDDEN_COMMAND_FAMILIES).issubset(set(boundary["forbidden_command_families"])):
+        raise ValueError("sandbox task executor boundary missing forbidden command family")
+    if not isinstance(boundary["max_file_count"], int) or boundary["max_file_count"] != len(boundary["allowed_file_scope"]) or boundary["max_file_count"] <= 0:
+        raise ValueError("sandbox task executor boundary max_file_count must match allowed file scope")
+    for field in ("max_diff_lines", "max_runtime_seconds"):
+        if not isinstance(boundary[field], int) or boundary[field] <= 0:
+            raise ValueError(f"sandbox task executor boundary {field} must be positive integer")
+    if boundary["blockers"] and boundary["execution_candidate_status"] != "blocked":
+        raise ValueError("sandbox task executor boundary must be blocked when blockers exist")
+    if boundary["safety_metadata"] != _read_only_safety_metadata() or boundary["dry_run"] is not True or boundary["write_allowed"] is not False or boundary["automation_allowed"] is not False or boundary["writes"] != []:
+        raise ValueError("sandbox task executor boundary must be read-only")
+    if all(item is not None for item in (operator_task_draft, operator_task_scope_review, operator_task_test_plan, operator_task_review_package)):
+        validate_operator_task_draft(operator_task_draft)
+        validate_operator_task_scope_review(operator_task_scope_review, operator_task_draft)
+        validate_operator_task_test_plan(operator_task_test_plan, operator_task_draft)
+        validate_operator_task_review_package(operator_task_review_package)
+        expected_id = make_sandbox_task_executor_boundary_id(operator_task_draft, operator_task_scope_review, operator_task_test_plan, operator_task_review_package)
+        if boundary["sandbox_task_executor_boundary_id"] != expected_id:
+            raise ValueError("sandbox task executor boundary id is not deterministic")
+        if boundary["operator_task_draft_id"] != operator_task_draft["operator_task_draft_id"]:
+            raise ValueError("sandbox task executor boundary draft id mismatch")
+
+
+def stable_sandbox_task_executor_boundary_json(boundary: dict[str, Any]) -> str:
+    validate_sandbox_task_executor_boundary(boundary)
+    return _stable_ruflo_json(boundary, indent=2) + "\n"
+
+
+def parse_sandbox_task_executor_boundary_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    boundary = _json.loads(text)
+    validate_sandbox_task_executor_boundary(boundary)
+    return boundary
+
+
+def make_sandbox_execution_evidence_contract_id(boundary: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "sandbox_task_executor_boundary_id": boundary["sandbox_task_executor_boundary_id"],
+        "version": SANDBOX_EXECUTION_EVIDENCE_CONTRACT_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"sandbox-execution-evidence-contract-{digest}"
+
+
+def collect_sandbox_execution_evidence_contract(sandbox_task_executor_boundary: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    boundary = sandbox_task_executor_boundary or collect_sandbox_task_executor_boundary()
+    validate_sandbox_task_executor_boundary(boundary)
+    required_logs = _normalize_implementation_branch_refs(["command log", "stdout log", "stderr log"])
+    required_diffs = _normalize_implementation_branch_refs(["pre-execution diff", "post-execution diff", "changed file summary"])
+    required_receipts = _normalize_implementation_branch_refs(["sandbox execution receipt", "task review receipt"])
+    required_verification = _normalize_implementation_branch_refs(["py_compile result", "unit test result", "healthcheck result"])
+    required_rollback = _normalize_implementation_branch_refs(["rollback instructions", "before/after file hashes", "safe tag reference"])
+    missing = _normalize_implementation_branch_refs(required_logs + required_diffs + required_receipts + required_verification + required_rollback)
+    contract = {
+        "sandbox_execution_evidence_contract_version": SANDBOX_EXECUTION_EVIDENCE_CONTRACT_VERSION,
+        "sandbox_execution_evidence_contract_id": make_sandbox_execution_evidence_contract_id(boundary),
+        "sandbox_task_executor_boundary_id": boundary["sandbox_task_executor_boundary_id"],
+        "required_logs": required_logs,
+        "required_diffs": required_diffs,
+        "required_receipts": required_receipts,
+        "required_verification": required_verification,
+        "required_rollback_evidence": required_rollback,
+        "missing_evidence": missing,
+        "blockers": _normalize_implementation_branch_refs(["future sandbox execution evidence has not been produced"]),
+        "recommended_next_action": "Require these evidence artifacts before any future sandbox execution can be reviewed.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_sandbox_execution_evidence_contract(contract, boundary)
+    return contract
+
+
+def validate_sandbox_execution_evidence_contract(contract: dict[str, Any], sandbox_task_executor_boundary: dict[str, Any] | None = None) -> None:
+    required = ("sandbox_execution_evidence_contract_version", "sandbox_execution_evidence_contract_id", "sandbox_task_executor_boundary_id", "required_logs", "required_diffs", "required_receipts", "required_verification", "required_rollback_evidence", "missing_evidence", "blockers", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in contract:
+            raise ValueError(f"sandbox execution evidence contract missing required field: {key}")
+    if contract["sandbox_execution_evidence_contract_version"] != SANDBOX_EXECUTION_EVIDENCE_CONTRACT_VERSION:
+        raise ValueError("invalid sandbox execution evidence contract version")
+    if not isinstance(contract["sandbox_execution_evidence_contract_id"], str) or not contract["sandbox_execution_evidence_contract_id"].startswith("sandbox-execution-evidence-contract-"):
+        raise ValueError("invalid sandbox execution evidence contract id")
+    for field in ("required_logs", "required_diffs", "required_receipts", "required_verification", "required_rollback_evidence", "missing_evidence", "blockers"):
+        if _normalize_implementation_branch_refs(contract[field]) != contract[field] or not contract[field]:
+            raise ValueError(f"sandbox execution evidence contract {field} must be normalized and non-empty")
+    required_all = contract["required_logs"] + contract["required_diffs"] + contract["required_receipts"] + contract["required_verification"] + contract["required_rollback_evidence"]
+    if not set(required_all).issubset(set(contract["missing_evidence"])):
+        raise ValueError("sandbox execution evidence contract missing_evidence must include all required evidence")
+    if contract["safety_metadata"] != _read_only_safety_metadata() or contract["dry_run"] is not True or contract["write_allowed"] is not False or contract["automation_allowed"] is not False or contract["writes"] != []:
+        raise ValueError("sandbox execution evidence contract must be read-only")
+    if sandbox_task_executor_boundary is not None:
+        validate_sandbox_task_executor_boundary(sandbox_task_executor_boundary)
+        if contract["sandbox_task_executor_boundary_id"] != sandbox_task_executor_boundary["sandbox_task_executor_boundary_id"]:
+            raise ValueError("sandbox execution evidence contract boundary id mismatch")
+        if contract["sandbox_execution_evidence_contract_id"] != make_sandbox_execution_evidence_contract_id(sandbox_task_executor_boundary):
+            raise ValueError("sandbox execution evidence contract id is not deterministic")
+
+
+def stable_sandbox_execution_evidence_contract_json(contract: dict[str, Any]) -> str:
+    validate_sandbox_execution_evidence_contract(contract)
+    return _stable_ruflo_json(contract, indent=2) + "\n"
+
+
+def parse_sandbox_execution_evidence_contract_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    contract = _json.loads(text)
+    validate_sandbox_execution_evidence_contract(contract)
+    return contract
+
+
+def make_sandbox_execution_approval_checklist_id(boundary: dict[str, Any], required_approvals: list[str]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "required_approvals": required_approvals,
+        "sandbox_task_executor_boundary_id": boundary["sandbox_task_executor_boundary_id"],
+        "version": SANDBOX_EXECUTION_APPROVAL_CHECKLIST_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"sandbox-execution-approval-checklist-{digest}"
+
+
+def collect_sandbox_execution_approval_checklist(sandbox_task_executor_boundary: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    boundary = sandbox_task_executor_boundary or collect_sandbox_task_executor_boundary()
+    validate_sandbox_task_executor_boundary(boundary)
+    required_approvals = _normalize_implementation_branch_refs(list(boundary["required_approvals"]) + ["approve sandbox executor experiment"])
+    checklist = {
+        "sandbox_execution_approval_checklist_version": SANDBOX_EXECUTION_APPROVAL_CHECKLIST_VERSION,
+        "sandbox_execution_approval_checklist_id": make_sandbox_execution_approval_checklist_id(boundary, required_approvals),
+        "sandbox_task_executor_boundary_id": boundary["sandbox_task_executor_boundary_id"],
+        "required_approvals": required_approvals,
+        "approval_status": "blocked",
+        "blockers": _normalize_implementation_branch_refs(["explicit approval required before sandbox execution experiment"]),
+        "required_human_actions": _normalize_implementation_branch_refs(["review sandbox executor boundary", "approve or reject sandbox executor experiment"]),
+        "recommended_next_action": "Ask for explicit approval only after evidence and scope are reviewed.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_sandbox_execution_approval_checklist(checklist, boundary)
+    return checklist
+
+
+def validate_sandbox_execution_approval_checklist(checklist: dict[str, Any], sandbox_task_executor_boundary: dict[str, Any] | None = None) -> None:
+    required = ("sandbox_execution_approval_checklist_version", "sandbox_execution_approval_checklist_id", "sandbox_task_executor_boundary_id", "required_approvals", "approval_status", "blockers", "required_human_actions", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in checklist:
+            raise ValueError(f"sandbox execution approval checklist missing required field: {key}")
+    if checklist["sandbox_execution_approval_checklist_version"] != SANDBOX_EXECUTION_APPROVAL_CHECKLIST_VERSION:
+        raise ValueError("invalid sandbox execution approval checklist version")
+    if not isinstance(checklist["sandbox_execution_approval_checklist_id"], str) or not checklist["sandbox_execution_approval_checklist_id"].startswith("sandbox-execution-approval-checklist-"):
+        raise ValueError("invalid sandbox execution approval checklist id")
+    if checklist["approval_status"] not in {"blocked", "approved"}:
+        raise ValueError("invalid sandbox execution approval status")
+    for field in ("required_approvals", "blockers", "required_human_actions"):
+        if _normalize_implementation_branch_refs(checklist[field]) != checklist[field] or not checklist[field]:
+            raise ValueError(f"sandbox execution approval checklist {field} must be normalized and non-empty")
+    if checklist["required_approvals"] and checklist["approval_status"] != "blocked":
+        raise ValueError("sandbox execution approval must remain blocked while approvals are required")
+    if checklist["safety_metadata"] != _read_only_safety_metadata() or checklist["dry_run"] is not True or checklist["write_allowed"] is not False or checklist["automation_allowed"] is not False or checklist["writes"] != []:
+        raise ValueError("sandbox execution approval checklist must be read-only")
+    if sandbox_task_executor_boundary is not None:
+        validate_sandbox_task_executor_boundary(sandbox_task_executor_boundary)
+        if checklist["sandbox_task_executor_boundary_id"] != sandbox_task_executor_boundary["sandbox_task_executor_boundary_id"]:
+            raise ValueError("sandbox execution approval checklist boundary id mismatch")
+        if checklist["sandbox_execution_approval_checklist_id"] != make_sandbox_execution_approval_checklist_id(sandbox_task_executor_boundary, checklist["required_approvals"]):
+            raise ValueError("sandbox execution approval checklist id is not deterministic")
+
+
+def stable_sandbox_execution_approval_checklist_json(checklist: dict[str, Any]) -> str:
+    validate_sandbox_execution_approval_checklist(checklist)
+    return _stable_ruflo_json(checklist, indent=2) + "\n"
+
+
+def parse_sandbox_execution_approval_checklist_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    checklist = _json.loads(text)
+    validate_sandbox_execution_approval_checklist(checklist)
+    return checklist
+
+
+def make_sandbox_execution_review_package_id(boundary: dict[str, Any], evidence: dict[str, Any], approvals: dict[str, Any], task_review: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "operator_task_review_package_id": task_review["operator_task_review_package_id"],
+        "sandbox_execution_approval_checklist_id": approvals["sandbox_execution_approval_checklist_id"],
+        "sandbox_execution_evidence_contract_id": evidence["sandbox_execution_evidence_contract_id"],
+        "sandbox_task_executor_boundary_id": boundary["sandbox_task_executor_boundary_id"],
+        "version": SANDBOX_EXECUTION_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"sandbox-execution-review-package-{digest}"
+
+
+def collect_sandbox_execution_review_package(sandbox_task_executor_boundary: dict[str, Any] | None = None, sandbox_execution_evidence_contract: dict[str, Any] | None = None, sandbox_execution_approval_checklist: dict[str, Any] | None = None, operator_task_review_package: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    draft = collect_operator_task_draft()
+    scope = collect_operator_task_scope_review(draft)
+    tests = collect_operator_task_test_plan(draft)
+    action_plan = collect_operator_action_plan_preview()
+    action_evidence = collect_operator_action_evidence_checklist(action_plan)
+    action_approvals = collect_operator_action_approval_checklist(action_plan)
+    task_review = operator_task_review_package or collect_operator_task_review_package(draft, scope, tests, action_evidence, action_approvals)
+    validate_operator_task_review_package(task_review)
+    boundary = sandbox_task_executor_boundary or collect_sandbox_task_executor_boundary(draft, scope, tests, task_review)
+    validate_sandbox_task_executor_boundary(boundary)
+    evidence = sandbox_execution_evidence_contract or collect_sandbox_execution_evidence_contract(boundary)
+    validate_sandbox_execution_evidence_contract(evidence, boundary)
+    approvals = sandbox_execution_approval_checklist or collect_sandbox_execution_approval_checklist(boundary)
+    validate_sandbox_execution_approval_checklist(approvals, boundary)
+    blockers = _normalize_implementation_branch_refs(list(boundary["blockers"]) + list(evidence["blockers"]) + list(approvals["blockers"]) + list(task_review["blockers"]))
+    package = {
+        "sandbox_execution_review_package_version": SANDBOX_EXECUTION_REVIEW_PACKAGE_VERSION,
+        "sandbox_execution_review_package_id": make_sandbox_execution_review_package_id(boundary, evidence, approvals, task_review),
+        "sandbox_task_executor_boundary_id": boundary["sandbox_task_executor_boundary_id"],
+        "sandbox_execution_evidence_contract_id": evidence["sandbox_execution_evidence_contract_id"],
+        "sandbox_execution_approval_checklist_id": approvals["sandbox_execution_approval_checklist_id"],
+        "operator_task_review_package_id": task_review["operator_task_review_package_id"],
+        "execution_candidate_status": boundary["execution_candidate_status"],
+        "evidence_status": "blocked" if evidence["missing_evidence"] else "ready",
+        "approval_status": approvals["approval_status"],
+        "readiness_status": "blocked" if blockers else "ready",
+        "blockers": blockers,
+        "warnings": _normalize_implementation_branch_refs(list(boundary["warnings"]) + list(task_review["warnings"])),
+        "required_human_actions": _normalize_implementation_branch_refs(list(approvals["required_human_actions"]) + list(task_review["required_human_actions"])),
+        "review_recommendation": "Do not execute. Review whether a future sandbox executor experiment should be authorized.",
+        "recommended_next_action": "Resolve blockers and obtain explicit approval before implementing any sandbox executor runtime.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_sandbox_execution_review_package(package, boundary, evidence, approvals, task_review)
+    return package
+
+
+def validate_sandbox_execution_review_package(package: dict[str, Any], sandbox_task_executor_boundary: dict[str, Any] | None = None, sandbox_execution_evidence_contract: dict[str, Any] | None = None, sandbox_execution_approval_checklist: dict[str, Any] | None = None, operator_task_review_package: dict[str, Any] | None = None) -> None:
+    required = ("sandbox_execution_review_package_version", "sandbox_execution_review_package_id", "sandbox_task_executor_boundary_id", "sandbox_execution_evidence_contract_id", "sandbox_execution_approval_checklist_id", "execution_candidate_status", "evidence_status", "approval_status", "readiness_status", "blockers", "warnings", "required_human_actions", "review_recommendation", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in package:
+            raise ValueError(f"sandbox execution review package missing required field: {key}")
+    if package["sandbox_execution_review_package_version"] != SANDBOX_EXECUTION_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid sandbox execution review package version")
+    if not isinstance(package["sandbox_execution_review_package_id"], str) or not package["sandbox_execution_review_package_id"].startswith("sandbox-execution-review-package-"):
+        raise ValueError("invalid sandbox execution review package id")
+    if package["execution_candidate_status"] not in {"blocked", "candidate", "denied"} or package["evidence_status"] not in {"blocked", "ready"} or package["approval_status"] not in {"blocked", "approved"} or package["readiness_status"] not in {"blocked", "ready"}:
+        raise ValueError("invalid sandbox execution review status")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        if _normalize_implementation_branch_refs(package[field]) != package[field] or not package[field]:
+            raise ValueError(f"sandbox execution review package {field} must be normalized and non-empty")
+    if package["blockers"] and package["readiness_status"] != "blocked":
+        raise ValueError("sandbox execution review package must be blocked when blockers exist")
+    if package["safety_metadata"] != _read_only_safety_metadata() or package["dry_run"] is not True or package["write_allowed"] is not False or package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("sandbox execution review package must be read-only")
+    if all(item is not None for item in (sandbox_task_executor_boundary, sandbox_execution_evidence_contract, sandbox_execution_approval_checklist, operator_task_review_package)):
+        validate_sandbox_task_executor_boundary(sandbox_task_executor_boundary)
+        validate_sandbox_execution_evidence_contract(sandbox_execution_evidence_contract, sandbox_task_executor_boundary)
+        validate_sandbox_execution_approval_checklist(sandbox_execution_approval_checklist, sandbox_task_executor_boundary)
+        validate_operator_task_review_package(operator_task_review_package)
+        expected_id = make_sandbox_execution_review_package_id(sandbox_task_executor_boundary, sandbox_execution_evidence_contract, sandbox_execution_approval_checklist, operator_task_review_package)
+        if package["sandbox_execution_review_package_id"] != expected_id:
+            raise ValueError("sandbox execution review package id is not deterministic")
+        if package["sandbox_task_executor_boundary_id"] != sandbox_task_executor_boundary["sandbox_task_executor_boundary_id"]:
+            raise ValueError("sandbox execution review package boundary id mismatch")
+
+
+def stable_sandbox_execution_review_package_json(package: dict[str, Any]) -> str:
+    validate_sandbox_execution_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_sandbox_execution_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_sandbox_execution_review_package(package)
+    return package
+
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -24000,6 +24398,129 @@ def operator_task_review_package_main(argv: list[str] | None = None) -> int:
         print(stable_operator_task_review_package_json(package), end="")
         return 0
     render_operator_task_review_package_plain(package)
+    return 0
+
+
+
+def render_sandbox_task_executor_boundary_plain(boundary: dict[str, Any]) -> None:
+    validate_sandbox_task_executor_boundary(boundary)
+    print("Sandbox task executor boundary")
+    print(f"sandbox_task_executor_boundary_id: {boundary['sandbox_task_executor_boundary_id']}")
+    print(f"operator_task_draft_id: {boundary['operator_task_draft_id']}")
+    print(f"execution_candidate_status: {boundary['execution_candidate_status']}")
+    print(f"allowed_file_count: {len(boundary['allowed_file_scope'])}")
+    print(f"forbidden_file_count: {len(boundary['forbidden_file_scope'])}")
+    print(f"allowed_command_family_count: {len(boundary['allowed_command_families'])}")
+    print(f"forbidden_command_family_count: {len(boundary['forbidden_command_families'])}")
+    print(f"max_diff_lines: {boundary['max_diff_lines']}")
+    print(f"next_action: {boundary['recommended_next_action']}")
+
+
+def sandbox_task_executor_boundary_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Sandbox executor boundary: read-only task execution boundary")
+        print("Read-only sandbox executor planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: sandbox-executor boundary is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    boundary = collect_sandbox_task_executor_boundary()
+    validate_sandbox_task_executor_boundary(boundary)
+    if "--json" in args:
+        print(stable_sandbox_task_executor_boundary_json(boundary), end="")
+        return 0
+    render_sandbox_task_executor_boundary_plain(boundary)
+    return 0
+
+
+def render_sandbox_execution_evidence_contract_plain(contract: dict[str, Any]) -> None:
+    validate_sandbox_execution_evidence_contract(contract)
+    print("Sandbox execution evidence contract")
+    print(f"sandbox_execution_evidence_contract_id: {contract['sandbox_execution_evidence_contract_id']}")
+    print(f"sandbox_task_executor_boundary_id: {contract['sandbox_task_executor_boundary_id']}")
+    print(f"required_log_count: {len(contract['required_logs'])}")
+    print(f"required_diff_count: {len(contract['required_diffs'])}")
+    print(f"required_receipt_count: {len(contract['required_receipts'])}")
+    print(f"missing_evidence_count: {len(contract['missing_evidence'])}")
+    print(f"next_action: {contract['recommended_next_action']}")
+
+
+def sandbox_execution_evidence_contract_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Sandbox executor evidence: read-only execution evidence contract")
+        print("Read-only sandbox executor planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: sandbox-executor evidence is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    contract = collect_sandbox_execution_evidence_contract()
+    validate_sandbox_execution_evidence_contract(contract)
+    if "--json" in args:
+        print(stable_sandbox_execution_evidence_contract_json(contract), end="")
+        return 0
+    render_sandbox_execution_evidence_contract_plain(contract)
+    return 0
+
+
+def render_sandbox_execution_approval_checklist_plain(checklist: dict[str, Any]) -> None:
+    validate_sandbox_execution_approval_checklist(checklist)
+    print("Sandbox execution approval checklist")
+    print(f"sandbox_execution_approval_checklist_id: {checklist['sandbox_execution_approval_checklist_id']}")
+    print(f"sandbox_task_executor_boundary_id: {checklist['sandbox_task_executor_boundary_id']}")
+    print(f"required_approval_count: {len(checklist['required_approvals'])}")
+    print(f"approval_status: {checklist['approval_status']}")
+    print(f"blocker_count: {len(checklist['blockers'])}")
+    print(f"next_action: {checklist['recommended_next_action']}")
+
+
+def sandbox_execution_approval_checklist_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Sandbox executor approvals: read-only execution approval checklist")
+        print("Read-only sandbox executor planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: sandbox-executor approvals is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    checklist = collect_sandbox_execution_approval_checklist()
+    validate_sandbox_execution_approval_checklist(checklist)
+    if "--json" in args:
+        print(stable_sandbox_execution_approval_checklist_json(checklist), end="")
+        return 0
+    render_sandbox_execution_approval_checklist_plain(checklist)
+    return 0
+
+
+def render_sandbox_execution_review_package_plain(package: dict[str, Any]) -> None:
+    validate_sandbox_execution_review_package(package)
+    print("Sandbox execution review package")
+    print(f"sandbox_execution_review_package_id: {package['sandbox_execution_review_package_id']}")
+    print(f"sandbox_task_executor_boundary_id: {package['sandbox_task_executor_boundary_id']}")
+    print(f"execution_candidate_status: {package['execution_candidate_status']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"approval_status: {package['approval_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def sandbox_execution_review_package_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Sandbox executor review: read-only execution review package")
+        print("Read-only sandbox executor planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: sandbox-executor review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_sandbox_execution_review_package()
+    validate_sandbox_execution_review_package(package)
+    if "--json" in args:
+        print(stable_sandbox_execution_review_package_json(package), end="")
+        return 0
+    render_sandbox_execution_review_package_plain(package)
     return 0
 
 

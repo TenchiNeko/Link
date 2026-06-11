@@ -540,6 +540,38 @@ def _cmd_decision(argv: list[str]) -> int:
 
 
 
+def _cmd_sandbox_executor(argv: list[str]) -> int:
+    """Read-only sandbox executor boundary previews."""
+    subcommand = argv[0] if argv else ""
+    if subcommand == "boundary":
+        from link_modes.growth.link_growth_console import sandbox_task_executor_boundary_main as _sandbox_executor_boundary_main
+
+        return _sandbox_executor_boundary_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "evidence":
+        from link_modes.growth.link_growth_console import sandbox_execution_evidence_contract_main as _sandbox_executor_evidence_main
+
+        return _sandbox_executor_evidence_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "approvals":
+        from link_modes.growth.link_growth_console import sandbox_execution_approval_checklist_main as _sandbox_executor_approvals_main
+
+        return _sandbox_executor_approvals_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "review":
+        from link_modes.growth.link_growth_console import sandbox_execution_review_package_main as _sandbox_executor_review_main
+
+        return _sandbox_executor_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand in ("-h", "--help", "help", ""):
+        print("Sandbox executor commands:")
+        print("  boundary   Preview sandbox task executor boundary")
+        print("  evidence   Preview sandbox execution evidence contract")
+        print("  approvals  Preview sandbox execution approval checklist")
+        print("  review     Preview sandbox execution review package")
+        return 0
+    print(f"sandbox-executor: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py sandbox-executor --help' for subcommands.", file=sys.stderr)
+    return 2
+
+
+
 def _cmd_operator(argv: list[str]) -> int:
     """Read-only operator action planning previews."""
     subcommand = argv[0] if argv else ""
@@ -1051,6 +1083,7 @@ _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "sandbox": (_cmd_sandbox, "Read-only execution readiness sandbox projections."),
     "decision": (_cmd_decision, "Read-only operator decision support previews."),
     "operator": (_cmd_operator, "Read-only operator action planning previews."),
+    "sandbox-executor": (_cmd_sandbox_executor, "Read-only sandbox executor boundary previews."),
     "dashboard": (_cmd_dashboard, "Compact diagnostics dashboard."),
     "self-test": (_cmd_self_test, "Run canonical architecture smoke checks."),
     "config": (_cmd_config, "Validate Link configuration files against runtime."),
