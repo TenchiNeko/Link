@@ -16241,6 +16241,192 @@ def check_operator_decision_trace_clis() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62q. Operator action plan preview
+# ---------------------------------------------------------------------------
+
+def check_operator_action_plan_helpers() -> None:
+    """Operator action plan converts the decision trace into a non-executable task plan."""
+    from link_modes.growth.link_growth_console import (
+        collect_operator_action_approval_checklist,
+        collect_operator_action_evidence_checklist,
+        collect_operator_action_plan_preview,
+        collect_operator_action_review_package,
+        collect_operator_decision_review,
+        collect_operator_decision_trace_package,
+        collect_remediation_dependency_graph,
+        collect_remediation_priority_queue,
+        collect_simulation_remediation_plan,
+        parse_operator_action_approval_checklist_json,
+        parse_operator_action_evidence_checklist_json,
+        parse_operator_action_plan_preview_json,
+        parse_operator_action_review_package_json,
+        stable_operator_action_approval_checklist_json,
+        stable_operator_action_evidence_checklist_json,
+        stable_operator_action_plan_preview_json,
+        stable_operator_action_review_package_json,
+        validate_operator_action_approval_checklist,
+        validate_operator_action_evidence_checklist,
+        validate_operator_action_plan_preview,
+        validate_operator_action_review_package,
+    )
+
+    remediation_plan = collect_simulation_remediation_plan()
+    graph = collect_remediation_dependency_graph(remediation_plan)
+    queue = collect_remediation_priority_queue(remediation_plan, graph)
+    decision_review = collect_operator_decision_review()
+    trace = collect_operator_decision_trace_package(operator_decision_review=decision_review)
+
+    preview = collect_operator_action_plan_preview(trace, decision_review, remediation_plan, queue)
+    same_preview = collect_operator_action_plan_preview(trace, decision_review, remediation_plan, queue)
+    validate_operator_action_plan_preview(preview, trace, decision_review, remediation_plan, queue)
+    _require(preview["operator_action_plan_preview_id"] == same_preview["operator_action_plan_preview_id"],
+             "operator action plan preview id must be deterministic")
+    _require(preview["top_candidate_id"] == trace["top_candidate_id"],
+             "operator action plan must flow from decision trace top candidate")
+    _require(preview["operator_decision_review_id"] == decision_review["operator_decision_review_id"],
+             "operator action plan must flow from decision review")
+    _require(preview["execution_allowed"] is False,
+             "operator action plan must never allow execution")
+    _require("link.py" in preview["likely_affected_files"] and "tests/test_growth_pipeline.py" in preview["likely_affected_files"],
+             "operator action plan must include likely source/test files")
+    _require(preview["affected_modules"] and preview["expected_tests"] and preview["rollback_plan"],
+             "operator action plan must include modules, expected tests, and rollback plan")
+    _require(parse_operator_action_plan_preview_json(stable_operator_action_plan_preview_json(preview)) == preview,
+             "operator action plan JSON must round trip")
+
+    evidence = collect_operator_action_evidence_checklist(preview)
+    same_evidence = collect_operator_action_evidence_checklist(preview)
+    validate_operator_action_evidence_checklist(evidence, preview)
+    _require(evidence["operator_action_evidence_checklist_id"] == same_evidence["operator_action_evidence_checklist_id"],
+             "operator action evidence checklist id must be deterministic")
+    _require(evidence["operator_action_plan_preview_id"] == preview["operator_action_plan_preview_id"],
+             "operator action evidence checklist must flow from action plan")
+    _require(evidence["evidence_status"] == "blocked" and evidence["missing_evidence"],
+             "operator action evidence checklist must block on missing evidence")
+    _require(parse_operator_action_evidence_checklist_json(stable_operator_action_evidence_checklist_json(evidence)) == evidence,
+             "operator action evidence checklist JSON must round trip")
+
+    approvals = collect_operator_action_approval_checklist(preview)
+    same_approvals = collect_operator_action_approval_checklist(preview)
+    validate_operator_action_approval_checklist(approvals, preview)
+    _require(approvals["operator_action_approval_checklist_id"] == same_approvals["operator_action_approval_checklist_id"],
+             "operator action approval checklist id must be deterministic")
+    _require(approvals["operator_action_plan_preview_id"] == preview["operator_action_plan_preview_id"],
+             "operator action approval checklist must flow from action plan")
+    _require(approvals["approval_status"] == "blocked" and approvals["required_approvals"],
+             "operator action approval checklist must block on required approvals")
+    _require(parse_operator_action_approval_checklist_json(stable_operator_action_approval_checklist_json(approvals)) == approvals,
+             "operator action approval checklist JSON must round trip")
+
+    review = collect_operator_action_review_package(preview, evidence, approvals)
+    same_review = collect_operator_action_review_package(preview, evidence, approvals)
+    validate_operator_action_review_package(review, preview, evidence, approvals)
+    _require(review["operator_action_review_package_id"] == same_review["operator_action_review_package_id"],
+             "operator action review package id must be deterministic")
+    _require(review["operator_action_plan_preview_id"] == preview["operator_action_plan_preview_id"],
+             "operator action review must flow from action plan")
+    _require(review["operator_action_evidence_checklist_id"] == evidence["operator_action_evidence_checklist_id"],
+             "operator action review must flow from evidence checklist")
+    _require(review["operator_action_approval_checklist_id"] == approvals["operator_action_approval_checklist_id"],
+             "operator action review must flow from approval checklist")
+    _require(review["action_status"] == "preview_only" and review["readiness_status"] == "blocked",
+             "operator action review must remain preview-only and blocked")
+    _require(parse_operator_action_review_package_json(stable_operator_action_review_package_json(review)) == review,
+             "operator action review package JSON must round trip")
+
+    bad_preview = json.loads(stable_operator_action_plan_preview_json(preview))
+    bad_preview["execution_allowed"] = True
+    try:
+        validate_operator_action_plan_preview(bad_preview)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator action plan validation must reject execution_allowed=True")
+
+    bad_evidence = json.loads(stable_operator_action_evidence_checklist_json(evidence))
+    bad_evidence["evidence_items"] = []
+    try:
+        validate_operator_action_evidence_checklist(bad_evidence)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator action evidence validation must reject empty evidence items")
+
+    bad_approvals = json.loads(stable_operator_action_approval_checklist_json(approvals))
+    bad_approvals["approval_status"] = "approved"
+    try:
+        validate_operator_action_approval_checklist(bad_approvals)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator action approval validation must reject approval drift")
+
+    bad_review = json.loads(stable_operator_action_review_package_json(review))
+    bad_review["write_allowed"] = True
+    try:
+        validate_operator_action_review_package(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator action review validation must reject writes")
+
+    print("operator action plan helpers OK")
+
+
+def check_operator_action_plan_clis() -> None:
+    """Operator action CLIs expose concise read-only action planning payloads."""
+    from link import _cmd_operator
+    from link_modes.growth.link_growth_console import (
+        operator_action_approval_checklist_main,
+        operator_action_evidence_checklist_main,
+        operator_action_plan_preview_main,
+        operator_action_review_package_main,
+        parse_operator_action_plan_preview_json,
+    )
+
+    commands = [
+        ("action-plan", operator_action_plan_preview_main),
+        ("action-evidence", operator_action_evidence_checklist_main),
+        ("action-approvals", operator_action_approval_checklist_main),
+        ("action-review", operator_action_review_package_main),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_operator(["--help"])
+    _require(help_rc == 0, "operator --help must return 0")
+    for command, main_func in commands:
+        _require(command in help_out.getvalue(), f"operator help must include {command}")
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"operator {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"operator {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"operator {command} --write must not print normal output")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = _cmd_operator(["action-plan", "--json"])
+    parsed = parse_operator_action_plan_preview_json(json_out.getvalue())
+    _require(json_rc == 0, "operator action-plan route must return 0")
+    _require(parsed["execution_allowed"] is False and parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "operator action-plan CLI must remain read-only and non-executable")
+    _require("operator_decision_trace_package" not in parsed and "operator_decision_review" not in parsed,
+             "operator action-plan --json must output only its object payload")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = operator_action_plan_preview_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "operator action-plan human mode must return 0")
+    _require("Operator action plan preview" in human and "operator_action_plan_preview_id:" in human,
+             "operator action-plan human mode must include title and id")
+    _require(len(human.splitlines()) <= 12, "operator action-plan human mode must stay concise")
+    print("operator action plan CLIs OK")
+
+
+# ---------------------------------------------------------------------------
 # 62q. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
 
@@ -17289,6 +17475,8 @@ def main() -> None:
     check_operator_decision_engine_clis()
     check_operator_decision_trace_helpers()
     check_operator_decision_trace_clis()
+    check_operator_action_plan_helpers()
+    check_operator_action_plan_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

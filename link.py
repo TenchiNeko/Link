@@ -540,6 +540,38 @@ def _cmd_decision(argv: list[str]) -> int:
 
 
 
+def _cmd_operator(argv: list[str]) -> int:
+    """Read-only operator action planning previews."""
+    subcommand = argv[0] if argv else ""
+    if subcommand == "action-plan":
+        from link_modes.growth.link_growth_console import operator_action_plan_preview_main as _operator_action_plan_main
+
+        return _operator_action_plan_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "action-evidence":
+        from link_modes.growth.link_growth_console import operator_action_evidence_checklist_main as _operator_action_evidence_main
+
+        return _operator_action_evidence_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "action-approvals":
+        from link_modes.growth.link_growth_console import operator_action_approval_checklist_main as _operator_action_approvals_main
+
+        return _operator_action_approvals_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "action-review":
+        from link_modes.growth.link_growth_console import operator_action_review_package_main as _operator_action_review_main
+
+        return _operator_action_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand in ("-h", "--help", "help", ""):
+        print("Operator commands:")
+        print("  action-plan       Preview the concrete next operator action plan")
+        print("  action-evidence   Preview evidence required for the action plan")
+        print("  action-approvals  Preview approvals required for the action plan")
+        print("  action-review     Preview operator action review package")
+        return 0
+    print(f"operator: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py operator --help' for subcommands.", file=sys.stderr)
+    return 2
+
+
+
 def _cmd_dashboard(argv: list[str]) -> int:
     """Print a compact dashboard/status summary."""
     from link_core.dashboard import collect as _collect
@@ -998,6 +1030,7 @@ _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "simulation": (_cmd_simulation, "Dry-run business execution simulation previews."),
     "sandbox": (_cmd_sandbox, "Read-only execution readiness sandbox projections."),
     "decision": (_cmd_decision, "Read-only operator decision support previews."),
+    "operator": (_cmd_operator, "Read-only operator action planning previews."),
     "dashboard": (_cmd_dashboard, "Compact diagnostics dashboard."),
     "self-test": (_cmd_self_test, "Run canonical architecture smoke checks."),
     "config": (_cmd_config, "Validate Link configuration files against runtime."),

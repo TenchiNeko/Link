@@ -11058,6 +11058,10 @@ DECISION_SCORE_BREAKDOWN_VERSION = "link-decision-score-breakdown-v1"
 REJECTED_ALTERNATIVE_ANALYSIS_VERSION = "link-rejected-alternative-analysis-v1"
 DECISION_ASSUMPTION_LEDGER_VERSION = "link-decision-assumption-ledger-v1"
 OPERATOR_DECISION_TRACE_PACKAGE_VERSION = "link-operator-decision-trace-package-v1"
+OPERATOR_ACTION_PLAN_PREVIEW_VERSION = "link-operator-action-plan-preview-v1"
+OPERATOR_ACTION_EVIDENCE_CHECKLIST_VERSION = "link-operator-action-evidence-checklist-v1"
+OPERATOR_ACTION_APPROVAL_CHECKLIST_VERSION = "link-operator-action-approval-checklist-v1"
+OPERATOR_ACTION_REVIEW_PACKAGE_VERSION = "link-operator-action-review-package-v1"
 REMEDIATION_PRIORITIES = ("critical", "high", "medium", "low")
 BUSINESS_EXECUTION_SIMULATED_STEPS = (
     "validate opportunity",
@@ -19079,6 +19083,381 @@ def parse_operator_decision_trace_package_json(text: str) -> dict[str, Any]:
 
 
 
+def _operator_action_top_candidate(candidate_set: dict[str, Any], top_candidate_id: str) -> dict[str, Any]:
+    for candidate in candidate_set["candidates"]:
+        if candidate["decision_candidate_id"] == top_candidate_id:
+            return candidate
+    raise ValueError("top decision candidate not found for operator action plan")
+
+
+def make_operator_action_plan_preview_id(trace: dict[str, Any], review: dict[str, Any], plan: dict[str, Any], queue: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "operator_decision_trace_package_id": trace["operator_decision_trace_package_id"],
+        "operator_decision_review_id": review["operator_decision_review_id"],
+        "remediation_priority_queue_id": queue["remediation_priority_queue_id"],
+        "simulation_remediation_plan_id": plan["simulation_remediation_plan_id"],
+        "top_candidate_id": trace["top_candidate_id"],
+        "version": OPERATOR_ACTION_PLAN_PREVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-action-plan-preview-{digest}"
+
+
+def collect_operator_action_plan_preview(operator_decision_trace_package: dict[str, Any] | None = None, operator_decision_review: dict[str, Any] | None = None, simulation_remediation_plan: dict[str, Any] | None = None, remediation_priority_queue: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Convert the winning decision trace into a concrete non-executable task plan."""
+    remediation_plan = simulation_remediation_plan or collect_simulation_remediation_plan()
+    validate_simulation_remediation_plan(remediation_plan)
+    graph = collect_remediation_dependency_graph(remediation_plan)
+    queue = remediation_priority_queue or collect_remediation_priority_queue(remediation_plan, graph)
+    validate_remediation_priority_queue(queue, remediation_plan, graph)
+    candidate_set = collect_decision_candidate_set(remediation_plan, queue)
+    impact = collect_decision_impact_analysis(candidate_set)
+    ranking = collect_decision_ranking(candidate_set, impact)
+    review = operator_decision_review or collect_operator_decision_review(candidate_set, impact, ranking)
+    validate_operator_decision_review(review, candidate_set, impact, ranking)
+    breakdown = collect_decision_score_breakdown(candidate_set, impact, ranking)
+    rejected = collect_rejected_alternative_analysis(candidate_set, ranking, breakdown)
+    ledger = collect_decision_assumption_ledger(candidate_set, ranking, review)
+    trace = operator_decision_trace_package or collect_operator_decision_trace_package(ranking, breakdown, rejected, ledger, review, candidate_set, impact)
+    validate_operator_decision_trace_package(trace, ranking, breakdown, rejected, ledger, review)
+    top_candidate = _operator_action_top_candidate(candidate_set, trace["top_candidate_id"])
+    top_step = next((step for step in remediation_plan["remediation_steps"] if step["remediation_step_id"] in top_candidate["source_refs"]), remediation_plan["remediation_steps"][0])
+    required_evidence = _normalize_implementation_branch_refs(list(top_step["required_evidence"]) + list(top_candidate["source_refs"][:2]))
+    required_approvals = _normalize_implementation_branch_refs(list(top_step["required_approvals"]) + ["human approval before execution planning"])
+    preview = {
+        "operator_action_plan_preview_version": OPERATOR_ACTION_PLAN_PREVIEW_VERSION,
+        "operator_action_plan_preview_id": make_operator_action_plan_preview_id(trace, review, remediation_plan, queue),
+        "operator_decision_trace_package_id": trace["operator_decision_trace_package_id"],
+        "operator_decision_review_id": review["operator_decision_review_id"],
+        "simulation_remediation_plan_id": remediation_plan["simulation_remediation_plan_id"],
+        "remediation_priority_queue_id": queue["remediation_priority_queue_id"],
+        "top_candidate_id": trace["top_candidate_id"],
+        "action_title": top_candidate["title"],
+        "action_summary": f"Plan the next non-executable remediation slice: {top_candidate['title']}",
+        "affected_modules": _normalize_implementation_branch_refs(["decision", "link-router", "operator", "simulation"]),
+        "likely_affected_files": _normalize_implementation_branch_refs(["link.py", "link_modes/growth/link_growth_console.py", "tests/test_growth_pipeline.py"]),
+        "required_evidence": required_evidence,
+        "required_approvals": required_approvals,
+        "expected_tests": _normalize_implementation_branch_refs([
+            "git diff --check -- link.py link_modes/growth/link_growth_console.py tests/test_growth_pipeline.py",
+            "python3 -m py_compile link.py link_modes/growth/link_growth_console.py tests/test_growth_pipeline.py",
+            "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_growth_pipeline.py",
+            "PYTHONDONTWRITEBYTECODE=1 python3 link_healthcheck.py",
+        ]),
+        "rollback_plan": _normalize_implementation_branch_refs([
+            "do not run the planned action automatically",
+            "revert only the planned source/test edits if review rejects the slice",
+            "keep safe-link-latest unchanged until verification and commit approval",
+        ]),
+        "execution_allowed": False,
+        "recommended_next_action": "Review this action plan, then decide whether to create an approved implementation slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_action_plan_preview(preview, trace, review, remediation_plan, queue)
+    return preview
+
+
+def validate_operator_action_plan_preview(preview: dict[str, Any], operator_decision_trace_package: dict[str, Any] | None = None, operator_decision_review: dict[str, Any] | None = None, simulation_remediation_plan: dict[str, Any] | None = None, remediation_priority_queue: dict[str, Any] | None = None) -> None:
+    required = ("operator_action_plan_preview_version", "operator_action_plan_preview_id", "operator_decision_trace_package_id", "operator_decision_review_id", "simulation_remediation_plan_id", "remediation_priority_queue_id", "top_candidate_id", "action_title", "action_summary", "affected_modules", "likely_affected_files", "required_evidence", "required_approvals", "expected_tests", "rollback_plan", "execution_allowed", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in preview:
+            raise ValueError(f"operator action plan preview missing required field: {key}")
+    if preview["operator_action_plan_preview_version"] != OPERATOR_ACTION_PLAN_PREVIEW_VERSION:
+        raise ValueError("invalid operator action plan preview version")
+    if not isinstance(preview["operator_action_plan_preview_id"], str) or not preview["operator_action_plan_preview_id"].startswith("operator-action-plan-preview-"):
+        raise ValueError("invalid operator action plan preview id")
+    for field in ("action_title", "action_summary", "recommended_next_action", "top_candidate_id"):
+        if not isinstance(preview[field], str) or not preview[field].strip():
+            raise ValueError(f"operator action plan preview {field} must be non-empty")
+    for field in ("affected_modules", "likely_affected_files", "required_evidence", "required_approvals", "expected_tests", "rollback_plan"):
+        if _normalize_implementation_branch_refs(preview[field]) != preview[field] or not preview[field]:
+            raise ValueError(f"operator action plan preview {field} must be normalized and non-empty")
+    if preview["execution_allowed"] is not False:
+        raise ValueError("operator action plan preview must not allow execution")
+    if preview["safety_metadata"] != _read_only_safety_metadata() or preview["dry_run"] is not True or preview["write_allowed"] is not False or preview["automation_allowed"] is not False or preview["writes"] != []:
+        raise ValueError("operator action plan preview must be read-only")
+    if all(item is not None for item in (operator_decision_trace_package, operator_decision_review, simulation_remediation_plan, remediation_priority_queue)):
+        validate_operator_decision_trace_package(operator_decision_trace_package)
+        validate_operator_decision_review(operator_decision_review)
+        validate_simulation_remediation_plan(simulation_remediation_plan)
+        validate_remediation_priority_queue(remediation_priority_queue, simulation_remediation_plan)
+        expected_id = make_operator_action_plan_preview_id(operator_decision_trace_package, operator_decision_review, simulation_remediation_plan, remediation_priority_queue)
+        if preview["operator_action_plan_preview_id"] != expected_id:
+            raise ValueError("operator action plan preview id is not deterministic")
+        if preview["top_candidate_id"] != operator_decision_trace_package["top_candidate_id"]:
+            raise ValueError("operator action plan preview top candidate mismatch")
+
+
+def stable_operator_action_plan_preview_json(preview: dict[str, Any]) -> str:
+    validate_operator_action_plan_preview(preview)
+    return _stable_ruflo_json(preview, indent=2) + "\n"
+
+
+def parse_operator_action_plan_preview_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    preview = _json.loads(text)
+    validate_operator_action_plan_preview(preview)
+    return preview
+
+
+def make_operator_action_evidence_checklist_id(action_plan_preview: dict[str, Any], evidence_items: list[str]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "evidence_items": evidence_items,
+        "operator_action_plan_preview_id": action_plan_preview["operator_action_plan_preview_id"],
+        "version": OPERATOR_ACTION_EVIDENCE_CHECKLIST_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-action-evidence-checklist-{digest}"
+
+
+def collect_operator_action_evidence_checklist(operator_action_plan_preview: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    preview = operator_action_plan_preview or collect_operator_action_plan_preview()
+    validate_operator_action_plan_preview(preview)
+    evidence_items = _normalize_implementation_branch_refs(list(preview["required_evidence"]) + list(preview["expected_tests"]))
+    missing_evidence = _normalize_implementation_branch_refs(list(preview["required_evidence"]))
+    checklist = {
+        "operator_action_evidence_checklist_version": OPERATOR_ACTION_EVIDENCE_CHECKLIST_VERSION,
+        "operator_action_evidence_checklist_id": make_operator_action_evidence_checklist_id(preview, evidence_items),
+        "operator_action_plan_preview_id": preview["operator_action_plan_preview_id"],
+        "evidence_items": evidence_items,
+        "missing_evidence": missing_evidence,
+        "evidence_status": "blocked" if missing_evidence else "ready",
+        "blockers": _normalize_implementation_branch_refs(["required evidence has not been collected for this action plan"] if missing_evidence else []),
+        "recommended_next_action": "Collect or confirm the required evidence before any execution-capable slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_action_evidence_checklist(checklist, preview)
+    return checklist
+
+
+def validate_operator_action_evidence_checklist(checklist: dict[str, Any], operator_action_plan_preview: dict[str, Any] | None = None) -> None:
+    required = ("operator_action_evidence_checklist_version", "operator_action_evidence_checklist_id", "operator_action_plan_preview_id", "evidence_items", "missing_evidence", "evidence_status", "blockers", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in checklist:
+            raise ValueError(f"operator action evidence checklist missing required field: {key}")
+    if checklist["operator_action_evidence_checklist_version"] != OPERATOR_ACTION_EVIDENCE_CHECKLIST_VERSION:
+        raise ValueError("invalid operator action evidence checklist version")
+    if not isinstance(checklist["operator_action_evidence_checklist_id"], str) or not checklist["operator_action_evidence_checklist_id"].startswith("operator-action-evidence-checklist-"):
+        raise ValueError("invalid operator action evidence checklist id")
+    for field in ("evidence_items", "missing_evidence", "blockers"):
+        if _normalize_implementation_branch_refs(checklist[field]) != checklist[field]:
+            raise ValueError(f"operator action evidence checklist {field} must be normalized")
+    if not checklist["evidence_items"]:
+        raise ValueError("operator action evidence checklist must include evidence items")
+    if checklist["evidence_status"] not in {"blocked", "ready"}:
+        raise ValueError("invalid operator action evidence status")
+    if checklist["missing_evidence"] and checklist["evidence_status"] != "blocked":
+        raise ValueError("operator action evidence must be blocked when evidence is missing")
+    if checklist["safety_metadata"] != _read_only_safety_metadata() or checklist["dry_run"] is not True or checklist["write_allowed"] is not False or checklist["automation_allowed"] is not False or checklist["writes"] != []:
+        raise ValueError("operator action evidence checklist must be read-only")
+    if operator_action_plan_preview is not None:
+        validate_operator_action_plan_preview(operator_action_plan_preview)
+        if checklist["operator_action_plan_preview_id"] != operator_action_plan_preview["operator_action_plan_preview_id"]:
+            raise ValueError("operator action evidence checklist plan id mismatch")
+        if checklist["operator_action_evidence_checklist_id"] != make_operator_action_evidence_checklist_id(operator_action_plan_preview, checklist["evidence_items"]):
+            raise ValueError("operator action evidence checklist id is not deterministic")
+
+
+def stable_operator_action_evidence_checklist_json(checklist: dict[str, Any]) -> str:
+    validate_operator_action_evidence_checklist(checklist)
+    return _stable_ruflo_json(checklist, indent=2) + "\n"
+
+
+def parse_operator_action_evidence_checklist_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    checklist = _json.loads(text)
+    validate_operator_action_evidence_checklist(checklist)
+    return checklist
+
+
+def make_operator_action_approval_checklist_id(action_plan_preview: dict[str, Any], required_approvals: list[str]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "operator_action_plan_preview_id": action_plan_preview["operator_action_plan_preview_id"],
+        "required_approvals": required_approvals,
+        "version": OPERATOR_ACTION_APPROVAL_CHECKLIST_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-action-approval-checklist-{digest}"
+
+
+def collect_operator_action_approval_checklist(operator_action_plan_preview: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    preview = operator_action_plan_preview or collect_operator_action_plan_preview()
+    validate_operator_action_plan_preview(preview)
+    required_approvals = _normalize_implementation_branch_refs(list(preview["required_approvals"]))
+    blockers = _normalize_implementation_branch_refs(["human approval is required before this action can execute"] if required_approvals else [])
+    checklist = {
+        "operator_action_approval_checklist_version": OPERATOR_ACTION_APPROVAL_CHECKLIST_VERSION,
+        "operator_action_approval_checklist_id": make_operator_action_approval_checklist_id(preview, required_approvals),
+        "operator_action_plan_preview_id": preview["operator_action_plan_preview_id"],
+        "required_approvals": required_approvals,
+        "approval_status": "blocked" if required_approvals else "approved",
+        "blockers": blockers,
+        "required_human_actions": _normalize_implementation_branch_refs(["review operator action plan", "explicitly approve any future execution-capable slice"]),
+        "recommended_next_action": "Review and approve the action plan before any execution-capable implementation.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_action_approval_checklist(checklist, preview)
+    return checklist
+
+
+def validate_operator_action_approval_checklist(checklist: dict[str, Any], operator_action_plan_preview: dict[str, Any] | None = None) -> None:
+    required = ("operator_action_approval_checklist_version", "operator_action_approval_checklist_id", "operator_action_plan_preview_id", "required_approvals", "approval_status", "blockers", "required_human_actions", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in checklist:
+            raise ValueError(f"operator action approval checklist missing required field: {key}")
+    if checklist["operator_action_approval_checklist_version"] != OPERATOR_ACTION_APPROVAL_CHECKLIST_VERSION:
+        raise ValueError("invalid operator action approval checklist version")
+    if not isinstance(checklist["operator_action_approval_checklist_id"], str) or not checklist["operator_action_approval_checklist_id"].startswith("operator-action-approval-checklist-"):
+        raise ValueError("invalid operator action approval checklist id")
+    for field in ("required_approvals", "blockers", "required_human_actions"):
+        if _normalize_implementation_branch_refs(checklist[field]) != checklist[field]:
+            raise ValueError(f"operator action approval checklist {field} must be normalized")
+    if checklist["approval_status"] not in {"blocked", "approved"}:
+        raise ValueError("invalid operator action approval status")
+    if checklist["required_approvals"] and checklist["approval_status"] != "blocked":
+        raise ValueError("operator action approval must be blocked while approvals are required")
+    if checklist["safety_metadata"] != _read_only_safety_metadata() or checklist["dry_run"] is not True or checklist["write_allowed"] is not False or checklist["automation_allowed"] is not False or checklist["writes"] != []:
+        raise ValueError("operator action approval checklist must be read-only")
+    if operator_action_plan_preview is not None:
+        validate_operator_action_plan_preview(operator_action_plan_preview)
+        if checklist["operator_action_plan_preview_id"] != operator_action_plan_preview["operator_action_plan_preview_id"]:
+            raise ValueError("operator action approval checklist plan id mismatch")
+        if checklist["operator_action_approval_checklist_id"] != make_operator_action_approval_checklist_id(operator_action_plan_preview, checklist["required_approvals"]):
+            raise ValueError("operator action approval checklist id is not deterministic")
+
+
+def stable_operator_action_approval_checklist_json(checklist: dict[str, Any]) -> str:
+    validate_operator_action_approval_checklist(checklist)
+    return _stable_ruflo_json(checklist, indent=2) + "\n"
+
+
+def parse_operator_action_approval_checklist_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    checklist = _json.loads(text)
+    validate_operator_action_approval_checklist(checklist)
+    return checklist
+
+
+def make_operator_action_review_package_id(action_plan_preview: dict[str, Any], evidence_checklist: dict[str, Any], approval_checklist: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "operator_action_approval_checklist_id": approval_checklist["operator_action_approval_checklist_id"],
+        "operator_action_evidence_checklist_id": evidence_checklist["operator_action_evidence_checklist_id"],
+        "operator_action_plan_preview_id": action_plan_preview["operator_action_plan_preview_id"],
+        "version": OPERATOR_ACTION_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-action-review-package-{digest}"
+
+
+def collect_operator_action_review_package(operator_action_plan_preview: dict[str, Any] | None = None, operator_action_evidence_checklist: dict[str, Any] | None = None, operator_action_approval_checklist: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    preview = operator_action_plan_preview or collect_operator_action_plan_preview()
+    validate_operator_action_plan_preview(preview)
+    evidence = operator_action_evidence_checklist or collect_operator_action_evidence_checklist(preview)
+    validate_operator_action_evidence_checklist(evidence, preview)
+    approvals = operator_action_approval_checklist or collect_operator_action_approval_checklist(preview)
+    validate_operator_action_approval_checklist(approvals, preview)
+    blockers = _normalize_implementation_branch_refs(list(evidence["blockers"]) + list(approvals["blockers"]) + (["operator action plan is preview-only"] if preview["execution_allowed"] is False else []))
+    required_human_actions = _normalize_implementation_branch_refs(list(approvals["required_human_actions"]) + ["confirm expected tests before implementation"])
+    package = {
+        "operator_action_review_package_version": OPERATOR_ACTION_REVIEW_PACKAGE_VERSION,
+        "operator_action_review_package_id": make_operator_action_review_package_id(preview, evidence, approvals),
+        "operator_action_plan_preview_id": preview["operator_action_plan_preview_id"],
+        "operator_action_evidence_checklist_id": evidence["operator_action_evidence_checklist_id"],
+        "operator_action_approval_checklist_id": approvals["operator_action_approval_checklist_id"],
+        "action_status": "preview_only",
+        "evidence_status": evidence["evidence_status"],
+        "approval_status": approvals["approval_status"],
+        "readiness_status": "blocked" if blockers else "ready",
+        "blockers": blockers,
+        "warnings": _normalize_implementation_branch_refs(["action plan does not execute or create files", "expected tests must pass before commit"]),
+        "required_human_actions": required_human_actions,
+        "review_recommendation": "Review the action plan and decide whether to authorize a separate implementation slice.",
+        "recommended_next_action": "Use this review package as the handoff for the next human-approved slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_action_review_package(package, preview, evidence, approvals)
+    return package
+
+
+def validate_operator_action_review_package(package: dict[str, Any], operator_action_plan_preview: dict[str, Any] | None = None, operator_action_evidence_checklist: dict[str, Any] | None = None, operator_action_approval_checklist: dict[str, Any] | None = None) -> None:
+    required = ("operator_action_review_package_version", "operator_action_review_package_id", "operator_action_plan_preview_id", "operator_action_evidence_checklist_id", "operator_action_approval_checklist_id", "action_status", "evidence_status", "approval_status", "readiness_status", "blockers", "warnings", "required_human_actions", "review_recommendation", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in package:
+            raise ValueError(f"operator action review package missing required field: {key}")
+    if package["operator_action_review_package_version"] != OPERATOR_ACTION_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid operator action review package version")
+    if not isinstance(package["operator_action_review_package_id"], str) or not package["operator_action_review_package_id"].startswith("operator-action-review-package-"):
+        raise ValueError("invalid operator action review package id")
+    if package["action_status"] != "preview_only":
+        raise ValueError("operator action review package must remain preview-only")
+    if package["evidence_status"] not in {"blocked", "ready"} or package["approval_status"] not in {"blocked", "approved"} or package["readiness_status"] not in {"blocked", "ready"}:
+        raise ValueError("invalid operator action review status")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        if _normalize_implementation_branch_refs(package[field]) != package[field] or not package[field]:
+            raise ValueError(f"operator action review package {field} must be normalized and non-empty")
+    if package["blockers"] and package["readiness_status"] != "blocked":
+        raise ValueError("operator action review must be blocked when blockers exist")
+    if package["safety_metadata"] != _read_only_safety_metadata() or package["dry_run"] is not True or package["write_allowed"] is not False or package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("operator action review package must be read-only")
+    if all(item is not None for item in (operator_action_plan_preview, operator_action_evidence_checklist, operator_action_approval_checklist)):
+        validate_operator_action_plan_preview(operator_action_plan_preview)
+        validate_operator_action_evidence_checklist(operator_action_evidence_checklist, operator_action_plan_preview)
+        validate_operator_action_approval_checklist(operator_action_approval_checklist, operator_action_plan_preview)
+        if package["operator_action_plan_preview_id"] != operator_action_plan_preview["operator_action_plan_preview_id"]:
+            raise ValueError("operator action review package plan id mismatch")
+        if package["operator_action_evidence_checklist_id"] != operator_action_evidence_checklist["operator_action_evidence_checklist_id"]:
+            raise ValueError("operator action review package evidence id mismatch")
+        if package["operator_action_approval_checklist_id"] != operator_action_approval_checklist["operator_action_approval_checklist_id"]:
+            raise ValueError("operator action review package approval id mismatch")
+        if package["operator_action_review_package_id"] != make_operator_action_review_package_id(operator_action_plan_preview, operator_action_evidence_checklist, operator_action_approval_checklist):
+            raise ValueError("operator action review package id is not deterministic")
+
+
+def stable_operator_action_review_package_json(package: dict[str, Any]) -> str:
+    validate_operator_action_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_operator_action_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_operator_action_review_package(package)
+    return package
+
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -23009,6 +23388,132 @@ def operator_decision_trace_package_main(argv: list[str] | None = None) -> int:
         print(stable_operator_decision_trace_package_json(package), end="")
         return 0
     render_operator_decision_trace_package_plain(package)
+    return 0
+
+
+
+def render_operator_action_plan_preview_plain(preview: dict[str, Any]) -> None:
+    validate_operator_action_plan_preview(preview)
+    print("Operator action plan preview")
+    print(f"operator_action_plan_preview_id: {preview['operator_action_plan_preview_id']}")
+    print(f"top_candidate_id: {preview['top_candidate_id']}")
+    print(f"action_title: {preview['action_title']}")
+    print(f"affected_module_count: {len(preview['affected_modules'])}")
+    print(f"likely_affected_file_count: {len(preview['likely_affected_files'])}")
+    print(f"required_evidence_count: {len(preview['required_evidence'])}")
+    print(f"required_approval_count: {len(preview['required_approvals'])}")
+    print(f"expected_test_count: {len(preview['expected_tests'])}")
+    print(f"execution_allowed: {preview['execution_allowed']}")
+    print(f"next_action: {preview['recommended_next_action']}")
+
+
+def operator_action_plan_preview_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Operator action-plan: read-only next-action plan preview")
+        print("Read-only operator action planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: operator action-plan is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    preview = collect_operator_action_plan_preview()
+    validate_operator_action_plan_preview(preview)
+    if "--json" in args:
+        print(stable_operator_action_plan_preview_json(preview), end="")
+        return 0
+    render_operator_action_plan_preview_plain(preview)
+    return 0
+
+
+def render_operator_action_evidence_checklist_plain(checklist: dict[str, Any]) -> None:
+    validate_operator_action_evidence_checklist(checklist)
+    print("Operator action evidence checklist")
+    print(f"operator_action_evidence_checklist_id: {checklist['operator_action_evidence_checklist_id']}")
+    print(f"operator_action_plan_preview_id: {checklist['operator_action_plan_preview_id']}")
+    print(f"evidence_item_count: {len(checklist['evidence_items'])}")
+    print(f"missing_evidence_count: {len(checklist['missing_evidence'])}")
+    print(f"evidence_status: {checklist['evidence_status']}")
+    print(f"blocker_count: {len(checklist['blockers'])}")
+    print(f"next_action: {checklist['recommended_next_action']}")
+
+
+def operator_action_evidence_checklist_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Operator action-evidence: read-only action evidence checklist")
+        print("Read-only operator action planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: operator action-evidence is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    checklist = collect_operator_action_evidence_checklist()
+    validate_operator_action_evidence_checklist(checklist)
+    if "--json" in args:
+        print(stable_operator_action_evidence_checklist_json(checklist), end="")
+        return 0
+    render_operator_action_evidence_checklist_plain(checklist)
+    return 0
+
+
+def render_operator_action_approval_checklist_plain(checklist: dict[str, Any]) -> None:
+    validate_operator_action_approval_checklist(checklist)
+    print("Operator action approval checklist")
+    print(f"operator_action_approval_checklist_id: {checklist['operator_action_approval_checklist_id']}")
+    print(f"operator_action_plan_preview_id: {checklist['operator_action_plan_preview_id']}")
+    print(f"required_approval_count: {len(checklist['required_approvals'])}")
+    print(f"approval_status: {checklist['approval_status']}")
+    print(f"blocker_count: {len(checklist['blockers'])}")
+    print(f"required_human_action_count: {len(checklist['required_human_actions'])}")
+    print(f"next_action: {checklist['recommended_next_action']}")
+
+
+def operator_action_approval_checklist_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Operator action-approvals: read-only action approval checklist")
+        print("Read-only operator action planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: operator action-approvals is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    checklist = collect_operator_action_approval_checklist()
+    validate_operator_action_approval_checklist(checklist)
+    if "--json" in args:
+        print(stable_operator_action_approval_checklist_json(checklist), end="")
+        return 0
+    render_operator_action_approval_checklist_plain(checklist)
+    return 0
+
+
+def render_operator_action_review_package_plain(package: dict[str, Any]) -> None:
+    validate_operator_action_review_package(package)
+    print("Operator action review package")
+    print(f"operator_action_review_package_id: {package['operator_action_review_package_id']}")
+    print(f"operator_action_plan_preview_id: {package['operator_action_plan_preview_id']}")
+    print(f"action_status: {package['action_status']}")
+    print(f"evidence_status: {package['evidence_status']}")
+    print(f"approval_status: {package['approval_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"required_human_action_count: {len(package['required_human_actions'])}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def operator_action_review_package_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Operator action-review: read-only action review package")
+        print("Read-only operator action planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: operator action-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_operator_action_review_package()
+    validate_operator_action_review_package(package)
+    if "--json" in args:
+        print(stable_operator_action_review_package_json(package), end="")
+        return 0
+    render_operator_action_review_package_plain(package)
     return 0
 
 
