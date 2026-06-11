@@ -97,6 +97,13 @@ def _install_growth_collector_test_cache() -> None:
 
     cache: dict[str, Any] = {}
     collector_names = (
+        "collect_growth_planning_chain_preview",
+        "collect_execution_approval_checklist",
+        "collect_execution_readiness_bundle",
+        "collect_witness_manifest_plan",
+        "collect_planning_chain_review_bundle",
+        "collect_workspace_creator_runtime_boundary",
+        "collect_supervised_execution_plan",
         "collect_supervised_execution_review_package",
         "collect_governance_dashboard_summary",
         "collect_governance_risk_dashboard",
@@ -153,7 +160,13 @@ def _install_growth_collector_test_cache() -> None:
 
         def _cached(*args: Any, _name: str = name, _original: Any = original, **kwargs: Any) -> Any:
             if args or kwargs:
-                return _original(*args, **kwargs)
+                try:
+                    key = _name + ":" + json.dumps({"args": args, "kwargs": kwargs}, sort_keys=True, default=str)
+                except TypeError:
+                    return _original(*args, **kwargs)
+                if key not in cache:
+                    cache[key] = _original(*args, **kwargs)
+                return copy.deepcopy(cache[key])
             if _name not in cache:
                 cache[_name] = _original()
             return copy.deepcopy(cache[_name])
@@ -18053,6 +18066,171 @@ def check_research_target_clis() -> None:
 
     print("research target CLIs OK")
 
+
+def check_source_aware_downstream_binding_helpers() -> None:
+    from link_modes.growth.link_growth_console import (
+        collect_growth_business_evidence_contract,
+        collect_growth_business_opportunity_scan,
+        collect_growth_opportunity_review_package,
+        collect_research_source_binding_context,
+        collect_source_aware_operator_flow,
+        parse_research_source_binding_context_json,
+        parse_source_aware_operator_flow_json,
+        stable_research_source_binding_context_json,
+        stable_source_aware_operator_flow_json,
+        validate_growth_business_evidence_contract,
+        validate_growth_business_opportunity_scan,
+        validate_growth_opportunity_review_package,
+        validate_research_source_binding_context,
+        validate_source_aware_operator_flow,
+    )
+
+    zip_source, _, _ = _research_target_test_paths()
+    binding = collect_research_source_binding_context(source_path=zip_source)
+    same_binding = collect_research_source_binding_context(source_path=zip_source)
+    _require(binding["research_source_binding_context_id"] == same_binding["research_source_binding_context_id"],
+             "research source binding id must be deterministic")
+    _require(binding["source_path"] == zip_source, "research source binding must preserve source path")
+    _require(binding["source_refs"] and binding["evidence_refs"] and binding["upgrade_candidate_refs"],
+             "research source binding must include source, evidence, and upgrade refs")
+    _require(binding["selected_upgrade_candidate_id"] in binding["upgrade_candidate_refs"],
+             "research source binding selected candidate must be available")
+    validate_research_source_binding_context(binding)
+    _require(parse_research_source_binding_context_json(stable_research_source_binding_context_json(binding)) == binding,
+             "research source binding JSON must round trip")
+
+    scan = collect_growth_business_opportunity_scan(source_path=zip_source)
+    validate_growth_business_opportunity_scan(scan)
+    _require(scan["source_bound"] is True, "source-aware opportunity scan must be source-bound")
+    _require(scan["research_target_intake_id"] == binding["research_target_intake_id"],
+             "source-aware opportunity scan must include research target intake id")
+    for opportunity in scan["opportunities"]:
+        _require(opportunity["source_bound"] is True, "source-aware opportunities must be source-bound")
+        _require(opportunity["research_target_intake_id"] == binding["research_target_intake_id"],
+                 "source-aware opportunity must reference selected target")
+        _require(opportunity["evidence_refs"], "source-aware opportunity must include evidence refs")
+
+    contract = collect_growth_business_evidence_contract(scan)
+    validate_growth_business_evidence_contract(contract, scan)
+    _require(contract["source_bound"] is True, "source-aware evidence contract must be source-bound")
+    _require(contract["research_target_evidence_bundle_id"] == binding["research_target_evidence_bundle_id"],
+             "source-aware evidence contract must include evidence bundle id")
+
+    review = collect_growth_opportunity_review_package(scan, contract)
+    validate_growth_opportunity_review_package(review, scan, contract)
+    _require(review["source_bound"] is True, "source-aware opportunity review must be source-bound")
+    _require(review["research_target_intake_id"] == binding["research_target_intake_id"],
+             "source-aware opportunity review must include selected target id")
+
+    flow = collect_source_aware_operator_flow(source_path=zip_source)
+    validate_source_aware_operator_flow(flow)
+    _require(flow["research_target_intake_id"] == binding["research_target_intake_id"],
+             "source-aware flow must include binding target id")
+    _require(flow["source_bound"] is True, "source-aware flow must be source-bound")
+    _require(parse_source_aware_operator_flow_json(stable_source_aware_operator_flow_json(flow)) == flow,
+             "source-aware operator flow JSON must round trip")
+
+    print("source-aware downstream binding helpers OK")
+
+
+def check_source_aware_downstream_binding_clis() -> None:
+    from link import _cmd_decision, _cmd_growth, _cmd_operator, _cmd_research
+    from link_modes.growth.link_growth_console import (
+        parse_decision_candidate_set_json,
+        parse_decision_ranking_json,
+        parse_growth_business_evidence_contract_json,
+        parse_growth_business_opportunity_scan_json,
+        parse_growth_opportunity_review_package_json,
+        parse_operator_action_plan_preview_json,
+        parse_operator_decision_review_json,
+        parse_operator_decision_trace_package_json,
+        parse_operator_task_draft_json,
+        parse_operator_task_review_package_json,
+        parse_research_source_binding_context_json,
+        parse_source_aware_operator_flow_json,
+    )
+
+    zip_source, _, _ = _research_target_test_paths()
+    research_commands = [
+        ("source-binding", parse_research_source_binding_context_json, "research_source_binding_context_id"),
+        ("source-operator-flow", parse_source_aware_operator_flow_json, "source_aware_operator_flow_id"),
+    ]
+    for command, parser, id_key in research_commands:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = _cmd_research([command, "--source", zip_source, "--json"])
+        _require(rc == 0, f"research {command} --source --json must return 0")
+        payload = parser(out.getvalue())
+        _require(id_key in payload, f"research {command} must output only its payload")
+        _require(payload["dry_run"] is True and payload["write_allowed"] is False,
+                 f"research {command} must be read-only")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            write_rc = _cmd_research([command, "--source", zip_source, "--write"])
+        _require(write_rc != 0 and "read-only" in err.getvalue(), f"research {command} --write must be rejected")
+
+    growth_commands = [
+        ("business-opportunities", parse_growth_business_opportunity_scan_json, "growth_business_opportunity_scan_id"),
+        ("business-evidence-contract", parse_growth_business_evidence_contract_json, "growth_business_evidence_contract_id"),
+        ("opportunity-review", parse_growth_opportunity_review_package_json, "growth_opportunity_review_package_id"),
+    ]
+    for command, parser, id_key in growth_commands:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = _cmd_growth([command, "--source", zip_source, "--json"])
+        _require(rc == 0, f"growth {command} --source --json must return 0")
+        payload = parser(out.getvalue())
+        _require(id_key in payload, f"growth {command} must output only its payload")
+        _require(payload["source_bound"] is True, f"growth {command} must be source-bound")
+        _require(payload["research_target_intake_id"].startswith("research-target-intake-"),
+                 f"growth {command} must include research target id")
+
+    decision_commands = [
+        ("candidates", parse_decision_candidate_set_json, "decision_candidate_set_id"),
+        ("ranking", parse_decision_ranking_json, "decision_ranking_id"),
+        ("review", parse_operator_decision_review_json, "operator_decision_review_id"),
+        ("trace", parse_operator_decision_trace_package_json, "operator_decision_trace_package_id"),
+    ]
+    for command, parser, id_key in decision_commands:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = _cmd_decision([command, "--source", zip_source, "--json"])
+        _require(rc == 0, f"decision {command} --source --json must return 0")
+        payload = parser(out.getvalue())
+        _require(id_key in payload, f"decision {command} must output only its payload")
+        _require(payload["source_bound"] is True, f"decision {command} must be source-bound")
+        if command == "candidates":
+            top_ids = [item["decision_candidate_id"] for item in payload["candidates"]]
+            _require(top_ids, "source-aware decision candidates must include candidate ids")
+        if command == "ranking":
+            ranked_ids = [item["decision_candidate_id"] for item in payload["ranked_candidates"]]
+            _require(payload["top_candidate_id"] in ranked_ids,
+                     "source-aware decision ranking top candidate must be ranked")
+
+    operator_commands = [
+        ("action-plan", parse_operator_action_plan_preview_json, "operator_action_plan_preview_id"),
+        ("action-review", parse_operator_task_review_package_json, "operator_action_review_package_id"),
+        ("task-draft", parse_operator_task_draft_json, "operator_task_draft_id"),
+        ("task-review", parse_operator_task_review_package_json, "operator_task_review_package_id"),
+    ]
+    # action-review has its own parser; keep the table compact by fixing it here.
+    operator_commands[1] = ("action-review", __import__("link_modes.growth.link_growth_console", fromlist=["parse_operator_action_review_package_json"]).parse_operator_action_review_package_json, "operator_action_review_package_id")
+    for command, parser, id_key in operator_commands:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = _cmd_operator([command, "--source", zip_source, "--json"])
+        _require(rc == 0, f"operator {command} --source --json must return 0")
+        payload = parser(out.getvalue())
+        _require(id_key in payload, f"operator {command} must output only its payload")
+        _require(payload["source_bound"] is True, f"operator {command} must be source-bound")
+        if command == "task-draft":
+            _require(payload["source_path"] == zip_source and payload["source_name"] == "gpt-crawler-main.zip",
+                     "source-aware operator task draft must reference selected source")
+            _require(payload["execution_allowed"] is False,
+                     "source-aware operator task draft must remain non-executable")
+
+    print("source-aware downstream binding CLIs OK")
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -18160,6 +18338,8 @@ def main() -> None:
     check_sandbox_executor_boundary_clis()
     check_research_target_intake_helpers()
     check_research_target_clis()
+    check_source_aware_downstream_binding_helpers()
+    check_source_aware_downstream_binding_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

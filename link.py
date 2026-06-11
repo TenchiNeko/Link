@@ -155,6 +155,14 @@ def _cmd_modules(argv: list[str]) -> int:
 def _cmd_research(argv: list[str]) -> int:
     """Read-only local research target intake and evidence views."""
     subcommand = argv[0] if argv else ""
+    if subcommand == "source-binding":
+        from link_modes.growth.link_growth_console import research_source_binding_main as _research_source_binding_main
+
+        return _research_source_binding_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-operator-flow":
+        from link_modes.growth.link_growth_console import source_aware_operator_flow_main as _source_aware_operator_flow_main
+
+        return _source_aware_operator_flow_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "target-intake":
         from link_modes.growth.link_growth_console import research_target_intake_main as _research_target_intake_main
 
@@ -177,11 +185,13 @@ def _cmd_research(argv: list[str]) -> int:
         return _research_target_flow_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Link research commands:")
-        print("  target-intake      Inspect a local research target without extraction")
-        print("  target-evidence    Build evidence refs for a local research target")
-        print("  target-upgrades    Preview Link upgrade candidates from a target")
-        print("  target-task-draft  Preview a target-bound operator task draft")
-        print("  target-flow        Preview target intake -> evidence -> task flow")
+        print("  source-binding        Build a downstream source binding context")
+        print("  source-operator-flow  Preview source-bound downstream operator flow")
+        print("  target-intake         Inspect a local research target without extraction")
+        print("  target-evidence       Build evidence refs for a local research target")
+        print("  target-upgrades       Preview Link upgrade candidates from a target")
+        print("  target-task-draft     Preview a target-bound operator task draft")
+        print("  target-flow           Preview target intake -> evidence -> task flow")
         return 0
     print(f"research: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py research --help' for subcommands.", file=sys.stderr)

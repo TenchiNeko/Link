@@ -9315,8 +9315,38 @@ def _growth_business_opportunity_templates() -> list[dict[str, Any]]:
 def collect_growth_business_opportunity_scan(
     *,
     metadata: dict[str, Any] | None = None,
+    research_source_binding_context: dict[str, Any] | None = None,
+    source_path: str | None = None,
 ) -> dict[str, Any]:
     """Generate deterministic business/growth opportunities from local research references."""
+    if research_source_binding_context is not None or source_path is not None:
+        binding = research_source_binding_context or collect_research_source_binding_context(source_path=source_path or "")
+        validate_research_source_binding_context(binding)
+        source_payload = _source_aware_candidates_from_binding(binding)
+        opportunities = source_payload["opportunities"]
+        scan = {
+            "growth_business_opportunity_scan_version": GROWTH_BUSINESS_OPPORTUNITY_SCAN_VERSION,
+            "growth_business_opportunity_scan_id": make_growth_business_opportunity_scan_id(opportunities),
+            "source_scope": [
+                f"source-bound research target: {binding['source_path']}",
+                binding["research_source_binding_context_id"],
+                binding["research_target_evidence_bundle_id"],
+            ],
+            "opportunity_count": len(opportunities),
+            "opportunities": opportunities,
+            "research_source_binding_context_id": binding["research_source_binding_context_id"],
+            "research_target_intake_id": binding["research_target_intake_id"],
+            "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
+            "source_bound": True,
+            "top_recommended_next_action": opportunities[0]["recommended_next_action"] if opportunities else "No source-bound opportunities found.",
+            "dry_run": True,
+            "write_allowed": False,
+            "automation_allowed": False,
+            "metadata": dict(metadata or {}),
+            "writes": [],
+        }
+        validate_growth_business_opportunity_scan(scan)
+        return scan
     opportunities: list[dict[str, Any]] = []
     for template in _growth_business_opportunity_templates():
         source_refs = _growth_business_available_source_refs(list(template["source_refs"]))
@@ -9492,8 +9522,15 @@ def collect_growth_business_evidence_contract(
     opportunity_scan: dict[str, Any] | None = None,
     *,
     metadata: dict[str, Any] | None = None,
+    research_source_binding_context: dict[str, Any] | None = None,
+    source_path: str | None = None,
 ) -> dict[str, Any]:
     """Define evidence requirements before Growth opportunities become business action."""
+    if opportunity_scan is None and (research_source_binding_context is not None or source_path is not None):
+        opportunity_scan = collect_growth_business_opportunity_scan(
+            research_source_binding_context=research_source_binding_context,
+            source_path=source_path,
+        )
     scan = opportunity_scan if opportunity_scan is not None else collect_growth_business_opportunity_scan()
     validate_growth_business_opportunity_scan(scan)
     source_refs: list[str] = []
@@ -9582,6 +9619,14 @@ def collect_growth_business_evidence_contract(
         ],
         "blocked_actions": list(GROWTH_BUSINESS_BLOCKED_ACTIONS),
         "recommended_next_action": "Resolve missing evidence and human review requirements before any Growth business action.",
+        **({
+            "research_source_binding_context_id": scan.get("research_source_binding_context_id", ""),
+            "research_target_intake_id": scan.get("research_target_intake_id", ""),
+            "research_target_evidence_bundle_id": scan.get("research_target_evidence_bundle_id", ""),
+            "source_refs": _normalize_implementation_branch_refs(source_refs),
+            "evidence_refs": _normalize_implementation_branch_refs([ref for opportunity in scan["opportunities"] for ref in opportunity.get("evidence_refs", [])]),
+            "source_bound": True,
+        } if scan.get("source_bound") is True else {}),
         "safety_metadata": {
             "dry_run": True,
             "write_allowed": False,
@@ -9752,8 +9797,15 @@ def collect_growth_opportunity_review_package(
     evidence_contract: dict[str, Any] | None = None,
     *,
     metadata: dict[str, Any] | None = None,
+    research_source_binding_context: dict[str, Any] | None = None,
+    source_path: str | None = None,
 ) -> dict[str, Any]:
     """Summarize Growth opportunity readiness for human review without action."""
+    if opportunity_scan is None and (research_source_binding_context is not None or source_path is not None):
+        opportunity_scan = collect_growth_business_opportunity_scan(
+            research_source_binding_context=research_source_binding_context,
+            source_path=source_path,
+        )
     scan = opportunity_scan if opportunity_scan is not None else collect_growth_business_opportunity_scan()
     validate_growth_business_opportunity_scan(scan)
     contract = evidence_contract if evidence_contract is not None else collect_growth_business_evidence_contract(scan)
@@ -9817,6 +9869,15 @@ def collect_growth_opportunity_review_package(
         "required_human_actions": required_human_actions,
         "review_recommendation": review_recommendation,
         "recommended_next_action": "Resolve Growth opportunity evidence blockers before business action.",
+        **({
+            "research_source_binding_context_id": scan.get("research_source_binding_context_id", ""),
+            "research_target_intake_id": scan.get("research_target_intake_id", ""),
+            "research_target_evidence_bundle_id": scan.get("research_target_evidence_bundle_id", ""),
+            "source_refs": _normalize_implementation_branch_refs([ref for opportunity in scan["opportunities"] for ref in opportunity.get("source_refs", [])]),
+            "evidence_refs": _normalize_implementation_branch_refs([ref for opportunity in scan["opportunities"] for ref in opportunity.get("evidence_refs", [])]),
+            "source_bound": True,
+            "source_evidence_summary": "Selected research target evidence is usable for planning but still requires human review.",
+        } if scan.get("source_bound") is True else {}),
         "dry_run": True,
         "write_allowed": False,
         "automation_allowed": False,
@@ -11827,6 +11888,488 @@ def parse_research_target_operator_flow_json(text: str) -> dict[str, Any]:
     return flow
 
 
+
+RESEARCH_SOURCE_BINDING_CONTEXT_VERSION = "link-research-source-binding-context-v1"
+SOURCE_AWARE_OPERATOR_FLOW_VERSION = "link-source-aware-operator-flow-v1"
+
+
+def _source_aware_hash_id(prefix: str, payload: dict[str, Any]) -> str:
+    digest = _research_target_hash_text(payload)[:12]
+    return f"{prefix}-{digest}"
+
+
+def _research_source_binding_from_path(source_path: str) -> dict[str, Any]:
+    return collect_research_source_binding_context(source_path=source_path)
+
+
+def collect_research_source_binding_context(
+    research_target_intake: dict[str, Any] | None = None,
+    research_target_evidence_bundle: dict[str, Any] | None = None,
+    research_target_upgrade_candidates: dict[str, Any] | None = None,
+    research_target_operator_task_draft: dict[str, Any] | None = None,
+    research_target_operator_flow: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if research_target_intake is None:
+        if source_path is None:
+            raise ValueError("research source binding requires source_path or intake")
+        intake = collect_research_target_intake(source_path)
+    else:
+        intake = research_target_intake
+    validate_research_target_intake(intake)
+    evidence = research_target_evidence_bundle or collect_research_target_evidence_bundle(intake)
+    validate_research_target_evidence_bundle(evidence, intake)
+    candidates = research_target_upgrade_candidates or collect_research_target_upgrade_candidates(intake, evidence)
+    validate_research_target_upgrade_candidates(candidates, intake, evidence)
+    task = research_target_operator_task_draft or collect_research_target_operator_task_draft(candidates, evidence)
+    validate_research_target_operator_task_draft(task, candidates, evidence)
+    flow = research_target_operator_flow or collect_research_target_operator_flow(source_path=intake["source_path"])
+    validate_research_target_operator_flow(flow)
+    selected_candidate_id = task["selected_upgrade_candidate_id"]
+    selected = next(item for item in candidates["upgrade_candidates"] if item["upgrade_candidate_id"] == selected_candidate_id)
+    source_refs = _normalize_implementation_branch_refs([item["path"] for item in evidence["source_refs"]])
+    evidence_refs = _normalize_implementation_branch_refs([item["evidence_ref_id"] for item in evidence["evidence_refs"]])
+    upgrade_refs = _normalize_implementation_branch_refs([item["upgrade_candidate_id"] for item in candidates["upgrade_candidates"]])
+    blockers = _normalize_implementation_branch_refs(list(candidates["missing_evidence"]) + [f"review source-bound candidate before implementation: {selected_candidate_id}"])
+    warnings = _normalize_implementation_branch_refs([
+        "source binding is read-only and does not authorize execution",
+        f"selected research target remains local-only: {intake['source_path']}",
+    ])
+    context_core = {
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "research_target_evidence_bundle_id": evidence["research_target_evidence_bundle_id"],
+        "research_target_upgrade_candidates_id": candidates["research_target_upgrade_candidates_id"],
+        "research_target_operator_task_draft_id": task["research_target_operator_task_draft_id"],
+        "selected_upgrade_candidate_id": selected_candidate_id,
+        "version": RESEARCH_SOURCE_BINDING_CONTEXT_VERSION,
+    }
+    context = {
+        "research_source_binding_context_version": RESEARCH_SOURCE_BINDING_CONTEXT_VERSION,
+        "research_source_binding_context_id": _source_aware_hash_id("research-source-binding-context", context_core),
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "research_target_evidence_bundle_id": evidence["research_target_evidence_bundle_id"],
+        "research_target_upgrade_candidates_id": candidates["research_target_upgrade_candidates_id"],
+        "research_target_operator_task_draft_id": task["research_target_operator_task_draft_id"],
+        "source_path": intake["source_path"],
+        "source_type": intake["source_type"],
+        "source_name": intake["source_name"],
+        "detected_domains": _normalize_implementation_branch_refs(intake["detected_domains"]),
+        "detected_languages": _normalize_implementation_branch_refs(intake["detected_languages"]),
+        "source_refs": source_refs,
+        "evidence_refs": evidence_refs,
+        "upgrade_candidate_refs": upgrade_refs,
+        "selected_upgrade_candidate_id": selected_candidate_id,
+        "target_link_module": selected["target_link_module"],
+        "source_binding_status": "bound" if source_refs and evidence_refs else "blocked",
+        "missing_evidence": _normalize_implementation_branch_refs(list(evidence["missing_evidence"]) + list(candidates["missing_evidence"])),
+        "blockers": blockers,
+        "warnings": warnings,
+        "recommended_next_action": "Use this source binding context to drive source-aware Growth, Decision, and Operator planning.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_research_source_binding_context(context, intake, evidence, candidates, task)
+    return context
+
+
+def validate_research_source_binding_context(context: dict[str, Any], research_target_intake: dict[str, Any] | None = None, research_target_evidence_bundle: dict[str, Any] | None = None, research_target_upgrade_candidates: dict[str, Any] | None = None, research_target_operator_task_draft: dict[str, Any] | None = None) -> None:
+    required = (
+        "research_source_binding_context_version", "research_source_binding_context_id",
+        "research_target_intake_id", "research_target_evidence_bundle_id",
+        "research_target_upgrade_candidates_id", "research_target_operator_task_draft_id",
+        "source_path", "source_type", "source_name", "detected_domains", "detected_languages",
+        "source_refs", "evidence_refs", "upgrade_candidate_refs", "selected_upgrade_candidate_id",
+        "target_link_module", "source_binding_status", "missing_evidence", "blockers", "warnings",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in context:
+            raise ValueError(f"research source binding context missing required field: {key}")
+    if context["research_source_binding_context_version"] != RESEARCH_SOURCE_BINDING_CONTEXT_VERSION:
+        raise ValueError("invalid research source binding context version")
+    if not isinstance(context["research_source_binding_context_id"], str) or not context["research_source_binding_context_id"].startswith("research-source-binding-context-"):
+        raise ValueError("invalid research source binding context id")
+    if not context["source_path"].startswith("research/"):
+        raise ValueError("research source binding source_path must remain under research")
+    if context["source_type"] not in {"zip_archive", "folder", "file"}:
+        raise ValueError("invalid research source binding source_type")
+    for field in ("detected_domains", "detected_languages", "source_refs", "evidence_refs", "upgrade_candidate_refs", "missing_evidence", "blockers", "warnings"):
+        if _normalize_implementation_branch_refs(context[field]) != context[field]:
+            raise ValueError(f"research source binding {field} must be normalized")
+    if not context["source_refs"] or not context["evidence_refs"] or not context["upgrade_candidate_refs"]:
+        raise ValueError("research source binding must include source, evidence, and upgrade refs")
+    if context["selected_upgrade_candidate_id"] not in context["upgrade_candidate_refs"]:
+        raise ValueError("research source binding selected candidate must be available")
+    if context["target_link_module"] not in RESEARCH_TARGET_LINK_MODULES:
+        raise ValueError("invalid research source binding target module")
+    if context["source_binding_status"] not in {"bound", "blocked"}:
+        raise ValueError("invalid research source binding status")
+    if context["safety_metadata"] != _read_only_safety_metadata() or context["dry_run"] is not True or context["write_allowed"] is not False or context["automation_allowed"] is not False or context["writes"] != []:
+        raise ValueError("research source binding must remain read-only")
+    if research_target_intake is not None and context["research_target_intake_id"] != research_target_intake["research_target_intake_id"]:
+        raise ValueError("research source binding intake id mismatch")
+    if research_target_evidence_bundle is not None and context["research_target_evidence_bundle_id"] != research_target_evidence_bundle["research_target_evidence_bundle_id"]:
+        raise ValueError("research source binding evidence id mismatch")
+    if research_target_upgrade_candidates is not None and context["research_target_upgrade_candidates_id"] != research_target_upgrade_candidates["research_target_upgrade_candidates_id"]:
+        raise ValueError("research source binding candidates id mismatch")
+    if research_target_operator_task_draft is not None and context["research_target_operator_task_draft_id"] != research_target_operator_task_draft["research_target_operator_task_draft_id"]:
+        raise ValueError("research source binding task draft id mismatch")
+    expected_id = _source_aware_hash_id("research-source-binding-context", {
+        "research_target_intake_id": context["research_target_intake_id"],
+        "research_target_evidence_bundle_id": context["research_target_evidence_bundle_id"],
+        "research_target_upgrade_candidates_id": context["research_target_upgrade_candidates_id"],
+        "research_target_operator_task_draft_id": context["research_target_operator_task_draft_id"],
+        "selected_upgrade_candidate_id": context["selected_upgrade_candidate_id"],
+        "version": RESEARCH_SOURCE_BINDING_CONTEXT_VERSION,
+    })
+    if context["research_source_binding_context_id"] != expected_id:
+        raise ValueError("research source binding context id is not deterministic")
+
+
+def stable_research_source_binding_context_json(context: dict[str, Any]) -> str:
+    validate_research_source_binding_context(context)
+    return _stable_ruflo_json(context, indent=2) + "\n"
+
+
+def parse_research_source_binding_context_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    context = _json.loads(text)
+    validate_research_source_binding_context(context)
+    return context
+
+
+def _source_aware_candidates_from_binding(binding: dict[str, Any]) -> dict[str, Any]:
+    validate_research_source_binding_context(binding)
+    target_candidates = collect_research_target_upgrade_candidates(source_path=binding["source_path"])
+    source_refs = _normalize_implementation_branch_refs(binding["source_refs"])
+    evidence_refs = _normalize_implementation_branch_refs(binding["evidence_refs"])
+    opportunities: list[dict[str, Any]] = []
+    for candidate in target_candidates["upgrade_candidates"]:
+        title = f"Source-bound Link upgrade: {candidate['title']}"
+        category = "Internal Automation" if candidate["target_link_module"] in {"engineering", "shared_services", "control_plane", "research"} else "AI Tools"
+        opportunity = {
+            "title": title,
+            "category": category,
+            "description": candidate["description"],
+            "source_refs": source_refs,
+            "evidence_strength": int(max(40, min(100, candidate["confidence_score"]))),
+            "confidence_score": int(candidate["confidence_score"]),
+            "effort_score": int(candidate["effort_score"]),
+            "risk_score": 65 if candidate["risk_level"] == "medium" else 45,
+            "monetization_model": "Improve Link's local research-to-upgrade workflow for future projects",
+            "growth_channel": f"Local research target intake for {binding['source_name']}",
+            "required_approvals": _normalize_implementation_branch_refs(candidate["required_approvals"]),
+            "missing_evidence": _normalize_implementation_branch_refs([f"human review of source-bound evidence for {binding['source_path']}"] + list(binding["missing_evidence"] or [])),
+            "recommended_next_action": candidate["recommended_next_action"],
+            "research_target_intake_id": binding["research_target_intake_id"],
+            "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
+            "evidence_refs": evidence_refs,
+            "detected_domains": list(binding["detected_domains"]),
+            "selected_upgrade_candidate_id": candidate["upgrade_candidate_id"],
+            "target_link_module": candidate["target_link_module"],
+            "source_bound": True,
+        }
+        opportunity["opportunity_id"] = make_growth_business_opportunity_id(opportunity)
+        opportunities.append(opportunity)
+    return {"opportunities": sorted(opportunities, key=lambda item: item["opportunity_id"]), "target_candidates": target_candidates}
+
+
+def _source_aware_decision_candidate_id(candidate: dict[str, Any], binding: dict[str, Any]) -> str:
+    return _source_aware_hash_id("decision-candidate", {
+        "binding_id": binding["research_source_binding_context_id"],
+        "upgrade_candidate_id": candidate["upgrade_candidate_id"],
+        "version": DECISION_CANDIDATE_SET_VERSION,
+    })
+
+
+def _source_aware_decision_chain(source_path: str, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    binding = collect_research_source_binding_context(source_path=source_path)
+    target_candidates = collect_research_target_upgrade_candidates(source_path=source_path)
+    candidates = []
+    for upgrade in target_candidates["upgrade_candidates"]:
+        blockers = _normalize_implementation_branch_refs(["source-bound decision is read-only and requires human review"] + list(upgrade["missing_evidence"] if "missing_evidence" in upgrade else []))
+        candidate = {
+            "decision_candidate_id": _source_aware_decision_candidate_id(upgrade, binding),
+            "title": upgrade["title"],
+            "description": upgrade["description"],
+            "source_refs": _normalize_implementation_branch_refs(list(upgrade["source_refs"]) + [binding["research_source_binding_context_id"]]),
+            "expected_readiness_gain": int(max(1, 100 - upgrade["effort_score"])),
+            "expected_risk_reduction": 12 if upgrade["risk_level"] == "medium" else 18,
+            "expected_evidence_gain": int(min(100, len(upgrade["evidence_refs"]) * 10)),
+            "expected_approval_gain": int(min(100, len(upgrade["required_approvals"]) * 8)),
+            "effort_score": int(upgrade["effort_score"]),
+            "priority": "high" if upgrade["target_link_module"] in {"research", "growth", "control_plane"} else "medium",
+            "blockers": blockers,
+            "execution_allowed": False,
+            "research_target_intake_id": binding["research_target_intake_id"],
+            "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
+            "selected_upgrade_candidate_id": upgrade["upgrade_candidate_id"],
+            "target_link_module": upgrade["target_link_module"],
+            "source_bound": True,
+        }
+        candidates.append(candidate)
+    candidates = sorted(candidates, key=lambda item: item["decision_candidate_id"])
+    blocked = [item for item in candidates if item["blockers"]]
+    candidate_set = {
+        "decision_candidate_set_version": DECISION_CANDIDATE_SET_VERSION,
+        "decision_candidate_set_id": _source_aware_hash_id("decision-candidate-set", {
+            "candidate_ids": [item["decision_candidate_id"] for item in candidates],
+            "binding_id": binding["research_source_binding_context_id"],
+            "version": DECISION_CANDIDATE_SET_VERSION,
+        }),
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "research_target_intake_id": binding["research_target_intake_id"],
+        "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
+        "source_bound": True,
+        "candidates": candidates,
+        "blocked_candidates": blocked,
+        "decision_context": {
+            "question": "Which source-bound Link upgrade should be planned next?",
+            "source_path": binding["source_path"],
+            "source_name": binding["source_name"],
+            "candidate_count": len(candidates),
+            "blocked_candidate_count": len(blocked),
+            "execution_allowed": False,
+            "source_bound": True,
+        },
+        "recommended_next_action": "Rank source-bound upgrade candidates and review the top target-specific action.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_decision_candidate_set(candidate_set)
+    impact = collect_decision_impact_analysis(candidate_set)
+    ranking = collect_decision_ranking(candidate_set, impact)
+    ranking.update({
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "research_target_intake_id": binding["research_target_intake_id"],
+        "selected_upgrade_candidate_id": next(item["selected_upgrade_candidate_id"] for item in candidates if item["decision_candidate_id"] == ranking["top_candidate_id"]),
+        "source_bound": True,
+    })
+    validate_decision_ranking(ranking)
+    review = collect_operator_decision_review(candidate_set, impact, ranking)
+    review.update({
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "research_target_intake_id": binding["research_target_intake_id"],
+        "selected_upgrade_candidate_id": ranking["selected_upgrade_candidate_id"],
+        "source_bound": True,
+    })
+    validate_operator_decision_review(review)
+    breakdown = collect_decision_score_breakdown(candidate_set, impact, ranking)
+    rejected = collect_rejected_alternative_analysis(candidate_set, ranking, breakdown)
+    ledger = collect_decision_assumption_ledger(candidate_set, ranking, review)
+    trace = collect_operator_decision_trace_package(ranking, breakdown, rejected, ledger, review, candidate_set, impact)
+    trace.update({
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "research_target_intake_id": binding["research_target_intake_id"],
+        "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
+        "selected_upgrade_candidate_id": ranking["selected_upgrade_candidate_id"],
+        "source_path": binding["source_path"],
+        "source_name": binding["source_name"],
+        "source_bound": True,
+        "explanation_summary": f"The source-bound candidate {ranking['selected_upgrade_candidate_id']} won for {binding['source_path']} using deterministic readiness, risk, evidence, approval, effort, and blocker scoring.",
+    })
+    validate_operator_decision_trace_package(trace)
+    return {
+        "binding": binding,
+        "candidate_set": candidate_set,
+        "impact": impact,
+        "ranking": ranking,
+        "review": review,
+        "trace": trace,
+    }
+
+
+def _source_aware_operator_chain(source_path: str) -> dict[str, Any]:
+    decision = _source_aware_decision_chain(source_path)
+    binding = decision["binding"]
+    top = next(item for item in decision["candidate_set"]["candidates"] if item["decision_candidate_id"] == decision["ranking"]["top_candidate_id"])
+    affected_files = _research_target_likely_files(top["target_link_module"])
+    action_plan = {
+        "operator_action_plan_preview_version": OPERATOR_ACTION_PLAN_PREVIEW_VERSION,
+        "operator_action_plan_preview_id": _source_aware_hash_id("operator-action-plan-preview", {
+            "trace_id": decision["trace"]["operator_decision_trace_package_id"],
+            "review_id": decision["review"]["operator_decision_review_id"],
+            "top_candidate_id": top["decision_candidate_id"],
+            "binding_id": binding["research_source_binding_context_id"],
+            "version": OPERATOR_ACTION_PLAN_PREVIEW_VERSION,
+        }),
+        "operator_decision_trace_package_id": decision["trace"]["operator_decision_trace_package_id"],
+        "operator_decision_review_id": decision["review"]["operator_decision_review_id"],
+        "simulation_remediation_plan_id": "source-aware-research-binding",
+        "remediation_priority_queue_id": "source-aware-research-binding",
+        "top_candidate_id": top["decision_candidate_id"],
+        "action_title": f"Plan source-bound Link upgrade from {binding['source_name']}",
+        "action_summary": f"Create a non-executable implementation plan for {top['title']} using {binding['source_path']} as evidence.",
+        "affected_modules": _normalize_implementation_branch_refs([top["target_link_module"], "research", "operator"]),
+        "likely_affected_files": affected_files,
+        "required_evidence": _normalize_implementation_branch_refs(list(binding["evidence_refs"]) + list(top["source_refs"])),
+        "required_approvals": _normalize_implementation_branch_refs(["human approval before source-bound implementation", "license/copying review before using external patterns"]),
+        "expected_tests": _normalize_implementation_branch_refs([
+            "git diff --check -- link.py link_modes/growth/link_growth_console.py tests/test_growth_pipeline.py",
+            "python3 -m py_compile link.py link_modes/growth/link_growth_console.py tests/test_growth_pipeline.py",
+            "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_growth_pipeline.py",
+            "PYTHONDONTWRITEBYTECODE=1 python3 link_healthcheck.py",
+        ]),
+        "rollback_plan": _normalize_implementation_branch_refs(["do not modify the selected research target", "revert only intended Link source/test edits if rejected", "do not copy external code"]),
+        "execution_allowed": False,
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "research_target_intake_id": binding["research_target_intake_id"],
+        "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
+        "selected_upgrade_candidate_id": top["selected_upgrade_candidate_id"],
+        "source_path": binding["source_path"],
+        "source_name": binding["source_name"],
+        "source_bound": True,
+        "recommended_next_action": "Review the source-bound action plan before authorizing any implementation slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": {},
+        "writes": [],
+    }
+    validate_operator_action_plan_preview(action_plan)
+    action_evidence = collect_operator_action_evidence_checklist(action_plan)
+    action_approvals = collect_operator_action_approval_checklist(action_plan)
+    action_review = collect_operator_action_review_package(action_plan, action_evidence, action_approvals)
+    action_review.update({
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "research_target_intake_id": binding["research_target_intake_id"],
+        "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
+        "selected_upgrade_candidate_id": top["selected_upgrade_candidate_id"],
+        "source_path": binding["source_path"],
+        "source_bound": True,
+    })
+    validate_operator_action_review_package(action_review)
+    task = collect_operator_task_draft(action_plan, action_review, decision["trace"])
+    task.update({
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "research_target_intake_id": binding["research_target_intake_id"],
+        "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
+        "selected_upgrade_candidate_id": top["selected_upgrade_candidate_id"],
+        "source_path": binding["source_path"],
+        "source_name": binding["source_name"],
+        "source_bound": True,
+        "objective": f"Implement a Link-native upgrade inspired by {binding['source_path']}: {top['title']}.",
+        "scope_summary": f"Use source refs from {binding['source_name']} to improve {top['target_link_module']} without copying external code or executing the task.",
+    })
+    validate_operator_task_draft(task)
+    scope = collect_operator_task_scope_review(task)
+    tests = collect_operator_task_test_plan(task)
+    task_review = collect_operator_task_review_package(task, scope, tests, action_evidence, action_approvals)
+    task_review.update({
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "research_target_intake_id": binding["research_target_intake_id"],
+        "selected_upgrade_candidate_id": top["selected_upgrade_candidate_id"],
+        "source_path": binding["source_path"],
+        "source_bound": True,
+    })
+    validate_operator_task_review_package(task_review)
+    return {
+        **decision,
+        "action_plan": action_plan,
+        "action_review": action_review,
+        "task_draft": task,
+        "task_review": task_review,
+    }
+
+
+def collect_source_aware_operator_flow(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    chain = _source_aware_operator_chain(source_path)
+    binding = chain["binding"]
+    growth_scan = collect_growth_business_opportunity_scan(research_source_binding_context=binding)
+    growth_contract = collect_growth_business_evidence_contract(growth_scan)
+    growth_review = collect_growth_opportunity_review_package(growth_scan, growth_contract)
+    flow = {
+        "source_aware_operator_flow_version": SOURCE_AWARE_OPERATOR_FLOW_VERSION,
+        "source_aware_operator_flow_id": _source_aware_hash_id("source-aware-operator-flow", {
+            "binding_id": binding["research_source_binding_context_id"],
+            "scan_id": growth_scan["growth_business_opportunity_scan_id"],
+            "ranking_id": chain["ranking"]["decision_ranking_id"],
+            "task_id": chain["task_draft"]["operator_task_draft_id"],
+            "version": SOURCE_AWARE_OPERATOR_FLOW_VERSION,
+        }),
+        "research_target_intake_id": binding["research_target_intake_id"],
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "growth_business_opportunity_scan_id": growth_scan["growth_business_opportunity_scan_id"],
+        "growth_business_evidence_contract_id": growth_contract["growth_business_evidence_contract_id"],
+        "growth_opportunity_review_package_id": growth_review["growth_opportunity_review_package_id"],
+        "decision_candidate_set_id": chain["candidate_set"]["decision_candidate_set_id"],
+        "decision_ranking_id": chain["ranking"]["decision_ranking_id"],
+        "operator_action_plan_preview_id": chain["action_plan"]["operator_action_plan_preview_id"],
+        "operator_task_draft_id": chain["task_draft"]["operator_task_draft_id"],
+        "selected_upgrade_summary": {
+            "selected_upgrade_candidate_id": chain["ranking"]["selected_upgrade_candidate_id"],
+            "top_candidate_id": chain["ranking"]["top_candidate_id"],
+            "source_path": binding["source_path"],
+            "source_name": binding["source_name"],
+            "target_link_module": binding["target_link_module"],
+        },
+        "source_bound": True,
+        "blocker_count": len(chain["task_review"]["blockers"]),
+        "warning_count": len(chain["task_review"]["warnings"]),
+        "recommended_next_action": "Review the source-bound operator task draft before any separate implementation slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_aware_operator_flow(flow)
+    return flow
+
+
+def validate_source_aware_operator_flow(flow: dict[str, Any]) -> None:
+    required = (
+        "source_aware_operator_flow_version", "source_aware_operator_flow_id", "research_target_intake_id",
+        "research_source_binding_context_id", "growth_business_opportunity_scan_id", "growth_business_evidence_contract_id",
+        "growth_opportunity_review_package_id", "decision_candidate_set_id", "decision_ranking_id",
+        "operator_action_plan_preview_id", "operator_task_draft_id", "selected_upgrade_summary", "source_bound",
+        "blocker_count", "warning_count", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in flow:
+            raise ValueError(f"source-aware operator flow missing required field: {key}")
+    if flow["source_aware_operator_flow_version"] != SOURCE_AWARE_OPERATOR_FLOW_VERSION:
+        raise ValueError("invalid source-aware operator flow version")
+    if not flow["source_aware_operator_flow_id"].startswith("source-aware-operator-flow-"):
+        raise ValueError("invalid source-aware operator flow id")
+    if flow["source_bound"] is not True:
+        raise ValueError("source-aware operator flow must be source-bound")
+    summary = flow["selected_upgrade_summary"]
+    if not isinstance(summary, dict) or not summary.get("source_path", "").startswith("research/"):
+        raise ValueError("source-aware operator flow must summarize selected source")
+    for field in ("blocker_count", "warning_count"):
+        if not isinstance(flow[field], int) or flow[field] < 0:
+            raise ValueError(f"source-aware operator flow {field} must be non-negative")
+    if flow["safety_metadata"] != _read_only_safety_metadata() or flow["dry_run"] is not True or flow["write_allowed"] is not False or flow["automation_allowed"] is not False or flow["writes"] != []:
+        raise ValueError("source-aware operator flow must remain read-only")
+
+
+def stable_source_aware_operator_flow_json(flow: dict[str, Any]) -> str:
+    validate_source_aware_operator_flow(flow)
+    return _stable_ruflo_json(flow, indent=2) + "\n"
+
+
+def parse_source_aware_operator_flow_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    flow = _json.loads(text)
+    validate_source_aware_operator_flow(flow)
+    return flow
+
 def _research_target_cli_source_or_error(args: list[str], command_name: str) -> tuple[str | None, int | None]:
     if "--write" in args:
         print(f"error: research {command_name} is read-only; --write is not supported", file=sys.stderr)
@@ -11843,6 +12386,68 @@ def _research_target_print_summary(title: str, payload: dict[str, Any], lines: l
     for label, value in lines[1:]:
         print(f"{label}: {value}")
 
+
+
+def research_source_binding_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research source-binding: read-only target binding context")
+        print("  python3 link.py research source-binding --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "source-binding")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_source_binding_context(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_source_binding_context_json(payload), end="")
+    else:
+        _research_target_print_summary("Research source binding", payload, [
+            ("id", payload["research_source_binding_context_id"]),
+            ("source_path", payload["source_path"]),
+            ("source_type", payload["source_type"]),
+            ("selected candidate", payload["selected_upgrade_candidate_id"]),
+            ("target module", payload["target_link_module"]),
+            ("source refs", len(payload["source_refs"])),
+            ("evidence refs", len(payload["evidence_refs"])),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def source_aware_operator_flow_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research source-operator-flow: read-only source-aware downstream flow")
+        print("  python3 link.py research source-operator-flow --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "source-operator-flow")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_source_aware_operator_flow(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_source_aware_operator_flow_json(payload), end="")
+    else:
+        summary = payload["selected_upgrade_summary"]
+        _research_target_print_summary("Source-aware operator flow", payload, [
+            ("id", payload["source_aware_operator_flow_id"]),
+            ("source_path", summary["source_path"]),
+            ("selected upgrade", summary["selected_upgrade_candidate_id"]),
+            ("target module", summary["target_link_module"]),
+            ("blocker count", payload["blocker_count"]),
+            ("warning count", payload["warning_count"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
 
 def research_target_intake_main(argv: list[str] | None = None) -> int:
     args = _research_target_normalize_args(argv)
@@ -23213,6 +23818,15 @@ def supervised_execution_review_package_main(argv: list[str] | None = None) -> i
     return 0
 
 
+
+def _optional_research_source_arg(args: list[str]) -> str | None:
+    return _research_target_extract_source_arg(args)
+
+
+def _source_cli_error(command_name: str, exc: Exception) -> int:
+    print(f"error: {exc}", file=sys.stderr)
+    return 2
+
 def render_business_opportunities_plain(scan: dict[str, Any]) -> None:
     validate_growth_business_opportunity_scan(scan)
     top = scan["opportunities"][0]
@@ -23243,8 +23857,12 @@ def business_opportunities_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: growth business-opportunities is read-only; --write is not supported", file=sys.stderr)
         return 2
-    scan = collect_growth_business_opportunity_scan()
-    validate_growth_business_opportunity_scan(scan)
+    source = _optional_research_source_arg(args)
+    try:
+        scan = collect_growth_business_opportunity_scan(source_path=source) if source else collect_growth_business_opportunity_scan()
+        validate_growth_business_opportunity_scan(scan)
+    except Exception as exc:
+        return _source_cli_error("growth business-opportunities", exc)
     if "--json" in args:
         print(stable_growth_business_opportunity_scan_json(scan), end="")
         return 0
@@ -23282,8 +23900,12 @@ def business_evidence_contract_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: growth business-evidence-contract is read-only; --write is not supported", file=sys.stderr)
         return 2
-    contract = collect_growth_business_evidence_contract()
-    validate_growth_business_evidence_contract(contract)
+    source = _optional_research_source_arg(args)
+    try:
+        contract = collect_growth_business_evidence_contract(source_path=source) if source else collect_growth_business_evidence_contract()
+        validate_growth_business_evidence_contract(contract)
+    except Exception as exc:
+        return _source_cli_error("growth business-evidence-contract", exc)
     if "--json" in args:
         print(stable_growth_business_evidence_contract_json(contract), end="")
         return 0
@@ -23324,8 +23946,12 @@ def opportunity_review_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: growth opportunity-review is read-only; --write is not supported", file=sys.stderr)
         return 2
-    package = collect_growth_opportunity_review_package()
-    validate_growth_opportunity_review_package(package)
+    source = _optional_research_source_arg(args)
+    try:
+        package = collect_growth_opportunity_review_package(source_path=source) if source else collect_growth_opportunity_review_package()
+        validate_growth_opportunity_review_package(package)
+    except Exception as exc:
+        return _source_cli_error("growth opportunity-review", exc)
     if "--json" in args:
         print(stable_growth_opportunity_review_package_json(package), end="")
         return 0
@@ -25093,8 +25719,12 @@ def decision_candidate_set_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: decision candidates is read-only; --write is not supported", file=sys.stderr)
         return 2
-    candidate_set = collect_decision_candidate_set()
-    validate_decision_candidate_set(candidate_set)
+    source = _optional_research_source_arg(args)
+    try:
+        candidate_set = _source_aware_decision_chain(source)["candidate_set"] if source else collect_decision_candidate_set()
+        validate_decision_candidate_set(candidate_set)
+    except Exception as exc:
+        return _source_cli_error("decision candidates", exc)
     if "--json" in args:
         print(stable_decision_candidate_set_json(candidate_set), end="")
         return 0
@@ -25152,8 +25782,12 @@ def decision_ranking_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: decision ranking is read-only; --write is not supported", file=sys.stderr)
         return 2
-    ranking = collect_decision_ranking()
-    validate_decision_ranking(ranking)
+    source = _optional_research_source_arg(args)
+    try:
+        ranking = _source_aware_decision_chain(source)["ranking"] if source else collect_decision_ranking()
+        validate_decision_ranking(ranking)
+    except Exception as exc:
+        return _source_cli_error("decision ranking", exc)
     if "--json" in args:
         print(stable_decision_ranking_json(ranking), end="")
         return 0
@@ -25183,8 +25817,12 @@ def operator_decision_review_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: decision review is read-only; --write is not supported", file=sys.stderr)
         return 2
-    review = collect_operator_decision_review()
-    validate_operator_decision_review(review)
+    source = _optional_research_source_arg(args)
+    try:
+        review = _source_aware_decision_chain(source)["review"] if source else collect_operator_decision_review()
+        validate_operator_decision_review(review)
+    except Exception as exc:
+        return _source_cli_error("decision review", exc)
     if "--json" in args:
         print(stable_operator_decision_review_json(review), end="")
         return 0
@@ -25302,8 +25940,12 @@ def operator_decision_trace_package_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: decision trace is read-only; --write is not supported", file=sys.stderr)
         return 2
-    package = collect_operator_decision_trace_package()
-    validate_operator_decision_trace_package(package)
+    source = _optional_research_source_arg(args)
+    try:
+        package = _source_aware_decision_chain(source)["trace"] if source else collect_operator_decision_trace_package()
+        validate_operator_decision_trace_package(package)
+    except Exception as exc:
+        return _source_cli_error("decision trace", exc)
     if "--json" in args:
         print(stable_operator_decision_trace_package_json(package), end="")
         return 0
@@ -25336,8 +25978,12 @@ def operator_action_plan_preview_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: operator action-plan is read-only; --write is not supported", file=sys.stderr)
         return 2
-    preview = collect_operator_action_plan_preview()
-    validate_operator_action_plan_preview(preview)
+    source = _optional_research_source_arg(args)
+    try:
+        preview = _source_aware_operator_chain(source)["action_plan"] if source else collect_operator_action_plan_preview()
+        validate_operator_action_plan_preview(preview)
+    except Exception as exc:
+        return _source_cli_error("operator action-plan", exc)
     if "--json" in args:
         print(stable_operator_action_plan_preview_json(preview), end="")
         return 0
@@ -25428,8 +26074,12 @@ def operator_action_review_package_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: operator action-review is read-only; --write is not supported", file=sys.stderr)
         return 2
-    package = collect_operator_action_review_package()
-    validate_operator_action_review_package(package)
+    source = _optional_research_source_arg(args)
+    try:
+        package = _source_aware_operator_chain(source)["action_review"] if source else collect_operator_action_review_package()
+        validate_operator_action_review_package(package)
+    except Exception as exc:
+        return _source_cli_error("operator action-review", exc)
     if "--json" in args:
         print(stable_operator_action_review_package_json(package), end="")
         return 0
@@ -25460,8 +26110,12 @@ def operator_task_draft_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: operator task-draft is read-only; --write is not supported", file=sys.stderr)
         return 2
-    draft = collect_operator_task_draft()
-    validate_operator_task_draft(draft)
+    source = _optional_research_source_arg(args)
+    try:
+        draft = _source_aware_operator_chain(source)["task_draft"] if source else collect_operator_task_draft()
+        validate_operator_task_draft(draft)
+    except Exception as exc:
+        return _source_cli_error("operator task-draft", exc)
     if "--json" in args:
         print(stable_operator_task_draft_json(draft), end="")
         return 0
@@ -25552,8 +26206,12 @@ def operator_task_review_package_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: operator task-review is read-only; --write is not supported", file=sys.stderr)
         return 2
-    package = collect_operator_task_review_package()
-    validate_operator_task_review_package(package)
+    source = _optional_research_source_arg(args)
+    try:
+        package = _source_aware_operator_chain(source)["task_review"] if source else collect_operator_task_review_package()
+        validate_operator_task_review_package(package)
+    except Exception as exc:
+        return _source_cli_error("operator task-review", exc)
     if "--json" in args:
         print(stable_operator_task_review_package_json(package), end="")
         return 0
