@@ -17897,6 +17897,11 @@ def check_research_target_intake_helpers() -> None:
     _require(zip_intake["source_path"] == zip_source, "zip source path must be preserved")
     _require(zip_intake["archive_member_refs"], "zip intake must inspect archive members without extraction")
     _require(zip_intake["selected_file_refs"], "zip intake must include selected refs")
+    zip_ref = zip_intake["selected_file_refs"][0]
+    _require("!" in zip_ref["provenance_path"], "zip selected refs must include archive-qualified provenance_path")
+    _require(zip_ref["provenance_path"].startswith(zip_source + "!"), "zip provenance_path must preserve archive source path")
+    _require("!" not in zip_ref["display_path"] and not zip_ref["display_path"].startswith("research/"),
+             "zip display_path must remain a clean archive member path")
     _require(zip_intake["dry_run"] is True and zip_intake["write_allowed"] is False,
              "research target intake must be read-only")
     _require(parse_research_target_intake_json(stable_research_target_intake_json(zip_intake)) == zip_intake,
@@ -17906,12 +17911,19 @@ def check_research_target_intake_helpers() -> None:
     _require(folder_intake["source_type"] == "folder", "folder source intake must detect folder")
     _require(folder_intake["selected_file_refs"], "folder intake must include selected refs")
     _require(folder_intake["allowed_root"] == "research/_extracted", "folder intake must use most specific allowed root")
+    folder_ref = folder_intake["selected_file_refs"][0]
+    _require(folder_ref["display_path"] == folder_ref["provenance_path"],
+             "folder refs must use the same display and provenance path")
 
     file_intake = collect_research_target_intake(file_source)
     _require(file_intake["source_type"] == "file", "file source intake must detect file")
     _require(file_intake["file_count"] == 1, "file intake must count one file")
     _require(file_intake["selected_file_refs"][0]["path"] == file_source,
              "file intake selected ref must preserve selected source")
+    _require(file_intake["selected_file_refs"][0]["display_path"] == file_source,
+             "file intake display path must preserve selected source")
+    _require(file_intake["selected_file_refs"][0]["provenance_path"] == file_source,
+             "file intake provenance path must preserve selected source")
 
     try:
         collect_research_target_intake("link.py")
@@ -17925,6 +17937,10 @@ def check_research_target_intake_helpers() -> None:
              "research target evidence bundle must flow from intake")
     _require(evidence["source_refs"] and evidence["evidence_refs"],
              "research target evidence bundle must include source and evidence refs")
+    _require("!" in evidence["source_refs"][0]["provenance_path"],
+             "research target evidence source refs must preserve zip provenance")
+    _require("!" in evidence["evidence_refs"][0]["provenance_path"],
+             "research target evidence refs must preserve zip provenance")
     _require(evidence["provenance_summary"]["source_path"] == zip_source,
              "research target evidence provenance must include selected source")
     validate_research_target_evidence_bundle(evidence, zip_intake)
@@ -18069,6 +18085,7 @@ def check_research_target_clis() -> None:
 
 def check_source_aware_downstream_binding_helpers() -> None:
     from link_modes.growth.link_growth_console import (
+        build_source_aware_context_for_cli,
         collect_growth_business_evidence_contract,
         collect_growth_business_opportunity_scan,
         collect_growth_opportunity_review_package,
@@ -18083,6 +18100,7 @@ def check_source_aware_downstream_binding_helpers() -> None:
         validate_growth_opportunity_review_package,
         validate_research_source_binding_context,
         validate_source_aware_operator_flow,
+        validate_source_aware_provenance,
     )
 
     zip_source, _, _ = _research_target_test_paths()
@@ -18093,6 +18111,8 @@ def check_source_aware_downstream_binding_helpers() -> None:
     _require(binding["source_path"] == zip_source, "research source binding must preserve source path")
     _require(binding["source_refs"] and binding["evidence_refs"] and binding["upgrade_candidate_refs"],
              "research source binding must include source, evidence, and upgrade refs")
+    _require(all("!" in item for item in binding["source_refs"]),
+             "research source binding zip refs must be archive-qualified")
     _require(binding["selected_upgrade_candidate_id"] in binding["upgrade_candidate_refs"],
              "research source binding selected candidate must be available")
     validate_research_source_binding_context(binding)
@@ -18102,6 +18122,10 @@ def check_source_aware_downstream_binding_helpers() -> None:
     scan = collect_growth_business_opportunity_scan(source_path=zip_source)
     validate_growth_business_opportunity_scan(scan)
     _require(scan["source_bound"] is True, "source-aware opportunity scan must be source-bound")
+    _require(scan["source_path"] == zip_source and scan["source_name"] == "gpt-crawler-main.zip",
+             "source-aware opportunity scan must include top-level source metadata")
+    _require(scan["source_refs"] and all("!" in item for item in scan["source_refs"]),
+             "source-aware opportunity scan must include archive-qualified source refs")
     _require(scan["research_target_intake_id"] == binding["research_target_intake_id"],
              "source-aware opportunity scan must include research target intake id")
     for opportunity in scan["opportunities"]:
@@ -18109,26 +18133,91 @@ def check_source_aware_downstream_binding_helpers() -> None:
         _require(opportunity["research_target_intake_id"] == binding["research_target_intake_id"],
                  "source-aware opportunity must reference selected target")
         _require(opportunity["evidence_refs"], "source-aware opportunity must include evidence refs")
+        _require(opportunity["source_path"] == zip_source, "source-aware opportunity must include source path")
 
     contract = collect_growth_business_evidence_contract(scan)
     validate_growth_business_evidence_contract(contract, scan)
     _require(contract["source_bound"] is True, "source-aware evidence contract must be source-bound")
+    _require(contract["source_path"] == zip_source, "source-aware evidence contract must include source path")
     _require(contract["research_target_evidence_bundle_id"] == binding["research_target_evidence_bundle_id"],
              "source-aware evidence contract must include evidence bundle id")
 
     review = collect_growth_opportunity_review_package(scan, contract)
     validate_growth_opportunity_review_package(review, scan, contract)
     _require(review["source_bound"] is True, "source-aware opportunity review must be source-bound")
+    _require(review["source_path"] == zip_source, "source-aware opportunity review must include source path")
     _require(review["research_target_intake_id"] == binding["research_target_intake_id"],
              "source-aware opportunity review must include selected target id")
 
-    flow = collect_source_aware_operator_flow(source_path=zip_source)
+    context = build_source_aware_context_for_cli(zip_source)
+    _require(context["research_source_binding_context"]["research_source_binding_context_id"] == binding["research_source_binding_context_id"],
+             "source-aware CLI context must preserve binding id")
+    _require(context["operator_chain"]["task_draft"]["source_path"] == zip_source,
+             "source-aware CLI context must build source-bound operator chain")
+
+    import link_modes.growth.link_growth_console as growth_console
+    original_intake = growth_console.collect_research_target_intake
+    intake_calls = {"count": 0}
+
+    def counted_intake(*args, **kwargs):
+        intake_calls["count"] += 1
+        return original_intake(*args, **kwargs)
+
+    growth_console.collect_research_target_intake = counted_intake
+    try:
+        counted_context = growth_console.build_source_aware_context_for_cli(zip_source)
+    finally:
+        growth_console.collect_research_target_intake = original_intake
+    _require(intake_calls["count"] == 1,
+             "source-aware CLI context must not rebuild research target intake repeatedly")
+    _require(counted_context["operator_chain"]["task_draft"]["source_path"] == zip_source,
+             "source-aware context reuse guard must still build operator task draft")
+
+    flow = collect_source_aware_operator_flow(source_path=zip_source, source_context=context)
     validate_source_aware_operator_flow(flow)
     _require(flow["research_target_intake_id"] == binding["research_target_intake_id"],
              "source-aware flow must include binding target id")
     _require(flow["source_bound"] is True, "source-aware flow must be source-bound")
+    _require(flow["source_path"] == zip_source and flow["source_refs"],
+             "source-aware flow must include top-level source provenance")
     _require(parse_source_aware_operator_flow_json(stable_source_aware_operator_flow_json(flow)) == flow,
              "source-aware operator flow JSON must round trip")
+
+    bad_missing_source = dict(flow)
+    bad_missing_source.pop("source_path")
+    try:
+        validate_source_aware_provenance(bad_missing_source)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("source-aware provenance validation must reject missing source_path")
+
+    bad_refs = dict(flow)
+    bad_refs["source_refs"] = []
+    try:
+        validate_source_aware_provenance(bad_refs)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("source-aware provenance validation must reject missing source_refs")
+
+    bad_zip = dict(flow)
+    bad_zip["source_refs"] = ["gpt-crawler-main/README.md"]
+    try:
+        validate_source_aware_provenance(bad_zip)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("source-aware provenance validation must reject unqualified zip provenance")
+
+    bad_safety = dict(flow)
+    bad_safety["write_allowed"] = True
+    try:
+        validate_source_aware_provenance(bad_safety)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("source-aware provenance validation must reject unsafe writes")
 
     print("source-aware downstream binding helpers OK")
 
@@ -18162,6 +18251,8 @@ def check_source_aware_downstream_binding_clis() -> None:
         _require(rc == 0, f"research {command} --source --json must return 0")
         payload = parser(out.getvalue())
         _require(id_key in payload, f"research {command} must output only its payload")
+        _require(payload["source_path"] == zip_source, f"research {command} must include top-level source_path")
+        _require(payload["source_refs"], f"research {command} must include source refs")
         _require(payload["dry_run"] is True and payload["write_allowed"] is False,
                  f"research {command} must be read-only")
         err = io.StringIO()
@@ -18182,6 +18273,8 @@ def check_source_aware_downstream_binding_clis() -> None:
         payload = parser(out.getvalue())
         _require(id_key in payload, f"growth {command} must output only its payload")
         _require(payload["source_bound"] is True, f"growth {command} must be source-bound")
+        _require(payload["source_path"] == zip_source, f"growth {command} must include top-level source_path")
+        _require(payload["source_refs"] and payload["evidence_refs"], f"growth {command} must include source and evidence refs")
         _require(payload["research_target_intake_id"].startswith("research-target-intake-"),
                  f"growth {command} must include research target id")
 
@@ -18199,6 +18292,8 @@ def check_source_aware_downstream_binding_clis() -> None:
         payload = parser(out.getvalue())
         _require(id_key in payload, f"decision {command} must output only its payload")
         _require(payload["source_bound"] is True, f"decision {command} must be source-bound")
+        _require(payload["source_path"] == zip_source, f"decision {command} must include top-level source_path")
+        _require(payload["source_refs"] and payload["evidence_refs"], f"decision {command} must include source and evidence refs")
         if command == "candidates":
             top_ids = [item["decision_candidate_id"] for item in payload["candidates"]]
             _require(top_ids, "source-aware decision candidates must include candidate ids")
@@ -18223,6 +18318,8 @@ def check_source_aware_downstream_binding_clis() -> None:
         payload = parser(out.getvalue())
         _require(id_key in payload, f"operator {command} must output only its payload")
         _require(payload["source_bound"] is True, f"operator {command} must be source-bound")
+        _require(payload["source_path"] == zip_source, f"operator {command} must include top-level source_path")
+        _require(payload["source_refs"] and payload["evidence_refs"], f"operator {command} must include source and evidence refs")
         if command == "task-draft":
             _require(payload["source_path"] == zip_source and payload["source_name"] == "gpt-crawler-main.zip",
                      "source-aware operator task draft must reference selected source")

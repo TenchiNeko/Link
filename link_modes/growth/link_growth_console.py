@@ -9317,12 +9317,13 @@ def collect_growth_business_opportunity_scan(
     metadata: dict[str, Any] | None = None,
     research_source_binding_context: dict[str, Any] | None = None,
     source_path: str | None = None,
+    research_target_upgrade_candidates: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate deterministic business/growth opportunities from local research references."""
     if research_source_binding_context is not None or source_path is not None:
         binding = research_source_binding_context or collect_research_source_binding_context(source_path=source_path or "")
         validate_research_source_binding_context(binding)
-        source_payload = _source_aware_candidates_from_binding(binding)
+        source_payload = _source_aware_candidates_from_binding(binding, research_target_upgrade_candidates)
         opportunities = source_payload["opportunities"]
         scan = {
             "growth_business_opportunity_scan_version": GROWTH_BUSINESS_OPPORTUNITY_SCAN_VERSION,
@@ -9334,10 +9335,7 @@ def collect_growth_business_opportunity_scan(
             ],
             "opportunity_count": len(opportunities),
             "opportunities": opportunities,
-            "research_source_binding_context_id": binding["research_source_binding_context_id"],
-            "research_target_intake_id": binding["research_target_intake_id"],
-            "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
-            "source_bound": True,
+            **_source_aware_source_metadata(binding),
             "top_recommended_next_action": opportunities[0]["recommended_next_action"] if opportunities else "No source-bound opportunities found.",
             "dry_run": True,
             "write_allowed": False,
@@ -9427,6 +9425,7 @@ def validate_growth_business_opportunity_scan(scan: dict[str, Any]) -> None:
     expected_scan_id = make_growth_business_opportunity_scan_id(scan["opportunities"])
     if scan["growth_business_opportunity_scan_id"] != expected_scan_id:
         raise ValueError("growth business opportunity scan id is not deterministic")
+    validate_source_aware_provenance(scan)
 
 
 def validate_growth_business_opportunity(opportunity: dict[str, Any]) -> None:
@@ -9623,6 +9622,10 @@ def collect_growth_business_evidence_contract(
             "research_source_binding_context_id": scan.get("research_source_binding_context_id", ""),
             "research_target_intake_id": scan.get("research_target_intake_id", ""),
             "research_target_evidence_bundle_id": scan.get("research_target_evidence_bundle_id", ""),
+            "selected_upgrade_candidate_id": scan.get("selected_upgrade_candidate_id", ""),
+            "source_path": scan.get("source_path", ""),
+            "source_name": scan.get("source_name", ""),
+            "source_type": scan.get("source_type", ""),
             "source_refs": _normalize_implementation_branch_refs(source_refs),
             "evidence_refs": _normalize_implementation_branch_refs([ref for opportunity in scan["opportunities"] for ref in opportunity.get("evidence_refs", [])]),
             "source_bound": True,
@@ -9688,6 +9691,7 @@ def validate_growth_business_evidence_contract(
         raise ValueError("growth business evidence contract must be read-only")
     if contract["automation_allowed"] is not False or contract["writes"] != []:
         raise ValueError("growth business evidence contract must not allow automation or writes")
+    validate_source_aware_provenance(contract)
     if opportunity_scan is not None:
         validate_growth_business_opportunity_scan(opportunity_scan)
         if contract["growth_business_opportunity_scan_id"] != opportunity_scan["growth_business_opportunity_scan_id"]:
@@ -9873,6 +9877,10 @@ def collect_growth_opportunity_review_package(
             "research_source_binding_context_id": scan.get("research_source_binding_context_id", ""),
             "research_target_intake_id": scan.get("research_target_intake_id", ""),
             "research_target_evidence_bundle_id": scan.get("research_target_evidence_bundle_id", ""),
+            "selected_upgrade_candidate_id": scan.get("selected_upgrade_candidate_id", ""),
+            "source_path": scan.get("source_path", ""),
+            "source_name": scan.get("source_name", ""),
+            "source_type": scan.get("source_type", ""),
             "source_refs": _normalize_implementation_branch_refs([ref for opportunity in scan["opportunities"] for ref in opportunity.get("source_refs", [])]),
             "evidence_refs": _normalize_implementation_branch_refs([ref for opportunity in scan["opportunities"] for ref in opportunity.get("evidence_refs", [])]),
             "source_bound": True,
@@ -9949,6 +9957,7 @@ def validate_growth_opportunity_review_package(
         validate_growth_business_evidence_contract(evidence_contract, opportunity_scan)
         if package["growth_business_evidence_contract_id"] != evidence_contract["growth_business_evidence_contract_id"]:
             raise ValueError("growth opportunity review package evidence contract id mismatch")
+    validate_source_aware_provenance(package)
     if opportunity_scan is not None and evidence_contract is not None:
         expected_id = make_growth_opportunity_review_package_id(opportunity_scan, evidence_contract)
         if package["growth_opportunity_review_package_id"] != expected_id:
@@ -11127,6 +11136,8 @@ def _research_target_ref_from_file(path_value, *, base=None) -> dict[str, Any]:
     return {
         "ref_id": _research_target_ref_id(rel),
         "path": rel,
+        "display_path": rel,
+        "provenance_path": rel,
         "file_type": _research_target_file_type(rel),
         "reason_selected": _research_target_reason(rel),
         "size_bytes": int(stat.st_size),
@@ -11134,7 +11145,7 @@ def _research_target_ref_from_file(path_value, *, base=None) -> dict[str, Any]:
     }
 
 
-def _research_target_ref_from_zip_member(member, archive=None) -> dict[str, Any]:
+def _research_target_ref_from_zip_member(member, archive=None, *, archive_path: str = "") -> dict[str, Any]:
     digest = ""
     if archive is not None and member.file_size <= 2_000_000:
         import hashlib
@@ -11144,11 +11155,15 @@ def _research_target_ref_from_zip_member(member, archive=None) -> dict[str, Any]
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 hasher.update(chunk)
         digest = hasher.hexdigest()
+    display_path = member.filename
+    provenance_path = f"{archive_path}!{display_path}" if archive_path else display_path
     return {
-        "ref_id": _research_target_ref_id(member.filename),
-        "path": member.filename,
-        "file_type": _research_target_file_type(member.filename),
-        "reason_selected": _research_target_reason(member.filename),
+        "ref_id": _research_target_ref_id(provenance_path),
+        "path": display_path,
+        "display_path": display_path,
+        "provenance_path": provenance_path,
+        "file_type": _research_target_file_type(display_path),
+        "reason_selected": _research_target_reason(display_path),
         "size_bytes": int(member.file_size),
         "hash": digest,
     }
@@ -11199,9 +11214,9 @@ def _research_target_intake_core(source_path: str) -> dict[str, Any]:
             selected_names = set(_research_target_choose_paths(all_paths, limit=12))
             for member in members:
                 if member.filename in selected_names:
-                    selected_refs.append(_research_target_ref_from_zip_member(member, archive))
+                    selected_refs.append(_research_target_ref_from_zip_member(member, archive, archive_path=rel_source))
                 if len(archive_refs) < 30 and member.filename in _research_target_choose_paths(all_paths, limit=30):
-                    archive_refs.append(_research_target_ref_from_zip_member(member, archive))
+                    archive_refs.append(_research_target_ref_from_zip_member(member, archive, archive_path=rel_source))
         source_hash = _research_target_hash_file(candidate)
     elif candidate.is_dir():
         source_type = "folder"
@@ -11317,16 +11332,37 @@ def validate_research_target_intake(intake: dict[str, Any]) -> None:
         raise ValueError("research target intake id is not deterministic")
 
 
+def _research_target_validate_path_text(path_text: str, field: str) -> None:
+    if not isinstance(path_text, str) or not path_text:
+        raise ValueError(f"research target ref {field} must be a non-empty string")
+    parts = path_text.replace("!", "/").split("/")
+    if path_text.startswith("/") or any(part in parts for part in ("..", ".git", ".agents", ".link")):
+        raise ValueError(f"research target ref {field} contains forbidden path segment")
+
+
 def _validate_research_target_ref(ref: dict[str, Any]) -> None:
-    required = ("ref_id", "path", "file_type", "reason_selected", "size_bytes", "hash")
+    required = ("ref_id", "path", "display_path", "provenance_path", "file_type", "reason_selected", "size_bytes", "hash")
     for key in required:
         if key not in ref:
             raise ValueError(f"research target ref missing field: {key}")
-    for field in ("ref_id", "path", "file_type", "reason_selected", "hash"):
+    for field in ("ref_id", "path", "display_path", "provenance_path", "file_type", "reason_selected", "hash"):
         if not isinstance(ref[field], str):
             raise TypeError(f"research target ref {field} must be a string")
     if not ref["ref_id"].startswith("research-target-ref-"):
         raise ValueError("invalid research target ref id")
+    _research_target_validate_path_text(ref["path"], "path")
+    _research_target_validate_path_text(ref["display_path"], "display_path")
+    _research_target_validate_path_text(ref["provenance_path"], "provenance_path")
+    if ref["display_path"] != ref["path"]:
+        raise ValueError("research target ref display_path must match path")
+    if "!" in ref["display_path"]:
+        raise ValueError("research target ref display_path must not be archive-qualified")
+    if "!" in ref["provenance_path"]:
+        archive_path, member_path = ref["provenance_path"].split("!", 1)
+        if not archive_path.startswith("research/") or not archive_path.endswith(".zip"):
+            raise ValueError("zip research target provenance_path must start with the archive path")
+        if member_path != ref["display_path"]:
+            raise ValueError("zip research target provenance_path member must match display_path")
     if not isinstance(ref["size_bytes"], int) or ref["size_bytes"] < 0:
         raise ValueError("research target ref size_bytes must be a non-negative integer")
 
@@ -11355,6 +11391,8 @@ def _research_target_source_refs(intake: dict[str, Any]) -> list[dict[str, Any]]
         refs.append({
             "source_ref_id": ref["ref_id"],
             "path": ref["path"],
+            "display_path": ref["display_path"],
+            "provenance_path": ref["provenance_path"],
             "file_type": ref["file_type"],
             "size_bytes": ref["size_bytes"],
             "hash": ref["hash"],
@@ -11378,17 +11416,21 @@ def collect_research_target_evidence_bundle(
         evidence_refs.append({
             "evidence_ref_id": _research_target_evidence_ref_id(source_ref["source_ref_id"], evidence_type),
             "source_ref_id": source_ref["source_ref_id"],
+            "display_path": source_ref["display_path"],
+            "provenance_path": source_ref["provenance_path"],
             "evidence_type": evidence_type,
-            "evidence_summary": f"{evidence_type} evidence from {source_ref['path']} in {intake['source_path']}.",
+            "evidence_summary": f"{evidence_type} evidence from {source_ref['display_path']} in {intake['source_path']}.",
             "confidence_score": 80 if evidence_type != "unknown" else 45,
             "risk_score": 25 if evidence_type in {"README", "architecture_doc", "package_manifest"} else 45,
-            "provenance_fields": ["source_path", "source_ref_id", "source_hash", "source_type"],
+            "provenance_fields": ["source_path", "source_ref_id", "display_path", "provenance_path", "source_hash", "source_type"],
             "reviewer_notes_required": evidence_type in {"unknown", "source_code_pattern"},
         })
         if source_ref["hash"]:
             hash_refs.append({
                 "source_ref_id": source_ref["source_ref_id"],
                 "path": source_ref["path"],
+                "display_path": source_ref["display_path"],
+                "provenance_path": source_ref["provenance_path"],
                 "hash": source_ref["hash"],
             })
     missing_evidence = []
@@ -11460,13 +11502,29 @@ def validate_research_target_evidence_bundle(bundle: dict[str, Any], research_ta
             raise TypeError(f"{field} must be a list")
     if not bundle["source_refs"] or not bundle["evidence_refs"]:
         raise ValueError("research target evidence bundle must include source and evidence refs")
+    source_ref_ids = set()
+    for source_ref in bundle["source_refs"]:
+        for key in ("source_ref_id", "path", "display_path", "provenance_path", "file_type", "size_bytes", "hash"):
+            if key not in source_ref:
+                raise ValueError(f"research target source ref missing field: {key}")
+        _research_target_validate_path_text(source_ref["display_path"], "source display_path")
+        _research_target_validate_path_text(source_ref["provenance_path"], "source provenance_path")
+        if source_ref["display_path"] != source_ref["path"]:
+            raise ValueError("research target source ref display_path must match path")
+        source_ref_ids.add(source_ref["source_ref_id"])
     allowed_types = {"README", "architecture_doc", "workflow_definition", "prompt_or_skill", "test_file", "config_file", "package_manifest", "source_code_pattern", "unknown"}
     for ref in bundle["evidence_refs"]:
-        for key in ("evidence_ref_id", "source_ref_id", "evidence_type", "evidence_summary", "confidence_score", "risk_score", "provenance_fields", "reviewer_notes_required"):
+        for key in ("evidence_ref_id", "source_ref_id", "display_path", "provenance_path", "evidence_type", "evidence_summary", "confidence_score", "risk_score", "provenance_fields", "reviewer_notes_required"):
             if key not in ref:
                 raise ValueError(f"research target evidence ref missing field: {key}")
         if not ref["evidence_ref_id"].startswith("research-target-evidence-ref-"):
             raise ValueError("invalid research target evidence ref id")
+        if ref["source_ref_id"] not in source_ref_ids:
+            raise ValueError("research target evidence ref source id mismatch")
+        _research_target_validate_path_text(ref["display_path"], "evidence display_path")
+        _research_target_validate_path_text(ref["provenance_path"], "evidence provenance_path")
+        if "!" in ref["display_path"]:
+            raise ValueError("research target evidence display_path must not be archive-qualified")
         if ref["evidence_type"] not in allowed_types:
             raise ValueError("invalid research target evidence type")
         for score in ("confidence_score", "risk_score"):
@@ -11476,6 +11534,12 @@ def validate_research_target_evidence_bundle(bundle: dict[str, Any], research_ta
             raise ValueError("research target evidence ref provenance fields required")
         if not isinstance(ref["reviewer_notes_required"], bool):
             raise TypeError("research target evidence reviewer_notes_required must be bool")
+    for hash_ref in bundle["hash_refs"]:
+        for key in ("source_ref_id", "path", "display_path", "provenance_path", "hash"):
+            if key not in hash_ref:
+                raise ValueError(f"research target hash ref missing field: {key}")
+        _research_target_validate_path_text(hash_ref["display_path"], "hash display_path")
+        _research_target_validate_path_text(hash_ref["provenance_path"], "hash provenance_path")
     if bundle["safety_metadata"] != _read_only_safety_metadata() or bundle["dry_run"] is not True or bundle["write_allowed"] is not False or bundle["automation_allowed"] is not False or bundle["writes"] != []:
         raise ValueError("research target evidence bundle must remain read-only")
     if research_target_intake is not None:
@@ -11902,6 +11966,56 @@ def _research_source_binding_from_path(source_path: str) -> dict[str, Any]:
     return collect_research_source_binding_context(source_path=source_path)
 
 
+def _source_aware_source_metadata(binding: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_bound": True,
+        "source_path": binding["source_path"],
+        "source_name": binding["source_name"],
+        "source_type": binding["source_type"],
+        "research_target_intake_id": binding["research_target_intake_id"],
+        "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "selected_upgrade_candidate_id": binding["selected_upgrade_candidate_id"],
+        "source_refs": list(binding["source_refs"]),
+        "evidence_refs": list(binding["evidence_refs"]),
+    }
+
+
+def _source_aware_validate_archive_provenance(payload: dict[str, Any]) -> None:
+    if payload.get("source_type") != "zip_archive":
+        return
+    source_path = payload.get("source_path", "")
+    for ref in payload.get("source_refs", []):
+        if not isinstance(ref, str) or "!" not in ref:
+            raise ValueError("source-aware zip source_refs must use archive-qualified provenance_path")
+        archive_path, member_path = ref.split("!", 1)
+        if archive_path != source_path or not member_path:
+            raise ValueError("source-aware zip source_ref must preserve selected archive path")
+
+
+def validate_source_aware_provenance(payload: dict[str, Any], *, evidence_expected: bool = True) -> None:
+    if payload.get("source_bound") is not True:
+        return
+    for key in ("source_path", "research_target_intake_id", "source_refs"):
+        if key not in payload or not payload[key]:
+            raise ValueError(f"source-aware payload missing provenance field: {key}")
+    if evidence_expected and not payload.get("research_target_evidence_bundle_id"):
+        raise ValueError("source-aware payload missing research target evidence bundle id")
+    source_refs = payload.get("source_refs")
+    if _normalize_implementation_branch_refs(source_refs) != source_refs:
+        raise ValueError("source-aware source_refs must be normalized")
+    if evidence_expected:
+        evidence_refs = payload.get("evidence_refs")
+        if not evidence_refs or _normalize_implementation_branch_refs(evidence_refs) != evidence_refs:
+            raise ValueError("source-aware evidence_refs must be present and normalized")
+    if payload.get("write_allowed") is not False or payload.get("automation_allowed") is not False or payload.get("writes") != []:
+        raise ValueError("source-aware payload must remain read-only")
+    safety = payload.get("safety_metadata")
+    if safety is not None and safety != _read_only_safety_metadata():
+        raise ValueError("source-aware safety metadata mismatch")
+    _source_aware_validate_archive_provenance(payload)
+
+
 def collect_research_source_binding_context(
     research_target_intake: dict[str, Any] | None = None,
     research_target_evidence_bundle: dict[str, Any] | None = None,
@@ -11925,11 +12039,11 @@ def collect_research_source_binding_context(
     validate_research_target_upgrade_candidates(candidates, intake, evidence)
     task = research_target_operator_task_draft or collect_research_target_operator_task_draft(candidates, evidence)
     validate_research_target_operator_task_draft(task, candidates, evidence)
-    flow = research_target_operator_flow or collect_research_target_operator_flow(source_path=intake["source_path"])
-    validate_research_target_operator_flow(flow)
+    if research_target_operator_flow is not None:
+        validate_research_target_operator_flow(research_target_operator_flow)
     selected_candidate_id = task["selected_upgrade_candidate_id"]
     selected = next(item for item in candidates["upgrade_candidates"] if item["upgrade_candidate_id"] == selected_candidate_id)
-    source_refs = _normalize_implementation_branch_refs([item["path"] for item in evidence["source_refs"]])
+    source_refs = _normalize_implementation_branch_refs([item.get("provenance_path", item["path"]) for item in evidence["source_refs"]])
     evidence_refs = _normalize_implementation_branch_refs([item["evidence_ref_id"] for item in evidence["evidence_refs"]])
     upgrade_refs = _normalize_implementation_branch_refs([item["upgrade_candidate_id"] for item in candidates["upgrade_candidates"]])
     blockers = _normalize_implementation_branch_refs(list(candidates["missing_evidence"]) + [f"review source-bound candidate before implementation: {selected_candidate_id}"])
@@ -12012,6 +12126,7 @@ def validate_research_source_binding_context(context: dict[str, Any], research_t
         raise ValueError("invalid research source binding status")
     if context["safety_metadata"] != _read_only_safety_metadata() or context["dry_run"] is not True or context["write_allowed"] is not False or context["automation_allowed"] is not False or context["writes"] != []:
         raise ValueError("research source binding must remain read-only")
+    validate_source_aware_provenance({**context, "source_bound": True})
     if research_target_intake is not None and context["research_target_intake_id"] != research_target_intake["research_target_intake_id"]:
         raise ValueError("research source binding intake id mismatch")
     if research_target_evidence_bundle is not None and context["research_target_evidence_bundle_id"] != research_target_evidence_bundle["research_target_evidence_bundle_id"]:
@@ -12045,9 +12160,10 @@ def parse_research_source_binding_context_json(text: str) -> dict[str, Any]:
     return context
 
 
-def _source_aware_candidates_from_binding(binding: dict[str, Any]) -> dict[str, Any]:
+def _source_aware_candidates_from_binding(binding: dict[str, Any], target_candidates: dict[str, Any] | None = None) -> dict[str, Any]:
     validate_research_source_binding_context(binding)
-    target_candidates = collect_research_target_upgrade_candidates(source_path=binding["source_path"])
+    target_candidates = target_candidates or collect_research_target_upgrade_candidates(source_path=binding["source_path"])
+    validate_research_target_upgrade_candidates(target_candidates)
     source_refs = _normalize_implementation_branch_refs(binding["source_refs"])
     evidence_refs = _normalize_implementation_branch_refs(binding["evidence_refs"])
     opportunities: list[dict[str, Any]] = []
@@ -12070,6 +12186,10 @@ def _source_aware_candidates_from_binding(binding: dict[str, Any]) -> dict[str, 
             "recommended_next_action": candidate["recommended_next_action"],
             "research_target_intake_id": binding["research_target_intake_id"],
             "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
+            "research_source_binding_context_id": binding["research_source_binding_context_id"],
+            "source_path": binding["source_path"],
+            "source_name": binding["source_name"],
+            "source_type": binding["source_type"],
             "evidence_refs": evidence_refs,
             "detected_domains": list(binding["detected_domains"]),
             "selected_upgrade_candidate_id": candidate["upgrade_candidate_id"],
@@ -12089,17 +12209,27 @@ def _source_aware_decision_candidate_id(candidate: dict[str, Any], binding: dict
     })
 
 
-def _source_aware_decision_chain(source_path: str, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    binding = collect_research_source_binding_context(source_path=source_path)
-    target_candidates = collect_research_target_upgrade_candidates(source_path=source_path)
+def _source_aware_decision_chain(
+    source_path: str | None = None,
+    *,
+    binding: dict[str, Any] | None = None,
+    target_candidates: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    binding = binding or collect_research_source_binding_context(source_path=source_path or "")
+    validate_research_source_binding_context(binding)
+    target_candidates = target_candidates or collect_research_target_upgrade_candidates(source_path=binding["source_path"])
+    validate_research_target_upgrade_candidates(target_candidates)
+    source_metadata = _source_aware_source_metadata(binding)
     candidates = []
     for upgrade in target_candidates["upgrade_candidates"]:
-        blockers = _normalize_implementation_branch_refs(["source-bound decision is read-only and requires human review"] + list(upgrade["missing_evidence"] if "missing_evidence" in upgrade else []))
+        blockers = _normalize_implementation_branch_refs(["source-bound decision is read-only and requires human review"] + list(upgrade.get("missing_evidence", [])))
         candidate = {
             "decision_candidate_id": _source_aware_decision_candidate_id(upgrade, binding),
             "title": upgrade["title"],
             "description": upgrade["description"],
-            "source_refs": _normalize_implementation_branch_refs(list(upgrade["source_refs"]) + [binding["research_source_binding_context_id"]]),
+            "source_refs": list(binding["source_refs"]),
+            "evidence_refs": list(binding["evidence_refs"]),
             "expected_readiness_gain": int(max(1, 100 - upgrade["effort_score"])),
             "expected_risk_reduction": 12 if upgrade["risk_level"] == "medium" else 18,
             "expected_evidence_gain": int(min(100, len(upgrade["evidence_refs"]) * 10)),
@@ -12108,11 +12238,8 @@ def _source_aware_decision_chain(source_path: str, *, metadata: dict[str, Any] |
             "priority": "high" if upgrade["target_link_module"] in {"research", "growth", "control_plane"} else "medium",
             "blockers": blockers,
             "execution_allowed": False,
-            "research_target_intake_id": binding["research_target_intake_id"],
-            "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
-            "selected_upgrade_candidate_id": upgrade["upgrade_candidate_id"],
+            **{**source_metadata, "selected_upgrade_candidate_id": upgrade["upgrade_candidate_id"]},
             "target_link_module": upgrade["target_link_module"],
-            "source_bound": True,
         }
         candidates.append(candidate)
     candidates = sorted(candidates, key=lambda item: item["decision_candidate_id"])
@@ -12124,10 +12251,7 @@ def _source_aware_decision_chain(source_path: str, *, metadata: dict[str, Any] |
             "binding_id": binding["research_source_binding_context_id"],
             "version": DECISION_CANDIDATE_SET_VERSION,
         }),
-        "research_source_binding_context_id": binding["research_source_binding_context_id"],
-        "research_target_intake_id": binding["research_target_intake_id"],
-        "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
-        "source_bound": True,
+        **source_metadata,
         "candidates": candidates,
         "blocked_candidates": blocked,
         "decision_context": {
@@ -12148,38 +12272,28 @@ def _source_aware_decision_chain(source_path: str, *, metadata: dict[str, Any] |
         "writes": [],
     }
     validate_decision_candidate_set(candidate_set)
+    validate_source_aware_provenance(candidate_set)
     impact = collect_decision_impact_analysis(candidate_set)
     ranking = collect_decision_ranking(candidate_set, impact)
-    ranking.update({
-        "research_source_binding_context_id": binding["research_source_binding_context_id"],
-        "research_target_intake_id": binding["research_target_intake_id"],
-        "selected_upgrade_candidate_id": next(item["selected_upgrade_candidate_id"] for item in candidates if item["decision_candidate_id"] == ranking["top_candidate_id"]),
-        "source_bound": True,
-    })
+    selected_upgrade_candidate_id = next(item["selected_upgrade_candidate_id"] for item in candidates if item["decision_candidate_id"] == ranking["top_candidate_id"])
+    ranking.update({**source_metadata, "selected_upgrade_candidate_id": selected_upgrade_candidate_id})
     validate_decision_ranking(ranking)
+    validate_source_aware_provenance(ranking)
     review = collect_operator_decision_review(candidate_set, impact, ranking)
-    review.update({
-        "research_source_binding_context_id": binding["research_source_binding_context_id"],
-        "research_target_intake_id": binding["research_target_intake_id"],
-        "selected_upgrade_candidate_id": ranking["selected_upgrade_candidate_id"],
-        "source_bound": True,
-    })
+    review.update({**source_metadata, "selected_upgrade_candidate_id": selected_upgrade_candidate_id})
     validate_operator_decision_review(review)
+    validate_source_aware_provenance(review)
     breakdown = collect_decision_score_breakdown(candidate_set, impact, ranking)
     rejected = collect_rejected_alternative_analysis(candidate_set, ranking, breakdown)
     ledger = collect_decision_assumption_ledger(candidate_set, ranking, review)
     trace = collect_operator_decision_trace_package(ranking, breakdown, rejected, ledger, review, candidate_set, impact)
     trace.update({
-        "research_source_binding_context_id": binding["research_source_binding_context_id"],
-        "research_target_intake_id": binding["research_target_intake_id"],
-        "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
-        "selected_upgrade_candidate_id": ranking["selected_upgrade_candidate_id"],
-        "source_path": binding["source_path"],
-        "source_name": binding["source_name"],
-        "source_bound": True,
-        "explanation_summary": f"The source-bound candidate {ranking['selected_upgrade_candidate_id']} won for {binding['source_path']} using deterministic readiness, risk, evidence, approval, effort, and blocker scoring.",
+        **source_metadata,
+        "selected_upgrade_candidate_id": selected_upgrade_candidate_id,
+        "explanation_summary": f"The source-bound candidate {selected_upgrade_candidate_id} won for {binding['source_path']} using deterministic readiness, risk, evidence, approval, effort, and blocker scoring.",
     })
     validate_operator_decision_trace_package(trace)
+    validate_source_aware_provenance(trace)
     return {
         "binding": binding,
         "candidate_set": candidate_set,
@@ -12190,10 +12304,51 @@ def _source_aware_decision_chain(source_path: str, *, metadata: dict[str, Any] |
     }
 
 
-def _source_aware_operator_chain(source_path: str) -> dict[str, Any]:
-    decision = _source_aware_decision_chain(source_path)
+def _collect_source_aware_operator_task_review_package(
+    task: dict[str, Any],
+    scope: dict[str, Any],
+    tests: dict[str, Any],
+    action_evidence: dict[str, Any],
+    action_approvals: dict[str, Any],
+    source_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    blockers = _normalize_implementation_branch_refs(list(scope["blockers"]) + list(action_evidence["blockers"]) + list(action_approvals["blockers"]) + ["operator task draft is not executable"])
+    package = {
+        "operator_task_review_package_version": OPERATOR_TASK_REVIEW_PACKAGE_VERSION,
+        "operator_task_review_package_id": make_operator_task_review_package_id(task, scope, tests, action_evidence, action_approvals),
+        "operator_task_draft_id": task["operator_task_draft_id"],
+        "operator_task_scope_review_id": scope["operator_task_scope_review_id"],
+        "operator_task_test_plan_id": tests["operator_task_test_plan_id"],
+        "operator_action_evidence_checklist_id": action_evidence["operator_action_evidence_checklist_id"],
+        "operator_action_approval_checklist_id": action_approvals["operator_action_approval_checklist_id"],
+        "task_status": "draft",
+        "scope_status": scope["scope_status"],
+        "test_status": "planned",
+        "approval_status": action_approvals["approval_status"],
+        "readiness_status": "blocked" if blockers else "ready",
+        "blockers": blockers,
+        "warnings": _normalize_implementation_branch_refs(list(scope["warnings"]) + ["verification commands are strings only and are not executed"]),
+        "required_human_actions": _normalize_implementation_branch_refs(list(scope["required_human_actions"]) + list(action_approvals["required_human_actions"])),
+        "review_recommendation": "Review the source-bound task draft, scope, and test plan before authorizing implementation.",
+        "recommended_next_action": "Use this source-bound task review package to decide whether to authorize a separate implementation slice.",
+        **source_metadata,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": {},
+        "writes": [],
+    }
+    validate_operator_task_review_package(package, task, scope, tests, action_evidence, action_approvals)
+    validate_source_aware_provenance(package)
+    return package
+
+
+def _source_aware_operator_chain(source_path: str | None = None, *, source_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    decision = source_context["decision_chain"] if source_context is not None else _source_aware_decision_chain(source_path)
     binding = decision["binding"]
     top = next(item for item in decision["candidate_set"]["candidates"] if item["decision_candidate_id"] == decision["ranking"]["top_candidate_id"])
+    selected_metadata = {**_source_aware_source_metadata(binding), "selected_upgrade_candidate_id": top["selected_upgrade_candidate_id"]}
     affected_files = _research_target_likely_files(top["target_link_module"])
     action_plan = {
         "operator_action_plan_preview_version": OPERATOR_ACTION_PLAN_PREVIEW_VERSION,
@@ -12223,13 +12378,7 @@ def _source_aware_operator_chain(source_path: str) -> dict[str, Any]:
         ]),
         "rollback_plan": _normalize_implementation_branch_refs(["do not modify the selected research target", "revert only intended Link source/test edits if rejected", "do not copy external code"]),
         "execution_allowed": False,
-        "research_source_binding_context_id": binding["research_source_binding_context_id"],
-        "research_target_intake_id": binding["research_target_intake_id"],
-        "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
-        "selected_upgrade_candidate_id": top["selected_upgrade_candidate_id"],
-        "source_path": binding["source_path"],
-        "source_name": binding["source_name"],
-        "source_bound": True,
+        **selected_metadata,
         "recommended_next_action": "Review the source-bound action plan before authorizing any implementation slice.",
         "safety_metadata": _read_only_safety_metadata(),
         "dry_run": True,
@@ -12239,42 +12388,24 @@ def _source_aware_operator_chain(source_path: str) -> dict[str, Any]:
         "writes": [],
     }
     validate_operator_action_plan_preview(action_plan)
+    validate_source_aware_provenance(action_plan)
     action_evidence = collect_operator_action_evidence_checklist(action_plan)
     action_approvals = collect_operator_action_approval_checklist(action_plan)
     action_review = collect_operator_action_review_package(action_plan, action_evidence, action_approvals)
-    action_review.update({
-        "research_source_binding_context_id": binding["research_source_binding_context_id"],
-        "research_target_intake_id": binding["research_target_intake_id"],
-        "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
-        "selected_upgrade_candidate_id": top["selected_upgrade_candidate_id"],
-        "source_path": binding["source_path"],
-        "source_bound": True,
-    })
+    action_review.update(selected_metadata)
     validate_operator_action_review_package(action_review)
+    validate_source_aware_provenance(action_review)
     task = collect_operator_task_draft(action_plan, action_review, decision["trace"])
     task.update({
-        "research_source_binding_context_id": binding["research_source_binding_context_id"],
-        "research_target_intake_id": binding["research_target_intake_id"],
-        "research_target_evidence_bundle_id": binding["research_target_evidence_bundle_id"],
-        "selected_upgrade_candidate_id": top["selected_upgrade_candidate_id"],
-        "source_path": binding["source_path"],
-        "source_name": binding["source_name"],
-        "source_bound": True,
+        **selected_metadata,
         "objective": f"Implement a Link-native upgrade inspired by {binding['source_path']}: {top['title']}.",
         "scope_summary": f"Use source refs from {binding['source_name']} to improve {top['target_link_module']} without copying external code or executing the task.",
     })
     validate_operator_task_draft(task)
+    validate_source_aware_provenance(task)
     scope = collect_operator_task_scope_review(task)
     tests = collect_operator_task_test_plan(task)
-    task_review = collect_operator_task_review_package(task, scope, tests, action_evidence, action_approvals)
-    task_review.update({
-        "research_source_binding_context_id": binding["research_source_binding_context_id"],
-        "research_target_intake_id": binding["research_target_intake_id"],
-        "selected_upgrade_candidate_id": top["selected_upgrade_candidate_id"],
-        "source_path": binding["source_path"],
-        "source_bound": True,
-    })
-    validate_operator_task_review_package(task_review)
+    task_review = _collect_source_aware_operator_task_review_package(task, scope, tests, action_evidence, action_approvals, selected_metadata)
     return {
         **decision,
         "action_plan": action_plan,
@@ -12284,12 +12415,39 @@ def _source_aware_operator_chain(source_path: str) -> dict[str, Any]:
     }
 
 
-def collect_source_aware_operator_flow(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    chain = _source_aware_operator_chain(source_path)
-    binding = chain["binding"]
-    growth_scan = collect_growth_business_opportunity_scan(research_source_binding_context=binding)
+def build_source_aware_context_for_cli(source: str) -> dict[str, Any]:
+    intake = collect_research_target_intake(source)
+    evidence = collect_research_target_evidence_bundle(intake)
+    candidates = collect_research_target_upgrade_candidates(intake, evidence)
+    task = collect_research_target_operator_task_draft(candidates, evidence)
+    binding = collect_research_source_binding_context(intake, evidence, candidates, task)
+    growth_scan = collect_growth_business_opportunity_scan(research_source_binding_context=binding, research_target_upgrade_candidates=candidates)
     growth_contract = collect_growth_business_evidence_contract(growth_scan)
     growth_review = collect_growth_opportunity_review_package(growth_scan, growth_contract)
+    decision_chain = _source_aware_decision_chain(binding=binding, target_candidates=candidates)
+    context = {
+        "research_target_intake": intake,
+        "research_target_evidence_bundle": evidence,
+        "research_target_upgrade_candidates": candidates,
+        "research_target_operator_task_draft": task,
+        "research_source_binding_context": binding,
+        "growth_scan": growth_scan,
+        "growth_contract": growth_contract,
+        "growth_review": growth_review,
+        "decision_chain": decision_chain,
+    }
+    context["operator_chain"] = _source_aware_operator_chain(source_context=context)
+    return context
+
+
+def collect_source_aware_operator_flow(*, source_path: str, metadata: dict[str, Any] | None = None, source_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = source_context or build_source_aware_context_for_cli(source_path)
+    binding = context["research_source_binding_context"]
+    chain = context["operator_chain"]
+    growth_scan = context["growth_scan"]
+    growth_contract = context["growth_contract"]
+    growth_review = context["growth_review"]
+    source_metadata = {**_source_aware_source_metadata(binding), "selected_upgrade_candidate_id": chain["ranking"]["selected_upgrade_candidate_id"]}
     flow = {
         "source_aware_operator_flow_version": SOURCE_AWARE_OPERATOR_FLOW_VERSION,
         "source_aware_operator_flow_id": _source_aware_hash_id("source-aware-operator-flow", {
@@ -12299,8 +12457,6 @@ def collect_source_aware_operator_flow(*, source_path: str, metadata: dict[str, 
             "task_id": chain["task_draft"]["operator_task_draft_id"],
             "version": SOURCE_AWARE_OPERATOR_FLOW_VERSION,
         }),
-        "research_target_intake_id": binding["research_target_intake_id"],
-        "research_source_binding_context_id": binding["research_source_binding_context_id"],
         "growth_business_opportunity_scan_id": growth_scan["growth_business_opportunity_scan_id"],
         "growth_business_evidence_contract_id": growth_contract["growth_business_evidence_contract_id"],
         "growth_opportunity_review_package_id": growth_review["growth_opportunity_review_package_id"],
@@ -12315,7 +12471,7 @@ def collect_source_aware_operator_flow(*, source_path: str, metadata: dict[str, 
             "source_name": binding["source_name"],
             "target_link_module": binding["target_link_module"],
         },
-        "source_bound": True,
+        **source_metadata,
         "blocker_count": len(chain["task_review"]["blockers"]),
         "warning_count": len(chain["task_review"]["warnings"]),
         "recommended_next_action": "Review the source-bound operator task draft before any separate implementation slice.",
@@ -12333,7 +12489,9 @@ def collect_source_aware_operator_flow(*, source_path: str, metadata: dict[str, 
 def validate_source_aware_operator_flow(flow: dict[str, Any]) -> None:
     required = (
         "source_aware_operator_flow_version", "source_aware_operator_flow_id", "research_target_intake_id",
-        "research_source_binding_context_id", "growth_business_opportunity_scan_id", "growth_business_evidence_contract_id",
+        "research_target_evidence_bundle_id", "research_source_binding_context_id", "selected_upgrade_candidate_id",
+        "source_path", "source_name", "source_type", "source_refs", "evidence_refs",
+        "growth_business_opportunity_scan_id", "growth_business_evidence_contract_id",
         "growth_opportunity_review_package_id", "decision_candidate_set_id", "decision_ranking_id",
         "operator_action_plan_preview_id", "operator_task_draft_id", "selected_upgrade_summary", "source_bound",
         "blocker_count", "warning_count", "recommended_next_action", "safety_metadata", "dry_run",
@@ -12356,6 +12514,7 @@ def validate_source_aware_operator_flow(flow: dict[str, Any]) -> None:
             raise ValueError(f"source-aware operator flow {field} must be non-negative")
     if flow["safety_metadata"] != _read_only_safety_metadata() or flow["dry_run"] is not True or flow["write_allowed"] is not False or flow["automation_allowed"] is not False or flow["writes"] != []:
         raise ValueError("source-aware operator flow must remain read-only")
+    validate_source_aware_provenance(flow)
 
 
 def stable_source_aware_operator_flow_json(flow: dict[str, Any]) -> str:
@@ -12430,7 +12589,7 @@ def source_aware_operator_flow_main(argv: list[str] | None = None) -> int:
     if rc is not None:
         return rc
     try:
-        payload = collect_source_aware_operator_flow(source_path=source or "")
+        payload = collect_source_aware_operator_flow(source_path=source or "", source_context=build_source_aware_context_for_cli(source or ""))
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -23859,7 +24018,7 @@ def business_opportunities_main(argv: list[str] | None = None) -> int:
         return 2
     source = _optional_research_source_arg(args)
     try:
-        scan = collect_growth_business_opportunity_scan(source_path=source) if source else collect_growth_business_opportunity_scan()
+        scan = build_source_aware_context_for_cli(source)["growth_scan"] if source else collect_growth_business_opportunity_scan()
         validate_growth_business_opportunity_scan(scan)
     except Exception as exc:
         return _source_cli_error("growth business-opportunities", exc)
@@ -23902,7 +24061,7 @@ def business_evidence_contract_main(argv: list[str] | None = None) -> int:
         return 2
     source = _optional_research_source_arg(args)
     try:
-        contract = collect_growth_business_evidence_contract(source_path=source) if source else collect_growth_business_evidence_contract()
+        contract = build_source_aware_context_for_cli(source)["growth_contract"] if source else collect_growth_business_evidence_contract()
         validate_growth_business_evidence_contract(contract)
     except Exception as exc:
         return _source_cli_error("growth business-evidence-contract", exc)
@@ -23948,7 +24107,7 @@ def opportunity_review_main(argv: list[str] | None = None) -> int:
         return 2
     source = _optional_research_source_arg(args)
     try:
-        package = collect_growth_opportunity_review_package(source_path=source) if source else collect_growth_opportunity_review_package()
+        package = build_source_aware_context_for_cli(source)["growth_review"] if source else collect_growth_opportunity_review_package()
         validate_growth_opportunity_review_package(package)
     except Exception as exc:
         return _source_cli_error("growth opportunity-review", exc)
@@ -25721,7 +25880,7 @@ def decision_candidate_set_main(argv: list[str] | None = None) -> int:
         return 2
     source = _optional_research_source_arg(args)
     try:
-        candidate_set = _source_aware_decision_chain(source)["candidate_set"] if source else collect_decision_candidate_set()
+        candidate_set = build_source_aware_context_for_cli(source)["decision_chain"]["candidate_set"] if source else collect_decision_candidate_set()
         validate_decision_candidate_set(candidate_set)
     except Exception as exc:
         return _source_cli_error("decision candidates", exc)
@@ -25784,7 +25943,7 @@ def decision_ranking_main(argv: list[str] | None = None) -> int:
         return 2
     source = _optional_research_source_arg(args)
     try:
-        ranking = _source_aware_decision_chain(source)["ranking"] if source else collect_decision_ranking()
+        ranking = build_source_aware_context_for_cli(source)["decision_chain"]["ranking"] if source else collect_decision_ranking()
         validate_decision_ranking(ranking)
     except Exception as exc:
         return _source_cli_error("decision ranking", exc)
@@ -25819,7 +25978,7 @@ def operator_decision_review_main(argv: list[str] | None = None) -> int:
         return 2
     source = _optional_research_source_arg(args)
     try:
-        review = _source_aware_decision_chain(source)["review"] if source else collect_operator_decision_review()
+        review = build_source_aware_context_for_cli(source)["decision_chain"]["review"] if source else collect_operator_decision_review()
         validate_operator_decision_review(review)
     except Exception as exc:
         return _source_cli_error("decision review", exc)
@@ -25942,7 +26101,7 @@ def operator_decision_trace_package_main(argv: list[str] | None = None) -> int:
         return 2
     source = _optional_research_source_arg(args)
     try:
-        package = _source_aware_decision_chain(source)["trace"] if source else collect_operator_decision_trace_package()
+        package = build_source_aware_context_for_cli(source)["decision_chain"]["trace"] if source else collect_operator_decision_trace_package()
         validate_operator_decision_trace_package(package)
     except Exception as exc:
         return _source_cli_error("decision trace", exc)
@@ -25980,7 +26139,7 @@ def operator_action_plan_preview_main(argv: list[str] | None = None) -> int:
         return 2
     source = _optional_research_source_arg(args)
     try:
-        preview = _source_aware_operator_chain(source)["action_plan"] if source else collect_operator_action_plan_preview()
+        preview = build_source_aware_context_for_cli(source)["operator_chain"]["action_plan"] if source else collect_operator_action_plan_preview()
         validate_operator_action_plan_preview(preview)
     except Exception as exc:
         return _source_cli_error("operator action-plan", exc)
@@ -26076,7 +26235,7 @@ def operator_action_review_package_main(argv: list[str] | None = None) -> int:
         return 2
     source = _optional_research_source_arg(args)
     try:
-        package = _source_aware_operator_chain(source)["action_review"] if source else collect_operator_action_review_package()
+        package = build_source_aware_context_for_cli(source)["operator_chain"]["action_review"] if source else collect_operator_action_review_package()
         validate_operator_action_review_package(package)
     except Exception as exc:
         return _source_cli_error("operator action-review", exc)
@@ -26112,7 +26271,7 @@ def operator_task_draft_main(argv: list[str] | None = None) -> int:
         return 2
     source = _optional_research_source_arg(args)
     try:
-        draft = _source_aware_operator_chain(source)["task_draft"] if source else collect_operator_task_draft()
+        draft = build_source_aware_context_for_cli(source)["operator_chain"]["task_draft"] if source else collect_operator_task_draft()
         validate_operator_task_draft(draft)
     except Exception as exc:
         return _source_cli_error("operator task-draft", exc)
@@ -26208,7 +26367,7 @@ def operator_task_review_package_main(argv: list[str] | None = None) -> int:
         return 2
     source = _optional_research_source_arg(args)
     try:
-        package = _source_aware_operator_chain(source)["task_review"] if source else collect_operator_task_review_package()
+        package = build_source_aware_context_for_cli(source)["operator_chain"]["task_review"] if source else collect_operator_task_review_package()
         validate_operator_task_review_package(package)
     except Exception as exc:
         return _source_cli_error("operator task-review", exc)
