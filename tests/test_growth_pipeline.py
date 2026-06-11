@@ -18328,6 +18328,194 @@ def check_source_aware_downstream_binding_clis() -> None:
 
     print("source-aware downstream binding CLIs OK")
 
+
+def check_source_aware_operator_report_and_sandbox_helpers() -> None:
+    from link_modes.growth.link_growth_console import (
+        build_source_aware_sandbox_context_for_cli,
+        collect_research_target_implementation_preview,
+        collect_research_target_operator_report,
+        collect_research_target_sandbox_flow,
+        parse_research_target_implementation_preview_json,
+        parse_research_target_operator_report_json,
+        parse_research_target_sandbox_flow_json,
+        stable_research_target_implementation_preview_json,
+        stable_research_target_operator_report_json,
+        stable_research_target_sandbox_flow_json,
+        validate_research_target_implementation_preview,
+        validate_research_target_operator_report,
+        validate_research_target_sandbox_flow,
+        validate_sandbox_execution_approval_checklist,
+        validate_sandbox_execution_evidence_contract,
+        validate_sandbox_execution_review_package,
+        validate_sandbox_task_executor_boundary,
+    )
+
+    zip_source, _, _ = _research_target_test_paths()
+    report = collect_research_target_operator_report(source_path=zip_source)
+    same_report = collect_research_target_operator_report(source_path=zip_source)
+    _require(report["research_target_operator_report_id"] == same_report["research_target_operator_report_id"],
+             "research target operator report id must be deterministic")
+    _require(report["source_path"] == zip_source, "operator report must include source_path")
+    _require(report["source_bound"] is True, "operator report must be source-bound")
+    _require(report["selected_upgrade_title"], "operator report must include selected upgrade title")
+    _require(report["target_link_module"] in {"engineering", "growth", "business_development", "business_operations", "shared_services", "control_plane", "research", "unknown"},
+             "operator report must include target Link module")
+    _require(report["source_refs_summary"] and report["evidence_refs_summary"],
+             "operator report must include source/evidence summaries")
+    _require(all("!" in item["provenance_path"] for item in report["source_refs_summary"]),
+             "operator report zip source summaries must be archive-qualified")
+    _require(report["likely_affected_files"], "operator report must include likely affected files")
+    _require(zip_source in report["task_draft_summary"]["objective"],
+             "operator report task summary must reference selected source")
+    validate_research_target_operator_report(report)
+    _require(parse_research_target_operator_report_json(stable_research_target_operator_report_json(report)) == report,
+             "operator report JSON must round trip")
+
+    preview = collect_research_target_implementation_preview(source_path=zip_source, operator_report=report)
+    same_preview = collect_research_target_implementation_preview(source_path=zip_source, operator_report=report)
+    _require(preview["research_target_implementation_preview_id"] == same_preview["research_target_implementation_preview_id"],
+             "implementation preview id must be deterministic")
+    _require(preview["research_target_operator_report_id"] == report["research_target_operator_report_id"],
+             "implementation preview must flow from report")
+    _require(preview["selected_upgrade_candidate_id"] == report["selected_upgrade_candidate_id"],
+             "implementation preview must preserve selected candidate")
+    _require(preview["likely_affected_files"] and preview["allowed_file_scope"],
+             "implementation preview must include affected/allowed files")
+    _require(preview["acceptance_criteria"], "implementation preview must include acceptance criteria")
+    _require(preview["execution_allowed"] is False, "implementation preview must be non-executable")
+    _require(zip_source in preview["objective"] or zip_source in preview["implementation_scope"],
+             "implementation preview must reference selected source")
+    validate_research_target_implementation_preview(preview, report)
+    _require(parse_research_target_implementation_preview_json(stable_research_target_implementation_preview_json(preview)) == preview,
+             "implementation preview JSON must round trip")
+
+    context = build_source_aware_sandbox_context_for_cli(zip_source)
+    for key in ("boundary", "evidence", "approvals", "review"):
+        payload = context[key]
+        _require(payload["source_bound"] is True, f"source-aware sandbox {key} must be source-bound")
+        _require(payload["source_path"] == zip_source, f"source-aware sandbox {key} must include selected source")
+        _require(payload["research_target_intake_id"] == report["research_target_intake_id"],
+                 f"source-aware sandbox {key} must preserve target id")
+        _require(payload["research_target_implementation_preview_id"] == preview["research_target_implementation_preview_id"],
+                 f"source-aware sandbox {key} must preserve implementation preview id")
+    validate_sandbox_task_executor_boundary(context["boundary"])
+    validate_sandbox_execution_evidence_contract(context["evidence"], context["boundary"])
+    validate_sandbox_execution_approval_checklist(context["approvals"], context["boundary"])
+    validate_sandbox_execution_review_package(context["review"], context["boundary"], context["evidence"], context["approvals"], context["task_review"])
+
+    flow = collect_research_target_sandbox_flow(source_path=zip_source, sandbox_context=context)
+    _require(flow["research_target_operator_report_id"] == report["research_target_operator_report_id"],
+             "sandbox flow must include report id")
+    _require(flow["research_target_implementation_preview_id"] == preview["research_target_implementation_preview_id"],
+             "sandbox flow must include implementation preview id")
+    _require(flow["sandbox_task_executor_boundary_id"] == context["boundary"]["sandbox_task_executor_boundary_id"],
+             "sandbox flow must include boundary id")
+    _require(flow["sandbox_execution_review_package_id"] == context["review"]["sandbox_execution_review_package_id"],
+             "sandbox flow must include sandbox review id")
+    _require(flow["execution_candidate_status"] == "blocked", "sandbox flow must remain blocked")
+    validate_research_target_sandbox_flow(flow)
+    _require(parse_research_target_sandbox_flow_json(stable_research_target_sandbox_flow_json(flow)) == flow,
+             "sandbox flow JSON must round trip")
+
+    bad_report = json.loads(stable_research_target_operator_report_json(report))
+    bad_report["source_refs_summary"][0]["provenance_path"] = bad_report["source_refs_summary"][0]["display_path"]
+    try:
+        validate_research_target_operator_report(bad_report)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator report validation must reject unqualified zip provenance")
+
+    bad_preview = json.loads(stable_research_target_implementation_preview_json(preview))
+    bad_preview["execution_allowed"] = True
+    try:
+        validate_research_target_implementation_preview(bad_preview)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("implementation preview validation must reject execution_allowed=True")
+
+    print("source-aware operator report and sandbox helpers OK")
+
+
+def check_source_aware_operator_report_and_sandbox_clis() -> None:
+    from link import _cmd_research, _cmd_sandbox_executor
+    from link_modes.growth.link_growth_console import (
+        parse_research_target_implementation_preview_json,
+        parse_research_target_operator_report_json,
+        parse_research_target_sandbox_flow_json,
+        parse_sandbox_execution_approval_checklist_json,
+        parse_sandbox_execution_evidence_contract_json,
+        parse_sandbox_execution_review_package_json,
+        parse_sandbox_task_executor_boundary_json,
+    )
+
+    zip_source, _, _ = _research_target_test_paths()
+    research_commands = [
+        ("target-operator-report", parse_research_target_operator_report_json, "research_target_operator_report_id"),
+        ("target-implementation-preview", parse_research_target_implementation_preview_json, "research_target_implementation_preview_id"),
+        ("target-sandbox-flow", parse_research_target_sandbox_flow_json, "research_target_sandbox_flow_id"),
+    ]
+    for command, parser, id_key in research_commands:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = _cmd_research([command, "--source", zip_source, "--json"])
+        _require(rc == 0, f"research {command} --source --json must return 0")
+        payload = parser(out.getvalue())
+        _require(id_key in payload, f"research {command} must output only its payload")
+        _require(payload["source_bound"] is True and payload["source_path"] == zip_source,
+                 f"research {command} must be source-bound")
+        _require(payload["write_allowed"] is False and payload["automation_allowed"] is False and payload["writes"] == [],
+                 f"research {command} must remain read-only")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            write_rc = _cmd_research([command, "--source", zip_source, "--write"])
+        _require(write_rc != 0 and "read-only" in err.getvalue(), f"research {command} --write must be rejected")
+        missing_err = io.StringIO()
+        with contextlib.redirect_stderr(missing_err):
+            missing_rc = _cmd_research([command, "--json"])
+        _require(missing_rc != 0 and "requires --source" in missing_err.getvalue(),
+                 f"research {command} missing --source must be rejected")
+        outside_err = io.StringIO()
+        with contextlib.redirect_stderr(outside_err):
+            outside_rc = _cmd_research([command, "--source", "../README.md", "--json"])
+        _require(outside_rc != 0, f"research {command} outside source must be rejected")
+
+    sandbox_commands = [
+        ("boundary", parse_sandbox_task_executor_boundary_json, "sandbox_task_executor_boundary_id"),
+        ("evidence", parse_sandbox_execution_evidence_contract_json, "sandbox_execution_evidence_contract_id"),
+        ("approvals", parse_sandbox_execution_approval_checklist_json, "sandbox_execution_approval_checklist_id"),
+        ("review", parse_sandbox_execution_review_package_json, "sandbox_execution_review_package_id"),
+    ]
+    for command, parser, id_key in sandbox_commands:
+        no_source_out = io.StringIO()
+        with contextlib.redirect_stdout(no_source_out):
+            no_source_rc = _cmd_sandbox_executor([command, "--json"])
+        _require(no_source_rc == 0, f"sandbox-executor {command} no-source must still return 0")
+        no_source_payload = parser(no_source_out.getvalue())
+        _require(id_key in no_source_payload, f"sandbox-executor {command} no-source payload must validate")
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = _cmd_sandbox_executor([command, "--source", zip_source, "--json"])
+        _require(rc == 0, f"sandbox-executor {command} --source --json must return 0")
+        payload = parser(out.getvalue())
+        _require(id_key in payload, f"sandbox-executor {command} must output only its payload")
+        _require(payload["source_bound"] is True and payload["source_path"] == zip_source,
+                 f"sandbox-executor {command} must be source-bound")
+        _require(payload["research_target_intake_id"].startswith("research-target-intake-"),
+                 f"sandbox-executor {command} must include research target id")
+        _require(payload["research_target_implementation_preview_id"].startswith("research-target-implementation-preview-"),
+                 f"sandbox-executor {command} must include implementation preview id")
+        _require(payload["operator_task_draft_id"].startswith("operator-task-draft-"),
+                 f"sandbox-executor {command} must include operator task draft id")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            write_rc = _cmd_sandbox_executor([command, "--source", zip_source, "--write"])
+        _require(write_rc != 0 and "read-only" in err.getvalue(), f"sandbox-executor {command} --write must be rejected")
+
+    print("source-aware operator report and sandbox CLIs OK")
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -18437,6 +18625,8 @@ def main() -> None:
     check_research_target_clis()
     check_source_aware_downstream_binding_helpers()
     check_source_aware_downstream_binding_clis()
+    check_source_aware_operator_report_and_sandbox_helpers()
+    check_source_aware_operator_report_and_sandbox_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

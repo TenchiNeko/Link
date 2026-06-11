@@ -163,6 +163,18 @@ def _cmd_research(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import source_aware_operator_flow_main as _source_aware_operator_flow_main
 
         return _source_aware_operator_flow_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-operator-report":
+        from link_modes.growth.link_growth_console import research_target_operator_report_main as _research_target_operator_report_main
+
+        return _research_target_operator_report_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-implementation-preview":
+        from link_modes.growth.link_growth_console import research_target_implementation_preview_main as _research_target_implementation_preview_main
+
+        return _research_target_implementation_preview_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-sandbox-flow":
+        from link_modes.growth.link_growth_console import research_target_sandbox_flow_main as _research_target_sandbox_flow_main
+
+        return _research_target_sandbox_flow_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "target-intake":
         from link_modes.growth.link_growth_console import research_target_intake_main as _research_target_intake_main
 
@@ -187,6 +199,9 @@ def _cmd_research(argv: list[str]) -> int:
         print("Link research commands:")
         print("  source-binding        Build a downstream source binding context")
         print("  source-operator-flow  Preview source-bound downstream operator flow")
+        print("  target-operator-report Preview compact source-aware operator report")
+        print("  target-implementation-preview Preview source-bound implementation scope")
+        print("  target-sandbox-flow   Preview source target to sandbox boundary flow")
         print("  target-intake         Inspect a local research target without extraction")
         print("  target-evidence       Build evidence refs for a local research target")
         print("  target-upgrades       Preview Link upgrade candidates from a target")

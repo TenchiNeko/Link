@@ -12529,6 +12529,453 @@ def parse_source_aware_operator_flow_json(text: str) -> dict[str, Any]:
     validate_source_aware_operator_flow(flow)
     return flow
 
+
+RESEARCH_TARGET_OPERATOR_REPORT_VERSION = "link-research-target-operator-report-v1"
+RESEARCH_TARGET_IMPLEMENTATION_PREVIEW_VERSION = "link-research-target-implementation-preview-v1"
+RESEARCH_TARGET_SANDBOX_FLOW_VERSION = "link-research-target-sandbox-flow-v1"
+
+
+def _compact_source_ref_summaries(evidence_bundle: dict[str, Any], *, limit: int = 5) -> list[dict[str, Any]]:
+    validate_research_target_evidence_bundle(evidence_bundle)
+    summaries = []
+    for ref in evidence_bundle["source_refs"][:limit]:
+        summaries.append({
+            "source_ref_id": ref["source_ref_id"],
+            "display_path": ref["display_path"],
+            "provenance_path": ref["provenance_path"],
+            "file_type": ref["file_type"],
+            "size_bytes": ref["size_bytes"],
+        })
+    return summaries
+
+
+def _compact_evidence_ref_summaries(evidence_bundle: dict[str, Any], *, limit: int = 5) -> list[dict[str, Any]]:
+    validate_research_target_evidence_bundle(evidence_bundle)
+    summaries = []
+    for ref in evidence_bundle["evidence_refs"][:limit]:
+        summaries.append({
+            "evidence_ref_id": ref["evidence_ref_id"],
+            "source_ref_id": ref["source_ref_id"],
+            "evidence_type": ref["evidence_type"],
+            "display_path": ref["display_path"],
+            "provenance_path": ref["provenance_path"],
+            "confidence_score": ref["confidence_score"],
+            "risk_score": ref["risk_score"],
+        })
+    return summaries
+
+
+def collect_research_target_operator_report(*, source_path: str, metadata: dict[str, Any] | None = None, source_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = source_context or build_source_aware_context_for_cli(source_path)
+    intake = context["research_target_intake"]
+    evidence = context["research_target_evidence_bundle"]
+    candidates = context["research_target_upgrade_candidates"]
+    binding = context["research_source_binding_context"]
+    scan = context["growth_scan"]
+    contract = context["growth_contract"]
+    review = context["growth_review"]
+    decision = context["decision_chain"]
+    operator_chain = context["operator_chain"]
+    selected_candidate_id = decision["ranking"]["selected_upgrade_candidate_id"]
+    selected = next(item for item in candidates["upgrade_candidates"] if item["upgrade_candidate_id"] == selected_candidate_id)
+    selected_opportunity = next((item for item in scan["opportunities"] if item.get("selected_upgrade_candidate_id") == selected_candidate_id), scan["opportunities"][0])
+    task = operator_chain["task_draft"]
+    blockers = _normalize_implementation_branch_refs(list(review["blockers"]) + list(operator_chain["task_review"]["blockers"]))
+    warnings = _normalize_implementation_branch_refs(list(review["warnings"]) + list(operator_chain["task_review"]["warnings"]))
+    required_actions = _normalize_implementation_branch_refs(list(review["required_human_actions"]) + list(operator_chain["task_review"]["required_human_actions"]))
+    core = {
+        "source_path": intake["source_path"],
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "research_target_evidence_bundle_id": evidence["research_target_evidence_bundle_id"],
+        "selected_upgrade_candidate_id": selected_candidate_id,
+        "operator_task_draft_id": task["operator_task_draft_id"],
+        "version": RESEARCH_TARGET_OPERATOR_REPORT_VERSION,
+    }
+    report = {
+        "research_target_operator_report_version": RESEARCH_TARGET_OPERATOR_REPORT_VERSION,
+        "research_target_operator_report_id": _source_aware_hash_id("research-target-operator-report", core),
+        "source_bound": True,
+        "source_path": intake["source_path"],
+        "source_name": intake["source_name"],
+        "source_type": intake["source_type"],
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "research_target_evidence_bundle_id": evidence["research_target_evidence_bundle_id"],
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "selected_upgrade_candidate_id": selected_candidate_id,
+        "target_link_module": selected["target_link_module"],
+        "selected_upgrade_title": selected["title"],
+        "selected_upgrade_summary": selected["description"],
+        "evidence_strength": evidence["evidence_strength"],
+        "confidence_score": selected_opportunity["confidence_score"],
+        "risk_score": selected_opportunity["risk_score"],
+        "effort_score": selected_opportunity["effort_score"],
+        "source_refs_summary": _compact_source_ref_summaries(evidence),
+        "evidence_refs_summary": _compact_evidence_ref_summaries(evidence),
+        "source_refs": list(binding["source_refs"]),
+        "evidence_refs": list(binding["evidence_refs"]),
+        "task_draft_summary": {
+            "operator_task_draft_id": task["operator_task_draft_id"],
+            "objective": task["objective"],
+            "scope_summary": task["scope_summary"],
+            "execution_allowed": task["execution_allowed"],
+        },
+        "likely_affected_files": list(task["affected_files"]),
+        "expected_tests": list(task["expected_tests"]),
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": required_actions,
+        "recommended_next_action": "Review this compact target report, then inspect the implementation preview before authorizing any separate patch slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_research_target_operator_report(report)
+    return report
+
+
+def validate_research_target_operator_report(report: dict[str, Any]) -> None:
+    required = (
+        "research_target_operator_report_version", "research_target_operator_report_id", "source_bound",
+        "source_path", "source_name", "source_type", "research_target_intake_id",
+        "research_target_evidence_bundle_id", "research_source_binding_context_id", "selected_upgrade_candidate_id",
+        "target_link_module", "selected_upgrade_title", "selected_upgrade_summary", "evidence_strength",
+        "confidence_score", "risk_score", "effort_score", "source_refs_summary", "evidence_refs_summary",
+        "source_refs", "evidence_refs", "task_draft_summary", "likely_affected_files", "expected_tests",
+        "blockers", "warnings", "required_human_actions", "recommended_next_action", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in report:
+            raise ValueError(f"research target operator report missing field: {key}")
+    if report["research_target_operator_report_version"] != RESEARCH_TARGET_OPERATOR_REPORT_VERSION:
+        raise ValueError("invalid research target operator report version")
+    if not report["research_target_operator_report_id"].startswith("research-target-operator-report-"):
+        raise ValueError("invalid research target operator report id")
+    if report["source_bound"] is not True:
+        raise ValueError("research target operator report must be source-bound")
+    if report["target_link_module"] not in RESEARCH_TARGET_LINK_MODULES:
+        raise ValueError("invalid target Link module in operator report")
+    for field in ("confidence_score", "risk_score", "effort_score"):
+        if not isinstance(report[field], int) or not 0 <= report[field] <= 100:
+            raise ValueError(f"operator report {field} must be 0..100")
+    for field in ("source_refs_summary", "evidence_refs_summary", "likely_affected_files", "expected_tests", "blockers", "warnings", "required_human_actions"):
+        if not isinstance(report[field], list) or not report[field]:
+            raise ValueError(f"operator report {field} must be a non-empty list")
+    for ref in report["source_refs_summary"]:
+        for key in ("source_ref_id", "display_path", "provenance_path", "file_type", "size_bytes"):
+            if key not in ref:
+                raise ValueError(f"operator report source ref summary missing {key}")
+        if report["source_type"] == "zip_archive" and "!" not in ref["provenance_path"]:
+            raise ValueError("zip operator report source provenance must be archive-qualified")
+    for ref in report["evidence_refs_summary"]:
+        for key in ("evidence_ref_id", "source_ref_id", "evidence_type", "display_path", "provenance_path", "confidence_score", "risk_score"):
+            if key not in ref:
+                raise ValueError(f"operator report evidence ref summary missing {key}")
+        if report["source_type"] == "zip_archive" and "!" not in ref["provenance_path"]:
+            raise ValueError("zip operator report evidence provenance must be archive-qualified")
+    if not isinstance(report["task_draft_summary"], dict) or report["task_draft_summary"].get("execution_allowed") is not False:
+        raise ValueError("operator report task draft summary must remain non-executable")
+    if report["source_path"] not in report["task_draft_summary"].get("objective", ""):
+        raise ValueError("operator report task summary must reference selected source")
+    validate_source_aware_provenance(report)
+    expected_id = _source_aware_hash_id("research-target-operator-report", {
+        "source_path": report["source_path"],
+        "research_target_intake_id": report["research_target_intake_id"],
+        "research_target_evidence_bundle_id": report["research_target_evidence_bundle_id"],
+        "selected_upgrade_candidate_id": report["selected_upgrade_candidate_id"],
+        "operator_task_draft_id": report["task_draft_summary"]["operator_task_draft_id"],
+        "version": RESEARCH_TARGET_OPERATOR_REPORT_VERSION,
+    })
+    if report["research_target_operator_report_id"] != expected_id:
+        raise ValueError("research target operator report id is not deterministic")
+
+
+def stable_research_target_operator_report_json(report: dict[str, Any]) -> str:
+    validate_research_target_operator_report(report)
+    return _stable_ruflo_json(report, indent=2) + "\n"
+
+
+def parse_research_target_operator_report_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    report = _json.loads(text)
+    validate_research_target_operator_report(report)
+    return report
+
+
+def collect_research_target_implementation_preview(*, source_path: str, metadata: dict[str, Any] | None = None, source_context: dict[str, Any] | None = None, operator_report: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = source_context or build_source_aware_context_for_cli(source_path)
+    report = operator_report or collect_research_target_operator_report(source_path=source_path, source_context=context)
+    validate_research_target_operator_report(report)
+    task = context["operator_chain"]["task_draft"]
+    tests = collect_operator_task_test_plan(task)
+    allowed_scope = _normalize_implementation_branch_refs(list(report["likely_affected_files"]))
+    forbidden_scope = _normalize_implementation_branch_refs([".agents/", ".git/", ".link/", "research/", "credentials", "secrets"])
+    expected_patch_shape = {
+        "patch_type": "small Link source/test slice",
+        "expected_file_count": len(allowed_scope),
+        "expected_files": allowed_scope,
+        "must_not_modify": forbidden_scope,
+        "copy_external_code": False,
+    }
+    core = {
+        "operator_report_id": report["research_target_operator_report_id"],
+        "operator_task_draft_id": task["operator_task_draft_id"],
+        "selected_upgrade_candidate_id": report["selected_upgrade_candidate_id"],
+        "version": RESEARCH_TARGET_IMPLEMENTATION_PREVIEW_VERSION,
+    }
+    preview = {
+        "research_target_implementation_preview_version": RESEARCH_TARGET_IMPLEMENTATION_PREVIEW_VERSION,
+        "research_target_implementation_preview_id": _source_aware_hash_id("research-target-implementation-preview", core),
+        "research_target_operator_report_id": report["research_target_operator_report_id"],
+        "operator_task_draft_id": task["operator_task_draft_id"],
+        "source_bound": True,
+        "source_path": report["source_path"],
+        "source_name": report["source_name"],
+        "source_type": report["source_type"],
+        "research_target_intake_id": report["research_target_intake_id"],
+        "research_target_evidence_bundle_id": report["research_target_evidence_bundle_id"],
+        "research_source_binding_context_id": report["research_source_binding_context_id"],
+        "selected_upgrade_candidate_id": report["selected_upgrade_candidate_id"],
+        "objective": task["objective"],
+        "implementation_scope": task["scope_summary"],
+        "target_link_module": report["target_link_module"],
+        "likely_affected_files": allowed_scope,
+        "allowed_file_scope": allowed_scope,
+        "forbidden_file_scope": forbidden_scope,
+        "expected_patch_shape": expected_patch_shape,
+        "acceptance_criteria": list(task["acceptance_criteria"]),
+        "expected_tests": _normalize_implementation_branch_refs(list(task["expected_tests"]) + list(tests["verification_commands"])),
+        "rollback_plan": list(task["rollback_plan"]),
+        "required_evidence": list(task["required_evidence"]),
+        "required_approvals": list(task["required_approvals"]),
+        "source_refs": list(report["source_refs"]),
+        "evidence_refs": list(report["evidence_refs"]),
+        "execution_allowed": False,
+        "recommended_next_action": "Use this implementation preview to judge scope before any separate execution-capable slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_research_target_implementation_preview(preview, report)
+    return preview
+
+
+def validate_research_target_implementation_preview(preview: dict[str, Any], operator_report: dict[str, Any] | None = None) -> None:
+    required = (
+        "research_target_implementation_preview_version", "research_target_implementation_preview_id",
+        "research_target_operator_report_id", "operator_task_draft_id", "source_bound", "source_path",
+        "source_name", "source_type", "research_target_intake_id", "research_target_evidence_bundle_id",
+        "research_source_binding_context_id", "selected_upgrade_candidate_id", "objective", "implementation_scope",
+        "target_link_module", "likely_affected_files", "allowed_file_scope", "forbidden_file_scope",
+        "expected_patch_shape", "acceptance_criteria", "expected_tests", "rollback_plan", "required_evidence",
+        "required_approvals", "source_refs", "evidence_refs", "execution_allowed", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in preview:
+            raise ValueError(f"research target implementation preview missing field: {key}")
+    if preview["research_target_implementation_preview_version"] != RESEARCH_TARGET_IMPLEMENTATION_PREVIEW_VERSION:
+        raise ValueError("invalid research target implementation preview version")
+    if not preview["research_target_implementation_preview_id"].startswith("research-target-implementation-preview-"):
+        raise ValueError("invalid research target implementation preview id")
+    if preview["source_bound"] is not True or preview["execution_allowed"] is not False:
+        raise ValueError("implementation preview must be source-bound and non-executable")
+    if preview["source_path"] not in preview["objective"] and preview["source_path"] not in preview["implementation_scope"]:
+        raise ValueError("implementation preview must reference selected source")
+    for field in ("likely_affected_files", "allowed_file_scope", "forbidden_file_scope", "acceptance_criteria", "expected_tests", "rollback_plan", "required_evidence", "required_approvals"):
+        if not isinstance(preview[field], list) or not preview[field]:
+            raise ValueError(f"implementation preview {field} must be non-empty")
+    if preview["allowed_file_scope"] != preview["likely_affected_files"]:
+        raise ValueError("implementation preview allowed file scope must match likely affected files")
+    if not isinstance(preview["expected_patch_shape"], dict) or preview["expected_patch_shape"].get("copy_external_code") is not False:
+        raise ValueError("implementation preview expected patch shape must forbid copying external code")
+    validate_source_aware_provenance(preview)
+    if operator_report is not None:
+        validate_research_target_operator_report(operator_report)
+        if preview["research_target_operator_report_id"] != operator_report["research_target_operator_report_id"]:
+            raise ValueError("implementation preview operator report id mismatch")
+    expected_id = _source_aware_hash_id("research-target-implementation-preview", {
+        "operator_report_id": preview["research_target_operator_report_id"],
+        "operator_task_draft_id": preview["operator_task_draft_id"],
+        "selected_upgrade_candidate_id": preview["selected_upgrade_candidate_id"],
+        "version": RESEARCH_TARGET_IMPLEMENTATION_PREVIEW_VERSION,
+    })
+    if preview["research_target_implementation_preview_id"] != expected_id:
+        raise ValueError("research target implementation preview id is not deterministic")
+
+
+def stable_research_target_implementation_preview_json(preview: dict[str, Any]) -> str:
+    validate_research_target_implementation_preview(preview)
+    return _stable_ruflo_json(preview, indent=2) + "\n"
+
+
+def parse_research_target_implementation_preview_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    preview = _json.loads(text)
+    validate_research_target_implementation_preview(preview)
+    return preview
+
+
+def _source_sandbox_metadata(report: dict[str, Any], preview: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_bound": True,
+        "source_path": report["source_path"],
+        "source_name": report["source_name"],
+        "source_type": report["source_type"],
+        "research_target_intake_id": report["research_target_intake_id"],
+        "research_target_evidence_bundle_id": report["research_target_evidence_bundle_id"],
+        "research_source_binding_context_id": report["research_source_binding_context_id"],
+        "selected_upgrade_candidate_id": report["selected_upgrade_candidate_id"],
+        "operator_task_draft_id": preview["operator_task_draft_id"],
+        "research_target_operator_report_id": report["research_target_operator_report_id"],
+        "research_target_implementation_preview_id": preview["research_target_implementation_preview_id"],
+        "source_refs": list(report["source_refs"]),
+        "evidence_refs": list(report["evidence_refs"]),
+    }
+
+
+def build_source_aware_sandbox_context_for_cli(source: str) -> dict[str, Any]:
+    source_context = build_source_aware_context_for_cli(source)
+    report = collect_research_target_operator_report(source_path=source, source_context=source_context)
+    preview = collect_research_target_implementation_preview(source_path=source, source_context=source_context, operator_report=report)
+    chain = source_context["operator_chain"]
+    task = chain["task_draft"]
+    scope = collect_operator_task_scope_review(task)
+    tests = collect_operator_task_test_plan(task)
+    task_review = chain["task_review"]
+    meta = _source_sandbox_metadata(report, preview)
+    boundary = collect_sandbox_task_executor_boundary(task, scope, tests, task_review)
+    boundary.update(meta)
+    validate_sandbox_task_executor_boundary(boundary, task, scope, tests, task_review)
+    validate_source_aware_provenance(boundary)
+    evidence = collect_sandbox_execution_evidence_contract(boundary)
+    evidence.update(meta)
+    validate_sandbox_execution_evidence_contract(evidence, boundary)
+    validate_source_aware_provenance(evidence)
+    approvals = collect_sandbox_execution_approval_checklist(boundary)
+    approvals.update(meta)
+    validate_sandbox_execution_approval_checklist(approvals, boundary)
+    validate_source_aware_provenance(approvals)
+    review = collect_sandbox_execution_review_package(boundary, evidence, approvals, task_review)
+    review.update(meta)
+    validate_sandbox_execution_review_package(review, boundary, evidence, approvals, task_review)
+    validate_source_aware_provenance(review)
+    return {
+        "source_context": source_context,
+        "operator_report": report,
+        "implementation_preview": preview,
+        "task_draft": task,
+        "task_scope": scope,
+        "task_tests": tests,
+        "task_review": task_review,
+        "boundary": boundary,
+        "evidence": evidence,
+        "approvals": approvals,
+        "review": review,
+    }
+
+
+def collect_research_target_sandbox_flow(*, source_path: str, metadata: dict[str, Any] | None = None, sandbox_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = sandbox_context or build_source_aware_sandbox_context_for_cli(source_path)
+    report = context["operator_report"]
+    preview = context["implementation_preview"]
+    boundary = context["boundary"]
+    review = context["review"]
+    core = {
+        "operator_report_id": report["research_target_operator_report_id"],
+        "implementation_preview_id": preview["research_target_implementation_preview_id"],
+        "boundary_id": boundary["sandbox_task_executor_boundary_id"],
+        "review_id": review["sandbox_execution_review_package_id"],
+        "version": RESEARCH_TARGET_SANDBOX_FLOW_VERSION,
+    }
+    flow = {
+        "research_target_sandbox_flow_version": RESEARCH_TARGET_SANDBOX_FLOW_VERSION,
+        "research_target_sandbox_flow_id": _source_aware_hash_id("research-target-sandbox-flow", core),
+        "source_bound": True,
+        "source_path": report["source_path"],
+        "source_name": report["source_name"],
+        "source_type": report["source_type"],
+        "research_target_intake_id": report["research_target_intake_id"],
+        "research_target_evidence_bundle_id": report["research_target_evidence_bundle_id"],
+        "research_source_binding_context_id": report["research_source_binding_context_id"],
+        "research_target_operator_report_id": report["research_target_operator_report_id"],
+        "research_target_implementation_preview_id": preview["research_target_implementation_preview_id"],
+        "sandbox_task_executor_boundary_id": boundary["sandbox_task_executor_boundary_id"],
+        "sandbox_execution_review_package_id": review["sandbox_execution_review_package_id"],
+        "selected_upgrade_candidate_id": report["selected_upgrade_candidate_id"],
+        "operator_task_draft_id": preview["operator_task_draft_id"],
+        "execution_candidate_status": boundary["execution_candidate_status"],
+        "blocker_count": len(review["blockers"]),
+        "warning_count": len(review["warnings"]),
+        "source_refs": list(report["source_refs"]),
+        "evidence_refs": list(report["evidence_refs"]),
+        "recommended_next_action": "Review the operator report and sandbox boundary; do not execute without a separate approved implementation slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_research_target_sandbox_flow(flow)
+    return flow
+
+
+def validate_research_target_sandbox_flow(flow: dict[str, Any]) -> None:
+    required = (
+        "research_target_sandbox_flow_version", "research_target_sandbox_flow_id", "source_bound", "source_path",
+        "source_name", "source_type", "research_target_intake_id", "research_target_evidence_bundle_id",
+        "research_source_binding_context_id", "research_target_operator_report_id", "research_target_implementation_preview_id",
+        "sandbox_task_executor_boundary_id", "sandbox_execution_review_package_id", "selected_upgrade_candidate_id",
+        "operator_task_draft_id", "execution_candidate_status", "blocker_count", "warning_count", "source_refs",
+        "evidence_refs", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in flow:
+            raise ValueError(f"research target sandbox flow missing field: {key}")
+    if flow["research_target_sandbox_flow_version"] != RESEARCH_TARGET_SANDBOX_FLOW_VERSION:
+        raise ValueError("invalid research target sandbox flow version")
+    if not flow["research_target_sandbox_flow_id"].startswith("research-target-sandbox-flow-"):
+        raise ValueError("invalid research target sandbox flow id")
+    if flow["source_bound"] is not True:
+        raise ValueError("research target sandbox flow must be source-bound")
+    if flow["execution_candidate_status"] not in {"blocked", "candidate", "denied"}:
+        raise ValueError("invalid source-aware sandbox execution candidate status")
+    for field in ("blocker_count", "warning_count"):
+        if not isinstance(flow[field], int) or flow[field] < 0:
+            raise ValueError(f"sandbox flow {field} must be a non-negative integer")
+    validate_source_aware_provenance(flow)
+    expected_id = _source_aware_hash_id("research-target-sandbox-flow", {
+        "operator_report_id": flow["research_target_operator_report_id"],
+        "implementation_preview_id": flow["research_target_implementation_preview_id"],
+        "boundary_id": flow["sandbox_task_executor_boundary_id"],
+        "review_id": flow["sandbox_execution_review_package_id"],
+        "version": RESEARCH_TARGET_SANDBOX_FLOW_VERSION,
+    })
+    if flow["research_target_sandbox_flow_id"] != expected_id:
+        raise ValueError("research target sandbox flow id is not deterministic")
+
+
+def stable_research_target_sandbox_flow_json(flow: dict[str, Any]) -> str:
+    validate_research_target_sandbox_flow(flow)
+    return _stable_ruflo_json(flow, indent=2) + "\n"
+
+
+def parse_research_target_sandbox_flow_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    flow = _json.loads(text)
+    validate_research_target_sandbox_flow(flow)
+    return flow
+
 def _research_target_cli_source_or_error(args: list[str], command_name: str) -> tuple[str | None, int | None]:
     if "--write" in args:
         print(f"error: research {command_name} is read-only; --write is not supported", file=sys.stderr)
@@ -12545,6 +12992,99 @@ def _research_target_print_summary(title: str, payload: dict[str, Any], lines: l
     for label, value in lines[1:]:
         print(f"{label}: {value}")
 
+
+
+
+def research_target_operator_report_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-operator-report: compact source-aware operator report")
+        print("  python3 link.py research target-operator-report --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-operator-report")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_operator_report(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_operator_report_json(payload), end="")
+    else:
+        _research_target_print_summary("Research target operator report", payload, [
+            ("id", payload["research_target_operator_report_id"]),
+            ("source_path", payload["source_path"]),
+            ("selected upgrade", payload["selected_upgrade_title"]),
+            ("target module", payload["target_link_module"]),
+            ("evidence strength", payload["evidence_strength"]),
+            ("affected files", len(payload["likely_affected_files"])),
+            ("blockers", len(payload["blockers"])),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def research_target_implementation_preview_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-implementation-preview: non-executable implementation preview")
+        print("  python3 link.py research target-implementation-preview --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-implementation-preview")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_implementation_preview(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_implementation_preview_json(payload), end="")
+    else:
+        _research_target_print_summary("Research target implementation preview", payload, [
+            ("id", payload["research_target_implementation_preview_id"]),
+            ("source_path", payload["source_path"]),
+            ("objective", payload["objective"]),
+            ("target module", payload["target_link_module"]),
+            ("allowed files", len(payload["allowed_file_scope"])),
+            ("expected tests", len(payload["expected_tests"])),
+            ("execution_allowed", payload["execution_allowed"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def research_target_sandbox_flow_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-sandbox-flow: source target to sandbox boundary preview")
+        print("  python3 link.py research target-sandbox-flow --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-sandbox-flow")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_sandbox_flow(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_sandbox_flow_json(payload), end="")
+    else:
+        _research_target_print_summary("Research target sandbox flow", payload, [
+            ("id", payload["research_target_sandbox_flow_id"]),
+            ("source_path", payload["source_path"]),
+            ("boundary", payload["sandbox_task_executor_boundary_id"]),
+            ("review", payload["sandbox_execution_review_package_id"]),
+            ("execution_candidate_status", payload["execution_candidate_status"]),
+            ("blockers", payload["blocker_count"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
 
 
 def research_source_binding_main(argv: list[str] | None = None) -> int:
@@ -21795,11 +22335,15 @@ def collect_sandbox_task_executor_boundary(operator_task_draft: dict[str, Any] |
     validate_operator_task_scope_review(scope, draft)
     tests = operator_task_test_plan or collect_operator_task_test_plan(draft)
     validate_operator_task_test_plan(tests, draft)
-    action_plan = collect_operator_action_plan_preview()
-    action_evidence = collect_operator_action_evidence_checklist(action_plan)
-    action_approvals = collect_operator_action_approval_checklist(action_plan)
-    review = operator_task_review_package or collect_operator_task_review_package(draft, scope, tests, action_evidence, action_approvals)
-    validate_operator_task_review_package(review, draft, scope, tests, action_evidence, action_approvals)
+    if operator_task_review_package is None:
+        action_plan = collect_operator_action_plan_preview()
+        action_evidence = collect_operator_action_evidence_checklist(action_plan)
+        action_approvals = collect_operator_action_approval_checklist(action_plan)
+        review = collect_operator_task_review_package(draft, scope, tests, action_evidence, action_approvals)
+        validate_operator_task_review_package(review, draft, scope, tests, action_evidence, action_approvals)
+    else:
+        review = operator_task_review_package
+        validate_operator_task_review_package(review)
     allowed_scope = _normalize_implementation_branch_refs(list(draft["affected_files"]))
     forbidden_scope = _normalize_implementation_branch_refs([".agents/", ".git/", ".link/", "research/", "secrets", "credentials"])
     blockers = _normalize_implementation_branch_refs(list(review["blockers"]) + ["sandbox executor runtime does not exist yet"])
@@ -22056,15 +22600,20 @@ def make_sandbox_execution_review_package_id(boundary: dict[str, Any], evidence:
 
 
 def collect_sandbox_execution_review_package(sandbox_task_executor_boundary: dict[str, Any] | None = None, sandbox_execution_evidence_contract: dict[str, Any] | None = None, sandbox_execution_approval_checklist: dict[str, Any] | None = None, operator_task_review_package: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    draft = collect_operator_task_draft()
-    scope = collect_operator_task_scope_review(draft)
-    tests = collect_operator_task_test_plan(draft)
-    action_plan = collect_operator_action_plan_preview()
-    action_evidence = collect_operator_action_evidence_checklist(action_plan)
-    action_approvals = collect_operator_action_approval_checklist(action_plan)
-    task_review = operator_task_review_package or collect_operator_task_review_package(draft, scope, tests, action_evidence, action_approvals)
-    validate_operator_task_review_package(task_review)
-    boundary = sandbox_task_executor_boundary or collect_sandbox_task_executor_boundary(draft, scope, tests, task_review)
+    if operator_task_review_package is None and sandbox_task_executor_boundary is None:
+        draft = collect_operator_task_draft()
+        scope = collect_operator_task_scope_review(draft)
+        tests = collect_operator_task_test_plan(draft)
+        action_plan = collect_operator_action_plan_preview()
+        action_evidence = collect_operator_action_evidence_checklist(action_plan)
+        action_approvals = collect_operator_action_approval_checklist(action_plan)
+        task_review = collect_operator_task_review_package(draft, scope, tests, action_evidence, action_approvals)
+        validate_operator_task_review_package(task_review)
+        boundary = collect_sandbox_task_executor_boundary(draft, scope, tests, task_review)
+    else:
+        task_review = operator_task_review_package or collect_operator_task_review_package()
+        validate_operator_task_review_package(task_review)
+        boundary = sandbox_task_executor_boundary or collect_sandbox_task_executor_boundary(operator_task_review_package=task_review)
     validate_sandbox_task_executor_boundary(boundary)
     evidence = sandbox_execution_evidence_contract or collect_sandbox_execution_evidence_contract(boundary)
     validate_sandbox_execution_evidence_contract(evidence, boundary)
@@ -26402,8 +26951,12 @@ def sandbox_task_executor_boundary_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: sandbox-executor boundary is read-only; --write is not supported", file=sys.stderr)
         return 2
-    boundary = collect_sandbox_task_executor_boundary()
-    validate_sandbox_task_executor_boundary(boundary)
+    source = _optional_research_source_arg(args)
+    try:
+        boundary = build_source_aware_sandbox_context_for_cli(source)["boundary"] if source else collect_sandbox_task_executor_boundary()
+        validate_sandbox_task_executor_boundary(boundary)
+    except Exception as exc:
+        return _source_cli_error("sandbox-executor boundary", exc)
     if "--json" in args:
         print(stable_sandbox_task_executor_boundary_json(boundary), end="")
         return 0
@@ -26432,8 +26985,12 @@ def sandbox_execution_evidence_contract_main(argv: list[str] | None = None) -> i
     if "--write" in args:
         print("error: sandbox-executor evidence is read-only; --write is not supported", file=sys.stderr)
         return 2
-    contract = collect_sandbox_execution_evidence_contract()
-    validate_sandbox_execution_evidence_contract(contract)
+    source = _optional_research_source_arg(args)
+    try:
+        contract = build_source_aware_sandbox_context_for_cli(source)["evidence"] if source else collect_sandbox_execution_evidence_contract()
+        validate_sandbox_execution_evidence_contract(contract)
+    except Exception as exc:
+        return _source_cli_error("sandbox-executor evidence", exc)
     if "--json" in args:
         print(stable_sandbox_execution_evidence_contract_json(contract), end="")
         return 0
@@ -26461,8 +27018,12 @@ def sandbox_execution_approval_checklist_main(argv: list[str] | None = None) -> 
     if "--write" in args:
         print("error: sandbox-executor approvals is read-only; --write is not supported", file=sys.stderr)
         return 2
-    checklist = collect_sandbox_execution_approval_checklist()
-    validate_sandbox_execution_approval_checklist(checklist)
+    source = _optional_research_source_arg(args)
+    try:
+        checklist = build_source_aware_sandbox_context_for_cli(source)["approvals"] if source else collect_sandbox_execution_approval_checklist()
+        validate_sandbox_execution_approval_checklist(checklist)
+    except Exception as exc:
+        return _source_cli_error("sandbox-executor approvals", exc)
     if "--json" in args:
         print(stable_sandbox_execution_approval_checklist_json(checklist), end="")
         return 0
@@ -26492,8 +27053,12 @@ def sandbox_execution_review_package_main(argv: list[str] | None = None) -> int:
     if "--write" in args:
         print("error: sandbox-executor review is read-only; --write is not supported", file=sys.stderr)
         return 2
-    package = collect_sandbox_execution_review_package()
-    validate_sandbox_execution_review_package(package)
+    source = _optional_research_source_arg(args)
+    try:
+        package = build_source_aware_sandbox_context_for_cli(source)["review"] if source else collect_sandbox_execution_review_package()
+        validate_sandbox_execution_review_package(package)
+    except Exception as exc:
+        return _source_cli_error("sandbox-executor review", exc)
     if "--json" in args:
         print(stable_sandbox_execution_review_package_json(package), end="")
         return 0
