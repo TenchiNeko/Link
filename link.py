@@ -559,12 +559,32 @@ def _cmd_operator(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import operator_action_review_package_main as _operator_action_review_main
 
         return _operator_action_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "task-draft":
+        from link_modes.growth.link_growth_console import operator_task_draft_main as _operator_task_draft_main
+
+        return _operator_task_draft_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "task-scope":
+        from link_modes.growth.link_growth_console import operator_task_scope_review_main as _operator_task_scope_main
+
+        return _operator_task_scope_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "task-tests":
+        from link_modes.growth.link_growth_console import operator_task_test_plan_main as _operator_task_tests_main
+
+        return _operator_task_tests_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "task-review":
+        from link_modes.growth.link_growth_console import operator_task_review_package_main as _operator_task_review_main
+
+        return _operator_task_review_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Operator commands:")
         print("  action-plan       Preview the concrete next operator action plan")
         print("  action-evidence   Preview evidence required for the action plan")
         print("  action-approvals  Preview approvals required for the action plan")
         print("  action-review     Preview operator action review package")
+        print("  task-draft        Preview the exact non-executable unit of work")
+        print("  task-scope        Preview task scope and boundary review")
+        print("  task-tests        Preview task verification plan")
+        print("  task-review       Preview operator task review package")
         return 0
     print(f"operator: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py operator --help' for subcommands.", file=sys.stderr)

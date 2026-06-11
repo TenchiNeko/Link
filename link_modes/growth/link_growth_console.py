@@ -11062,6 +11062,10 @@ OPERATOR_ACTION_PLAN_PREVIEW_VERSION = "link-operator-action-plan-preview-v1"
 OPERATOR_ACTION_EVIDENCE_CHECKLIST_VERSION = "link-operator-action-evidence-checklist-v1"
 OPERATOR_ACTION_APPROVAL_CHECKLIST_VERSION = "link-operator-action-approval-checklist-v1"
 OPERATOR_ACTION_REVIEW_PACKAGE_VERSION = "link-operator-action-review-package-v1"
+OPERATOR_TASK_DRAFT_VERSION = "link-operator-task-draft-v1"
+OPERATOR_TASK_SCOPE_REVIEW_VERSION = "link-operator-task-scope-review-v1"
+OPERATOR_TASK_TEST_PLAN_VERSION = "link-operator-task-test-plan-v1"
+OPERATOR_TASK_REVIEW_PACKAGE_VERSION = "link-operator-task-review-package-v1"
 REMEDIATION_PRIORITIES = ("critical", "high", "medium", "low")
 BUSINESS_EXECUTION_SIMULATED_STEPS = (
     "validate opportunity",
@@ -19458,6 +19462,364 @@ def parse_operator_action_review_package_json(text: str) -> dict[str, Any]:
 
 
 
+def make_operator_task_draft_id(action_plan: dict[str, Any], action_review: dict[str, Any], decision_trace: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "operator_action_plan_preview_id": action_plan["operator_action_plan_preview_id"],
+        "operator_action_review_package_id": action_review["operator_action_review_package_id"],
+        "operator_decision_trace_package_id": decision_trace["operator_decision_trace_package_id"],
+        "top_candidate_id": action_plan["top_candidate_id"],
+        "version": OPERATOR_TASK_DRAFT_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-task-draft-{digest}"
+
+
+def collect_operator_task_draft(operator_action_plan_preview: dict[str, Any] | None = None, operator_action_review_package: dict[str, Any] | None = None, operator_decision_trace_package: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    action_plan = operator_action_plan_preview or collect_operator_action_plan_preview()
+    validate_operator_action_plan_preview(action_plan)
+    evidence = collect_operator_action_evidence_checklist(action_plan)
+    approvals = collect_operator_action_approval_checklist(action_plan)
+    action_review = operator_action_review_package or collect_operator_action_review_package(action_plan, evidence, approvals)
+    validate_operator_action_review_package(action_review, action_plan, evidence, approvals)
+    trace = operator_decision_trace_package or collect_operator_decision_trace_package()
+    validate_operator_decision_trace_package(trace)
+    acceptance = _normalize_implementation_branch_refs([
+        "scope remains limited to affected_files unless human review expands it",
+        "task draft remains non-executable and read-only",
+        "required evidence and approvals are reviewed before implementation",
+        "all expected tests pass before any commit",
+    ])
+    draft = {
+        "operator_task_draft_version": OPERATOR_TASK_DRAFT_VERSION,
+        "operator_task_draft_id": make_operator_task_draft_id(action_plan, action_review, trace),
+        "operator_action_plan_preview_id": action_plan["operator_action_plan_preview_id"],
+        "operator_action_review_package_id": action_review["operator_action_review_package_id"],
+        "operator_decision_trace_package_id": trace["operator_decision_trace_package_id"],
+        "objective": action_plan["action_title"],
+        "scope_summary": action_plan["action_summary"],
+        "affected_modules": list(action_plan["affected_modules"]),
+        "affected_files": list(action_plan["likely_affected_files"]),
+        "acceptance_criteria": acceptance,
+        "required_evidence": list(action_plan["required_evidence"]),
+        "required_approvals": list(action_plan["required_approvals"]),
+        "expected_tests": list(action_plan["expected_tests"]),
+        "rollback_plan": list(action_plan["rollback_plan"]),
+        "execution_allowed": False,
+        "recommended_next_action": "Review this task draft before creating any execution-capable implementation slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_task_draft(draft, action_plan, action_review, trace)
+    return draft
+
+
+def validate_operator_task_draft(draft: dict[str, Any], operator_action_plan_preview: dict[str, Any] | None = None, operator_action_review_package: dict[str, Any] | None = None, operator_decision_trace_package: dict[str, Any] | None = None) -> None:
+    required = ("operator_task_draft_version", "operator_task_draft_id", "operator_action_plan_preview_id", "objective", "scope_summary", "affected_modules", "affected_files", "acceptance_criteria", "required_evidence", "required_approvals", "expected_tests", "rollback_plan", "execution_allowed", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in draft:
+            raise ValueError(f"operator task draft missing required field: {key}")
+    if draft["operator_task_draft_version"] != OPERATOR_TASK_DRAFT_VERSION:
+        raise ValueError("invalid operator task draft version")
+    if not isinstance(draft["operator_task_draft_id"], str) or not draft["operator_task_draft_id"].startswith("operator-task-draft-"):
+        raise ValueError("invalid operator task draft id")
+    for field in ("objective", "scope_summary", "recommended_next_action"):
+        if not isinstance(draft[field], str) or not draft[field].strip():
+            raise ValueError(f"operator task draft {field} must be non-empty")
+    for field in ("affected_modules", "affected_files", "acceptance_criteria", "required_evidence", "required_approvals", "expected_tests", "rollback_plan"):
+        if _normalize_implementation_branch_refs(draft[field]) != draft[field] or not draft[field]:
+            raise ValueError(f"operator task draft {field} must be normalized and non-empty")
+    if draft["execution_allowed"] is not False:
+        raise ValueError("operator task draft must not allow execution")
+    if draft["safety_metadata"] != _read_only_safety_metadata() or draft["dry_run"] is not True or draft["write_allowed"] is not False or draft["automation_allowed"] is not False or draft["writes"] != []:
+        raise ValueError("operator task draft must be read-only")
+    if all(item is not None for item in (operator_action_plan_preview, operator_action_review_package, operator_decision_trace_package)):
+        validate_operator_action_plan_preview(operator_action_plan_preview)
+        validate_operator_action_review_package(operator_action_review_package)
+        validate_operator_decision_trace_package(operator_decision_trace_package)
+        expected_id = make_operator_task_draft_id(operator_action_plan_preview, operator_action_review_package, operator_decision_trace_package)
+        if draft["operator_task_draft_id"] != expected_id:
+            raise ValueError("operator task draft id is not deterministic")
+        if draft["operator_action_plan_preview_id"] != operator_action_plan_preview["operator_action_plan_preview_id"]:
+            raise ValueError("operator task draft action plan id mismatch")
+
+
+def stable_operator_task_draft_json(draft: dict[str, Any]) -> str:
+    validate_operator_task_draft(draft)
+    return _stable_ruflo_json(draft, indent=2) + "\n"
+
+
+def parse_operator_task_draft_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    draft = _json.loads(text)
+    validate_operator_task_draft(draft)
+    return draft
+
+
+def make_operator_task_scope_review_id(task_draft: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "affected_files": task_draft["affected_files"],
+        "affected_modules": task_draft["affected_modules"],
+        "operator_task_draft_id": task_draft["operator_task_draft_id"],
+        "version": OPERATOR_TASK_SCOPE_REVIEW_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-task-scope-review-{digest}"
+
+
+def collect_operator_task_scope_review(operator_task_draft: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    draft = operator_task_draft or collect_operator_task_draft()
+    validate_operator_task_draft(draft)
+    file_count = len(draft["affected_files"])
+    module_count = len(draft["affected_modules"])
+    blockers = _normalize_implementation_branch_refs(["human review required before implementation"])
+    warnings = _normalize_implementation_branch_refs(["task touches shared router and growth console", "large growth console remains a consolidation risk"])
+    review = {
+        "operator_task_scope_review_version": OPERATOR_TASK_SCOPE_REVIEW_VERSION,
+        "operator_task_scope_review_id": make_operator_task_scope_review_id(draft),
+        "operator_task_draft_id": draft["operator_task_draft_id"],
+        "scope_status": "focused" if file_count <= 3 else "broad",
+        "risk_status": "medium" if module_count <= 4 else "high",
+        "module_boundary_status": "review_required",
+        "blockers": blockers,
+        "warnings": warnings,
+        "required_human_actions": _normalize_implementation_branch_refs(["confirm scope before implementation", "confirm module boundary impact"]),
+        "recommended_next_action": "Confirm scope and module boundary impact before authorizing implementation.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_task_scope_review(review, draft)
+    return review
+
+
+def validate_operator_task_scope_review(review: dict[str, Any], operator_task_draft: dict[str, Any] | None = None) -> None:
+    required = ("operator_task_scope_review_version", "operator_task_scope_review_id", "operator_task_draft_id", "scope_status", "risk_status", "module_boundary_status", "blockers", "warnings", "required_human_actions", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in review:
+            raise ValueError(f"operator task scope review missing required field: {key}")
+    if review["operator_task_scope_review_version"] != OPERATOR_TASK_SCOPE_REVIEW_VERSION:
+        raise ValueError("invalid operator task scope review version")
+    if not isinstance(review["operator_task_scope_review_id"], str) or not review["operator_task_scope_review_id"].startswith("operator-task-scope-review-"):
+        raise ValueError("invalid operator task scope review id")
+    if review["scope_status"] not in {"focused", "broad"} or review["risk_status"] not in {"low", "medium", "high"} or review["module_boundary_status"] not in {"clear", "review_required", "blocked"}:
+        raise ValueError("invalid operator task scope status")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        if _normalize_implementation_branch_refs(review[field]) != review[field] or not review[field]:
+            raise ValueError(f"operator task scope review {field} must be normalized and non-empty")
+    if review["safety_metadata"] != _read_only_safety_metadata() or review["dry_run"] is not True or review["write_allowed"] is not False or review["automation_allowed"] is not False or review["writes"] != []:
+        raise ValueError("operator task scope review must be read-only")
+    if operator_task_draft is not None:
+        validate_operator_task_draft(operator_task_draft)
+        if review["operator_task_draft_id"] != operator_task_draft["operator_task_draft_id"]:
+            raise ValueError("operator task scope review draft id mismatch")
+        if review["operator_task_scope_review_id"] != make_operator_task_scope_review_id(operator_task_draft):
+            raise ValueError("operator task scope review id is not deterministic")
+
+
+def stable_operator_task_scope_review_json(review: dict[str, Any]) -> str:
+    validate_operator_task_scope_review(review)
+    return _stable_ruflo_json(review, indent=2) + "\n"
+
+
+def parse_operator_task_scope_review_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    review = _json.loads(text)
+    validate_operator_task_scope_review(review)
+    return review
+
+
+def make_operator_task_test_plan_id(task_draft: dict[str, Any], verification_commands: list[str]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "operator_task_draft_id": task_draft["operator_task_draft_id"],
+        "verification_commands": verification_commands,
+        "version": OPERATOR_TASK_TEST_PLAN_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-task-test-plan-{digest}"
+
+
+def collect_operator_task_test_plan(operator_task_draft: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    draft = operator_task_draft or collect_operator_task_draft()
+    validate_operator_task_draft(draft)
+    verification_commands = _normalize_implementation_branch_refs(list(draft["expected_tests"]))
+    smoke_tests = _normalize_implementation_branch_refs([command for command in verification_commands if "operator task" not in command][:2])
+    plan = {
+        "operator_task_test_plan_version": OPERATOR_TASK_TEST_PLAN_VERSION,
+        "operator_task_test_plan_id": make_operator_task_test_plan_id(draft, verification_commands),
+        "operator_task_draft_id": draft["operator_task_draft_id"],
+        "required_tests": list(draft["expected_tests"]),
+        "smoke_tests": smoke_tests,
+        "verification_commands": verification_commands,
+        "success_criteria": _normalize_implementation_branch_refs(["all verification commands complete with exit code 0", "no runtime execution is introduced by the task draft", "final git status is understood"]),
+        "failure_conditions": _normalize_implementation_branch_refs(["any verification command fails", "task draft attempts execution", "unexpected files become dirty"]),
+        "recommended_next_action": "Review verification commands as strings before implementation; do not execute from this plan.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_task_test_plan(plan, draft)
+    return plan
+
+
+def validate_operator_task_test_plan(plan: dict[str, Any], operator_task_draft: dict[str, Any] | None = None) -> None:
+    required = ("operator_task_test_plan_version", "operator_task_test_plan_id", "operator_task_draft_id", "required_tests", "smoke_tests", "verification_commands", "success_criteria", "failure_conditions", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in plan:
+            raise ValueError(f"operator task test plan missing required field: {key}")
+    if plan["operator_task_test_plan_version"] != OPERATOR_TASK_TEST_PLAN_VERSION:
+        raise ValueError("invalid operator task test plan version")
+    if not isinstance(plan["operator_task_test_plan_id"], str) or not plan["operator_task_test_plan_id"].startswith("operator-task-test-plan-"):
+        raise ValueError("invalid operator task test plan id")
+    for field in ("required_tests", "smoke_tests", "verification_commands", "success_criteria", "failure_conditions"):
+        if _normalize_implementation_branch_refs(plan[field]) != plan[field] or not plan[field]:
+            raise ValueError(f"operator task test plan {field} must be normalized non-empty string list")
+        if not all(isinstance(item, str) for item in plan[field]):
+            raise ValueError(f"operator task test plan {field} must contain strings only")
+    if plan["safety_metadata"] != _read_only_safety_metadata() or plan["dry_run"] is not True or plan["write_allowed"] is not False or plan["automation_allowed"] is not False or plan["writes"] != []:
+        raise ValueError("operator task test plan must be read-only")
+    if operator_task_draft is not None:
+        validate_operator_task_draft(operator_task_draft)
+        if plan["operator_task_draft_id"] != operator_task_draft["operator_task_draft_id"]:
+            raise ValueError("operator task test plan draft id mismatch")
+        if plan["operator_task_test_plan_id"] != make_operator_task_test_plan_id(operator_task_draft, plan["verification_commands"]):
+            raise ValueError("operator task test plan id is not deterministic")
+
+
+def stable_operator_task_test_plan_json(plan: dict[str, Any]) -> str:
+    validate_operator_task_test_plan(plan)
+    return _stable_ruflo_json(plan, indent=2) + "\n"
+
+
+def parse_operator_task_test_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    plan = _json.loads(text)
+    validate_operator_task_test_plan(plan)
+    return plan
+
+
+def make_operator_task_review_package_id(task_draft: dict[str, Any], scope_review: dict[str, Any], test_plan: dict[str, Any], action_evidence: dict[str, Any], action_approvals: dict[str, Any]) -> str:
+    import hashlib
+
+    payload = _stable_ruflo_json({
+        "operator_action_approval_checklist_id": action_approvals["operator_action_approval_checklist_id"],
+        "operator_action_evidence_checklist_id": action_evidence["operator_action_evidence_checklist_id"],
+        "operator_task_draft_id": task_draft["operator_task_draft_id"],
+        "operator_task_scope_review_id": scope_review["operator_task_scope_review_id"],
+        "operator_task_test_plan_id": test_plan["operator_task_test_plan_id"],
+        "version": OPERATOR_TASK_REVIEW_PACKAGE_VERSION,
+    })
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return f"operator-task-review-package-{digest}"
+
+
+def collect_operator_task_review_package(operator_task_draft: dict[str, Any] | None = None, operator_task_scope_review: dict[str, Any] | None = None, operator_task_test_plan: dict[str, Any] | None = None, operator_action_evidence_checklist: dict[str, Any] | None = None, operator_action_approval_checklist: dict[str, Any] | None = None, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    draft = operator_task_draft or collect_operator_task_draft()
+    validate_operator_task_draft(draft)
+    scope = operator_task_scope_review or collect_operator_task_scope_review(draft)
+    validate_operator_task_scope_review(scope, draft)
+    tests = operator_task_test_plan or collect_operator_task_test_plan(draft)
+    validate_operator_task_test_plan(tests, draft)
+    action_plan = collect_operator_action_plan_preview()
+    evidence = operator_action_evidence_checklist or collect_operator_action_evidence_checklist(action_plan)
+    approvals = operator_action_approval_checklist or collect_operator_action_approval_checklist(action_plan)
+    validate_operator_action_evidence_checklist(evidence)
+    validate_operator_action_approval_checklist(approvals)
+    blockers = _normalize_implementation_branch_refs(list(scope["blockers"]) + list(evidence["blockers"]) + list(approvals["blockers"]) + ["operator task draft is not executable"])
+    package = {
+        "operator_task_review_package_version": OPERATOR_TASK_REVIEW_PACKAGE_VERSION,
+        "operator_task_review_package_id": make_operator_task_review_package_id(draft, scope, tests, evidence, approvals),
+        "operator_task_draft_id": draft["operator_task_draft_id"],
+        "operator_task_scope_review_id": scope["operator_task_scope_review_id"],
+        "operator_task_test_plan_id": tests["operator_task_test_plan_id"],
+        "operator_action_evidence_checklist_id": evidence["operator_action_evidence_checklist_id"],
+        "operator_action_approval_checklist_id": approvals["operator_action_approval_checklist_id"],
+        "task_status": "draft",
+        "scope_status": scope["scope_status"],
+        "test_status": "planned",
+        "approval_status": approvals["approval_status"],
+        "readiness_status": "blocked" if blockers else "ready",
+        "blockers": blockers,
+        "warnings": _normalize_implementation_branch_refs(list(scope["warnings"]) + ["verification commands are strings only and are not executed"]),
+        "required_human_actions": _normalize_implementation_branch_refs(list(scope["required_human_actions"]) + list(approvals["required_human_actions"])),
+        "review_recommendation": "Review the task draft, scope, and test plan before authorizing implementation.",
+        "recommended_next_action": "Use this task review package to decide whether to authorize a separate implementation slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_task_review_package(package, draft, scope, tests, evidence, approvals)
+    return package
+
+
+def validate_operator_task_review_package(package: dict[str, Any], operator_task_draft: dict[str, Any] | None = None, operator_task_scope_review: dict[str, Any] | None = None, operator_task_test_plan: dict[str, Any] | None = None, operator_action_evidence_checklist: dict[str, Any] | None = None, operator_action_approval_checklist: dict[str, Any] | None = None) -> None:
+    required = ("operator_task_review_package_version", "operator_task_review_package_id", "operator_task_draft_id", "operator_task_scope_review_id", "operator_task_test_plan_id", "task_status", "scope_status", "test_status", "approval_status", "readiness_status", "blockers", "warnings", "required_human_actions", "review_recommendation", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in package:
+            raise ValueError(f"operator task review package missing required field: {key}")
+    if package["operator_task_review_package_version"] != OPERATOR_TASK_REVIEW_PACKAGE_VERSION:
+        raise ValueError("invalid operator task review package version")
+    if not isinstance(package["operator_task_review_package_id"], str) or not package["operator_task_review_package_id"].startswith("operator-task-review-package-"):
+        raise ValueError("invalid operator task review package id")
+    if package["task_status"] != "draft" or package["test_status"] != "planned":
+        raise ValueError("operator task review package must remain draft with planned tests")
+    if package["readiness_status"] not in {"blocked", "ready"} or package["approval_status"] not in {"blocked", "approved"}:
+        raise ValueError("invalid operator task review status")
+    for field in ("blockers", "warnings", "required_human_actions"):
+        if _normalize_implementation_branch_refs(package[field]) != package[field] or not package[field]:
+            raise ValueError(f"operator task review package {field} must be normalized and non-empty")
+    if package["blockers"] and package["readiness_status"] != "blocked":
+        raise ValueError("operator task review must be blocked when blockers exist")
+    if package["safety_metadata"] != _read_only_safety_metadata() or package["dry_run"] is not True or package["write_allowed"] is not False or package["automation_allowed"] is not False or package["writes"] != []:
+        raise ValueError("operator task review package must be read-only")
+    if all(item is not None for item in (operator_task_draft, operator_task_scope_review, operator_task_test_plan, operator_action_evidence_checklist, operator_action_approval_checklist)):
+        validate_operator_task_draft(operator_task_draft)
+        validate_operator_task_scope_review(operator_task_scope_review, operator_task_draft)
+        validate_operator_task_test_plan(operator_task_test_plan, operator_task_draft)
+        validate_operator_action_evidence_checklist(operator_action_evidence_checklist)
+        validate_operator_action_approval_checklist(operator_action_approval_checklist)
+        expected_id = make_operator_task_review_package_id(operator_task_draft, operator_task_scope_review, operator_task_test_plan, operator_action_evidence_checklist, operator_action_approval_checklist)
+        if package["operator_task_review_package_id"] != expected_id:
+            raise ValueError("operator task review package id is not deterministic")
+        if package["operator_task_draft_id"] != operator_task_draft["operator_task_draft_id"]:
+            raise ValueError("operator task review package draft id mismatch")
+
+
+def stable_operator_task_review_package_json(package: dict[str, Any]) -> str:
+    validate_operator_task_review_package(package)
+    return _stable_ruflo_json(package, indent=2) + "\n"
+
+
+def parse_operator_task_review_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    package = _json.loads(text)
+    validate_operator_task_review_package(package)
+    return package
+
+
+
 def _valid_implementation_branch_name(name: str) -> bool:
     import re
 
@@ -23514,6 +23876,130 @@ def operator_action_review_package_main(argv: list[str] | None = None) -> int:
         print(stable_operator_action_review_package_json(package), end="")
         return 0
     render_operator_action_review_package_plain(package)
+    return 0
+
+
+
+def render_operator_task_draft_plain(draft: dict[str, Any]) -> None:
+    validate_operator_task_draft(draft)
+    print("Operator task draft")
+    print(f"operator_task_draft_id: {draft['operator_task_draft_id']}")
+    print(f"operator_action_plan_preview_id: {draft['operator_action_plan_preview_id']}")
+    print(f"objective: {draft['objective']}")
+    print(f"affected_file_count: {len(draft['affected_files'])}")
+    print(f"acceptance_criteria_count: {len(draft['acceptance_criteria'])}")
+    print(f"expected_test_count: {len(draft['expected_tests'])}")
+    print(f"execution_allowed: {draft['execution_allowed']}")
+    print(f"next_action: {draft['recommended_next_action']}")
+
+
+def operator_task_draft_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Operator task-draft: read-only unit-of-work draft")
+        print("Read-only operator task planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: operator task-draft is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    draft = collect_operator_task_draft()
+    validate_operator_task_draft(draft)
+    if "--json" in args:
+        print(stable_operator_task_draft_json(draft), end="")
+        return 0
+    render_operator_task_draft_plain(draft)
+    return 0
+
+
+def render_operator_task_scope_review_plain(review: dict[str, Any]) -> None:
+    validate_operator_task_scope_review(review)
+    print("Operator task scope review")
+    print(f"operator_task_scope_review_id: {review['operator_task_scope_review_id']}")
+    print(f"operator_task_draft_id: {review['operator_task_draft_id']}")
+    print(f"scope_status: {review['scope_status']}")
+    print(f"risk_status: {review['risk_status']}")
+    print(f"module_boundary_status: {review['module_boundary_status']}")
+    print(f"blocker_count: {len(review['blockers'])}")
+    print(f"next_action: {review['recommended_next_action']}")
+
+
+def operator_task_scope_review_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Operator task-scope: read-only task scope review")
+        print("Read-only operator task planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: operator task-scope is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    review = collect_operator_task_scope_review()
+    validate_operator_task_scope_review(review)
+    if "--json" in args:
+        print(stable_operator_task_scope_review_json(review), end="")
+        return 0
+    render_operator_task_scope_review_plain(review)
+    return 0
+
+
+def render_operator_task_test_plan_plain(plan: dict[str, Any]) -> None:
+    validate_operator_task_test_plan(plan)
+    print("Operator task test plan")
+    print(f"operator_task_test_plan_id: {plan['operator_task_test_plan_id']}")
+    print(f"operator_task_draft_id: {plan['operator_task_draft_id']}")
+    print(f"required_test_count: {len(plan['required_tests'])}")
+    print(f"smoke_test_count: {len(plan['smoke_tests'])}")
+    print(f"verification_command_count: {len(plan['verification_commands'])}")
+    print(f"success_criteria_count: {len(plan['success_criteria'])}")
+    print(f"next_action: {plan['recommended_next_action']}")
+
+
+def operator_task_test_plan_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Operator task-tests: read-only task test plan")
+        print("Read-only operator task planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: operator task-tests is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    plan = collect_operator_task_test_plan()
+    validate_operator_task_test_plan(plan)
+    if "--json" in args:
+        print(stable_operator_task_test_plan_json(plan), end="")
+        return 0
+    render_operator_task_test_plan_plain(plan)
+    return 0
+
+
+def render_operator_task_review_package_plain(package: dict[str, Any]) -> None:
+    validate_operator_task_review_package(package)
+    print("Operator task review package")
+    print(f"operator_task_review_package_id: {package['operator_task_review_package_id']}")
+    print(f"operator_task_draft_id: {package['operator_task_draft_id']}")
+    print(f"task_status: {package['task_status']}")
+    print(f"scope_status: {package['scope_status']}")
+    print(f"test_status: {package['test_status']}")
+    print(f"approval_status: {package['approval_status']}")
+    print(f"readiness_status: {package['readiness_status']}")
+    print(f"blocker_count: {len(package['blockers'])}")
+    print(f"next_action: {package['recommended_next_action']}")
+
+
+def operator_task_review_package_main(argv: list[str] | None = None) -> int:
+    args = _normalize_cli_dashes(sys.argv[1:] if argv is None else argv)
+    if "--help" in args or "-h" in args:
+        print("Operator task-review: read-only task review package")
+        print("Read-only operator task planning. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: operator task-review is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    package = collect_operator_task_review_package()
+    validate_operator_task_review_package(package)
+    if "--json" in args:
+        print(stable_operator_task_review_package_json(package), end="")
+        return 0
+    render_operator_task_review_package_plain(package)
     return 0
 
 

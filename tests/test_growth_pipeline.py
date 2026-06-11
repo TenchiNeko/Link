@@ -16427,6 +16427,190 @@ def check_operator_action_plan_clis() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 62r. Operator task draft
+# ---------------------------------------------------------------------------
+
+def check_operator_task_draft_helpers() -> None:
+    """Operator task draft creates an exact non-executable unit of work."""
+    from link_modes.growth.link_growth_console import (
+        collect_operator_action_approval_checklist,
+        collect_operator_action_evidence_checklist,
+        collect_operator_action_plan_preview,
+        collect_operator_action_review_package,
+        collect_operator_decision_trace_package,
+        collect_operator_task_draft,
+        collect_operator_task_review_package,
+        collect_operator_task_scope_review,
+        collect_operator_task_test_plan,
+        parse_operator_task_draft_json,
+        parse_operator_task_review_package_json,
+        parse_operator_task_scope_review_json,
+        parse_operator_task_test_plan_json,
+        stable_operator_task_draft_json,
+        stable_operator_task_review_package_json,
+        stable_operator_task_scope_review_json,
+        stable_operator_task_test_plan_json,
+        validate_operator_task_draft,
+        validate_operator_task_review_package,
+        validate_operator_task_scope_review,
+        validate_operator_task_test_plan,
+    )
+
+    action_plan = collect_operator_action_plan_preview()
+    action_evidence = collect_operator_action_evidence_checklist(action_plan)
+    action_approvals = collect_operator_action_approval_checklist(action_plan)
+    action_review = collect_operator_action_review_package(action_plan, action_evidence, action_approvals)
+    trace = collect_operator_decision_trace_package()
+
+    draft = collect_operator_task_draft(action_plan, action_review, trace)
+    same_draft = collect_operator_task_draft(action_plan, action_review, trace)
+    validate_operator_task_draft(draft, action_plan, action_review, trace)
+    _require(draft["operator_task_draft_id"] == same_draft["operator_task_draft_id"],
+             "operator task draft id must be deterministic")
+    _require(draft["operator_action_plan_preview_id"] == action_plan["operator_action_plan_preview_id"],
+             "operator task draft must flow from action plan")
+    _require(draft["execution_allowed"] is False,
+             "operator task draft must not allow execution")
+    _require(draft["affected_files"] == action_plan["likely_affected_files"],
+             "operator task draft affected files must flow from action plan")
+    _require(draft["acceptance_criteria"] and draft["rollback_plan"] and draft["expected_tests"],
+             "operator task draft must include acceptance criteria, rollback plan, and expected tests")
+    _require(parse_operator_task_draft_json(stable_operator_task_draft_json(draft)) == draft,
+             "operator task draft JSON must round trip")
+
+    scope = collect_operator_task_scope_review(draft)
+    same_scope = collect_operator_task_scope_review(draft)
+    validate_operator_task_scope_review(scope, draft)
+    _require(scope["operator_task_scope_review_id"] == same_scope["operator_task_scope_review_id"],
+             "operator task scope review id must be deterministic")
+    _require(scope["operator_task_draft_id"] == draft["operator_task_draft_id"],
+             "operator task scope review must flow from task draft")
+    _require(scope["scope_status"] in {"focused", "broad"} and scope["module_boundary_status"] == "review_required",
+             "operator task scope review must validate scope and module boundary")
+    _require(parse_operator_task_scope_review_json(stable_operator_task_scope_review_json(scope)) == scope,
+             "operator task scope review JSON must round trip")
+
+    tests = collect_operator_task_test_plan(draft)
+    same_tests = collect_operator_task_test_plan(draft)
+    validate_operator_task_test_plan(tests, draft)
+    _require(tests["operator_task_test_plan_id"] == same_tests["operator_task_test_plan_id"],
+             "operator task test plan id must be deterministic")
+    _require(tests["operator_task_draft_id"] == draft["operator_task_draft_id"],
+             "operator task test plan must flow from task draft")
+    _require(all(isinstance(command, str) for command in tests["verification_commands"]),
+             "operator task verification commands must be strings only")
+    _require(parse_operator_task_test_plan_json(stable_operator_task_test_plan_json(tests)) == tests,
+             "operator task test plan JSON must round trip")
+
+    review = collect_operator_task_review_package(draft, scope, tests, action_evidence, action_approvals)
+    same_review = collect_operator_task_review_package(draft, scope, tests, action_evidence, action_approvals)
+    validate_operator_task_review_package(review, draft, scope, tests, action_evidence, action_approvals)
+    _require(review["operator_task_review_package_id"] == same_review["operator_task_review_package_id"],
+             "operator task review package id must be deterministic")
+    _require(review["operator_task_draft_id"] == draft["operator_task_draft_id"],
+             "operator task review package must flow from draft")
+    _require(review["operator_task_scope_review_id"] == scope["operator_task_scope_review_id"],
+             "operator task review package must flow from scope review")
+    _require(review["operator_task_test_plan_id"] == tests["operator_task_test_plan_id"],
+             "operator task review package must flow from test plan")
+    _require(review["task_status"] == "draft" and review["readiness_status"] == "blocked",
+             "operator task review must remain draft and blocked")
+    _require(parse_operator_task_review_package_json(stable_operator_task_review_package_json(review)) == review,
+             "operator task review package JSON must round trip")
+
+    bad_draft = json.loads(stable_operator_task_draft_json(draft))
+    bad_draft["execution_allowed"] = True
+    try:
+        validate_operator_task_draft(bad_draft)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator task draft validation must reject execution_allowed=True")
+
+    bad_scope = json.loads(stable_operator_task_scope_review_json(scope))
+    bad_scope["risk_status"] = "reckless"
+    try:
+        validate_operator_task_scope_review(bad_scope)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator task scope validation must reject invalid risk")
+
+    bad_tests = json.loads(stable_operator_task_test_plan_json(tests))
+    bad_tests["verification_commands"].append({"cmd": "python3 tests/test_growth_pipeline.py"})
+    try:
+        validate_operator_task_test_plan(bad_tests)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator task test plan validation must reject non-string commands")
+
+    bad_review = json.loads(stable_operator_task_review_package_json(review))
+    bad_review["write_allowed"] = True
+    try:
+        validate_operator_task_review_package(bad_review)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("operator task review validation must reject writes")
+
+    print("operator task draft helpers OK")
+
+
+def check_operator_task_draft_clis() -> None:
+    """Operator task CLIs expose read-only unit-of-work payloads."""
+    from link import _cmd_operator
+    from link_modes.growth.link_growth_console import (
+        operator_task_draft_main,
+        operator_task_review_package_main,
+        operator_task_scope_review_main,
+        operator_task_test_plan_main,
+        parse_operator_task_draft_json,
+    )
+
+    commands = [
+        ("task-draft", operator_task_draft_main),
+        ("task-scope", operator_task_scope_review_main),
+        ("task-tests", operator_task_test_plan_main),
+        ("task-review", operator_task_review_package_main),
+    ]
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_operator(["--help"])
+    _require(help_rc == 0, "operator --help must return 0 for task commands")
+    for command, main_func in commands:
+        _require(command in help_out.getvalue(), f"operator help must include {command}")
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = main_func(["--write", "--json"])
+        _require(write_rc != 0, f"operator {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue() and "--write is not supported" in write_err.getvalue(),
+                 f"operator {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"operator {command} --write must not print normal output")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = _cmd_operator(["task-draft", "--json"])
+    parsed = parse_operator_task_draft_json(json_out.getvalue())
+    _require(json_rc == 0, "operator task-draft route must return 0")
+    _require(parsed["execution_allowed"] is False and parsed["dry_run"] is True and parsed["write_allowed"] is False,
+             "operator task-draft CLI must remain read-only and non-executable")
+    _require("operator_action_plan_preview" not in parsed and "operator_action_review_package" not in parsed,
+             "operator task-draft --json must output only its object payload")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = operator_task_draft_main([])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "operator task-draft human mode must return 0")
+    _require("Operator task draft" in human and "operator_task_draft_id:" in human,
+             "operator task-draft human mode must include title and id")
+    _require(len(human.splitlines()) <= 12, "operator task-draft human mode must stay concise")
+    print("operator task draft CLIs OK")
+
+
+# ---------------------------------------------------------------------------
 # 62q. Growth supervised-execution-review CLI
 # ---------------------------------------------------------------------------
 
@@ -17477,6 +17661,8 @@ def main() -> None:
     check_operator_decision_trace_clis()
     check_operator_action_plan_helpers()
     check_operator_action_plan_clis()
+    check_operator_task_draft_helpers()
+    check_operator_task_draft_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()
