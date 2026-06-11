@@ -10836,6 +10836,1166 @@ def parse_business_development_handoff_boundary_json(text: str) -> dict[str, Any
     return boundary
 
 
+
+# ---------------------------------------------------------------------------
+# Link-level local research target intake. Read-only: no extraction, no network.
+# ---------------------------------------------------------------------------
+
+RESEARCH_TARGET_INTAKE_VERSION = "link-research-target-intake-v1"
+RESEARCH_TARGET_EVIDENCE_BUNDLE_VERSION = "link-research-target-evidence-bundle-v1"
+RESEARCH_TARGET_UPGRADE_CANDIDATES_VERSION = "link-research-target-upgrade-candidates-v1"
+RESEARCH_TARGET_OPERATOR_TASK_DRAFT_VERSION = "link-research-target-operator-task-draft-v1"
+RESEARCH_TARGET_OPERATOR_FLOW_VERSION = "link-research-target-operator-flow-v1"
+RESEARCH_TARGET_ALLOWED_ROOTS = ("research", "research/_extracted")
+RESEARCH_TARGET_DOMAINS = (
+    "scraping", "ecommerce", "automation", "agent_memory", "workflow",
+    "market_research", "data_collection", "source_governance",
+    "business_development", "unknown",
+)
+RESEARCH_TARGET_LINK_MODULES = (
+    "engineering", "growth", "business_development", "business_operations",
+    "shared_services", "control_plane", "research", "unknown",
+)
+RESEARCH_TARGET_BLOCKED_ACTIONS = (
+    "copy external code", "network execution", "scraping", "outreach",
+    "CRM/ecommerce integration", "package installation", "repo mutation",
+    "proposal approval", "handoff execution",
+)
+_RESEARCH_TARGET_LANGUAGE_BY_EXT = {
+    ".py": "python",
+    ".ts": "typescript",
+    ".tsx": "typescript-react",
+    ".js": "javascript",
+    ".jsx": "javascript-react",
+    ".json": "json",
+    ".md": "markdown",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".toml": "toml",
+    ".txt": "text",
+    ".zip": "zip",
+}
+_RESEARCH_TARGET_DOMAIN_KEYWORDS = {
+    "scraping": ("scrap", "crawler", "crawl", "spider", "selenium", "playwright", "puppeteer", "browser"),
+    "ecommerce": ("ecommerce", "commerce", "shopify", "amazon", "ebay", "etsy", "walmart", "product", "pricing", "dropshipping"),
+    "automation": ("automation", "automate", "activepieces", "zapier", "trigger", "action", "connector"),
+    "agent_memory": ("memory", "recall", "context", "embedding", "transcript"),
+    "workflow": ("workflow", "flow", "orchestr", "queue", "runbook", "pipeline"),
+    "market_research": ("market", "competitor", "seo", "keyword", "research", "validation"),
+    "data_collection": ("data", "dataset", "collector", "ingestion", "source", "extract"),
+    "source_governance": ("provenance", "robots", "rate_limit", "rate-limit", "source", "compliance", "policy"),
+    "business_development": ("lead", "vendor", "supplier", "sourcing", "sales", "crm", "revenue", "business"),
+}
+_RESEARCH_TARGET_SELECTED_NAMES = (
+    "readme", "skill", "package.json", "config", "workflow", "flow", "crawler",
+    "source", "pricing", "product", "market", "competitor", "automation", "memory",
+)
+
+
+def _research_target_repo_root():
+    from pathlib import Path
+
+    return Path.cwd().resolve()
+
+
+def _research_target_normalize_args(argv: list[str] | None) -> list[str]:
+    args = list(argv or [])
+    normalized: list[str] = []
+    for arg in args:
+        normalized.append(str(arg).replace(chr(0x2013), "--").replace(chr(0x2014), "--"))
+    return normalized
+
+
+def _research_target_extract_source_arg(args: list[str]) -> str | None:
+    for index, arg in enumerate(args):
+        if arg == "--source" and index + 1 < len(args):
+            return args[index + 1]
+        if arg.startswith("--source="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _research_target_resolve_source(source_path: str):
+    from pathlib import Path
+
+    if not isinstance(source_path, str) or not source_path.strip():
+        raise ValueError("research target source is required")
+    raw = Path(source_path)
+    if any(part in {"..", ".git", ".agents", ".link"} for part in raw.parts):
+        raise ValueError("research target source path uses a forbidden path segment")
+    root = _research_target_repo_root()
+    candidate = (root / raw).resolve() if not raw.is_absolute() else raw.resolve()
+    allowed_roots = [(root / item).resolve() for item in RESEARCH_TARGET_ALLOWED_ROOTS]
+    allowed_root = None
+    for item in sorted(allowed_roots, key=lambda value: len(str(value)), reverse=True):
+        try:
+            candidate.relative_to(item)
+        except ValueError:
+            continue
+        allowed_root = item
+        break
+    if allowed_root is None:
+        raise ValueError("research target source must be under research/ or research/_extracted/")
+    if not candidate.exists():
+        raise ValueError("research target source does not exist")
+    return root, candidate, allowed_root
+
+
+def _research_target_relative(path_value) -> str:
+    root = _research_target_repo_root()
+    try:
+        return str(path_value.resolve().relative_to(root)).replace("\\", "/")
+    except ValueError:
+        return str(path_value).replace("\\", "/")
+
+
+def _research_target_hash_file(path_value) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path_value.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _research_target_hash_text(value: Any) -> str:
+    import hashlib
+
+    return hashlib.sha256(_stable_ruflo_json(value).encode("utf-8")).hexdigest()
+
+
+def _research_target_ref_id(path_text: str, *, prefix: str = "research-target-ref") -> str:
+    import hashlib
+    import re
+
+    slug = re.sub(r"[^a-z0-9]+", "-", path_text.lower()).strip("-")[:48] or "source"
+    digest = hashlib.sha256(path_text.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}-{slug}-{digest}"
+
+
+def _research_target_source_id(intake_core: dict[str, Any]) -> str:
+    digest = _research_target_hash_text({
+        "source_hash": intake_core["source_hash"],
+        "source_path": intake_core["source_path"],
+        "source_type": intake_core["source_type"],
+        "version": RESEARCH_TARGET_INTAKE_VERSION,
+    })[:12]
+    return f"research-target-intake-{digest}"
+
+
+def _research_target_detect_domains(text_values: list[str]) -> list[str]:
+    haystack = " ".join(text_values).lower()
+    domains: list[str] = []
+    for domain, keywords in _RESEARCH_TARGET_DOMAIN_KEYWORDS.items():
+        if any(keyword in haystack for keyword in keywords):
+            domains.append(domain)
+    return domains or ["unknown"]
+
+
+def _research_target_detect_languages(paths: list[str]) -> list[str]:
+    languages: list[str] = []
+    for item in paths:
+        suffix = "." + item.rsplit(".", 1)[-1].lower() if "." in item else ""
+        language = _RESEARCH_TARGET_LANGUAGE_BY_EXT.get(suffix)
+        if language and language not in languages:
+            languages.append(language)
+    return languages or ["unknown"]
+
+
+def _research_target_reason(path_text: str) -> str:
+    lower = path_text.lower()
+    if "readme" in lower:
+        return "README or overview file anchors operator understanding."
+    if lower.endswith("package.json"):
+        return "Package manifest exposes dependencies, scripts, and project metadata."
+    if "skill" in lower and lower.endswith(".md"):
+        return "Skill prompt/documentation can map to Link opportunity or task templates."
+    if "config" in lower:
+        return "Configuration file exposes runtime boundaries and source assumptions."
+    if "test" in lower or "spec" in lower:
+        return "Test file can inform verification patterns."
+    if any(keyword in lower for keyword in ("workflow", "flow", "crawler", "source", "pricing", "product", "market")):
+        return "Domain-specific file name matches Link research-target signals."
+    return "Representative source ref selected from the research target."
+
+
+def _research_target_file_type(path_text: str) -> str:
+    lower = path_text.lower()
+    if lower.endswith(".zip"):
+        return "zip_archive"
+    if lower.endswith(".md"):
+        return "markdown"
+    if lower.endswith(".json"):
+        return "json"
+    if lower.endswith(('.ts', '.tsx')):
+        return "typescript"
+    if lower.endswith(".py"):
+        return "python"
+    if lower.endswith(('.yml', '.yaml')):
+        return "yaml"
+    return "file"
+
+
+def _research_target_evidence_type(path_text: str) -> str:
+    lower = path_text.lower()
+    name = lower.rsplit("/", 1)[-1]
+    if name == "readme.md":
+        return "README"
+    if "architecture" in lower or "design" in lower or "overview" in lower:
+        return "architecture_doc"
+    if "workflow" in lower or "flow" in lower:
+        return "workflow_definition"
+    if "skill" in lower and lower.endswith(".md"):
+        return "prompt_or_skill"
+    if "test" in lower or "spec" in lower:
+        return "test_file"
+    if name == "package.json":
+        return "package_manifest"
+    if "config" in lower or name == "tsconfig.json" or lower.endswith((".yml", ".yaml")):
+        return "config_file"
+    if lower.endswith((".py", ".ts", ".tsx", ".js", ".jsx")):
+        return "source_code_pattern"
+    return "unknown"
+
+
+def _research_target_ref_from_file(path_value, *, base=None) -> dict[str, Any]:
+    rel = _research_target_relative(path_value) if base is None else str(path_value.relative_to(base)).replace("\\", "/")
+    stat = path_value.stat()
+    digest = _research_target_hash_file(path_value) if stat.st_size <= 2_000_000 else ""
+    return {
+        "ref_id": _research_target_ref_id(rel),
+        "path": rel,
+        "file_type": _research_target_file_type(rel),
+        "reason_selected": _research_target_reason(rel),
+        "size_bytes": int(stat.st_size),
+        "hash": digest,
+    }
+
+
+def _research_target_ref_from_zip_member(member, archive=None) -> dict[str, Any]:
+    digest = ""
+    if archive is not None and member.file_size <= 2_000_000:
+        import hashlib
+
+        hasher = hashlib.sha256()
+        with archive.open(member, "r") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        digest = hasher.hexdigest()
+    return {
+        "ref_id": _research_target_ref_id(member.filename),
+        "path": member.filename,
+        "file_type": _research_target_file_type(member.filename),
+        "reason_selected": _research_target_reason(member.filename),
+        "size_bytes": int(member.file_size),
+        "hash": digest,
+    }
+
+
+def _research_target_choose_paths(paths: list[str], *, limit: int = 12) -> list[str]:
+    def rank(path_text: str) -> tuple[int, str]:
+        lower = path_text.lower()
+        score = 100
+        for index, keyword in enumerate(_RESEARCH_TARGET_SELECTED_NAMES):
+            if keyword in lower:
+                score = min(score, index)
+        if lower.endswith((".md", ".json", ".py", ".ts", ".tsx", ".yml", ".yaml")):
+            score -= 1
+        return (score, lower)
+
+    chosen: list[str] = []
+    for item in sorted(paths, key=rank):
+        lower = item.lower()
+        if any(part in lower.split("/") for part in ("node_modules", ".git", "__pycache__")):
+            continue
+        if item not in chosen:
+            chosen.append(item)
+        if len(chosen) >= limit:
+            break
+    return chosen
+
+
+def _research_target_intake_core(source_path: str) -> dict[str, Any]:
+    root, candidate, allowed_root = _research_target_resolve_source(source_path)
+    rel_source = _research_target_relative(candidate)
+    rel_allowed = _research_target_relative(allowed_root)
+    source_name = candidate.name
+    selected_refs: list[dict[str, Any]] = []
+    archive_refs: list[dict[str, Any]] = []
+    all_paths: list[str] = []
+    source_size = 0
+
+    if candidate.is_file() and candidate.suffix.lower() == ".zip":
+        import zipfile
+
+        source_type = "zip_archive"
+        source_size = candidate.stat().st_size
+        with zipfile.ZipFile(candidate) as archive:
+            members = [item for item in archive.infolist() if not item.is_dir()]
+            file_count = len(members)
+            all_paths = [item.filename for item in members]
+            selected_names = set(_research_target_choose_paths(all_paths, limit=12))
+            for member in members:
+                if member.filename in selected_names:
+                    selected_refs.append(_research_target_ref_from_zip_member(member, archive))
+                if len(archive_refs) < 30 and member.filename in _research_target_choose_paths(all_paths, limit=30):
+                    archive_refs.append(_research_target_ref_from_zip_member(member, archive))
+        source_hash = _research_target_hash_file(candidate)
+    elif candidate.is_dir():
+        source_type = "folder"
+        file_paths = sorted([item for item in candidate.rglob("*") if item.is_file() and not any(part in {".git", "node_modules", "__pycache__"} for part in item.parts)])
+        file_count = len(file_paths)
+        source_size = sum(item.stat().st_size for item in file_paths)
+        rel_paths = [str(item.relative_to(candidate)).replace("\\", "/") for item in file_paths]
+        chosen = set(_research_target_choose_paths(rel_paths, limit=12))
+        for item in file_paths:
+            rel = str(item.relative_to(candidate)).replace("\\", "/")
+            if rel in chosen:
+                selected_refs.append(_research_target_ref_from_file(item, base=candidate))
+        source_hash = _research_target_hash_text({
+            "source_path": rel_source,
+            "file_count": file_count,
+            "source_size_bytes": source_size,
+            "selected_refs": selected_refs,
+        })
+        all_paths = rel_paths
+    elif candidate.is_file():
+        source_type = "file"
+        file_count = 1
+        source_size = candidate.stat().st_size
+        selected_refs = [_research_target_ref_from_file(candidate)]
+        all_paths = [rel_source]
+        source_hash = _research_target_hash_file(candidate)
+    else:
+        raise ValueError("research target source must be a file, folder, or zip archive")
+
+    text_values = [rel_source, source_name, *all_paths[:200]]
+    core = {
+        "research_target_intake_version": RESEARCH_TARGET_INTAKE_VERSION,
+        "source_path": rel_source,
+        "source_type": source_type,
+        "source_name": source_name,
+        "source_root": rel_source.split("/", 1)[0],
+        "allowed_root": rel_allowed,
+        "file_count": int(file_count),
+        "selected_file_refs": selected_refs,
+        "archive_member_refs": archive_refs,
+        "source_size_bytes": int(source_size),
+        "source_hash": source_hash,
+        "detected_domains": _research_target_detect_domains(text_values),
+        "detected_languages": _research_target_detect_languages(all_paths),
+    }
+    core["research_target_intake_id"] = _research_target_source_id(core)
+    return core
+
+
+def collect_research_target_intake(source_path: str, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    core = _research_target_intake_core(source_path)
+    intake = {
+        **core,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "recommended_next_action": "Review this target evidence before converting it into Growth, Decision, or Operator task inputs.",
+        "writes": [],
+    }
+    validate_research_target_intake(intake)
+    return intake
+
+
+def validate_research_target_intake(intake: dict[str, Any]) -> None:
+    required = (
+        "research_target_intake_version", "research_target_intake_id", "source_path", "source_type",
+        "source_name", "source_root", "allowed_root", "file_count", "selected_file_refs",
+        "archive_member_refs", "source_size_bytes", "source_hash", "detected_domains",
+        "detected_languages", "safety_metadata", "recommended_next_action", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in intake:
+            raise ValueError(f"research target intake missing required field: {key}")
+    if intake["research_target_intake_version"] != RESEARCH_TARGET_INTAKE_VERSION:
+        raise ValueError("invalid research target intake version")
+    if not isinstance(intake["research_target_intake_id"], str) or not intake["research_target_intake_id"].startswith("research-target-intake-"):
+        raise ValueError("invalid research target intake id")
+    if intake["source_type"] not in {"zip_archive", "folder", "file"}:
+        raise ValueError("invalid research target source_type")
+    if intake["allowed_root"] not in RESEARCH_TARGET_ALLOWED_ROOTS:
+        raise ValueError("research target allowed_root must be a permitted research root")
+    if any(part in intake["source_path"].split("/") for part in ("..", ".git", ".agents", ".link")):
+        raise ValueError("research target source_path contains forbidden segment")
+    if not intake["source_path"].startswith("research/"):
+        raise ValueError("research target source_path must remain under research")
+    for field in ("file_count", "source_size_bytes"):
+        if not isinstance(intake[field], int) or intake[field] < 0:
+            raise ValueError(f"{field} must be a non-negative integer")
+    if not isinstance(intake["source_hash"], str) or len(intake["source_hash"]) < 12:
+        raise ValueError("research target source_hash must be present")
+    for ref_field in ("selected_file_refs", "archive_member_refs"):
+        if not isinstance(intake[ref_field], list):
+            raise TypeError(f"{ref_field} must be a list")
+        for ref in intake[ref_field]:
+            _validate_research_target_ref(ref)
+    if not intake["selected_file_refs"]:
+        raise ValueError("research target intake must include selected refs")
+    if intake["source_type"] == "zip_archive" and not intake["archive_member_refs"]:
+        raise ValueError("zip research target intake must include archive member refs")
+    if not isinstance(intake["detected_domains"], list) or not intake["detected_domains"]:
+        raise ValueError("research target detected_domains must be non-empty")
+    if any(item not in RESEARCH_TARGET_DOMAINS for item in intake["detected_domains"]):
+        raise ValueError("research target detected_domains contains invalid value")
+    if not isinstance(intake["detected_languages"], list) or not all(isinstance(item, str) and item for item in intake["detected_languages"]):
+        raise ValueError("research target detected_languages must be non-empty strings")
+    if intake["safety_metadata"] != _read_only_safety_metadata() or intake["dry_run"] is not True or intake["write_allowed"] is not False or intake["automation_allowed"] is not False or intake["writes"] != []:
+        raise ValueError("research target intake must remain read-only")
+    expected_id = _research_target_source_id(intake)
+    if intake["research_target_intake_id"] != expected_id:
+        raise ValueError("research target intake id is not deterministic")
+
+
+def _validate_research_target_ref(ref: dict[str, Any]) -> None:
+    required = ("ref_id", "path", "file_type", "reason_selected", "size_bytes", "hash")
+    for key in required:
+        if key not in ref:
+            raise ValueError(f"research target ref missing field: {key}")
+    for field in ("ref_id", "path", "file_type", "reason_selected", "hash"):
+        if not isinstance(ref[field], str):
+            raise TypeError(f"research target ref {field} must be a string")
+    if not ref["ref_id"].startswith("research-target-ref-"):
+        raise ValueError("invalid research target ref id")
+    if not isinstance(ref["size_bytes"], int) or ref["size_bytes"] < 0:
+        raise ValueError("research target ref size_bytes must be a non-negative integer")
+
+
+def stable_research_target_intake_json(intake: dict[str, Any]) -> str:
+    validate_research_target_intake(intake)
+    return _stable_ruflo_json(intake, indent=2) + "\n"
+
+
+def parse_research_target_intake_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    intake = _json.loads(text)
+    validate_research_target_intake(intake)
+    return intake
+
+
+def _research_target_evidence_ref_id(source_ref_id: str, evidence_type: str) -> str:
+    digest = _research_target_hash_text({"source_ref_id": source_ref_id, "evidence_type": evidence_type})[:12]
+    return f"research-target-evidence-ref-{digest}"
+
+
+def _research_target_source_refs(intake: dict[str, Any]) -> list[dict[str, Any]]:
+    refs = []
+    for ref in intake["selected_file_refs"]:
+        refs.append({
+            "source_ref_id": ref["ref_id"],
+            "path": ref["path"],
+            "file_type": ref["file_type"],
+            "size_bytes": ref["size_bytes"],
+            "hash": ref["hash"],
+        })
+    return refs
+
+
+def collect_research_target_evidence_bundle(
+    research_target_intake: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    intake = research_target_intake or collect_research_target_intake(str(source_path or ""))
+    validate_research_target_intake(intake)
+    source_refs = _research_target_source_refs(intake)
+    evidence_refs = []
+    hash_refs = []
+    for source_ref in source_refs:
+        evidence_type = _research_target_evidence_type(source_ref["path"])
+        evidence_refs.append({
+            "evidence_ref_id": _research_target_evidence_ref_id(source_ref["source_ref_id"], evidence_type),
+            "source_ref_id": source_ref["source_ref_id"],
+            "evidence_type": evidence_type,
+            "evidence_summary": f"{evidence_type} evidence from {source_ref['path']} in {intake['source_path']}.",
+            "confidence_score": 80 if evidence_type != "unknown" else 45,
+            "risk_score": 25 if evidence_type in {"README", "architecture_doc", "package_manifest"} else 45,
+            "provenance_fields": ["source_path", "source_ref_id", "source_hash", "source_type"],
+            "reviewer_notes_required": evidence_type in {"unknown", "source_code_pattern"},
+        })
+        if source_ref["hash"]:
+            hash_refs.append({
+                "source_ref_id": source_ref["source_ref_id"],
+                "path": source_ref["path"],
+                "hash": source_ref["hash"],
+            })
+    missing_evidence = []
+    if not any(item["evidence_type"] == "README" for item in evidence_refs):
+        missing_evidence.append("README evidence")
+    if not hash_refs:
+        missing_evidence.append("selected file hashes")
+    evidence_strength = "strong" if len(evidence_refs) >= 3 and not missing_evidence else "medium" if evidence_refs else "weak"
+    bundle_core = {
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "source_refs": source_refs,
+        "evidence_refs": evidence_refs,
+        "provenance_summary": {
+            "source_path": intake["source_path"],
+            "source_type": intake["source_type"],
+            "source_hash": intake["source_hash"],
+            "allowed_root": intake["allowed_root"],
+        },
+        "hash_refs": hash_refs,
+        "selected_evidence": [item["evidence_ref_id"] for item in evidence_refs[:5]],
+        "missing_evidence": missing_evidence,
+        "evidence_strength": evidence_strength,
+        "evidence_status": "review" if missing_evidence else "ready_for_review",
+    }
+    digest = _research_target_hash_text({
+        "intake_id": intake["research_target_intake_id"],
+        "evidence_ref_ids": [item["evidence_ref_id"] for item in evidence_refs],
+        "version": RESEARCH_TARGET_EVIDENCE_BUNDLE_VERSION,
+    })[:12]
+    bundle = {
+        "research_target_evidence_bundle_version": RESEARCH_TARGET_EVIDENCE_BUNDLE_VERSION,
+        "research_target_evidence_bundle_id": f"research-target-evidence-bundle-{digest}",
+        **bundle_core,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "recommended_next_action": "Use this evidence bundle to produce target-bound upgrade candidates.",
+        "writes": [],
+    }
+    validate_research_target_evidence_bundle(bundle, intake)
+    return bundle
+
+
+def validate_research_target_evidence_bundle(bundle: dict[str, Any], research_target_intake: dict[str, Any] | None = None) -> None:
+    required = (
+        "research_target_evidence_bundle_version", "research_target_evidence_bundle_id",
+        "research_target_intake_id", "source_refs", "evidence_refs", "provenance_summary",
+        "hash_refs", "selected_evidence", "missing_evidence", "evidence_strength",
+        "evidence_status", "safety_metadata", "recommended_next_action", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in bundle:
+            raise ValueError(f"research target evidence bundle missing required field: {key}")
+    if bundle["research_target_evidence_bundle_version"] != RESEARCH_TARGET_EVIDENCE_BUNDLE_VERSION:
+        raise ValueError("invalid research target evidence bundle version")
+    if not isinstance(bundle["research_target_evidence_bundle_id"], str) or not bundle["research_target_evidence_bundle_id"].startswith("research-target-evidence-bundle-"):
+        raise ValueError("invalid research target evidence bundle id")
+    if not isinstance(bundle["research_target_intake_id"], str) or not bundle["research_target_intake_id"].startswith("research-target-intake-"):
+        raise ValueError("invalid research target intake id in evidence bundle")
+    if bundle["evidence_strength"] not in {"weak", "medium", "strong"}:
+        raise ValueError("invalid research target evidence strength")
+    if bundle["evidence_status"] not in {"review", "ready_for_review"}:
+        raise ValueError("invalid research target evidence status")
+    for field in ("source_refs", "evidence_refs", "hash_refs", "selected_evidence", "missing_evidence"):
+        if not isinstance(bundle[field], list):
+            raise TypeError(f"{field} must be a list")
+    if not bundle["source_refs"] or not bundle["evidence_refs"]:
+        raise ValueError("research target evidence bundle must include source and evidence refs")
+    allowed_types = {"README", "architecture_doc", "workflow_definition", "prompt_or_skill", "test_file", "config_file", "package_manifest", "source_code_pattern", "unknown"}
+    for ref in bundle["evidence_refs"]:
+        for key in ("evidence_ref_id", "source_ref_id", "evidence_type", "evidence_summary", "confidence_score", "risk_score", "provenance_fields", "reviewer_notes_required"):
+            if key not in ref:
+                raise ValueError(f"research target evidence ref missing field: {key}")
+        if not ref["evidence_ref_id"].startswith("research-target-evidence-ref-"):
+            raise ValueError("invalid research target evidence ref id")
+        if ref["evidence_type"] not in allowed_types:
+            raise ValueError("invalid research target evidence type")
+        for score in ("confidence_score", "risk_score"):
+            if not isinstance(ref[score], int) or not 0 <= ref[score] <= 100:
+                raise ValueError(f"{score} must be 0..100")
+        if not isinstance(ref["provenance_fields"], list) or not ref["provenance_fields"]:
+            raise ValueError("research target evidence ref provenance fields required")
+        if not isinstance(ref["reviewer_notes_required"], bool):
+            raise TypeError("research target evidence reviewer_notes_required must be bool")
+    if bundle["safety_metadata"] != _read_only_safety_metadata() or bundle["dry_run"] is not True or bundle["write_allowed"] is not False or bundle["automation_allowed"] is not False or bundle["writes"] != []:
+        raise ValueError("research target evidence bundle must remain read-only")
+    if research_target_intake is not None:
+        validate_research_target_intake(research_target_intake)
+        if bundle["research_target_intake_id"] != research_target_intake["research_target_intake_id"]:
+            raise ValueError("research target evidence bundle intake id mismatch")
+
+
+def stable_research_target_evidence_bundle_json(bundle: dict[str, Any]) -> str:
+    validate_research_target_evidence_bundle(bundle)
+    return _stable_ruflo_json(bundle, indent=2) + "\n"
+
+
+def parse_research_target_evidence_bundle_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    bundle = _json.loads(text)
+    validate_research_target_evidence_bundle(bundle)
+    return bundle
+
+
+def _research_target_candidate_template(domain: str) -> tuple[str, str, str, str]:
+    if domain == "ecommerce":
+        return ("Create source-backed ecommerce opportunity intake", "growth", "Convert ecommerce skill/product evidence into governed Link opportunity candidates.", "high")
+    if domain in {"scraping", "data_collection", "source_governance"}:
+        return ("Add governed source target planning", "business_development", "Turn local source/crawler patterns into approved source-card and evidence planning inputs.", "high")
+    if domain in {"automation", "workflow"}:
+        return ("Model workflow automation patterns safely", "shared_services", "Capture workflow, trigger/action, human input, and audit patterns without enabling execution.", "high")
+    if domain == "agent_memory":
+        return ("Add memory evidence intake patterns", "shared_services", "Convert agent memory patterns into Link-native memory evidence and review requirements.", "medium")
+    if domain == "market_research":
+        return ("Create market research evidence intake", "growth", "Use local market-research artifacts to produce evidence-backed Growth candidates.", "high")
+    if domain == "business_development":
+        return ("Create Business Development intake bridge", "business_development", "Convert reviewed Growth/source evidence into Business Development intake artifacts.", "medium")
+    return ("Review local research target for Link upgrade", "research", "Summarize this target into a Link-native upgrade candidate after human review.", "medium")
+
+
+def collect_research_target_upgrade_candidates(
+    research_target_intake: dict[str, Any] | None = None,
+    research_target_evidence_bundle: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    intake = research_target_intake or collect_research_target_intake(str(source_path or ""))
+    validate_research_target_intake(intake)
+    evidence = research_target_evidence_bundle or collect_research_target_evidence_bundle(intake)
+    validate_research_target_evidence_bundle(evidence, intake)
+    candidates = []
+    seen_candidate_keys: set[tuple[str, str]] = set()
+    for domain in intake["detected_domains"]:
+        title, module, description, expected_value = _research_target_candidate_template(domain)
+        candidate_key = (title, module)
+        if candidate_key in seen_candidate_keys:
+            continue
+        seen_candidate_keys.add(candidate_key)
+        candidate_id = "research-target-upgrade-candidate-" + _research_target_hash_text({
+            "intake_id": intake["research_target_intake_id"],
+            "module": module,
+            "title": title,
+        })[:12]
+        candidate = {
+            "upgrade_candidate_id": candidate_id,
+            "title": title,
+            "target_link_module": module,
+            "description": f"{description} Source: {intake['source_path']}.",
+            "source_refs": [item["source_ref_id"] for item in evidence["source_refs"][:5]],
+            "evidence_refs": [item["evidence_ref_id"] for item in evidence["evidence_refs"][:5]],
+            "expected_value": expected_value,
+            "risk_level": "medium" if domain in {"scraping", "ecommerce", "automation", "data_collection"} else "low",
+            "confidence_score": 75 if evidence["evidence_strength"] == "strong" else 60 if evidence["evidence_strength"] == "medium" else 40,
+            "effort_score": 4 if module in {"growth", "research"} else 6,
+            "implementation_scope": "read-only planning and evidence binding; no external execution",
+            "required_approvals": ["human review before implementation", "license/copying review"],
+            "required_tests": [
+                "python3 -m py_compile link.py link_modes/growth/link_growth_console.py tests/test_growth_pipeline.py",
+                "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_growth_pipeline.py",
+                "PYTHONDONTWRITEBYTECODE=1 python3 link_healthcheck.py",
+            ],
+            "blocked_actions": list(RESEARCH_TARGET_BLOCKED_ACTIONS),
+            "recommended_next_action": "Review this source-backed candidate before drafting an implementation slice.",
+        }
+        candidates.append(candidate)
+    if not candidates:
+        candidates.append({
+            "upgrade_candidate_id": "research-target-upgrade-candidate-" + _research_target_hash_text(intake["research_target_intake_id"])[:12],
+            "title": "Review local research target for Link upgrade",
+            "target_link_module": "research",
+            "description": f"Manual review required for {intake['source_path']}.",
+            "source_refs": [item["source_ref_id"] for item in evidence["source_refs"][:3]],
+            "evidence_refs": [item["evidence_ref_id"] for item in evidence["evidence_refs"][:3]],
+            "expected_value": "medium",
+            "risk_level": "low",
+            "confidence_score": 35,
+            "effort_score": 5,
+            "implementation_scope": "manual research review",
+            "required_approvals": ["human review before implementation"],
+            "required_tests": ["PYTHONDONTWRITEBYTECODE=1 python3 tests/test_growth_pipeline.py"],
+            "blocked_actions": list(RESEARCH_TARGET_BLOCKED_ACTIONS),
+            "recommended_next_action": "Add stronger evidence before implementation planning.",
+        })
+    blocked_candidates = []
+    if evidence["missing_evidence"]:
+        blocked_candidates.append({
+            "blocked_candidate_id": "research-target-blocked-missing-evidence",
+            "reason": "Evidence bundle has missing evidence.",
+            "missing_evidence": list(evidence["missing_evidence"]),
+        })
+    digest = _research_target_hash_text({
+        "candidate_ids": [item["upgrade_candidate_id"] for item in candidates],
+        "evidence_id": evidence["research_target_evidence_bundle_id"],
+        "intake_id": intake["research_target_intake_id"],
+        "version": RESEARCH_TARGET_UPGRADE_CANDIDATES_VERSION,
+    })[:12]
+    payload = {
+        "research_target_upgrade_candidates_version": RESEARCH_TARGET_UPGRADE_CANDIDATES_VERSION,
+        "research_target_upgrade_candidates_id": f"research-target-upgrade-candidates-{digest}",
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "research_target_evidence_bundle_id": evidence["research_target_evidence_bundle_id"],
+        "upgrade_candidates": candidates,
+        "blocked_candidates": blocked_candidates,
+        "missing_evidence": list(evidence["missing_evidence"]),
+        "recommended_next_action": "Select the highest-value source-backed candidate for a non-executable operator task draft.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_research_target_upgrade_candidates(payload, intake, evidence)
+    return payload
+
+
+def validate_research_target_upgrade_candidates(payload: dict[str, Any], research_target_intake: dict[str, Any] | None = None, research_target_evidence_bundle: dict[str, Any] | None = None) -> None:
+    required = (
+        "research_target_upgrade_candidates_version", "research_target_upgrade_candidates_id",
+        "research_target_intake_id", "research_target_evidence_bundle_id", "upgrade_candidates",
+        "blocked_candidates", "missing_evidence", "recommended_next_action", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"research target upgrade candidates missing required field: {key}")
+    if payload["research_target_upgrade_candidates_version"] != RESEARCH_TARGET_UPGRADE_CANDIDATES_VERSION:
+        raise ValueError("invalid research target upgrade candidates version")
+    if not payload["research_target_upgrade_candidates_id"].startswith("research-target-upgrade-candidates-"):
+        raise ValueError("invalid research target upgrade candidates id")
+    if not isinstance(payload["upgrade_candidates"], list) or not payload["upgrade_candidates"]:
+        raise ValueError("research target upgrade candidates must include candidates")
+    for candidate in payload["upgrade_candidates"]:
+        for key in ("upgrade_candidate_id", "title", "target_link_module", "description", "source_refs", "evidence_refs", "expected_value", "risk_level", "confidence_score", "effort_score", "implementation_scope", "required_approvals", "required_tests", "blocked_actions", "recommended_next_action"):
+            if key not in candidate:
+                raise ValueError(f"research target upgrade candidate missing field: {key}")
+        if not candidate["upgrade_candidate_id"].startswith("research-target-upgrade-candidate-"):
+            raise ValueError("invalid research target upgrade candidate id")
+        if candidate["target_link_module"] not in RESEARCH_TARGET_LINK_MODULES:
+            raise ValueError("invalid target Link module")
+        if candidate["risk_level"] not in {"low", "medium", "high"} or candidate["expected_value"] not in {"low", "medium", "high"}:
+            raise ValueError("invalid candidate risk/value")
+        for score in ("confidence_score", "effort_score"):
+            if not isinstance(candidate[score], int) or not 0 <= candidate[score] <= 100:
+                raise ValueError(f"candidate {score} must be 0..100")
+        for field in ("source_refs", "evidence_refs", "required_approvals", "required_tests", "blocked_actions"):
+            if not isinstance(candidate[field], list) or not candidate[field]:
+                raise ValueError(f"candidate {field} must be a non-empty list")
+        for action in RESEARCH_TARGET_BLOCKED_ACTIONS:
+            if action not in candidate["blocked_actions"]:
+                raise ValueError("research target candidate missing blocked action")
+    if not isinstance(payload["blocked_candidates"], list) or not isinstance(payload["missing_evidence"], list):
+        raise TypeError("blocked_candidates and missing_evidence must be lists")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("research target upgrade candidates must remain read-only")
+    if research_target_intake is not None:
+        validate_research_target_intake(research_target_intake)
+        if payload["research_target_intake_id"] != research_target_intake["research_target_intake_id"]:
+            raise ValueError("research target upgrade candidates intake id mismatch")
+    if research_target_evidence_bundle is not None:
+        validate_research_target_evidence_bundle(research_target_evidence_bundle, research_target_intake)
+        if payload["research_target_evidence_bundle_id"] != research_target_evidence_bundle["research_target_evidence_bundle_id"]:
+            raise ValueError("research target upgrade candidates evidence id mismatch")
+
+
+def stable_research_target_upgrade_candidates_json(payload: dict[str, Any]) -> str:
+    validate_research_target_upgrade_candidates(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_research_target_upgrade_candidates_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    payload = _json.loads(text)
+    validate_research_target_upgrade_candidates(payload)
+    return payload
+
+
+def _research_target_candidate_sort_key(candidate: dict[str, Any]) -> tuple[int, int, str]:
+    return (-int(candidate["confidence_score"]), int(candidate["effort_score"]), candidate["upgrade_candidate_id"])
+
+
+def _research_target_likely_files(module: str) -> list[str]:
+    if module == "growth":
+        return ["link.py", "link_modes/growth/link_growth_console.py", "tests/test_growth_pipeline.py"]
+    if module == "business_development":
+        return ["link.py", "link_modes/growth/link_growth_console.py", "tests/test_growth_pipeline.py"]
+    if module == "shared_services":
+        return ["link_modes/growth/link_growth_console.py", "tests/test_growth_pipeline.py"]
+    if module == "control_plane":
+        return ["link.py", "link_modes/growth/link_growth_console.py", "tests/test_growth_pipeline.py"]
+    return ["link_modes/growth/link_growth_console.py", "tests/test_growth_pipeline.py"]
+
+
+def collect_research_target_operator_task_draft(
+    research_target_upgrade_candidates: dict[str, Any] | None = None,
+    research_target_evidence_bundle: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    candidates_payload = research_target_upgrade_candidates
+    evidence = research_target_evidence_bundle
+    if candidates_payload is None:
+        intake = collect_research_target_intake(str(source_path or ""))
+        evidence = evidence or collect_research_target_evidence_bundle(intake)
+        candidates_payload = collect_research_target_upgrade_candidates(intake, evidence)
+    validate_research_target_upgrade_candidates(candidates_payload)
+    if evidence is None:
+        raise ValueError("research target evidence bundle is required when candidates are provided")
+    validate_research_target_evidence_bundle(evidence)
+    selected = sorted(candidates_payload["upgrade_candidates"], key=_research_target_candidate_sort_key)[0]
+    source_path_value = evidence["provenance_summary"]["source_path"]
+    digest = _research_target_hash_text({
+        "candidate_id": selected["upgrade_candidate_id"],
+        "evidence_id": evidence["research_target_evidence_bundle_id"],
+        "intake_id": candidates_payload["research_target_intake_id"],
+        "version": RESEARCH_TARGET_OPERATOR_TASK_DRAFT_VERSION,
+    })[:12]
+    draft = {
+        "research_target_operator_task_draft_version": RESEARCH_TARGET_OPERATOR_TASK_DRAFT_VERSION,
+        "research_target_operator_task_draft_id": f"research-target-operator-task-draft-{digest}",
+        "research_target_intake_id": candidates_payload["research_target_intake_id"],
+        "selected_upgrade_candidate_id": selected["upgrade_candidate_id"],
+        "objective": f"Create a Link-native, read-only implementation slice from {source_path_value}: {selected['title']}.",
+        "scope_summary": f"Use source-backed evidence from {source_path_value} to implement {selected['description']}",
+        "target_link_module": selected["target_link_module"],
+        "likely_affected_files": _research_target_likely_files(selected["target_link_module"]),
+        "required_evidence": list(selected["evidence_refs"]),
+        "required_approvals": list(selected["required_approvals"]),
+        "expected_tests": list(selected["required_tests"]),
+        "rollback_plan": [
+            "do not copy external source code",
+            "revert only the intended Link source/test edits if review rejects the slice",
+            "keep research target files unchanged",
+        ],
+        "execution_allowed": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "recommended_next_action": "Review this target-bound task draft before any implementation work.",
+        "writes": [],
+    }
+    validate_research_target_operator_task_draft(draft, candidates_payload, evidence)
+    return draft
+
+
+def validate_research_target_operator_task_draft(draft: dict[str, Any], research_target_upgrade_candidates: dict[str, Any] | None = None, research_target_evidence_bundle: dict[str, Any] | None = None) -> None:
+    required = (
+        "research_target_operator_task_draft_version", "research_target_operator_task_draft_id",
+        "research_target_intake_id", "selected_upgrade_candidate_id", "objective", "scope_summary",
+        "target_link_module", "likely_affected_files", "required_evidence", "required_approvals",
+        "expected_tests", "rollback_plan", "execution_allowed", "safety_metadata", "recommended_next_action",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in draft:
+            raise ValueError(f"research target operator task draft missing required field: {key}")
+    if draft["research_target_operator_task_draft_version"] != RESEARCH_TARGET_OPERATOR_TASK_DRAFT_VERSION:
+        raise ValueError("invalid research target operator task draft version")
+    if not draft["research_target_operator_task_draft_id"].startswith("research-target-operator-task-draft-"):
+        raise ValueError("invalid research target operator task draft id")
+    if draft["target_link_module"] not in RESEARCH_TARGET_LINK_MODULES:
+        raise ValueError("invalid research target task target module")
+    if draft["execution_allowed"] is not False:
+        raise ValueError("research target operator task draft must not allow execution")
+    for field in ("likely_affected_files", "required_evidence", "required_approvals", "expected_tests", "rollback_plan"):
+        if not isinstance(draft[field], list) or not all(isinstance(item, str) and item for item in draft[field]):
+            raise ValueError(f"research target operator task draft {field} must be non-empty strings")
+    if "research/" not in draft["objective"] or "research/" not in draft["scope_summary"]:
+        raise ValueError("research target operator task draft must reference selected research target")
+    if draft["safety_metadata"] != _read_only_safety_metadata() or draft["dry_run"] is not True or draft["write_allowed"] is not False or draft["automation_allowed"] is not False or draft["writes"] != []:
+        raise ValueError("research target operator task draft must remain read-only")
+    if research_target_upgrade_candidates is not None:
+        validate_research_target_upgrade_candidates(research_target_upgrade_candidates)
+        if draft["research_target_intake_id"] != research_target_upgrade_candidates["research_target_intake_id"]:
+            raise ValueError("research target operator task draft intake id mismatch")
+        candidate_ids = [item["upgrade_candidate_id"] for item in research_target_upgrade_candidates["upgrade_candidates"]]
+        if draft["selected_upgrade_candidate_id"] not in candidate_ids:
+            raise ValueError("research target operator task draft candidate id mismatch")
+    if research_target_evidence_bundle is not None:
+        validate_research_target_evidence_bundle(research_target_evidence_bundle)
+
+
+def stable_research_target_operator_task_draft_json(draft: dict[str, Any]) -> str:
+    validate_research_target_operator_task_draft(draft)
+    return _stable_ruflo_json(draft, indent=2) + "\n"
+
+
+def parse_research_target_operator_task_draft_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    draft = _json.loads(text)
+    validate_research_target_operator_task_draft(draft)
+    return draft
+
+
+def collect_research_target_operator_flow(
+    *,
+    source_path: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    intake = collect_research_target_intake(source_path)
+    evidence = collect_research_target_evidence_bundle(intake)
+    candidates = collect_research_target_upgrade_candidates(intake, evidence)
+    task = collect_research_target_operator_task_draft(candidates, evidence)
+    selected = next(item for item in candidates["upgrade_candidates"] if item["upgrade_candidate_id"] == task["selected_upgrade_candidate_id"])
+    warnings = []
+    if evidence["missing_evidence"]:
+        warnings.extend(evidence["missing_evidence"])
+    blocker_count = len(candidates["blocked_candidates"])
+    digest = _research_target_hash_text({
+        "candidates_id": candidates["research_target_upgrade_candidates_id"],
+        "evidence_id": evidence["research_target_evidence_bundle_id"],
+        "intake_id": intake["research_target_intake_id"],
+        "task_id": task["research_target_operator_task_draft_id"],
+        "version": RESEARCH_TARGET_OPERATOR_FLOW_VERSION,
+    })[:12]
+    flow = {
+        "research_target_operator_flow_version": RESEARCH_TARGET_OPERATOR_FLOW_VERSION,
+        "research_target_operator_flow_id": f"research-target-operator-flow-{digest}",
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "research_target_evidence_bundle_id": evidence["research_target_evidence_bundle_id"],
+        "research_target_upgrade_candidates_id": candidates["research_target_upgrade_candidates_id"],
+        "research_target_operator_task_draft_id": task["research_target_operator_task_draft_id"],
+        "selected_upgrade_summary": {
+            "upgrade_candidate_id": selected["upgrade_candidate_id"],
+            "title": selected["title"],
+            "target_link_module": selected["target_link_module"],
+            "source_path": intake["source_path"],
+        },
+        "blocker_count": blocker_count,
+        "warning_count": len(warnings),
+        "warnings": _normalize_implementation_branch_refs(warnings),
+        "recommended_next_action": "Review the target-bound task draft; do not execute it without a separate approved implementation slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_research_target_operator_flow(flow, intake, evidence, candidates, task)
+    return flow
+
+
+def validate_research_target_operator_flow(flow: dict[str, Any], research_target_intake: dict[str, Any] | None = None, research_target_evidence_bundle: dict[str, Any] | None = None, research_target_upgrade_candidates: dict[str, Any] | None = None, research_target_operator_task_draft: dict[str, Any] | None = None) -> None:
+    required = (
+        "research_target_operator_flow_version", "research_target_operator_flow_id",
+        "research_target_intake_id", "research_target_evidence_bundle_id",
+        "research_target_upgrade_candidates_id", "research_target_operator_task_draft_id",
+        "selected_upgrade_summary", "blocker_count", "warning_count", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in flow:
+            raise ValueError(f"research target operator flow missing required field: {key}")
+    if flow["research_target_operator_flow_version"] != RESEARCH_TARGET_OPERATOR_FLOW_VERSION:
+        raise ValueError("invalid research target operator flow version")
+    if not flow["research_target_operator_flow_id"].startswith("research-target-operator-flow-"):
+        raise ValueError("invalid research target operator flow id")
+    for field in ("blocker_count", "warning_count"):
+        if not isinstance(flow[field], int) or flow[field] < 0:
+            raise ValueError(f"research target operator flow {field} must be non-negative")
+    summary = flow["selected_upgrade_summary"]
+    if not isinstance(summary, dict) or not summary.get("source_path", "").startswith("research/"):
+        raise ValueError("research target operator flow summary must reference source path")
+    if flow["safety_metadata"] != _read_only_safety_metadata() or flow["dry_run"] is not True or flow["write_allowed"] is not False or flow["automation_allowed"] is not False or flow["writes"] != []:
+        raise ValueError("research target operator flow must remain read-only")
+    if research_target_intake is not None and flow["research_target_intake_id"] != research_target_intake["research_target_intake_id"]:
+        raise ValueError("research target operator flow intake id mismatch")
+    if research_target_evidence_bundle is not None and flow["research_target_evidence_bundle_id"] != research_target_evidence_bundle["research_target_evidence_bundle_id"]:
+        raise ValueError("research target operator flow evidence id mismatch")
+    if research_target_upgrade_candidates is not None and flow["research_target_upgrade_candidates_id"] != research_target_upgrade_candidates["research_target_upgrade_candidates_id"]:
+        raise ValueError("research target operator flow candidates id mismatch")
+    if research_target_operator_task_draft is not None and flow["research_target_operator_task_draft_id"] != research_target_operator_task_draft["research_target_operator_task_draft_id"]:
+        raise ValueError("research target operator flow task id mismatch")
+
+
+def stable_research_target_operator_flow_json(flow: dict[str, Any]) -> str:
+    validate_research_target_operator_flow(flow)
+    return _stable_ruflo_json(flow, indent=2) + "\n"
+
+
+def parse_research_target_operator_flow_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    flow = _json.loads(text)
+    validate_research_target_operator_flow(flow)
+    return flow
+
+
+def _research_target_cli_source_or_error(args: list[str], command_name: str) -> tuple[str | None, int | None]:
+    if "--write" in args:
+        print(f"error: research {command_name} is read-only; --write is not supported", file=sys.stderr)
+        return None, 2
+    source = _research_target_extract_source_arg(args)
+    if not source:
+        print(f"error: research {command_name} requires --source <path>", file=sys.stderr)
+        return None, 2
+    return source, None
+
+
+def _research_target_print_summary(title: str, payload: dict[str, Any], lines: list[tuple[str, Any]]) -> None:
+    print(f"{title}: {lines[0][1]}")
+    for label, value in lines[1:]:
+        print(f"{label}: {value}")
+
+
+def research_target_intake_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-intake: read-only local research target intake")
+        print("  python3 link.py research target-intake --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-intake")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_intake(source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_intake_json(payload), end="")
+    else:
+        _research_target_print_summary("Research target intake", payload, [
+            ("id", payload["research_target_intake_id"]),
+            ("source_path", payload["source_path"]),
+            ("source_type", payload["source_type"]),
+            ("file_count", payload["file_count"]),
+            ("selected refs", len(payload["selected_file_refs"])),
+            ("detected domains", ", ".join(payload["detected_domains"])),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def research_target_evidence_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-evidence: read-only target evidence bundle")
+        print("  python3 link.py research target-evidence --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-evidence")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_evidence_bundle(source_path=source)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_evidence_bundle_json(payload), end="")
+    else:
+        _research_target_print_summary("Research target evidence", payload, [
+            ("id", payload["research_target_evidence_bundle_id"]),
+            ("intake_id", payload["research_target_intake_id"]),
+            ("source refs", len(payload["source_refs"])),
+            ("evidence refs", len(payload["evidence_refs"])),
+            ("evidence_strength", payload["evidence_strength"]),
+            ("evidence_status", payload["evidence_status"]),
+            ("missing evidence", len(payload["missing_evidence"])),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def research_target_upgrades_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-upgrades: read-only target upgrade candidates")
+        print("  python3 link.py research target-upgrades --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-upgrades")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_upgrade_candidates(source_path=source)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_upgrade_candidates_json(payload), end="")
+    else:
+        top = sorted(payload["upgrade_candidates"], key=_research_target_candidate_sort_key)[0]
+        _research_target_print_summary("Research target upgrades", payload, [
+            ("id", payload["research_target_upgrade_candidates_id"]),
+            ("intake_id", payload["research_target_intake_id"]),
+            ("candidate count", len(payload["upgrade_candidates"])),
+            ("top candidate", top["title"]),
+            ("target module", top["target_link_module"]),
+            ("blocked candidates", len(payload["blocked_candidates"])),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def research_target_task_draft_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-task-draft: read-only target-bound task draft")
+        print("  python3 link.py research target-task-draft --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-task-draft")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_operator_task_draft(source_path=source)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_operator_task_draft_json(payload), end="")
+    else:
+        _research_target_print_summary("Research target task draft", payload, [
+            ("id", payload["research_target_operator_task_draft_id"]),
+            ("intake_id", payload["research_target_intake_id"]),
+            ("selected candidate", payload["selected_upgrade_candidate_id"]),
+            ("target module", payload["target_link_module"]),
+            ("affected files", len(payload["likely_affected_files"])),
+            ("execution_allowed", payload["execution_allowed"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def research_target_flow_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-flow: read-only target intake to task flow")
+        print("  python3 link.py research target-flow --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-flow")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_operator_flow(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_operator_flow_json(payload), end="")
+    else:
+        summary = payload["selected_upgrade_summary"]
+        _research_target_print_summary("Research target flow", payload, [
+            ("id", payload["research_target_operator_flow_id"]),
+            ("source_path", summary["source_path"]),
+            ("selected upgrade", summary["title"]),
+            ("target module", summary["target_link_module"]),
+            ("blocker count", payload["blocker_count"]),
+            ("warning count", payload["warning_count"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
 BUSINESS_DEVELOPMENT_INTAKE_PREVIEW_VERSION = "link-business-development-intake-preview-v1"
 BUSINESS_DEVELOPMENT_EVIDENCE_CONTRACT_VERSION = "link-business-development-evidence-contract-v1"
 BUSINESS_DEVELOPMENT_APPROVAL_CHECKLIST_VERSION = "link-business-development-approval-checklist-v1"

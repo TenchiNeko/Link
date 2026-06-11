@@ -78,6 +78,91 @@ def _sample_control_plane_proposal(
     }
 
 
+def _install_growth_collector_test_cache() -> None:
+    """Cache expensive no-arg governance collectors during this smoke suite only.
+
+    Runtime commands still build fresh payloads.  The full Growth smoke file calls
+    many deep dashboard/simulation/decision collectors repeatedly with no inputs;
+    those collectors recursively rebuild the same deterministic planning-chain
+    objects and dominate suite runtime.  This cache only applies to no-argument
+    calls inside this test process, and returns deep copies so tests can mutate
+    negative-case payloads safely.
+    """
+    import copy
+
+    import link_modes.growth.link_growth_console as growth_console
+
+    if getattr(growth_console, "_TEST_NO_ARG_CACHE_INSTALLED", False):
+        return
+
+    cache: dict[str, Any] = {}
+    collector_names = (
+        "collect_supervised_execution_review_package",
+        "collect_governance_dashboard_summary",
+        "collect_governance_risk_dashboard",
+        "collect_governance_readiness_dashboard",
+        "collect_governance_executive_review_package",
+        "collect_link_shared_services_dashboard",
+        "collect_link_control_plane_dashboard",
+        "collect_control_plane_health_package",
+        "collect_control_plane_review_package",
+        "collect_control_plane_status_summary",
+        "collect_business_execution_simulation_plan",
+        "collect_business_execution_simulation_evidence_package",
+        "collect_business_execution_simulation_review",
+        "collect_business_execution_simulation_readiness",
+        "collect_simulation_dashboard",
+        "collect_execution_gap_analysis",
+        "collect_execution_readiness_score",
+        "collect_operator_simulation_review_package",
+        "collect_simulation_remediation_plan",
+        "collect_remediation_dependency_graph",
+        "collect_remediation_priority_queue",
+        "collect_operator_remediation_review",
+        "collect_sandbox_readiness_projection",
+        "collect_sandbox_evidence_projection",
+        "collect_sandbox_approval_projection",
+        "collect_sandbox_outcome_projection",
+        "collect_sandbox_review_package",
+        "collect_decision_candidate_set",
+        "collect_decision_impact_analysis",
+        "collect_decision_ranking",
+        "collect_operator_decision_review",
+        "collect_decision_score_breakdown",
+        "collect_rejected_alternative_analysis",
+        "collect_decision_assumption_ledger",
+        "collect_operator_decision_trace_package",
+        "collect_operator_action_plan_preview",
+        "collect_operator_action_evidence_checklist",
+        "collect_operator_action_approval_checklist",
+        "collect_operator_action_review_package",
+        "collect_operator_task_draft",
+        "collect_operator_task_scope_review",
+        "collect_operator_task_test_plan",
+        "collect_operator_task_review_package",
+        "collect_sandbox_task_executor_boundary",
+        "collect_sandbox_execution_evidence_contract",
+        "collect_sandbox_execution_approval_checklist",
+        "collect_sandbox_execution_review_package",
+    )
+
+    for name in collector_names:
+        original = getattr(growth_console, name, None)
+        if original is None:
+            continue
+
+        def _cached(*args: Any, _name: str = name, _original: Any = original, **kwargs: Any) -> Any:
+            if args or kwargs:
+                return _original(*args, **kwargs)
+            if _name not in cache:
+                cache[_name] = _original()
+            return copy.deepcopy(cache[_name])
+
+        setattr(growth_console, name, _cached)
+
+    growth_console._TEST_NO_ARG_CACHE_INSTALLED = True
+
+
 # ---------------------------------------------------------------------------
 # 0. Fork lineage receipt helper -- pure model/JSON slice
 # ---------------------------------------------------------------------------
@@ -17752,11 +17837,228 @@ def check_growth_opportunity_review_package_helper() -> None:
 
     print("growth opportunity review package helper OK")
 
+
+# ---------------------------------------------------------------------------
+# Link-level research target intake and evidence bundle
+# ---------------------------------------------------------------------------
+
+def _research_target_test_paths() -> tuple[str, str, str]:
+    zip_source = "research/gpt-crawler-main.zip"
+    folder_source = "research/_extracted/sota-scan-master/sota-scan-master"
+    file_source = "research/hermes_upgrade_actionable_shortlist.md"
+    for source in (zip_source, folder_source, file_source):
+        _require((ROOT / source).exists(), f"research target test fixture must exist: {source}")
+    return zip_source, folder_source, file_source
+
+
+def check_research_target_intake_helpers() -> None:
+    from link_modes.growth.link_growth_console import (
+        collect_research_target_evidence_bundle,
+        collect_research_target_intake,
+        collect_research_target_operator_flow,
+        collect_research_target_operator_task_draft,
+        collect_research_target_upgrade_candidates,
+        parse_research_target_evidence_bundle_json,
+        parse_research_target_intake_json,
+        parse_research_target_operator_flow_json,
+        parse_research_target_operator_task_draft_json,
+        parse_research_target_upgrade_candidates_json,
+        stable_research_target_evidence_bundle_json,
+        stable_research_target_intake_json,
+        stable_research_target_operator_flow_json,
+        stable_research_target_operator_task_draft_json,
+        stable_research_target_upgrade_candidates_json,
+        validate_research_target_evidence_bundle,
+        validate_research_target_intake,
+        validate_research_target_operator_flow,
+        validate_research_target_operator_task_draft,
+        validate_research_target_upgrade_candidates,
+    )
+
+    zip_source, folder_source, file_source = _research_target_test_paths()
+    zip_intake = collect_research_target_intake(zip_source)
+    same_zip_intake = collect_research_target_intake(zip_source)
+    _require(zip_intake["research_target_intake_id"] == same_zip_intake["research_target_intake_id"],
+             "research target intake id must be deterministic")
+    _require(zip_intake["source_type"] == "zip_archive", "zip source intake must detect zip_archive")
+    _require(zip_intake["source_path"] == zip_source, "zip source path must be preserved")
+    _require(zip_intake["archive_member_refs"], "zip intake must inspect archive members without extraction")
+    _require(zip_intake["selected_file_refs"], "zip intake must include selected refs")
+    _require(zip_intake["dry_run"] is True and zip_intake["write_allowed"] is False,
+             "research target intake must be read-only")
+    _require(parse_research_target_intake_json(stable_research_target_intake_json(zip_intake)) == zip_intake,
+             "research target intake JSON must round trip")
+
+    folder_intake = collect_research_target_intake(folder_source)
+    _require(folder_intake["source_type"] == "folder", "folder source intake must detect folder")
+    _require(folder_intake["selected_file_refs"], "folder intake must include selected refs")
+    _require(folder_intake["allowed_root"] == "research/_extracted", "folder intake must use most specific allowed root")
+
+    file_intake = collect_research_target_intake(file_source)
+    _require(file_intake["source_type"] == "file", "file source intake must detect file")
+    _require(file_intake["file_count"] == 1, "file intake must count one file")
+    _require(file_intake["selected_file_refs"][0]["path"] == file_source,
+             "file intake selected ref must preserve selected source")
+
+    try:
+        collect_research_target_intake("link.py")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("research target intake must reject paths outside research")
+
+    evidence = collect_research_target_evidence_bundle(zip_intake)
+    _require(evidence["research_target_intake_id"] == zip_intake["research_target_intake_id"],
+             "research target evidence bundle must flow from intake")
+    _require(evidence["source_refs"] and evidence["evidence_refs"],
+             "research target evidence bundle must include source and evidence refs")
+    _require(evidence["provenance_summary"]["source_path"] == zip_source,
+             "research target evidence provenance must include selected source")
+    validate_research_target_evidence_bundle(evidence, zip_intake)
+    _require(parse_research_target_evidence_bundle_json(stable_research_target_evidence_bundle_json(evidence)) == evidence,
+             "research target evidence bundle JSON must round trip")
+
+    candidates = collect_research_target_upgrade_candidates(zip_intake, evidence)
+    _require(candidates["research_target_intake_id"] == zip_intake["research_target_intake_id"],
+             "research target candidates must flow from intake")
+    _require(candidates["research_target_evidence_bundle_id"] == evidence["research_target_evidence_bundle_id"],
+             "research target candidates must flow from evidence bundle")
+    _require(candidates["upgrade_candidates"], "research target upgrade candidates must be generated")
+    candidate = candidates["upgrade_candidates"][0]
+    _require(candidate["source_refs"] and candidate["evidence_refs"],
+             "research target candidate must cite source and evidence refs")
+    _require("copy external code" in candidate["blocked_actions"],
+             "research target candidate must block copying external code")
+    validate_research_target_upgrade_candidates(candidates, zip_intake, evidence)
+    _require(parse_research_target_upgrade_candidates_json(stable_research_target_upgrade_candidates_json(candidates)) == candidates,
+             "research target candidates JSON must round trip")
+
+    task = collect_research_target_operator_task_draft(candidates, evidence)
+    _require(task["research_target_intake_id"] == zip_intake["research_target_intake_id"],
+             "research target task draft must flow from intake")
+    _require(task["selected_upgrade_candidate_id"] in [item["upgrade_candidate_id"] for item in candidates["upgrade_candidates"]],
+             "research target task draft must select a generated candidate")
+    _require(zip_source in task["objective"] and zip_source in task["scope_summary"],
+             "research target task draft must reference the selected source")
+    _require(task["execution_allowed"] is False, "research target task draft must not allow execution")
+    _require(task["likely_affected_files"] and task["expected_tests"] and task["rollback_plan"],
+             "research target task draft must include files, tests, and rollback plan")
+    validate_research_target_operator_task_draft(task, candidates, evidence)
+    _require(parse_research_target_operator_task_draft_json(stable_research_target_operator_task_draft_json(task)) == task,
+             "research target task draft JSON must round trip")
+
+    flow = collect_research_target_operator_flow(source_path=zip_source)
+    _require(flow["research_target_intake_id"] == zip_intake["research_target_intake_id"],
+             "research target flow must include intake id")
+    _require(flow["research_target_evidence_bundle_id"] == evidence["research_target_evidence_bundle_id"],
+             "research target flow must include evidence id")
+    _require(flow["research_target_upgrade_candidates_id"] == candidates["research_target_upgrade_candidates_id"],
+             "research target flow must include candidate id")
+    _require(flow["research_target_operator_task_draft_id"] == task["research_target_operator_task_draft_id"],
+             "research target flow must include task id")
+    _require(flow["selected_upgrade_summary"]["source_path"] == zip_source,
+             "research target flow must reference selected source")
+    validate_research_target_operator_flow(flow, zip_intake, evidence, candidates, task)
+    _require(parse_research_target_operator_flow_json(stable_research_target_operator_flow_json(flow)) == flow,
+             "research target operator flow JSON must round trip")
+
+    bad_task = json.loads(stable_research_target_operator_task_draft_json(task))
+    bad_task["execution_allowed"] = True
+    try:
+        validate_research_target_operator_task_draft(bad_task)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("research target task draft validation must reject execution_allowed=True")
+
+    bad_intake = json.loads(stable_research_target_intake_json(zip_intake))
+    bad_intake["allowed_root"] = ".agents"
+    try:
+        validate_research_target_intake(bad_intake)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("research target intake validation must reject invalid allowed_root")
+
+    print("research target intake helpers OK")
+
+
+def check_research_target_clis() -> None:
+    from link import _cmd_research
+    from link_modes.growth.link_growth_console import (
+        parse_research_target_evidence_bundle_json,
+        parse_research_target_intake_json,
+        parse_research_target_operator_flow_json,
+        parse_research_target_operator_task_draft_json,
+        parse_research_target_upgrade_candidates_json,
+    )
+
+    zip_source, _, _ = _research_target_test_paths()
+    help_out = io.StringIO()
+    with contextlib.redirect_stdout(help_out):
+        help_rc = _cmd_research(["--help"])
+    _require(help_rc == 0, "research --help must return 0")
+    for command in ("target-intake", "target-evidence", "target-upgrades", "target-task-draft", "target-flow"):
+        _require(command in help_out.getvalue(), f"research help must include {command}")
+
+    commands = [
+        ("target-intake", parse_research_target_intake_json, "research_target_intake_id"),
+        ("target-evidence", parse_research_target_evidence_bundle_json, "research_target_evidence_bundle_id"),
+        ("target-upgrades", parse_research_target_upgrade_candidates_json, "research_target_upgrade_candidates_id"),
+        ("target-task-draft", parse_research_target_operator_task_draft_json, "research_target_operator_task_draft_id"),
+        ("target-flow", parse_research_target_operator_flow_json, "research_target_operator_flow_id"),
+    ]
+    for command, parser, id_key in commands:
+        json_out = io.StringIO()
+        with contextlib.redirect_stdout(json_out):
+            json_rc = _cmd_research([command, "--source", zip_source, "--json"])
+        _require(json_rc == 0, f"research {command} --json must return 0")
+        payload = parser(json_out.getvalue())
+        _require(id_key in payload, f"research {command} JSON must include id")
+        _require(payload["dry_run"] is True and payload["write_allowed"] is False,
+                 f"research {command} must remain read-only")
+        _require(payload["automation_allowed"] is False and payload["writes"] == [],
+                 f"research {command} must not allow automation or writes")
+        if command == "target-task-draft":
+            _require(zip_source in payload["objective"], "research target-task-draft must reference selected source")
+        if command == "target-flow":
+            _require(payload["selected_upgrade_summary"]["source_path"] == zip_source,
+                     "research target-flow must reference selected source")
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            human_rc = _cmd_research([command, "--source", zip_source])
+        _require(human_rc == 0, f"research {command} human mode must return 0")
+        _require(len(human_out.getvalue().splitlines()) <= 10,
+                 f"research {command} human mode must stay concise")
+        write_out = io.StringIO()
+        write_err = io.StringIO()
+        with contextlib.redirect_stdout(write_out), contextlib.redirect_stderr(write_err):
+            write_rc = _cmd_research([command, "--source", zip_source, "--write"])
+        _require(write_rc != 0, f"research {command} --write must be rejected")
+        _require("read-only" in write_err.getvalue(), f"research {command} --write must print clear error")
+        _require(write_out.getvalue() == "", f"research {command} --write must not print normal output")
+        missing_out = io.StringIO()
+        missing_err = io.StringIO()
+        with contextlib.redirect_stdout(missing_out), contextlib.redirect_stderr(missing_err):
+            missing_rc = _cmd_research([command, "--json"])
+        _require(missing_rc != 0, f"research {command} missing --source must be rejected")
+        _require("requires --source" in missing_err.getvalue(),
+                 f"research {command} missing --source must print clear error")
+
+    outside_err = io.StringIO()
+    with contextlib.redirect_stderr(outside_err):
+        outside_rc = _cmd_research(["target-intake", "--source", "link.py", "--json"])
+    _require(outside_rc != 0, "research target-intake must reject source outside research")
+    _require("research" in outside_err.getvalue(), "outside-source rejection must mention research")
+
+    print("research target CLIs OK")
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    _install_growth_collector_test_cache()
     check_fork_lineage_receipt_helper()
     check_transcript_snapshot_receipt_helper()
     check_growth_facade()
@@ -17856,6 +18158,8 @@ def main() -> None:
     check_operator_task_draft_clis()
     check_sandbox_executor_boundary_helpers()
     check_sandbox_executor_boundary_clis()
+    check_research_target_intake_helpers()
+    check_research_target_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

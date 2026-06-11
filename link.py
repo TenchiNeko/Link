@@ -152,6 +152,42 @@ def _cmd_modules(argv: list[str]) -> int:
     return 2
 
 
+def _cmd_research(argv: list[str]) -> int:
+    """Read-only local research target intake and evidence views."""
+    subcommand = argv[0] if argv else ""
+    if subcommand == "target-intake":
+        from link_modes.growth.link_growth_console import research_target_intake_main as _research_target_intake_main
+
+        return _research_target_intake_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-evidence":
+        from link_modes.growth.link_growth_console import research_target_evidence_main as _research_target_evidence_main
+
+        return _research_target_evidence_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-upgrades":
+        from link_modes.growth.link_growth_console import research_target_upgrades_main as _research_target_upgrades_main
+
+        return _research_target_upgrades_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-task-draft":
+        from link_modes.growth.link_growth_console import research_target_task_draft_main as _research_target_task_draft_main
+
+        return _research_target_task_draft_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-flow":
+        from link_modes.growth.link_growth_console import research_target_flow_main as _research_target_flow_main
+
+        return _research_target_flow_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand in ("-h", "--help", "help", ""):
+        print("Link research commands:")
+        print("  target-intake      Inspect a local research target without extraction")
+        print("  target-evidence    Build evidence refs for a local research target")
+        print("  target-upgrades    Preview Link upgrade candidates from a target")
+        print("  target-task-draft  Preview a target-bound operator task draft")
+        print("  target-flow        Preview target intake -> evidence -> task flow")
+        return 0
+    print(f"research: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py research --help' for subcommands.", file=sys.stderr)
+    return 2
+
+
 def _cmd_business_development(argv: list[str]) -> int:
     """Business Development governance previews."""
     subcommand = argv[0] if argv else ""
@@ -1074,6 +1110,7 @@ _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "modes": (_cmd_modes, "List Link operating modes (base/growth/business)."),
     "roles": (_cmd_roles, "List worker safety profiles and business roles."),
     "modules": (_cmd_modules, "Preview Link module boundary registry."),
+    "research": (_cmd_research, "Read-only local research target intake."),
     "business-development": (_cmd_business_development, "Business Development governance previews."),
     "business-operations": (_cmd_business_operations, "Business Operations governance previews."),
     "business": (_cmd_business, "Cross-lane business readiness governance previews."),
