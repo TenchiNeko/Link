@@ -13234,6 +13234,10 @@ ADVISOR_PROVIDER_SELECTION_BOUNDARY_VERSION = "link-advisor-provider-selection-b
 OPENROUTER_ADVISOR_CONFIG_VERSION = "link-openrouter-advisor-config-v1"
 ADVISOR_SMOKE_PLAN_VERSION = "link-advisor-smoke-plan-v1"
 ADVISOR_SMOKE_RESULT_VERSION = "link-advisor-smoke-result-v1"
+LOCAL_ADVISOR_AVAILABILITY_CARD_VERSION = "link-local-advisor-availability-card-v1"
+OPENROUTER_ADVISOR_READINESS_CARD_VERSION = "link-openrouter-advisor-readiness-card-v1"
+ADVISOR_PROVIDER_STATUS_DASHBOARD_VERSION = "link-advisor-provider-status-dashboard-v1"
+ADVISOR_PROVIDER_OPERATOR_GUIDANCE_VERSION = "link-advisor-provider-operator-guidance-v1"
 LOCAL_MODEL_PROVIDER_BOUNDARY_VERSION = "link-local-model-provider-boundary-v1"
 LOCAL_MODEL_SMOKE_PLAN_VERSION = "link-local-model-smoke-plan-v1"
 LOCAL_MODEL_SMOKE_RESULT_VERSION = "link-local-model-smoke-result-v1"
@@ -13755,6 +13759,352 @@ def parse_advisor_provider_selection_boundary_json(text: str) -> dict[str, Any]:
     import json as _json
     payload = _json.loads(text)
     validate_advisor_provider_selection_boundary(payload)
+    return payload
+
+
+def _local_endpoint_tcp_probe(endpoint: str, *, timeout: float = 0.35) -> tuple[bool, str]:
+    import socket
+    from urllib.parse import urlparse
+
+    endpoint_type = _local_advisor_endpoint_type(endpoint)
+    if endpoint_type != "local":
+        return False, "endpoint is not local-only"
+    parsed = urlparse(endpoint)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port
+    if port is None:
+        return False, "endpoint has no TCP port to check"
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True, ""
+    except OSError as exc:
+        return False, str(exc)[:200]
+
+
+def collect_local_advisor_availability_card(*, check_local: bool = False, endpoint: str | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    boundary = collect_local_model_provider_boundary(endpoint=endpoint)
+    reachable: bool | None = None
+    failure = ""
+    if check_local:
+        reachable, failure = _local_endpoint_tcp_probe(boundary["endpoint_summary"])
+    blocked = list(boundary.get("blocked_provider_candidates", [])) if boundary["endpoint_type"] != "local" else []
+    blocked_reasons = [item.get("reason", "blocked") for item in blocked if isinstance(item, dict)]
+    if boundary["endpoint_type"] != "local":
+        blocked_reasons.append("configured endpoint is not local-only")
+    provider_status = "configured"
+    if boundary["provider_status"] == "blocked" or blocked_reasons:
+        provider_status = "blocked"
+    elif check_local and reachable is False:
+        provider_status = "unavailable"
+    elif check_local and reachable is True:
+        provider_status = "reachable"
+    payload = {
+        "local_advisor_availability_card_version": LOCAL_ADVISOR_AVAILABILITY_CARD_VERSION,
+        "local_advisor_availability_card_id": "local-advisor-availability-card-" + _local_advisor_safe_hash({
+            "boundary": boundary["local_model_provider_boundary_id"],
+            "check_local": check_local,
+            "reachable": reachable,
+            "version": LOCAL_ADVISOR_AVAILABILITY_CARD_VERSION,
+        }),
+        "provider_name": "llamacpp",
+        "canonical_wrapper_path": boundary["canonical_wrapper_path"],
+        "endpoint_type": boundary["endpoint_type"],
+        "endpoint_summary": boundary["endpoint_summary"],
+        "model_name": boundary["model_name"],
+        "local_only": boundary["local_only"],
+        "endpoint_probe_performed": bool(check_local),
+        "endpoint_reachable": reachable,
+        "last_failure_summary": failure,
+        "provider_status": provider_status,
+        "blocked_reasons": blocked_reasons,
+        "recommended_next_action": "Run python3 link.py advisor local-smoke --local-model --json after starting the local llama.cpp server." if provider_status in {"configured", "unavailable"} else "Local llama.cpp endpoint is reachable; use advisor-review --local-model only for advisory inference." if provider_status == "reachable" else "Fix the local-only endpoint configuration before using the local advisor.",
+        "safety_metadata": _provider_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_advisor_availability_card(payload)
+    return payload
+
+
+def validate_local_advisor_availability_card(payload: dict[str, Any]) -> None:
+    required = ("local_advisor_availability_card_version", "local_advisor_availability_card_id", "provider_name", "canonical_wrapper_path", "endpoint_type", "endpoint_summary", "model_name", "local_only", "endpoint_probe_performed", "endpoint_reachable", "last_failure_summary", "provider_status", "blocked_reasons", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local advisor availability card missing field: {key}")
+    if payload["local_advisor_availability_card_version"] != LOCAL_ADVISOR_AVAILABILITY_CARD_VERSION:
+        raise ValueError("invalid local advisor availability card version")
+    if payload["provider_name"] != "llamacpp" or payload["canonical_wrapper_path"] != CANONICAL_LOCAL_MODEL_WRAPPER_PATH:
+        raise ValueError("local advisor availability must describe canonical llama.cpp provider")
+    if payload["endpoint_type"] != "local" or payload["local_only"] is not True:
+        raise ValueError("local advisor availability endpoint must be local-only")
+    if payload["endpoint_probe_performed"] is False and payload["endpoint_reachable"] is not None:
+        raise ValueError("endpoint reachable must be None when no probe was performed")
+    if payload["provider_status"] not in {"configured", "reachable", "unavailable", "blocked"}:
+        raise ValueError("invalid local advisor provider status")
+    text = _stable_ruflo_json(payload).lower()
+    if "sk-" in text or "bearer " in text:
+        raise ValueError("local advisor availability must not expose secrets")
+    if payload["safety_metadata"] != _provider_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local advisor availability must remain read-only")
+
+
+def stable_local_advisor_availability_card_json(payload: dict[str, Any]) -> str:
+    validate_local_advisor_availability_card(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_advisor_availability_card_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_advisor_availability_card(payload)
+    return payload
+
+
+def collect_openrouter_advisor_readiness_card(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = collect_openrouter_advisor_config()
+    payload = {
+        "openrouter_advisor_readiness_card_version": OPENROUTER_ADVISOR_READINESS_CARD_VERSION,
+        "openrouter_advisor_readiness_card_id": "openrouter-advisor-readiness-card-" + _local_advisor_safe_hash({
+            "config": config["openrouter_advisor_config_id"],
+            "version": OPENROUTER_ADVISOR_READINESS_CARD_VERSION,
+        }),
+        "provider_name": "openrouter",
+        "provider_kind": "external_paid",
+        "endpoint_type": "external",
+        "endpoint_summary": config["endpoint_summary"],
+        "opt_in_required": True,
+        "opt_in_present": config["opt_in_env_present"],
+        "api_key_required": True,
+        "api_key_present": config["api_key_present"],
+        "api_key_redacted": True,
+        "model_name": config["model_name"],
+        "enabled_for_advisor": config["enabled_for_advisor"],
+        "external_call_possible": config["external_call_possible"],
+        "paid_call_possible": True,
+        "fallback_allowed": False,
+        "blocked_reasons": list(config["blocked_reasons"]),
+        "recommended_next_action": "OpenRouter is explicit-only: use --provider openrouter --openrouter only after intentional paid-provider opt-in." if config["enabled_for_advisor"] else "Keep OpenRouter disabled unless paid advisor use is intentional; set LINK_ALLOW_OPENROUTER_ADVISOR=1 and provide OPENROUTER_API_KEY only when needed.",
+        "safety_metadata": _provider_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_openrouter_advisor_readiness_card(payload)
+    return payload
+
+
+def validate_openrouter_advisor_readiness_card(payload: dict[str, Any]) -> None:
+    required = ("openrouter_advisor_readiness_card_version", "openrouter_advisor_readiness_card_id", "provider_name", "provider_kind", "endpoint_type", "endpoint_summary", "opt_in_required", "opt_in_present", "api_key_required", "api_key_present", "api_key_redacted", "model_name", "enabled_for_advisor", "external_call_possible", "paid_call_possible", "fallback_allowed", "blocked_reasons", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"openrouter readiness card missing field: {key}")
+    if payload["provider_name"] != "openrouter" or payload["provider_kind"] != "external_paid" or payload["endpoint_type"] != "external":
+        raise ValueError("OpenRouter readiness card must describe external paid provider")
+    if payload["opt_in_required"] is not True or payload["api_key_required"] is not True or payload["api_key_redacted"] is not True:
+        raise ValueError("OpenRouter readiness must require opt-in and redacted API key")
+    if payload["fallback_allowed"] is not False:
+        raise ValueError("OpenRouter fallback must be disabled")
+    if payload["enabled_for_advisor"] is True and (not payload["opt_in_present"] or not payload["api_key_present"]):
+        raise ValueError("OpenRouter readiness cannot be enabled without opt-in and API key presence")
+    text = _stable_ruflo_json(payload).lower()
+    if "sk-" in text or "bearer " in text:
+        raise ValueError("OpenRouter readiness must not expose secrets")
+    if payload["safety_metadata"] != _provider_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("OpenRouter readiness must remain read-only")
+
+
+def stable_openrouter_advisor_readiness_card_json(payload: dict[str, Any]) -> str:
+    validate_openrouter_advisor_readiness_card(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_openrouter_advisor_readiness_card_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_openrouter_advisor_readiness_card(payload)
+    return payload
+
+
+def _advisor_provider_summary(provider: str, status: str, next_action: str, blockers: list[str] | None = None) -> dict[str, Any]:
+    return {"provider_name": provider, "status": status, "blocked_reasons": list(blockers or []), "recommended_next_action": next_action}
+
+
+def collect_advisor_provider_status_dashboard(*, check_local: bool = False, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    registry = collect_advisor_provider_registry()
+    local = collect_local_advisor_availability_card(check_local=check_local)
+    openrouter = collect_openrouter_advisor_readiness_card()
+    default_selection = collect_advisor_provider_selection_boundary(command_context="advisor status default")
+    local_selection = collect_advisor_provider_selection_boundary(requested_provider="llamacpp", explicit_provider_flag=True, command_context="advisor status local")
+    openrouter_selection = collect_advisor_provider_selection_boundary(requested_provider="openrouter", explicit_provider_flag=True, command_context="advisor status openrouter")
+    local_summary = _advisor_provider_summary("llamacpp", local["provider_status"], local["recommended_next_action"], local["blocked_reasons"])
+    local_summary.update({
+        "endpoint_summary": local["endpoint_summary"],
+        "endpoint_probe_performed": local["endpoint_probe_performed"],
+        "endpoint_reachable": local["endpoint_reachable"],
+    })
+    openrouter_summary = _advisor_provider_summary("openrouter", "enabled" if openrouter["enabled_for_advisor"] else "disabled", openrouter["recommended_next_action"], openrouter["blocked_reasons"])
+    openrouter_summary.update({
+        "opt_in_present": openrouter["opt_in_present"],
+        "api_key_present": openrouter["api_key_present"],
+        "api_key_redacted": openrouter["api_key_redacted"],
+        "paid_call_possible": openrouter["paid_call_possible"],
+    })
+    blockers = list(local["blocked_reasons"]) + list(openrouter["blocked_reasons"])
+    warnings = ["OpenRouter is external and paid; it is explicit-only and never fallback."]
+    if local["endpoint_probe_performed"] is False:
+        warnings.append("Local endpoint reachability was not checked; run advisor local-status --check-local --json if needed.")
+    payload = {
+        "advisor_provider_status_dashboard_version": ADVISOR_PROVIDER_STATUS_DASHBOARD_VERSION,
+        "advisor_provider_status_dashboard_id": "advisor-provider-status-dashboard-" + _local_advisor_safe_hash({
+            "registry": registry["advisor_provider_registry_id"],
+            "local": local["local_advisor_availability_card_id"],
+            "openrouter": openrouter["openrouter_advisor_readiness_card_id"],
+            "check_local": check_local,
+            "version": ADVISOR_PROVIDER_STATUS_DASHBOARD_VERSION,
+        }),
+        "default_provider": "llamacpp",
+        "selected_provider_preview": default_selection["selected_provider"],
+        "local_status": local_summary,
+        "openrouter_status": openrouter_summary,
+        "provider_count": len(registry["available_providers"]),
+        "available_provider_count": len([p for p in registry["available_providers"] if not p["provider_status"].startswith("blocked")]),
+        "blocked_provider_count": len(registry["blocked_providers"]),
+        "external_provider_count": len([p for p in registry["available_providers"] if p["external_network_required"]]),
+        "paid_provider_count": len([p for p in registry["available_providers"] if p["paid_provider"]]),
+        "fallback_policy": registry["fallback_policy"],
+        "selection_previews": [default_selection["advisor_provider_selection_boundary_id"], local_selection["advisor_provider_selection_boundary_id"], openrouter_selection["advisor_provider_selection_boundary_id"]],
+        "blockers": blockers or ["no blocking provider configuration issues for default preview mode"],
+        "warnings": warnings,
+        "recommended_next_action": "Use local llama.cpp by default. Start/check the local endpoint before --local-model; keep OpenRouter disabled unless explicitly needed.",
+        "safety_metadata": _provider_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_advisor_provider_status_dashboard(payload)
+    return payload
+
+
+def validate_advisor_provider_status_dashboard(payload: dict[str, Any]) -> None:
+    required = ("advisor_provider_status_dashboard_version", "advisor_provider_status_dashboard_id", "default_provider", "selected_provider_preview", "local_status", "openrouter_status", "provider_count", "available_provider_count", "blocked_provider_count", "external_provider_count", "paid_provider_count", "fallback_policy", "blockers", "warnings", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"advisor provider status dashboard missing field: {key}")
+    if payload["default_provider"] != "llamacpp" or payload["selected_provider_preview"] != "llamacpp":
+        raise ValueError("advisor provider status dashboard must preserve local default")
+    if "No fallback" not in payload["fallback_policy"] and "no fallback" not in payload["fallback_policy"].lower():
+        raise ValueError("advisor provider status dashboard must state no fallback")
+    for field in ("local_status", "openrouter_status"):
+        if not isinstance(payload[field], dict) or "provider_name" not in payload[field] or "recommended_next_action" not in payload[field]:
+            raise ValueError(f"advisor provider status dashboard {field} must be compact summary")
+    text = _stable_ruflo_json(payload).lower()
+    if "sk-" in text or "bearer " in text:
+        raise ValueError("advisor provider status dashboard must not expose secrets")
+    if payload["safety_metadata"] != _provider_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("advisor provider status dashboard must remain read-only")
+
+
+def stable_advisor_provider_status_dashboard_json(payload: dict[str, Any]) -> str:
+    validate_advisor_provider_status_dashboard(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_advisor_provider_status_dashboard_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_advisor_provider_status_dashboard(payload)
+    return payload
+
+
+def collect_advisor_provider_operator_guidance(*, check_local: bool = False, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    dashboard = collect_advisor_provider_status_dashboard(check_local=check_local)
+    local_status = dashboard["local_status"]["status"]
+    openrouter_status = dashboard["openrouter_status"]["status"]
+    safe_next_actions = [
+        "Run python3 link.py advisor status to review provider readiness.",
+        "Run python3 link.py advisor local-smoke --local-model --json only after starting the local llama.cpp server.",
+        "Run research advisor-review with --local-model only after local smoke succeeds.",
+        "Keep OpenRouter disabled unless paid external advisor use is intentionally required.",
+    ]
+    setup_steps = [
+        "Start the local llama.cpp-compatible server on the configured local endpoint.",
+        "Use LINK_LLAMACPP_BASE_URL only for localhost/127.0.0.1/local socket endpoints.",
+        "For OpenRouter, set LINK_ALLOW_OPENROUTER_ADVISOR=1 and pass --openrouter only when explicitly intended.",
+    ]
+    payload = {
+        "advisor_provider_operator_guidance_version": ADVISOR_PROVIDER_OPERATOR_GUIDANCE_VERSION,
+        "advisor_provider_operator_guidance_id": "advisor-provider-operator-guidance-" + _local_advisor_safe_hash({
+            "dashboard": dashboard["advisor_provider_status_dashboard_id"],
+            "version": ADVISOR_PROVIDER_OPERATOR_GUIDANCE_VERSION,
+        }),
+        "provider_status_dashboard_id": dashboard["advisor_provider_status_dashboard_id"],
+        "current_mode": f"local={local_status}; openrouter={openrouter_status}",
+        "recommended_mode": "local_first_preview_then_explicit_local_model" if local_status != "reachable" else "local_model_advisor_available",
+        "safe_next_actions": safe_next_actions,
+        "blocked_actions": [
+            "automatic fallback to OpenRouter",
+            "hidden paid model calls",
+            "model approval decisions",
+            "model execution decisions",
+            "model-driven file writes",
+        ],
+        "setup_steps": setup_steps,
+        "smoke_test_commands": [
+            "python3 link.py advisor local-status --check-local --json",
+            "python3 link.py advisor local-smoke --local-model --json",
+            "python3 link.py advisor smoke --provider llamacpp --local-model --json",
+        ],
+        "advisory_use_cases": [
+            "research pattern critique",
+            "operator report wording critique",
+            "task draft specificity review",
+            "missing evidence suggestions",
+        ],
+        "warnings": dashboard["warnings"] + ["Advisor output is never approval authority."],
+        "recommended_next_action": "Start/check local llama.cpp first; do not enable OpenRouter unless a paid external advisor is explicitly desired.",
+        "safety_metadata": _provider_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_advisor_provider_operator_guidance(payload)
+    return payload
+
+
+def validate_advisor_provider_operator_guidance(payload: dict[str, Any]) -> None:
+    required = ("advisor_provider_operator_guidance_version", "advisor_provider_operator_guidance_id", "provider_status_dashboard_id", "current_mode", "recommended_mode", "safe_next_actions", "blocked_actions", "setup_steps", "smoke_test_commands", "advisory_use_cases", "warnings", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"advisor provider guidance missing field: {key}")
+    if "automatic fallback to OpenRouter" not in payload["blocked_actions"]:
+        raise ValueError("advisor guidance must block OpenRouter fallback")
+    if not any("local-smoke" in item for item in payload["smoke_test_commands"]):
+        raise ValueError("advisor guidance must include local smoke command")
+    text = _stable_ruflo_json(payload).lower()
+    if "sk-" in text or "bearer " in text:
+        raise ValueError("advisor guidance must not expose secrets")
+    if payload["safety_metadata"] != _provider_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("advisor guidance must remain read-only")
+
+
+def stable_advisor_provider_operator_guidance_json(payload: dict[str, Any]) -> str:
+    validate_advisor_provider_operator_guidance(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_advisor_provider_operator_guidance_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_advisor_provider_operator_guidance(payload)
     return payload
 
 
@@ -16577,6 +16927,157 @@ def advisor_smoke_main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    return 0
+
+
+def _print_advisor_status_dashboard(payload: dict[str, Any]) -> None:
+    local = payload["local_status"]
+    openrouter = payload["openrouter_status"]
+    reachable = "not checked"
+    if local.get("endpoint_probe_performed"):
+        reachable = "yes" if local.get("endpoint_reachable") else "no"
+    opt_in = "present" if openrouter.get("opt_in_present") else "missing"
+    api_key = "present redacted" if openrouter.get("api_key_present") else "missing"
+    print("Advisor Provider Status")
+    print("Default:")
+    print(f"  provider: {payload['default_provider']}")
+    print(f"  status: {local['status']}")
+    print("Local llama.cpp:")
+    print(f"  endpoint: {local.get('endpoint_summary', 'unknown')}")
+    print(f"  reachable: {reachable}")
+    print(f"  status: {local['status']}")
+    print(f"  next: {local['recommended_next_action']}")
+    print("OpenRouter:")
+    print(f"  status: {openrouter['status']}")
+    print(f"  opt-in: {opt_in}")
+    print(f"  api key: {api_key}")
+    print("  explicit-only: yes")
+    print("  paid provider: yes")
+    print(f"  next: {openrouter['recommended_next_action']}")
+    print("Fallback:")
+    print("  disabled")
+    print("Next action:")
+    print(f"  {payload['recommended_next_action']}")
+
+
+def _print_advisor_guidance(payload: dict[str, Any]) -> None:
+    print("Advisor Provider Guidance")
+    print(f"current_mode: {payload['current_mode']}")
+    print(f"recommended_mode: {payload['recommended_mode']}")
+    print("safe_next_actions:")
+    for item in payload["safe_next_actions"][:5]:
+        print(f"  - {item}")
+    print("blocked_actions:")
+    for item in payload["blocked_actions"][:5]:
+        print(f"  - {item}")
+    print("smoke_test_commands:")
+    for item in payload["smoke_test_commands"][:3]:
+        print(f"  - {item}")
+    print(f"next_action: {payload['recommended_next_action']}")
+
+
+def advisor_local_status_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor local-status: local llama.cpp availability card")
+        print("  python3 link.py advisor local-status --json")
+        print("  python3 link.py advisor local-status --check-local --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor local-status is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_local_advisor_availability_card(check_local="--check-local" in args)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_advisor_availability_card_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor local status", payload, [
+            ("provider", payload["provider_name"]),
+            ("endpoint", payload["endpoint_summary"]),
+            ("endpoint_type", payload["endpoint_type"]),
+            ("probe_performed", payload["endpoint_probe_performed"]),
+            ("reachable", payload["endpoint_reachable"]),
+            ("status", payload["provider_status"]),
+            ("next", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def advisor_openrouter_status_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor openrouter-status: redacted OpenRouter readiness card")
+        print("  python3 link.py advisor openrouter-status --json")
+        print("Read-only. No network call is made. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor openrouter-status is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_openrouter_advisor_readiness_card()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_openrouter_advisor_readiness_card_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor OpenRouter status", payload, [
+            ("provider", payload["provider_name"]),
+            ("enabled", payload["enabled_for_advisor"]),
+            ("opt_in_present", payload["opt_in_present"]),
+            ("api_key_present", payload["api_key_present"]),
+            ("paid_call_possible", payload["paid_call_possible"]),
+            ("fallback_allowed", payload["fallback_allowed"]),
+            ("next", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def advisor_status_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor status: compact provider readiness dashboard")
+        print("  python3 link.py advisor status --json")
+        print("Read-only. No model calls. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor status is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_advisor_provider_status_dashboard()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_advisor_provider_status_dashboard_json(payload), end="")
+    else:
+        _print_advisor_status_dashboard(payload)
+    return 0
+
+
+def advisor_guidance_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor guidance: operator next steps for advisor providers")
+        print("  python3 link.py advisor guidance --json")
+        print("Read-only. No model calls. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor guidance is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_advisor_provider_operator_guidance()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_advisor_provider_operator_guidance_json(payload), end="")
+    else:
+        _print_advisor_guidance(payload)
     return 0
 
 

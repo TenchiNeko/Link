@@ -258,6 +258,22 @@ def _cmd_advisor(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import advisor_openrouter_config_main as _advisor_openrouter_config_main
 
         return _advisor_openrouter_config_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "local-status":
+        from link_modes.growth.link_growth_console import advisor_local_status_main as _advisor_local_status_main
+
+        return _advisor_local_status_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "openrouter-status":
+        from link_modes.growth.link_growth_console import advisor_openrouter_status_main as _advisor_openrouter_status_main
+
+        return _advisor_openrouter_status_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "status":
+        from link_modes.growth.link_growth_console import advisor_status_main as _advisor_status_main
+
+        return _advisor_status_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "guidance":
+        from link_modes.growth.link_growth_console import advisor_guidance_main as _advisor_guidance_main
+
+        return _advisor_guidance_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "smoke":
         from link_modes.growth.link_growth_console import advisor_smoke_main as _advisor_smoke_main
 
@@ -275,6 +291,10 @@ def _cmd_advisor(argv: list[str]) -> int:
         print("  providers         Preview advisor provider registry")
         print("  provider-boundary Preview canonical local llama.cpp provider boundary")
         print("  openrouter-config Preview redacted OpenRouter advisor config")
+        print("  local-status      Preview local llama.cpp availability")
+        print("  openrouter-status Preview redacted OpenRouter readiness")
+        print("  status            Show compact advisor provider status")
+        print("  guidance          Show advisor provider operator guidance")
         print("  smoke             Preview or run explicit provider smoke")
         print("  local-smoke       Preview or run bounded local llama.cpp smoke")
         print("  local-config      Preview safe local model advisor configuration")

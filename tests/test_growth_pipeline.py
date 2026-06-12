@@ -18978,51 +18978,66 @@ def check_local_model_advisor_foundation_helpers() -> None:
     from link_modes.growth.link_growth_console import (
         collect_advisor_provider_registry,
         collect_advisor_provider_selection_boundary,
+        collect_advisor_provider_operator_guidance,
+        collect_advisor_provider_status_dashboard,
         collect_advisor_smoke_plan,
         collect_advisor_smoke_result,
         collect_local_model_advisor_comparison_card,
         collect_local_model_advisor_config,
         collect_local_model_advisor_metadata,
+        collect_local_advisor_availability_card,
         collect_local_model_provider_boundary,
         collect_local_model_research_advisor_review,
         collect_local_model_smoke_plan,
         collect_local_model_smoke_result,
         collect_openrouter_advisor_config,
+        collect_openrouter_advisor_readiness_card,
         collect_research_advisor_prompt_package,
         parse_advisor_provider_registry_json,
         parse_advisor_provider_selection_boundary_json,
+        parse_advisor_provider_operator_guidance_json,
+        parse_advisor_provider_status_dashboard_json,
         parse_advisor_smoke_plan_json,
         parse_advisor_smoke_result_json,
         parse_advisor_provider_registry_json,
         parse_advisor_smoke_plan_json,
         parse_local_model_advisor_comparison_card_json,
         parse_local_model_advisor_config_json,
+        parse_local_advisor_availability_card_json,
         parse_local_model_advisor_metadata_json,
         parse_local_model_provider_boundary_json,
         parse_local_model_research_advisor_review_json,
         parse_local_model_smoke_plan_json,
         parse_local_model_smoke_result_json,
         parse_openrouter_advisor_config_json,
+        parse_openrouter_advisor_readiness_card_json,
         parse_research_advisor_prompt_package_json,
         stable_advisor_provider_registry_json,
         stable_advisor_provider_selection_boundary_json,
+        stable_advisor_provider_operator_guidance_json,
+        stable_advisor_provider_status_dashboard_json,
         stable_advisor_smoke_plan_json,
         stable_advisor_smoke_result_json,
         stable_local_model_advisor_comparison_card_json,
         stable_local_model_advisor_config_json,
+        stable_local_advisor_availability_card_json,
         stable_local_model_advisor_metadata_json,
         stable_local_model_provider_boundary_json,
         stable_local_model_research_advisor_review_json,
         stable_local_model_smoke_plan_json,
         stable_local_model_smoke_result_json,
         stable_openrouter_advisor_config_json,
+        stable_openrouter_advisor_readiness_card_json,
         stable_research_advisor_prompt_package_json,
         validate_advisor_provider_registry,
         validate_advisor_provider_selection_boundary,
+        validate_advisor_provider_operator_guidance,
+        validate_advisor_provider_status_dashboard,
         validate_advisor_smoke_plan,
         validate_advisor_smoke_result,
         validate_local_model_advisor_comparison_card,
         validate_local_model_advisor_config,
+        validate_local_advisor_availability_card,
         validate_local_model_advisor_metadata,
         validate_local_model_provider_boundary,
         validate_local_model_research_advisor_review,
@@ -19030,6 +19045,7 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_local_model_smoke_plan,
         validate_local_model_smoke_result,
         validate_openrouter_advisor_config,
+        validate_openrouter_advisor_readiness_card,
         validate_research_advisor_prompt_package,
     )
 
@@ -19053,6 +19069,58 @@ def check_local_model_advisor_foundation_helpers() -> None:
     validate_openrouter_advisor_config(openrouter_config)
     _require(parse_openrouter_advisor_config_json(stable_openrouter_advisor_config_json(openrouter_config)) == openrouter_config,
              "OpenRouter config JSON must round trip")
+
+    local_status = collect_local_advisor_availability_card()
+    _require(local_status["provider_name"] == "llamacpp" and local_status["endpoint_probe_performed"] is False,
+             "local advisor status must default to no-probe llama.cpp")
+    _require(local_status["endpoint_type"] == "local" and local_status["local_only"] is True,
+             "local advisor status must recognize local-only endpoint")
+    validate_local_advisor_availability_card(local_status)
+    _require(parse_local_advisor_availability_card_json(stable_local_advisor_availability_card_json(local_status)) == local_status,
+             "local advisor status JSON must round trip")
+    probed_status = json.loads(stable_local_advisor_availability_card_json(local_status))
+    probed_status["endpoint_probe_performed"] = True
+    probed_status["endpoint_reachable"] = False
+    probed_status["last_failure_summary"] = "fixture unavailable"
+    probed_status["provider_status"] = "unavailable"
+    validate_local_advisor_availability_card(probed_status)
+    try:
+        collect_local_advisor_availability_card(endpoint="https://openrouter.ai/api")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("external local advisor status endpoint must be rejected")
+
+    openrouter_status = collect_openrouter_advisor_readiness_card()
+    _require(openrouter_status["provider_name"] == "openrouter" and openrouter_status["fallback_allowed"] is False,
+             "OpenRouter status must block fallback")
+    _require(openrouter_status["api_key_redacted"] is True,
+             "OpenRouter status must redact API key state")
+    _require(openrouter_status["enabled_for_advisor"] is False or (openrouter_status["opt_in_present"] and openrouter_status["api_key_present"]),
+             "OpenRouter status can only be enabled with opt-in and key presence")
+    validate_openrouter_advisor_readiness_card(openrouter_status)
+    _require(parse_openrouter_advisor_readiness_card_json(stable_openrouter_advisor_readiness_card_json(openrouter_status)) == openrouter_status,
+             "OpenRouter status JSON must round trip")
+
+    dashboard = collect_advisor_provider_status_dashboard()
+    _require(dashboard["default_provider"] == "llamacpp" and dashboard["selected_provider_preview"] == "llamacpp",
+             "advisor status dashboard must preserve local default")
+    _require(dashboard["local_status"]["provider_name"] == "llamacpp" and dashboard["openrouter_status"]["provider_name"] == "openrouter",
+             "advisor status dashboard must summarize local and OpenRouter providers")
+    _require("fallback" in dashboard["fallback_policy"].lower(),
+             "advisor status dashboard must expose fallback policy")
+    validate_advisor_provider_status_dashboard(dashboard)
+    _require(parse_advisor_provider_status_dashboard_json(stable_advisor_provider_status_dashboard_json(dashboard)) == dashboard,
+             "advisor status dashboard JSON must round trip")
+
+    guidance = collect_advisor_provider_operator_guidance()
+    _require("automatic fallback to OpenRouter" in guidance["blocked_actions"],
+             "advisor guidance must block OpenRouter fallback")
+    _require(any("local-smoke" in item for item in guidance["smoke_test_commands"]),
+             "advisor guidance must include local smoke next step")
+    validate_advisor_provider_operator_guidance(guidance)
+    _require(parse_advisor_provider_operator_guidance_json(stable_advisor_provider_operator_guidance_json(guidance)) == guidance,
+             "advisor provider guidance JSON must round trip")
 
     default_selection = collect_advisor_provider_selection_boundary(command_context="test")
     _require(default_selection["selected_provider"] == "llamacpp" and default_selection["fallback_provider"] is None,
@@ -19303,13 +19371,17 @@ def check_local_model_advisor_clis() -> None:
     from link import _cmd_advisor, _cmd_research
     from link_modes.growth.link_growth_console import (
         parse_advisor_provider_registry_json,
+        parse_advisor_provider_operator_guidance_json,
+        parse_advisor_provider_status_dashboard_json,
         parse_advisor_smoke_plan_json,
         parse_local_model_advisor_comparison_card_json,
+        parse_local_advisor_availability_card_json,
         parse_local_model_advisor_config_json,
         parse_local_model_provider_boundary_json,
         parse_local_model_research_advisor_review_json,
         parse_local_model_smoke_plan_json,
         parse_openrouter_advisor_config_json,
+        parse_openrouter_advisor_readiness_card_json,
     )
 
     zip_source, _, _ = _research_target_test_paths()
@@ -19326,6 +19398,45 @@ def check_local_model_advisor_clis() -> None:
     _require(openrouter_config_rc == 0, "advisor openrouter-config --json must return 0")
     openrouter_config = parse_openrouter_advisor_config_json(openrouter_config_out.getvalue())
     _require(openrouter_config["api_key_redacted"] is True, "advisor openrouter-config must redact API key")
+
+    local_status_out = io.StringIO()
+    with contextlib.redirect_stdout(local_status_out):
+        local_status_rc = _cmd_advisor(["local-status", "--json"])
+    _require(local_status_rc == 0, "advisor local-status --json must return 0")
+    local_status = parse_local_advisor_availability_card_json(local_status_out.getvalue())
+    _require(local_status["endpoint_probe_performed"] is False, "advisor local-status default must not probe")
+
+    openrouter_status_out = io.StringIO()
+    with contextlib.redirect_stdout(openrouter_status_out):
+        openrouter_status_rc = _cmd_advisor(["openrouter-status", "--json"])
+    _require(openrouter_status_rc == 0, "advisor openrouter-status --json must return 0")
+    openrouter_status = parse_openrouter_advisor_readiness_card_json(openrouter_status_out.getvalue())
+    _require(openrouter_status["fallback_allowed"] is False, "advisor openrouter-status must block fallback")
+
+    status_out = io.StringIO()
+    with contextlib.redirect_stdout(status_out):
+        status_rc = _cmd_advisor(["status", "--json"])
+    _require(status_rc == 0, "advisor status --json must return 0")
+    status = parse_advisor_provider_status_dashboard_json(status_out.getvalue())
+    _require(status["default_provider"] == "llamacpp", "advisor status must preserve local default")
+
+    guidance_out = io.StringIO()
+    with contextlib.redirect_stdout(guidance_out):
+        guidance_rc = _cmd_advisor(["guidance", "--json"])
+    _require(guidance_rc == 0, "advisor guidance --json must return 0")
+    guidance = parse_advisor_provider_operator_guidance_json(guidance_out.getvalue())
+    _require("automatic fallback to OpenRouter" in guidance["blocked_actions"], "advisor guidance must block fallback")
+
+    human_status_out = io.StringIO()
+    with contextlib.redirect_stdout(human_status_out):
+        human_status_rc = _cmd_advisor(["status"])
+    human_status = human_status_out.getvalue()
+    _require(human_status_rc == 0, "advisor status human summary must return 0")
+    _require(not human_status.lstrip().startswith("{"), "advisor status non-JSON must not dump JSON")
+    _require("llamacpp" in human_status and "OpenRouter" in human_status and "Fallback" in human_status,
+             "advisor status non-JSON must name providers and fallback")
+    _require("Next action" in human_status and len(human_status.splitlines()) < 80,
+             "advisor status non-JSON must be compact and actionable")
 
     provider_smoke_out = io.StringIO()
     with contextlib.redirect_stdout(provider_smoke_out):
@@ -19355,7 +19466,7 @@ def check_local_model_advisor_clis() -> None:
     _require(config_rc == 0, "advisor local-config --json must return 0")
     config = parse_local_model_advisor_config_json(config_out.getvalue())
     _require(config["write_allowed"] is False, "advisor local-config must be read-only")
-    for command in ("providers", "provider-boundary", "openrouter-config", "smoke", "local-smoke", "local-config"):
+    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config"):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_advisor([command, "--write"])
