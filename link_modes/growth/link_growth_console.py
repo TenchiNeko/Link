@@ -13482,6 +13482,194 @@ def _research_target_print_summary(title: str, payload: dict[str, Any], lines: l
         print(f"{label}: {value}")
 
 
+def _source_aware_text(value: Any, *, fallback: str = "not available", max_chars: int = 180) -> str:
+    if value is None:
+        return fallback
+    text = str(value).strip()
+    if not text:
+        return fallback
+    if len(text) > max_chars:
+        return text[: max_chars - 3].rstrip() + "..."
+    return text
+
+
+def _source_aware_first(payloads: list[dict[str, Any] | None], keys: tuple[str, ...], *, fallback: Any = None) -> Any:
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        for key in keys:
+            value = payload.get(key)
+            if value not in (None, "", []):
+                return value
+    return fallback
+
+
+def _source_aware_refs(payloads: list[dict[str, Any] | None], keys: tuple[str, ...], *, limit: int = 3) -> list[str]:
+    refs: list[str] = []
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        for key in keys:
+            values = payload.get(key)
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if isinstance(item, dict):
+                    text = item.get("provenance_path") or item.get("display_path") or item.get("path") or item.get("source_ref_id") or item.get("evidence_ref_id")
+                else:
+                    text = item
+                text = _source_aware_text(text, fallback="", max_chars=140)
+                if text and text not in refs:
+                    refs.append(text)
+                if len(refs) >= limit:
+                    return refs
+    return refs
+
+
+def _source_aware_list_lines(values: Any, *, limit: int = 3, fallback: str = "not available") -> list[str]:
+    if not isinstance(values, list) or not values:
+        return [f"    - {fallback}"]
+    lines = [f"    - {_source_aware_text(value, max_chars=150)}" for value in values[:limit]]
+    if len(values) > limit:
+        lines.append(f"    - ... {len(values) - limit} more")
+    return lines
+
+
+def render_source_aware_evidence_table(payload: dict[str, Any], *, operator_report: dict[str, Any] | None = None) -> list[str]:
+    payloads = [operator_report, payload]
+    strength = _source_aware_first(payloads, ("evidence_strength", "evidence_status"), fallback="review_required")
+    source_refs = _source_aware_refs(payloads, ("source_refs_summary", "source_refs"), limit=3)
+    evidence_refs = _source_aware_refs(payloads, ("evidence_refs_summary", "evidence_refs"), limit=3)
+    lines = [
+        "Evidence / Provenance:",
+        f"  strength/status: {_source_aware_text(strength)}",
+    ]
+    if evidence_refs:
+        lines.append("  evidence refs:")
+        lines.extend(f"    - {ref}" for ref in evidence_refs)
+    if source_refs:
+        lines.append("  source refs:")
+        lines.extend(f"    - {ref}" for ref in source_refs)
+    if not evidence_refs and not source_refs:
+        lines.append("  refs: not available")
+    return lines
+
+
+def render_source_aware_decision_card(payload: dict[str, Any], *, decision_card: dict[str, Any] | None = None, operator_report: dict[str, Any] | None = None) -> list[str]:
+    payloads = [decision_card, operator_report, payload]
+    recommendation = _source_aware_first(payloads, ("decision_recommendation", "review_recommendation"), fallback="review selected source-bound candidate")
+    why = _source_aware_first(payloads, ("why_this_candidate", "selected_upgrade_summary"), fallback="selected by deterministic source-aware ranking")
+    selected = _source_aware_first(payloads, ("selected_upgrade_title", "selected_upgrade_candidate_id"), fallback="not available")
+    top_candidate = _source_aware_first(payloads, ("top_candidate_id",), fallback="not available")
+    return [
+        "Decision:",
+        f"  recommendation: {_source_aware_text(recommendation, max_chars=160)}",
+        f"  selected: {_source_aware_text(selected, max_chars=140)}",
+        f"  top candidate: {_source_aware_text(top_candidate, max_chars=120)}",
+        f"  why: {_source_aware_text(why, max_chars=220)}",
+    ]
+
+
+def render_source_aware_task_card(payload: dict[str, Any], *, implementation_preview: dict[str, Any] | None = None, operator_review: dict[str, Any] | None = None, operator_report: dict[str, Any] | None = None) -> list[str]:
+    payloads = [implementation_preview, operator_review, operator_report, payload]
+    summary = _source_aware_first(payloads, ("task_draft_summary",), fallback={})
+    objective = _source_aware_first(payloads, ("objective", "implementation_scope"), fallback=summary.get("objective") if isinstance(summary, dict) else None)
+    files = _source_aware_first(payloads, ("likely_affected_files", "allowed_file_scope"), fallback=[])
+    tests = _source_aware_first(payloads, ("expected_tests",), fallback=[])
+    execution_allowed = _source_aware_first(payloads, ("execution_allowed",), fallback=summary.get("execution_allowed") if isinstance(summary, dict) else False)
+    lines = [
+        "Task Draft:",
+        f"  summary: {_source_aware_text(objective, max_chars=190)}",
+        f"  execution_allowed: {execution_allowed}",
+        "  affected files:",
+    ]
+    lines.extend(_source_aware_list_lines(files, limit=3))
+    lines.append("  expected tests:")
+    lines.extend(_source_aware_list_lines(tests, limit=3))
+    return lines
+
+
+def render_source_aware_sandbox_card(payload: dict[str, Any], *, sandbox_flow: dict[str, Any] | None = None, operator_review: dict[str, Any] | None = None) -> list[str]:
+    payloads = [sandbox_flow, operator_review, payload]
+    status = _source_aware_first(payloads, ("execution_candidate_status", "sandbox_candidate_status", "sandbox_status"), fallback="blocked")
+    blockers = _source_aware_first(payloads, ("blockers",), fallback=[])
+    reason = blockers[0] if isinstance(blockers, list) and blockers else "execution remains disabled until explicit approval"
+    return [
+        "Sandbox Eligibility:",
+        f"  candidate status: {_source_aware_text(status)}",
+        f"  reason: {_source_aware_text(reason, max_chars=180)}",
+    ]
+
+
+def render_source_aware_operator_brief(
+    title: str,
+    payload: dict[str, Any],
+    *,
+    operator_report: dict[str, Any] | None = None,
+    implementation_preview: dict[str, Any] | None = None,
+    decision_card: dict[str, Any] | None = None,
+    operator_review: dict[str, Any] | None = None,
+    sandbox_flow: dict[str, Any] | None = None,
+) -> str:
+    payloads = [payload, operator_report, implementation_preview, decision_card, operator_review, sandbox_flow]
+    source_path = _source_aware_first(payloads, ("source_path",), fallback="not available")
+    source_name = _source_aware_first(payloads, ("source_name",), fallback="not available")
+    source_type = _source_aware_first(payloads, ("source_type",), fallback="not available")
+    target_module = _source_aware_first(payloads, ("target_link_module",), fallback="not available")
+    selected_title = _source_aware_first(payloads, ("selected_upgrade_title",), fallback=_source_aware_first(payloads, ("selected_upgrade_candidate_id",), fallback="not available"))
+    selected_id = _source_aware_first(payloads, ("selected_upgrade_candidate_id",), fallback="not available")
+    confidence = _source_aware_first(payloads, ("confidence_score",), fallback="not available")
+    risk = _source_aware_first(payloads, ("risk_score",), fallback="not available")
+    effort = _source_aware_first(payloads, ("effort_score",), fallback="not available")
+    blockers = _source_aware_first(payloads, ("blockers",), fallback=[])
+    warnings = _source_aware_first(payloads, ("warnings",), fallback=[])
+    blocker_count = _source_aware_first(payloads, ("blocker_count",), fallback=len(blockers) if isinstance(blockers, list) else 0)
+    warning_count = _source_aware_first(payloads, ("warning_count",), fallback=len(warnings) if isinstance(warnings, list) else 0)
+    next_action = _source_aware_first(payloads, ("recommended_next_action",), fallback="review source-aware output before approving any implementation slice")
+    lines = [
+        title,
+        "",
+        "Target:",
+        f"  source: {_source_aware_text(source_path, max_chars=160)}",
+        f"  name: {_source_aware_text(source_name, max_chars=120)}",
+        f"  type: {_source_aware_text(source_type)}",
+        "",
+        "Selected Upgrade:",
+        f"  title: {_source_aware_text(selected_title, max_chars=160)}",
+        f"  id: {_source_aware_text(selected_id, max_chars=140)}",
+        f"  module: {_source_aware_text(target_module)}",
+        f"  confidence/risk/effort: {confidence}/{risk}/{effort}",
+        "",
+    ]
+    lines.extend(render_source_aware_evidence_table(payload, operator_report=operator_report))
+    lines.append("")
+    lines.extend(render_source_aware_decision_card(payload, decision_card=decision_card, operator_report=operator_report))
+    lines.append("")
+    lines.extend(render_source_aware_task_card(payload, implementation_preview=implementation_preview, operator_review=operator_review, operator_report=operator_report))
+    lines.append("")
+    lines.extend(render_source_aware_sandbox_card(payload, sandbox_flow=sandbox_flow, operator_review=operator_review))
+    lines.extend([
+        "",
+        "Blockers / Warnings:",
+        f"  blockers: {blocker_count}",
+        f"  warnings: {warning_count}",
+    ])
+    if isinstance(blockers, list) and blockers:
+        lines.append("  blocker detail:")
+        lines.extend(_source_aware_list_lines(blockers, limit=2))
+    if isinstance(warnings, list) and warnings:
+        lines.append("  warning detail:")
+        lines.extend(_source_aware_list_lines(warnings, limit=2))
+    lines.extend([
+        "",
+        "Next Action:",
+        f"  {_source_aware_text(next_action, max_chars=220)}",
+        "",
+        "Read-only: no execution, no patches, no source mutation.",
+    ])
+    return "\n".join(lines)
+
+
 
 
 
@@ -13508,23 +13696,21 @@ def control_plane_target_status_main(argv: list[str] | None = None) -> int:
     if rc is not None:
         return rc
     try:
-        payload = collect_control_plane_target_status(source_path=source or "")
+        context = build_source_aware_dashboard_context_for_cli(source or "")
+        payload = collect_control_plane_target_status(source_path=source or "", dashboard_context=context)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if "--json" in args:
         print(stable_control_plane_target_status_json(payload), end="")
     else:
-        _research_target_print_summary("Control-plane target status", payload, [
-            ("id", payload["control_plane_target_status_id"]),
-            ("source_path", payload["source_path"]),
-            ("control_plane_status", payload["control_plane_status"]),
-            ("evidence_status", payload["evidence_status"]),
-            ("sandbox_status", payload["sandbox_status"]),
-            ("blockers", payload["blocker_count"]),
-            ("warnings", payload["warning_count"]),
-            ("recommended_next_action", payload["recommended_next_action"]),
-        ])
+        print(render_source_aware_operator_brief(
+            "Control-plane target status",
+            payload,
+            operator_report=context["operator_report"],
+            implementation_preview=context["implementation_preview"],
+            sandbox_flow=context["sandbox_flow"],
+        ))
     return 0
 
 
@@ -13539,23 +13725,22 @@ def operator_target_review_main(argv: list[str] | None = None) -> int:
     if rc is not None:
         return rc
     try:
-        payload = collect_operator_target_review(source_path=source or "")
+        context = build_source_aware_dashboard_context_for_cli(source or "")
+        payload = collect_operator_target_review(source_path=source or "", dashboard_context=context)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if "--json" in args:
         print(stable_operator_target_review_json(payload), end="")
     else:
-        _research_target_print_summary("Operator target review", payload, [
-            ("id", payload["operator_target_review_id"]),
-            ("source_path", payload["source_path"]),
-            ("selected upgrade", payload["selected_upgrade_title"]),
-            ("task_status", payload["task_status"]),
-            ("sandbox_status", payload["sandbox_candidate_status"]),
-            ("affected files", len(payload["likely_affected_files"])),
-            ("expected tests", len(payload["expected_tests"])),
-            ("recommended_next_action", payload["recommended_next_action"]),
-        ])
+        print(render_source_aware_operator_brief(
+            "Operator target review",
+            payload,
+            operator_report=context["operator_report"],
+            implementation_preview=context["implementation_preview"],
+            operator_review=payload,
+            sandbox_flow=context["sandbox_flow"],
+        ))
     return 0
 
 
@@ -13570,22 +13755,22 @@ def decision_target_card_main(argv: list[str] | None = None) -> int:
     if rc is not None:
         return rc
     try:
-        payload = collect_source_aware_target_decision_card(source_path=source or "")
+        context = build_source_aware_dashboard_context_for_cli(source or "")
+        payload = collect_source_aware_target_decision_card(source_path=source or "", dashboard_context=context)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if "--json" in args:
         print(stable_source_aware_target_decision_card_json(payload), end="")
     else:
-        _research_target_print_summary("Decision target card", payload, [
-            ("id", payload["source_aware_target_decision_card_id"]),
-            ("source_path", payload["source_path"]),
-            ("selected upgrade", payload["selected_upgrade_candidate_id"]),
-            ("top candidate", payload["top_candidate_id"]),
-            ("ranked candidates", payload["score_summary"]["ranked_candidate_count"]),
-            ("blockers", len(payload["blockers"])),
-            ("recommended_next_action", payload["recommended_next_action"]),
-        ])
+        print(render_source_aware_operator_brief(
+            "Decision target card",
+            payload,
+            operator_report=context["operator_report"],
+            implementation_preview=context["implementation_preview"],
+            decision_card=payload,
+            sandbox_flow=context["sandbox_flow"],
+        ))
     return 0
 
 
@@ -13600,23 +13785,25 @@ def operator_source_dashboard_main(argv: list[str] | None = None) -> int:
     if rc is not None:
         return rc
     try:
-        payload = collect_source_aware_operator_dashboard(source_path=source or "")
+        context = build_source_aware_dashboard_context_for_cli(source or "")
+        payload = collect_source_aware_operator_dashboard(source_path=source or "", dashboard_context=context)
+        decision_card = collect_source_aware_target_decision_card(source_path=source or "", dashboard_context=context)
+        operator_review = collect_operator_target_review(source_path=source or "", dashboard_context=context)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if "--json" in args:
         print(stable_source_aware_operator_dashboard_json(payload), end="")
     else:
-        _research_target_print_summary("Operator source dashboard", payload, [
-            ("id", payload["source_aware_operator_dashboard_id"]),
-            ("source_path", payload["source_path"]),
-            ("selected upgrade", payload["selected_upgrade_title"]),
-            ("overall_status", payload["overall_status"]),
-            ("sandbox_status", payload["sandbox_status"]),
-            ("blockers", payload["blocker_count"]),
-            ("warnings", payload["warning_count"]),
-            ("recommended_next_action", payload["recommended_next_action"]),
-        ])
+        print(render_source_aware_operator_brief(
+            "Source-aware operator dashboard",
+            payload,
+            operator_report=context["operator_report"],
+            implementation_preview=context["implementation_preview"],
+            decision_card=decision_card,
+            operator_review=operator_review,
+            sandbox_flow=context["sandbox_flow"],
+        ))
     return 0
 
 def research_target_operator_report_main(argv: list[str] | None = None) -> int:
@@ -13637,16 +13824,7 @@ def research_target_operator_report_main(argv: list[str] | None = None) -> int:
     if "--json" in args:
         print(stable_research_target_operator_report_json(payload), end="")
     else:
-        _research_target_print_summary("Research target operator report", payload, [
-            ("id", payload["research_target_operator_report_id"]),
-            ("source_path", payload["source_path"]),
-            ("selected upgrade", payload["selected_upgrade_title"]),
-            ("target module", payload["target_link_module"]),
-            ("evidence strength", payload["evidence_strength"]),
-            ("affected files", len(payload["likely_affected_files"])),
-            ("blockers", len(payload["blockers"])),
-            ("recommended_next_action", payload["recommended_next_action"]),
-        ])
+        print(render_source_aware_operator_brief("Research target operator report", payload, operator_report=payload))
     return 0
 
 
@@ -13661,23 +13839,21 @@ def research_target_implementation_preview_main(argv: list[str] | None = None) -
     if rc is not None:
         return rc
     try:
-        payload = collect_research_target_implementation_preview(source_path=source or "")
+        source_context = build_source_aware_context_for_cli(source or "")
+        report = collect_research_target_operator_report(source_path=source or "", source_context=source_context)
+        payload = collect_research_target_implementation_preview(source_path=source or "", source_context=source_context, operator_report=report)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if "--json" in args:
         print(stable_research_target_implementation_preview_json(payload), end="")
     else:
-        _research_target_print_summary("Research target implementation preview", payload, [
-            ("id", payload["research_target_implementation_preview_id"]),
-            ("source_path", payload["source_path"]),
-            ("objective", payload["objective"]),
-            ("target module", payload["target_link_module"]),
-            ("allowed files", len(payload["allowed_file_scope"])),
-            ("expected tests", len(payload["expected_tests"])),
-            ("execution_allowed", payload["execution_allowed"]),
-            ("recommended_next_action", payload["recommended_next_action"]),
-        ])
+        print(render_source_aware_operator_brief(
+            "Research target implementation preview",
+            payload,
+            operator_report=report,
+            implementation_preview=payload,
+        ))
     return 0
 
 
@@ -13692,22 +13868,21 @@ def research_target_sandbox_flow_main(argv: list[str] | None = None) -> int:
     if rc is not None:
         return rc
     try:
-        payload = collect_research_target_sandbox_flow(source_path=source or "")
+        sandbox_context = build_source_aware_sandbox_context_for_cli(source or "")
+        payload = collect_research_target_sandbox_flow(source_path=source or "", sandbox_context=sandbox_context)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if "--json" in args:
         print(stable_research_target_sandbox_flow_json(payload), end="")
     else:
-        _research_target_print_summary("Research target sandbox flow", payload, [
-            ("id", payload["research_target_sandbox_flow_id"]),
-            ("source_path", payload["source_path"]),
-            ("boundary", payload["sandbox_task_executor_boundary_id"]),
-            ("review", payload["sandbox_execution_review_package_id"]),
-            ("execution_candidate_status", payload["execution_candidate_status"]),
-            ("blockers", payload["blocker_count"]),
-            ("recommended_next_action", payload["recommended_next_action"]),
-        ])
+        print(render_source_aware_operator_brief(
+            "Research target sandbox flow",
+            payload,
+            operator_report=sandbox_context["operator_report"],
+            implementation_preview=sandbox_context["implementation_preview"],
+            sandbox_flow=payload,
+        ))
     return 0
 
 

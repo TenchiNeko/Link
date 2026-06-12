@@ -18687,6 +18687,87 @@ def check_source_aware_control_plane_dashboard_clis() -> None:
 
     print("source-aware control-plane dashboard CLIs OK")
 
+
+def check_source_aware_human_summary_clis() -> None:
+    from link import _cmd_control_plane, _cmd_decision, _cmd_operator, _cmd_research
+
+    zip_source, _, _ = _research_target_test_paths()
+    commands = [
+        (_cmd_research, ["target-operator-report", "--source", zip_source], "Research target operator report"),
+        (_cmd_research, ["target-implementation-preview", "--source", zip_source], "Research target implementation preview"),
+        (_cmd_research, ["target-sandbox-flow", "--source", zip_source], "Research target sandbox flow"),
+        (_cmd_operator, ["source-dashboard", "--source", zip_source], "Source-aware operator dashboard"),
+        (_cmd_operator, ["target-review", "--source", zip_source], "Operator target review"),
+        (_cmd_decision, ["target-card", "--source", zip_source], "Decision target card"),
+        (_cmd_control_plane, ["target-status", "--source", zip_source], "Control-plane target status"),
+    ]
+    forbidden_raw_keys = (
+        "full research_target_evidence_bundle",
+        "full growth_business_opportunity_scan",
+        "full decision_candidate_set",
+        "full operator_task_review_package",
+        '"research_target_evidence_bundle":',
+        '"growth_business_opportunity_scan":',
+        '"decision_candidate_set":',
+        '"operator_task_review_package":',
+    )
+    for dispatcher, argv, title in commands:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = dispatcher(argv)
+        output = out.getvalue()
+        _require(rc == 0, f"{title} human summary must return 0")
+        stripped = output.lstrip()
+        _require(not stripped.startswith("{"), f"{title} human summary must not be JSON-only")
+        _require(title in output, f"{title} human summary must include its title")
+        _require(zip_source in output, f"{title} human summary must include selected target")
+        _require("Target:" in output, f"{title} human summary must include target section")
+        _require("Selected Upgrade:" in output, f"{title} human summary must include selected upgrade section")
+        _require("Evidence / Provenance:" in output, f"{title} human summary must include evidence/provenance section")
+        _require("Decision:" in output, f"{title} human summary must include decision section")
+        _require("Task Draft:" in output, f"{title} human summary must include task draft section")
+        _require("Sandbox Eligibility:" in output, f"{title} human summary must include sandbox section")
+        _require("Next Action:" in output, f"{title} human summary must include next action section")
+        _require("Read-only:" in output, f"{title} human summary must state read-only behavior")
+        _require("research/gpt-crawler-main.zip!" in output, f"{title} human summary must show archive-qualified provenance")
+        _require(len(output.splitlines()) <= 120, f"{title} human summary must remain compact")
+        for key in forbidden_raw_keys:
+            _require(key not in output, f"{title} human summary must not dump raw nested payload key {key}")
+
+    source_dashboard_out = io.StringIO()
+    with contextlib.redirect_stdout(source_dashboard_out):
+        rc = _cmd_operator(["source-dashboard", "--source", zip_source])
+    source_dashboard = source_dashboard_out.getvalue()
+    _require(rc == 0, "operator source-dashboard human summary must return 0")
+    for expected in (
+        "source: research/gpt-crawler-main.zip",
+        "module:",
+        "strength/status:",
+        "recommendation:",
+        "affected files:",
+        "expected tests:",
+        "candidate status:",
+    ):
+        _require(expected in source_dashboard, f"operator source-dashboard summary missing {expected}")
+
+    decision_out = io.StringIO()
+    with contextlib.redirect_stdout(decision_out):
+        rc = _cmd_decision(["target-card", "--source", zip_source])
+    decision_output = decision_out.getvalue()
+    _require(rc == 0, "decision target-card human summary must return 0")
+    _require("why:" in decision_output and zip_source in decision_output,
+             "decision target-card summary must explain why the source-bound candidate won")
+
+    control_out = io.StringIO()
+    with contextlib.redirect_stdout(control_out):
+        rc = _cmd_control_plane(["target-status", "--source", zip_source])
+    control_output = control_out.getvalue()
+    _require(rc == 0, "control-plane target-status human summary must return 0")
+    _require("strength/status:" in control_output and "Sandbox Eligibility:" in control_output,
+             "control-plane target-status summary must show source binding and sandbox status")
+
+    print("source-aware human summary CLIs OK")
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -18800,6 +18881,7 @@ def main() -> None:
     check_source_aware_operator_report_and_sandbox_clis()
     check_source_aware_control_plane_dashboard_helpers()
     check_source_aware_control_plane_dashboard_clis()
+    check_source_aware_human_summary_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()
