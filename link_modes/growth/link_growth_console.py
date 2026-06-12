@@ -13229,6 +13229,9 @@ def parse_research_target_recommendation_specificity_json(text: str) -> dict[str
 
 
 LOCAL_MODEL_ADVISOR_CONFIG_VERSION = "link-local-model-advisor-config-v1"
+LOCAL_MODEL_PROVIDER_BOUNDARY_VERSION = "link-local-model-provider-boundary-v1"
+LOCAL_MODEL_SMOKE_PLAN_VERSION = "link-local-model-smoke-plan-v1"
+LOCAL_MODEL_SMOKE_RESULT_VERSION = "link-local-model-smoke-result-v1"
 LOCAL_MODEL_ADVISOR_METADATA_VERSION = "link-local-model-advisor-metadata-v1"
 RESEARCH_ADVISOR_PROMPT_PACKAGE_VERSION = "link-research-advisor-prompt-package-v1"
 LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION = "link-local-model-research-advisor-review-v1"
@@ -13266,54 +13269,152 @@ def _local_advisor_safe_hash(value: Any) -> str:
     return _research_target_hash_text(value)[:16]
 
 
-def collect_local_model_advisor_config(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    provider = "ollama"
-    model_name = "qwen2.5-coder:32b-instruct-q8_0"
-    endpoint = "http://127.0.0.1:11434"
-    refs = [
-        _redacted_config_ref("configs/models.yaml", "profiles.local_fast.provider", provider),
-        _redacted_config_ref("configs/models.yaml", "profiles.local_fast.default_model", model_name),
-        _redacted_config_ref("configs/models.yaml", "profiles.local_fast.endpoint_default", endpoint),
-    ]
-    try:
-        from link_core.routing.link_model_routing_profiles import get_profile
+CANONICAL_LOCAL_MODEL_WRAPPER_PATH = "link_core/models/link_local_llamacpp.py"
+CANONICAL_LOCAL_MODEL_API_PATH = "/v1/chat/completions"
 
-        profile = get_profile("local_fast")
-        provider = profile.provider
-        model_name = profile.default_model
-        endpoint = profile.endpoint_default
-        refs = [
-            _redacted_config_ref("link_core/routing/link_model_routing_profiles.py", "local_fast.provider", provider),
-            _redacted_config_ref("link_core/routing/link_model_routing_profiles.py", "local_fast.default_model", model_name),
-            _redacted_config_ref("link_core/routing/link_model_routing_profiles.py", "local_fast.endpoint_default", endpoint),
-            *refs,
-        ]
-    except Exception:
-        pass
-    endpoint_type = _local_advisor_endpoint_type(endpoint)
+
+def _canonical_llamacpp_endpoint() -> str:
+    import os as _os
+
+    return _os.environ.get("LINK_LLAMACPP_BASE_URL", "http://127.0.0.1:8084").rstrip("/")
+
+
+def _canonical_llamacpp_model_name() -> str:
+    import os as _os
+
+    return _os.environ.get("LINK_LLAMACPP_MODEL", "local")
+
+
+def collect_local_model_provider_boundary(*, endpoint: str | None = None, model_name: str | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    endpoint_value = (endpoint or _canonical_llamacpp_endpoint()).rstrip("/")
+    model_value = model_name or _canonical_llamacpp_model_name()
+    endpoint_type = _local_advisor_endpoint_type(endpoint_value)
     blocked: list[str] = []
     if endpoint_type != "local":
-        blocked.append("endpoint is not local-only")
-    if provider.lower() in {"openrouter", "anthropic"} or "openrouter" in endpoint.lower():
-        blocked.append("provider or endpoint suggests external model access")
-    usable = not blocked
+        blocked.append("canonical llama.cpp endpoint is not local-only")
+    if any(term in endpoint_value.lower() for term in ("openrouter", "deepseek", "anthropic", "api.openai.com")):
+        blocked.append("canonical advisor endpoint suggests external provider access")
+    local_only = endpoint_type == "local" and not blocked
+    payload = {
+        "local_model_provider_boundary_version": LOCAL_MODEL_PROVIDER_BOUNDARY_VERSION,
+        "local_model_provider_boundary_id": "local-model-provider-boundary-" + _local_advisor_safe_hash({
+            "provider": "llamacpp",
+            "wrapper": CANONICAL_LOCAL_MODEL_WRAPPER_PATH,
+            "endpoint": endpoint_value,
+            "model": model_value,
+            "version": LOCAL_MODEL_PROVIDER_BOUNDARY_VERSION,
+        }),
+        "provider_name": "llamacpp",
+        "provider_kind": "openai_compatible_local_chat",
+        "canonical_wrapper_path": CANONICAL_LOCAL_MODEL_WRAPPER_PATH,
+        "endpoint_type": endpoint_type,
+        "endpoint_summary": endpoint_value,
+        "model_name": model_value,
+        "api_path": CANONICAL_LOCAL_MODEL_API_PATH,
+        "local_only": bool(local_only),
+        "external_fallback_allowed": False,
+        "openrouter_fallback_allowed": False,
+        "legacy_provider_candidates": [
+            {"provider_name": "ollama", "status": "legacy_secondary_not_selected", "reason": "previous local advisor default; not canonical for this path"},
+            {"provider_name": "qwen-routing-profile", "status": "legacy_secondary_not_selected", "reason": "routing profile may mention Qwen/Ollama but advisor uses llama.cpp wrapper"},
+        ],
+        "blocked_provider_candidates": [
+            {"provider_name": "openrouter", "reason": "external fallback is forbidden for local advisor"},
+            {"provider_name": "deepseek", "reason": "external fallback is forbidden for local advisor"},
+            {"provider_name": "openai", "reason": "paid/external fallback is forbidden for local advisor"},
+            {"provider_name": "anthropic", "reason": "paid/external fallback is forbidden for local advisor"},
+        ],
+        "provider_status": "usable_local_provider" if local_only else "blocked",
+        "recommended_next_action": "Use explicit --local-model only for bounded local advisor calls through the canonical llama.cpp wrapper." if local_only else "Do not call local advisor until the canonical endpoint is local-only.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_model_provider_boundary(payload)
+    return payload
+
+
+def validate_local_model_provider_boundary(payload: dict[str, Any]) -> None:
+    required = (
+        "local_model_provider_boundary_version", "local_model_provider_boundary_id", "provider_name",
+        "provider_kind", "canonical_wrapper_path", "endpoint_type", "endpoint_summary", "model_name",
+        "api_path", "local_only", "external_fallback_allowed", "openrouter_fallback_allowed",
+        "legacy_provider_candidates", "blocked_provider_candidates", "provider_status",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local model provider boundary missing field: {key}")
+    if payload["local_model_provider_boundary_version"] != LOCAL_MODEL_PROVIDER_BOUNDARY_VERSION:
+        raise ValueError("invalid local model provider boundary version")
+    if not str(payload["local_model_provider_boundary_id"]).startswith("local-model-provider-boundary-"):
+        raise ValueError("invalid local model provider boundary id")
+    if payload["provider_name"] != "llamacpp":
+        raise ValueError("canonical local advisor provider must be llama.cpp")
+    if payload["canonical_wrapper_path"] != CANONICAL_LOCAL_MODEL_WRAPPER_PATH:
+        raise ValueError("canonical wrapper path must be link_core/models/link_local_llamacpp.py")
+    if payload["api_path"] != CANONICAL_LOCAL_MODEL_API_PATH:
+        raise ValueError("canonical llama.cpp advisor API path is invalid")
+    if payload["endpoint_type"] not in {"local", "external", "unknown"}:
+        raise ValueError("invalid provider boundary endpoint type")
+    if payload["local_only"] is True and payload["endpoint_type"] != "local":
+        raise ValueError("local-only provider boundary must use local endpoint")
+    if payload["external_fallback_allowed"] is not False or payload["openrouter_fallback_allowed"] is not False:
+        raise ValueError("local advisor provider must not allow external or OpenRouter fallback")
+    blocked_names = {str(item.get("provider_name", "")).lower() for item in payload["blocked_provider_candidates"] if isinstance(item, dict)}
+    for required_name in ("openrouter", "deepseek"):
+        if required_name not in blocked_names:
+            raise ValueError("OpenRouter and DeepSeek must be blocked for local advisor")
+    for item in payload["legacy_provider_candidates"]:
+        if not isinstance(item, dict) or item.get("status") != "legacy_secondary_not_selected":
+            raise ValueError("legacy provider candidates must not be selected by default")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local model provider boundary must remain read-only")
+
+
+def stable_local_model_provider_boundary_json(payload: dict[str, Any]) -> str:
+    validate_local_model_provider_boundary(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_model_provider_boundary_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_model_provider_boundary(payload)
+    return payload
+
+
+def collect_local_model_advisor_config(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    boundary = collect_local_model_provider_boundary()
+    refs = [
+        _redacted_config_ref(CANONICAL_LOCAL_MODEL_WRAPPER_PATH, "LINK_LLAMACPP_BASE_URL default", "http://127.0.0.1:8084"),
+        _redacted_config_ref(CANONICAL_LOCAL_MODEL_WRAPPER_PATH, "LINK_LLAMACPP_MODEL default", "local"),
+        _redacted_config_ref(CANONICAL_LOCAL_MODEL_WRAPPER_PATH, "api_path", CANONICAL_LOCAL_MODEL_API_PATH),
+    ]
+    usable = boundary["provider_status"] == "usable_local_provider"
     payload = {
         "local_model_advisor_config_version": LOCAL_MODEL_ADVISOR_CONFIG_VERSION,
         "local_model_advisor_config_id": "local-model-advisor-config-" + _local_advisor_safe_hash({
-            "provider": provider,
-            "model_name": model_name,
-            "endpoint": endpoint,
+            "provider_boundary_id": boundary["local_model_provider_boundary_id"],
             "version": LOCAL_MODEL_ADVISOR_CONFIG_VERSION,
         }),
         "config_status": "usable_local_config" if usable else "blocked",
-        "provider": provider,
-        "model_name": model_name,
-        "endpoint_type": endpoint_type,
-        "endpoint_summary": endpoint,
+        "provider": boundary["provider_name"],
+        "model_name": boundary["model_name"],
+        "endpoint_type": boundary["endpoint_type"],
+        "endpoint_summary": boundary["endpoint_summary"],
         "usable_for_local_advisor": usable,
-        "blocked_reasons": blocked,
+        "blocked_reasons": [] if usable else ["canonical provider boundary is blocked"],
         "redacted_config_refs": refs,
-        "recommended_next_action": "Use --local-model only for explicit advisory review; deterministic Link outputs remain authoritative." if usable else "Do not run local advisor inference until a local-only endpoint is configured.",
+        "provider_boundary_id": boundary["local_model_provider_boundary_id"],
+        "canonical_wrapper_path": boundary["canonical_wrapper_path"],
+        "external_fallback_allowed": False,
+        "openrouter_fallback_allowed": False,
+        "legacy_provider_candidates": boundary["legacy_provider_candidates"],
+        "recommended_next_action": boundary["recommended_next_action"],
         "safety_metadata": _read_only_safety_metadata(),
         "dry_run": True,
         "write_allowed": False,
@@ -13460,6 +13561,218 @@ def parse_local_model_advisor_metadata_json(text: str) -> dict[str, Any]:
     import json as _json
     payload = _json.loads(text)
     validate_local_model_advisor_metadata(payload)
+    return payload
+
+
+def collect_local_model_smoke_plan(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    boundary = collect_local_model_provider_boundary()
+    prompt = '{"ok": true, "role": "local_advisor_smoke"}'
+    payload = {
+        "local_model_smoke_plan_version": LOCAL_MODEL_SMOKE_PLAN_VERSION,
+        "local_model_smoke_plan_id": "local-model-smoke-plan-" + _local_advisor_safe_hash({
+            "provider_boundary_id": boundary["local_model_provider_boundary_id"],
+            "prompt": prompt,
+            "version": LOCAL_MODEL_SMOKE_PLAN_VERSION,
+        }),
+        "local_model_provider_boundary_id": boundary["local_model_provider_boundary_id"],
+        "smoke_status": "preview_only",
+        "would_call_endpoint": boundary["endpoint_summary"].rstrip("/") + boundary["api_path"],
+        "model_name": boundary["model_name"],
+        "test_prompt_hash": _research_target_hash_text(prompt),
+        "expected_response_schema": {"ok": True, "role": "local_advisor_smoke"},
+        "timeout_seconds": 8,
+        "external_fallback_allowed": False,
+        "openrouter_fallback_allowed": False,
+        "recommended_next_action": "Rerun with --local-model to perform the bounded local-only llama.cpp smoke check.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_model_smoke_plan(payload)
+    return payload
+
+
+def validate_local_model_smoke_plan(payload: dict[str, Any]) -> None:
+    required = (
+        "local_model_smoke_plan_version", "local_model_smoke_plan_id", "local_model_provider_boundary_id",
+        "smoke_status", "would_call_endpoint", "model_name", "test_prompt_hash", "expected_response_schema",
+        "timeout_seconds", "external_fallback_allowed", "openrouter_fallback_allowed", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local model smoke plan missing field: {key}")
+    if payload["local_model_smoke_plan_version"] != LOCAL_MODEL_SMOKE_PLAN_VERSION:
+        raise ValueError("invalid local model smoke plan version")
+    if not payload["local_model_smoke_plan_id"].startswith("local-model-smoke-plan-"):
+        raise ValueError("invalid local model smoke plan id")
+    if payload["smoke_status"] != "preview_only":
+        raise ValueError("local model smoke plan must be preview-only")
+    if payload["external_fallback_allowed"] is not False or payload["openrouter_fallback_allowed"] is not False:
+        raise ValueError("local model smoke plan must not allow external fallback")
+    if not isinstance(payload["timeout_seconds"], int) or payload["timeout_seconds"] <= 0 or payload["timeout_seconds"] > 30:
+        raise ValueError("local model smoke plan timeout must be short and bounded")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local model smoke plan must remain read-only")
+
+
+def stable_local_model_smoke_plan_json(payload: dict[str, Any]) -> str:
+    validate_local_model_smoke_plan(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_model_smoke_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_model_smoke_plan(payload)
+    return payload
+
+
+def _parse_strict_local_model_json(text: str) -> dict[str, Any]:
+    import json as _json
+
+    value = text.strip()
+    if value.startswith("```"):
+        lines = [line for line in value.splitlines() if not line.strip().startswith("```")]
+        value = "\n".join(lines).strip()
+    parsed = _json.loads(value)
+    if not isinstance(parsed, dict):
+        raise ValueError("local model response must be a JSON object")
+    return parsed
+
+
+def _call_canonical_llamacpp_chat(*, prompt: str, system_prompt: str, timeout: int, model_name: str | None = None) -> tuple[dict[str, Any], str, int]:
+    import json as _json
+    import time
+    import urllib.error
+    import urllib.request
+
+    boundary = collect_local_model_provider_boundary(model_name=model_name)
+    validate_local_model_provider_boundary(boundary)
+    if boundary["provider_status"] != "usable_local_provider" or boundary["endpoint_type"] != "local":
+        raise ValueError("canonical llama.cpp provider boundary is not usable for local inference")
+    endpoint = boundary["endpoint_summary"].rstrip("/") + boundary["api_path"]
+    payload = {
+        "model": boundary["model_name"],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": 1200,
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=_json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as exc:
+        raise ValueError(f"canonical local llama.cpp request failed: {exc}") from exc
+    latency_ms = int((time.monotonic() - started) * 1000)
+    data = _json.loads(raw)
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except Exception as exc:
+        raise ValueError("canonical local llama.cpp response did not include chat content") from exc
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("canonical local llama.cpp returned empty content")
+    return _parse_strict_local_model_json(content), content, latency_ms
+
+
+def collect_local_model_smoke_result(*, response_json: dict[str, Any] | None = None, raw_response: str | None = None, latency_ms: int = 0, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    plan = collect_local_model_smoke_plan()
+    boundary = collect_local_model_provider_boundary()
+    prompt = 'Return strict JSON only: {"ok": true, "role": "local_advisor_smoke"}'
+    if response_json is None:
+        response_json, raw_response, latency_ms = _call_canonical_llamacpp_chat(
+            prompt=prompt,
+            system_prompt="You are a local-only Link advisor smoke responder. Return strict JSON only.",
+            timeout=plan["timeout_seconds"],
+            model_name=boundary["model_name"],
+        )
+    raw_text = raw_response if raw_response is not None else _stable_ruflo_json(response_json)
+    smoke_ok = response_json.get("ok") is True and response_json.get("role") == "local_advisor_smoke"
+    payload = {
+        "local_model_smoke_result_version": LOCAL_MODEL_SMOKE_RESULT_VERSION,
+        "local_model_smoke_result_id": "local-model-smoke-result-" + _local_advisor_safe_hash({
+            "plan": plan["local_model_smoke_plan_id"],
+            "response": response_json,
+            "version": LOCAL_MODEL_SMOKE_RESULT_VERSION,
+        }),
+        "local_model_smoke_plan_id": plan["local_model_smoke_plan_id"],
+        "local_model_provider_boundary_id": boundary["local_model_provider_boundary_id"],
+        "canonical_wrapper_path": boundary["canonical_wrapper_path"],
+        "model_used": True,
+        "model_provider": "llamacpp",
+        "model_name": boundary["model_name"],
+        "endpoint_type": "local",
+        "prompt_hash": _research_target_hash_text(prompt),
+        "response_hash": _research_target_hash_text(raw_text),
+        "valid_json": isinstance(response_json, dict),
+        "latency_ms": int(latency_ms),
+        "smoke_ok": bool(smoke_ok),
+        "human_review_required": True,
+        "external_fallback_allowed": False,
+        "openrouter_fallback_allowed": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_model_smoke_result(payload)
+    return payload
+
+
+def validate_local_model_smoke_result(payload: dict[str, Any]) -> None:
+    required = (
+        "local_model_smoke_result_version", "local_model_smoke_result_id", "local_model_smoke_plan_id",
+        "local_model_provider_boundary_id", "canonical_wrapper_path", "model_used", "model_provider", "model_name",
+        "endpoint_type", "prompt_hash", "response_hash", "valid_json", "latency_ms", "smoke_ok",
+        "human_review_required", "external_fallback_allowed", "openrouter_fallback_allowed", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local model smoke result missing field: {key}")
+    if payload["local_model_smoke_result_version"] != LOCAL_MODEL_SMOKE_RESULT_VERSION:
+        raise ValueError("invalid local model smoke result version")
+    if not payload["local_model_smoke_result_id"].startswith("local-model-smoke-result-"):
+        raise ValueError("invalid local model smoke result id")
+    if payload["canonical_wrapper_path"] != CANONICAL_LOCAL_MODEL_WRAPPER_PATH:
+        raise ValueError("local model smoke result must use canonical wrapper path")
+    if payload["model_used"] is not True or payload["model_provider"] != "llamacpp" or payload["endpoint_type"] != "local":
+        raise ValueError("local model smoke result must use canonical local llama.cpp provider")
+    if not payload["prompt_hash"] or not payload["response_hash"]:
+        raise ValueError("local model smoke result requires prompt and response hashes")
+    if payload["external_fallback_allowed"] is not False or payload["openrouter_fallback_allowed"] is not False:
+        raise ValueError("local model smoke result must not allow external fallback")
+    if payload["human_review_required"] is not True:
+        raise ValueError("local model smoke result must require human review")
+    if not isinstance(payload["latency_ms"], int) or payload["latency_ms"] < 0:
+        raise ValueError("local model smoke result latency must be non-negative")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local model smoke result must remain read-only")
+
+
+def stable_local_model_smoke_result_json(payload: dict[str, Any]) -> str:
+    validate_local_model_smoke_result(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_model_smoke_result_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_model_smoke_result(payload)
     return payload
 
 
@@ -13751,18 +14064,13 @@ def _normalize_local_research_advisor_model_json(model_json: dict[str, Any], pro
     }
 
 
-def _call_local_research_advisor_model(config: dict[str, Any], prompt_package: dict[str, Any], *, timeout: int = 45) -> tuple[dict[str, Any], str, int]:
-    import json as _json
-    import time
-    import urllib.error
-    import urllib.request
-
+def _call_local_research_advisor_model(config: dict[str, Any], prompt_package: dict[str, Any], *, timeout: int = 30) -> tuple[dict[str, Any], str, int]:
     validate_local_model_advisor_config(config)
     validate_research_advisor_prompt_package(prompt_package)
     if not config["usable_for_local_advisor"] or config["endpoint_type"] != "local":
-        raise ValueError("local advisor config is not usable for local inference")
-    if config["provider"].lower() != "ollama":
-        raise ValueError("only local ollama advisor calls are enabled in this experiment")
+        raise ValueError("canonical local advisor config is not usable for local inference")
+    if config["provider"] != "llamacpp":
+        raise ValueError("only canonical llama.cpp advisor calls are enabled; no Ollama/OpenRouter fallback")
     prompt = _stable_ruflo_json({
         "task": "Review this Link research target and return strict JSON only.",
         "expected_schema": {
@@ -13775,38 +14083,20 @@ def _call_local_research_advisor_model(config: dict[str, Any], prompt_package: d
             "task_draft_improvements": [],
             "do_not_use": [],
         },
+        "grounding_rules": [
+            "cite only source_refs from the prompt",
+            "cite evidence_refs for high-confidence claims",
+            "say insufficient evidence when unsure",
+            "do not recommend execution, writes, approvals, scraping, package installation, git, or network use",
+        ],
         "prompt_package": prompt_package,
     })
-    payload = {
-        "model": config["model_name"],
-        "messages": [
-            {"role": "system", "content": "You are a local-only advisory reviewer for Link. Return strict JSON only. Do not suggest execution, writes, approvals, network use, scraping, package installs, or copying external code."},
-            {"role": "user", "content": prompt},
-        ],
-        "stream": False,
-        "format": "json",
-        "options": {"temperature": 0},
-    }
-    endpoint = config["endpoint_summary"].rstrip("/") + "/api/chat"
-    request = urllib.request.Request(
-        endpoint,
-        data=_json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+    return _call_canonical_llamacpp_chat(
+        prompt=prompt,
+        system_prompt="You are a local-only advisory reviewer for Link. Return strict JSON only. Do not suggest execution, writes, approvals, network use, scraping, package installs, git, or copying external code.",
+        timeout=timeout,
+        model_name=config["model_name"],
     )
-    started = time.monotonic()
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-    except urllib.error.URLError as exc:
-        raise ValueError(f"local advisor model request failed: {exc}") from exc
-    latency_ms = int((time.monotonic() - started) * 1000)
-    data = _json.loads(raw)
-    content = data.get("message", {}).get("content", "")
-    if not isinstance(content, str) or not content.strip():
-        raise ValueError("local advisor model returned empty content")
-    model_json = _json.loads(content)
-    return model_json, content, latency_ms
 
 
 def collect_local_model_research_advisor_review(
@@ -13820,6 +14110,7 @@ def collect_local_model_research_advisor_review(
     prompt_package = research_advisor_prompt_package or collect_research_advisor_prompt_package(source_path=source_path)
     validate_research_advisor_prompt_package(prompt_package)
     config = collect_local_model_advisor_config()
+    boundary = collect_local_model_provider_boundary()
     prompt_hash = prompt_package["prompt_hash"]
     response_hash = ""
     latency_ms = 0
@@ -13871,6 +14162,12 @@ def collect_local_model_research_advisor_review(
         evidence_refs_used=evidence_refs_used,
         latency_ms=latency_ms,
         valid_json=valid_json,
+        metadata={
+            "canonical_wrapper_path": boundary["canonical_wrapper_path"],
+            "local_model_provider_boundary_id": boundary["local_model_provider_boundary_id"],
+            "external_fallback_allowed": False,
+            "openrouter_fallback_allowed": False,
+        },
     )
     review = {
         "local_model_research_advisor_review_version": LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION,
@@ -13881,6 +14178,10 @@ def collect_local_model_research_advisor_review(
             "version": LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION,
         }),
         "research_advisor_prompt_package_id": prompt_package["research_advisor_prompt_package_id"],
+        "local_model_provider_boundary_id": boundary["local_model_provider_boundary_id"],
+        "canonical_wrapper_path": boundary["canonical_wrapper_path"],
+        "external_fallback_allowed": False,
+        "openrouter_fallback_allowed": False,
         "research_target_intake_id": prompt_package["research_target_intake_id"],
         "research_target_evidence_bundle_id": prompt_package["research_target_evidence_bundle_id"],
         "source_path": prompt_package["source_path"],
@@ -13916,7 +14217,8 @@ def collect_local_model_research_advisor_review(
 def validate_local_model_research_advisor_review(review: dict[str, Any], research_advisor_prompt_package: dict[str, Any] | None = None) -> None:
     required = (
         "local_model_research_advisor_review_version", "local_model_research_advisor_review_id",
-        "research_advisor_prompt_package_id", "research_target_intake_id", "source_path", "source_name",
+        "research_advisor_prompt_package_id", "local_model_provider_boundary_id", "canonical_wrapper_path",
+        "external_fallback_allowed", "openrouter_fallback_allowed", "research_target_intake_id", "source_path", "source_name",
         "advisor_status", "model_metadata", "patterns_found", "upgrade_candidate_critiques",
         "best_upgrade_suggestion", "genericity_warnings", "missing_evidence", "risks",
         "task_draft_improvements", "do_not_use", "grounding_warnings", "recommended_next_action",
@@ -13931,6 +14233,10 @@ def validate_local_model_research_advisor_review(review: dict[str, Any], researc
         raise ValueError("invalid local model research advisor review id")
     if not review["source_path"].startswith("research/"):
         raise ValueError("local research advisor review source_path required")
+    if review["canonical_wrapper_path"] != CANONICAL_LOCAL_MODEL_WRAPPER_PATH:
+        raise ValueError("local advisor review must use canonical llama.cpp wrapper")
+    if review["external_fallback_allowed"] is not False or review["openrouter_fallback_allowed"] is not False:
+        raise ValueError("local advisor review must block external fallback")
     validate_local_model_advisor_metadata(review["model_metadata"])
     for item in review["patterns_found"]:
         for key in ("pattern_name", "why_it_matters", "source_refs", "evidence_refs", "target_link_module", "risk", "confidence"):
@@ -14007,6 +14313,11 @@ def collect_local_model_advisor_comparison_card(
             "version": LOCAL_MODEL_ADVISOR_COMPARISON_CARD_VERSION,
         }),
         "source_path": report["source_path"],
+        "local_model_provider_boundary_id": advisor["local_model_provider_boundary_id"],
+        "canonical_wrapper_path": advisor["canonical_wrapper_path"],
+        "model_metadata": advisor["model_metadata"],
+        "external_fallback_allowed": False,
+        "openrouter_fallback_allowed": False,
         "research_target_intake_id": report["research_target_intake_id"],
         "deterministic_selected_upgrade_candidate_id": deterministic_id,
         "advisor_best_upgrade_title": advisor_best.get("title", ""),
@@ -14031,7 +14342,8 @@ def collect_local_model_advisor_comparison_card(
 def validate_local_model_advisor_comparison_card(payload: dict[str, Any]) -> None:
     required = (
         "local_model_advisor_comparison_card_version", "local_model_advisor_comparison_card_id",
-        "source_path", "deterministic_selected_upgrade_candidate_id", "advisor_best_upgrade_title",
+        "source_path", "local_model_provider_boundary_id", "canonical_wrapper_path", "model_metadata",
+        "external_fallback_allowed", "openrouter_fallback_allowed", "deterministic_selected_upgrade_candidate_id", "advisor_best_upgrade_title",
         "agreement_status", "advisor_added_value", "advisor_risks", "deterministic_output_better_at",
         "local_model_output_better_at", "human_review_required", "recommended_next_action",
         "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
@@ -14043,6 +14355,11 @@ def validate_local_model_advisor_comparison_card(payload: dict[str, Any]) -> Non
         raise ValueError("invalid local model advisor comparison version")
     if not payload["local_model_advisor_comparison_card_id"].startswith("local-model-advisor-comparison-card-"):
         raise ValueError("invalid local model advisor comparison id")
+    if payload["canonical_wrapper_path"] != CANONICAL_LOCAL_MODEL_WRAPPER_PATH:
+        raise ValueError("local advisor comparison must use canonical wrapper path")
+    if payload["external_fallback_allowed"] is not False or payload["openrouter_fallback_allowed"] is not False:
+        raise ValueError("local advisor comparison must block external fallback")
+    validate_local_model_advisor_metadata(payload["model_metadata"])
     if payload["agreement_status"] not in {"preview_only", "agrees", "differs"}:
         raise ValueError("invalid local advisor comparison agreement status")
     if payload["human_review_required"] is not True:
@@ -15416,6 +15733,83 @@ def _research_target_print_specificity(payload: dict[str, Any]) -> None:
     print("Read-only: no execution, no patches, no source mutation.")
 
 
+
+
+def advisor_provider_boundary_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor provider-boundary: canonical local llama.cpp provider boundary")
+        print("  python3 link.py advisor provider-boundary --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor provider-boundary is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_local_model_provider_boundary()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_model_provider_boundary_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor provider boundary", payload, [
+            ("id", payload["local_model_provider_boundary_id"]),
+            ("provider", payload["provider_name"]),
+            ("wrapper", payload["canonical_wrapper_path"]),
+            ("endpoint_type", payload["endpoint_type"]),
+            ("model", payload["model_name"]),
+            ("external_fallback_allowed", payload["external_fallback_allowed"]),
+            ("openrouter_fallback_allowed", payload["openrouter_fallback_allowed"]),
+            ("status", payload["provider_status"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def advisor_local_smoke_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor local-smoke: preview or run bounded local llama.cpp smoke")
+        print("  python3 link.py advisor local-smoke --json")
+        print("  python3 link.py advisor local-smoke --local-model --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor local-smoke is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    use_local_model = "--local-model" in args
+    try:
+        if use_local_model:
+            payload = collect_local_model_smoke_result()
+            if "--json" in args:
+                print(stable_local_model_smoke_result_json(payload), end="")
+            else:
+                _research_target_print_summary("Advisor local smoke result", payload, [
+                    ("id", payload["local_model_smoke_result_id"]),
+                    ("provider", payload["model_provider"]),
+                    ("model", payload["model_name"]),
+                    ("smoke_ok", payload["smoke_ok"]),
+                    ("valid_json", payload["valid_json"]),
+                    ("latency_ms", payload["latency_ms"]),
+                ])
+        else:
+            payload = collect_local_model_smoke_plan()
+            if "--json" in args:
+                print(stable_local_model_smoke_plan_json(payload), end="")
+            else:
+                _research_target_print_summary("Advisor local smoke plan", payload, [
+                    ("id", payload["local_model_smoke_plan_id"]),
+                    ("status", payload["smoke_status"]),
+                    ("would_call_endpoint", payload["would_call_endpoint"]),
+                    ("model", payload["model_name"]),
+                    ("timeout_seconds", payload["timeout_seconds"]),
+                    ("recommended_next_action", payload["recommended_next_action"]),
+                ])
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
 
 
 def advisor_local_config_main(argv: list[str] | None = None) -> int:

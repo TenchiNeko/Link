@@ -246,13 +246,23 @@ def _cmd_research(argv: list[str]) -> int:
 def _cmd_advisor(argv: list[str]) -> int:
     """Read-only local advisor configuration previews."""
     subcommand = argv[0] if argv else ""
+    if subcommand == "provider-boundary":
+        from link_modes.growth.link_growth_console import advisor_provider_boundary_main as _advisor_provider_boundary_main
+
+        return _advisor_provider_boundary_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "local-smoke":
+        from link_modes.growth.link_growth_console import advisor_local_smoke_main as _advisor_local_smoke_main
+
+        return _advisor_local_smoke_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "local-config":
         from link_modes.growth.link_growth_console import advisor_local_config_main as _advisor_local_config_main
 
         return _advisor_local_config_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Advisor commands:")
-        print("  local-config  Preview safe local model advisor configuration")
+        print("  provider-boundary Preview canonical local llama.cpp provider boundary")
+        print("  local-smoke       Preview or run bounded local llama.cpp smoke")
+        print("  local-config      Preview safe local model advisor configuration")
         return 0
     print(f"advisor: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py advisor --help' for subcommands.", file=sys.stderr)

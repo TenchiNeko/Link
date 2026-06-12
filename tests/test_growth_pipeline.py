@@ -18979,27 +18979,83 @@ def check_local_model_advisor_foundation_helpers() -> None:
         collect_local_model_advisor_comparison_card,
         collect_local_model_advisor_config,
         collect_local_model_advisor_metadata,
+        collect_local_model_provider_boundary,
         collect_local_model_research_advisor_review,
+        collect_local_model_smoke_plan,
+        collect_local_model_smoke_result,
         collect_research_advisor_prompt_package,
         parse_local_model_advisor_comparison_card_json,
         parse_local_model_advisor_config_json,
         parse_local_model_advisor_metadata_json,
+        parse_local_model_provider_boundary_json,
         parse_local_model_research_advisor_review_json,
+        parse_local_model_smoke_plan_json,
+        parse_local_model_smoke_result_json,
         parse_research_advisor_prompt_package_json,
         stable_local_model_advisor_comparison_card_json,
         stable_local_model_advisor_config_json,
         stable_local_model_advisor_metadata_json,
+        stable_local_model_provider_boundary_json,
         stable_local_model_research_advisor_review_json,
+        stable_local_model_smoke_plan_json,
+        stable_local_model_smoke_result_json,
         stable_research_advisor_prompt_package_json,
         validate_local_model_advisor_comparison_card,
         validate_local_model_advisor_config,
         validate_local_model_advisor_metadata,
+        validate_local_model_provider_boundary,
         validate_local_model_research_advisor_review,
         validate_local_model_research_grounding,
+        validate_local_model_smoke_plan,
+        validate_local_model_smoke_result,
         validate_research_advisor_prompt_package,
     )
 
     zip_source, _, _ = _research_target_test_paths()
+    boundary = collect_local_model_provider_boundary()
+    _require(boundary["provider_name"] == "llamacpp", "canonical advisor provider must be llama.cpp")
+    _require(boundary["canonical_wrapper_path"] == "link_core/models/link_local_llamacpp.py",
+             "canonical advisor wrapper path must be link_local_llamacpp.py")
+    _require(boundary["external_fallback_allowed"] is False and boundary["openrouter_fallback_allowed"] is False,
+             "canonical provider boundary must block external fallback")
+    _require(all(item["status"] == "legacy_secondary_not_selected" for item in boundary["legacy_provider_candidates"]),
+             "Ollama/Qwen candidates must remain legacy/secondary by default")
+    validate_local_model_provider_boundary(boundary)
+    _require(parse_local_model_provider_boundary_json(stable_local_model_provider_boundary_json(boundary)) == boundary,
+             "provider boundary JSON must round trip")
+    external_boundary = collect_local_model_provider_boundary(endpoint="https://openrouter.ai/api")
+    _require(external_boundary["provider_status"] == "blocked" and external_boundary["local_only"] is False,
+             "external provider boundary must fail closed")
+    try:
+        bad_boundary = json.loads(stable_local_model_provider_boundary_json(boundary))
+        bad_boundary["openrouter_fallback_allowed"] = True
+        validate_local_model_provider_boundary(bad_boundary)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("OpenRouter fallback must be rejected")
+
+    smoke_plan = collect_local_model_smoke_plan()
+    _require(smoke_plan["smoke_status"] == "preview_only" and smoke_plan["external_fallback_allowed"] is False,
+             "local-smoke plan must be preview-only and block external fallback")
+    validate_local_model_smoke_plan(smoke_plan)
+    _require(parse_local_model_smoke_plan_json(stable_local_model_smoke_plan_json(smoke_plan)) == smoke_plan,
+             "smoke plan JSON must round trip")
+    smoke_result = collect_local_model_smoke_result(response_json={"ok": True, "role": "local_advisor_smoke"}, raw_response='{"ok":true,"role":"local_advisor_smoke"}', latency_ms=3)
+    _require(smoke_result["model_provider"] == "llamacpp" and smoke_result["smoke_ok"] is True,
+             "fixture smoke result must validate canonical llama.cpp provider")
+    validate_local_model_smoke_result(smoke_result)
+    _require(parse_local_model_smoke_result_json(stable_local_model_smoke_result_json(smoke_result)) == smoke_result,
+             "smoke result JSON must round trip")
+    bad_smoke = json.loads(stable_local_model_smoke_result_json(smoke_result))
+    bad_smoke["prompt_hash"] = ""
+    try:
+        validate_local_model_smoke_result(bad_smoke)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("model smoke result must require prompt hash")
+
     config = collect_local_model_advisor_config()
     _require(config["write_allowed"] is False and config["automation_allowed"] is False,
              "local advisor config must be read-only")
@@ -19007,6 +19063,10 @@ def check_local_model_advisor_foundation_helpers() -> None:
         value = str(ref["value"]).lower()
         _require("bearer " not in value and "sk-" not in value,
                  "local advisor config must not expose secret-like values")
+    _require(config["provider"] == "llamacpp" and config["canonical_wrapper_path"] == "link_core/models/link_local_llamacpp.py",
+             "local advisor config must point at canonical llama.cpp wrapper")
+    _require(config["external_fallback_allowed"] is False and config["openrouter_fallback_allowed"] is False,
+             "local advisor config must block external fallback")
     validate_local_model_advisor_config(config)
     _require(parse_local_model_advisor_config_json(stable_local_model_advisor_config_json(config)) == config,
              "local advisor config JSON must round trip")
@@ -19042,7 +19102,7 @@ def check_local_model_advisor_foundation_helpers() -> None:
 
     metadata = collect_local_model_advisor_metadata(
         model_used=True,
-        model_provider="ollama",
+        model_provider="llamacpp",
         model_name=config["model_name"],
         model_endpoint_type="local",
         prompt_hash=package["prompt_hash"],
@@ -19103,6 +19163,8 @@ def check_local_model_advisor_foundation_helpers() -> None:
     }
     review = collect_local_model_research_advisor_review(package, model_response_json=fixture)
     _require(review["advisor_status"] == "model_fixture_validated", "fixture advisor review must validate as model-backed")
+    _require(review["model_metadata"]["model_provider"] == "llamacpp" and review["canonical_wrapper_path"] == "link_core/models/link_local_llamacpp.py",
+             "fixture advisor review must use canonical llama.cpp metadata")
     _require(review["model_metadata"]["model_used"] is True and review["human_review_required"] is True,
              "advisor review must mark model output advisory and human-reviewed")
     validate_local_model_research_advisor_review(review, package)
@@ -19145,6 +19207,8 @@ def check_local_model_advisor_foundation_helpers() -> None:
     comparison = collect_local_model_advisor_comparison_card(source_path=zip_source)
     _require(comparison["agreement_status"] == "preview_only" and comparison["human_review_required"] is True,
              "advisor comparison without local model must remain preview-only")
+    _require(comparison["canonical_wrapper_path"] == "link_core/models/link_local_llamacpp.py" and comparison["external_fallback_allowed"] is False,
+             "advisor comparison must carry canonical provider metadata")
     validate_local_model_advisor_comparison_card(comparison)
     _require(parse_local_model_advisor_comparison_card_json(stable_local_model_advisor_comparison_card_json(comparison)) == comparison,
              "advisor comparison JSON must round trip")
@@ -19157,16 +19221,37 @@ def check_local_model_advisor_clis() -> None:
     from link_modes.growth.link_growth_console import (
         parse_local_model_advisor_comparison_card_json,
         parse_local_model_advisor_config_json,
+        parse_local_model_provider_boundary_json,
         parse_local_model_research_advisor_review_json,
+        parse_local_model_smoke_plan_json,
     )
 
     zip_source, _, _ = _research_target_test_paths()
+    boundary_out = io.StringIO()
+    with contextlib.redirect_stdout(boundary_out):
+        boundary_rc = _cmd_advisor(["provider-boundary", "--json"])
+    _require(boundary_rc == 0, "advisor provider-boundary --json must return 0")
+    boundary = parse_local_model_provider_boundary_json(boundary_out.getvalue())
+    _require(boundary["provider_name"] == "llamacpp", "advisor provider-boundary must expose canonical llama.cpp")
+
+    smoke_out = io.StringIO()
+    with contextlib.redirect_stdout(smoke_out):
+        smoke_rc = _cmd_advisor(["local-smoke", "--json"])
+    _require(smoke_rc == 0, "advisor local-smoke preview --json must return 0")
+    smoke_plan = parse_local_model_smoke_plan_json(smoke_out.getvalue())
+    _require(smoke_plan["smoke_status"] == "preview_only", "advisor local-smoke without --local-model must not call model")
+
     config_out = io.StringIO()
     with contextlib.redirect_stdout(config_out):
         config_rc = _cmd_advisor(["local-config", "--json"])
     _require(config_rc == 0, "advisor local-config --json must return 0")
     config = parse_local_model_advisor_config_json(config_out.getvalue())
     _require(config["write_allowed"] is False, "advisor local-config must be read-only")
+    for command in ("provider-boundary", "local-smoke", "local-config"):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            write_rc = _cmd_advisor([command, "--write"])
+        _require(write_rc != 0 and "read-only" in err.getvalue(), f"advisor {command} --write must be rejected")
 
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
