@@ -13226,6 +13226,843 @@ def parse_research_target_recommendation_specificity_json(text: str) -> dict[str
     return payload
 
 
+
+
+LOCAL_MODEL_ADVISOR_CONFIG_VERSION = "link-local-model-advisor-config-v1"
+LOCAL_MODEL_ADVISOR_METADATA_VERSION = "link-local-model-advisor-metadata-v1"
+RESEARCH_ADVISOR_PROMPT_PACKAGE_VERSION = "link-research-advisor-prompt-package-v1"
+LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION = "link-local-model-research-advisor-review-v1"
+LOCAL_MODEL_ADVISOR_COMPARISON_CARD_VERSION = "link-local-model-advisor-comparison-card-v1"
+LOCAL_ADVISOR_FORBIDDEN_RECOMMENDATIONS = (
+    "copy external code", "scrape now", "contact vendors", "outreach",
+    "purchase inventory", "execute task", "patch files", "approve proposal",
+    "push commit", "install package", "use network",
+)
+
+
+def _local_advisor_endpoint_type(endpoint: str) -> str:
+    from urllib.parse import urlparse
+
+    value = str(endpoint or "").strip()
+    if not value:
+        return "unknown"
+    if value.startswith(("unix:", "file:")):
+        return "local"
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return "local"
+    return "external" if parsed.scheme in {"http", "https"} else "unknown"
+
+
+def _redacted_config_ref(path: str, key: str, value: str) -> dict[str, Any]:
+    secret_terms = ("key", "token", "secret", "authorization", "bearer")
+    lower_key = key.lower()
+    redacted = "<redacted>" if any(term in lower_key for term in secret_terms) else value
+    return {"path": path, "key": key, "value": redacted}
+
+
+def _local_advisor_safe_hash(value: Any) -> str:
+    return _research_target_hash_text(value)[:16]
+
+
+def collect_local_model_advisor_config(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    provider = "ollama"
+    model_name = "qwen2.5-coder:32b-instruct-q8_0"
+    endpoint = "http://127.0.0.1:11434"
+    refs = [
+        _redacted_config_ref("configs/models.yaml", "profiles.local_fast.provider", provider),
+        _redacted_config_ref("configs/models.yaml", "profiles.local_fast.default_model", model_name),
+        _redacted_config_ref("configs/models.yaml", "profiles.local_fast.endpoint_default", endpoint),
+    ]
+    try:
+        from link_core.routing.link_model_routing_profiles import get_profile
+
+        profile = get_profile("local_fast")
+        provider = profile.provider
+        model_name = profile.default_model
+        endpoint = profile.endpoint_default
+        refs = [
+            _redacted_config_ref("link_core/routing/link_model_routing_profiles.py", "local_fast.provider", provider),
+            _redacted_config_ref("link_core/routing/link_model_routing_profiles.py", "local_fast.default_model", model_name),
+            _redacted_config_ref("link_core/routing/link_model_routing_profiles.py", "local_fast.endpoint_default", endpoint),
+            *refs,
+        ]
+    except Exception:
+        pass
+    endpoint_type = _local_advisor_endpoint_type(endpoint)
+    blocked: list[str] = []
+    if endpoint_type != "local":
+        blocked.append("endpoint is not local-only")
+    if provider.lower() in {"openrouter", "anthropic"} or "openrouter" in endpoint.lower():
+        blocked.append("provider or endpoint suggests external model access")
+    usable = not blocked
+    payload = {
+        "local_model_advisor_config_version": LOCAL_MODEL_ADVISOR_CONFIG_VERSION,
+        "local_model_advisor_config_id": "local-model-advisor-config-" + _local_advisor_safe_hash({
+            "provider": provider,
+            "model_name": model_name,
+            "endpoint": endpoint,
+            "version": LOCAL_MODEL_ADVISOR_CONFIG_VERSION,
+        }),
+        "config_status": "usable_local_config" if usable else "blocked",
+        "provider": provider,
+        "model_name": model_name,
+        "endpoint_type": endpoint_type,
+        "endpoint_summary": endpoint,
+        "usable_for_local_advisor": usable,
+        "blocked_reasons": blocked,
+        "redacted_config_refs": refs,
+        "recommended_next_action": "Use --local-model only for explicit advisory review; deterministic Link outputs remain authoritative." if usable else "Do not run local advisor inference until a local-only endpoint is configured.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_model_advisor_config(payload)
+    return payload
+
+
+def validate_local_model_advisor_config(payload: dict[str, Any]) -> None:
+    required = (
+        "local_model_advisor_config_version", "local_model_advisor_config_id", "config_status",
+        "provider", "model_name", "endpoint_type", "endpoint_summary", "usable_for_local_advisor",
+        "blocked_reasons", "redacted_config_refs", "recommended_next_action", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local model advisor config missing field: {key}")
+    if payload["local_model_advisor_config_version"] != LOCAL_MODEL_ADVISOR_CONFIG_VERSION:
+        raise ValueError("invalid local model advisor config version")
+    if not str(payload["local_model_advisor_config_id"]).startswith("local-model-advisor-config-"):
+        raise ValueError("invalid local model advisor config id")
+    if payload["endpoint_type"] not in {"local", "external", "unknown"}:
+        raise ValueError("invalid local advisor endpoint type")
+    if payload["usable_for_local_advisor"] is True and payload["endpoint_type"] != "local":
+        raise ValueError("usable local advisor config must use a local endpoint")
+    if payload["provider"].lower() in {"openrouter", "anthropic"} and payload["usable_for_local_advisor"] is True:
+        raise ValueError("external providers cannot be usable for local advisor")
+    for ref in payload["redacted_config_refs"]:
+        if not isinstance(ref, dict) or any(key not in ref for key in ("path", "key", "value")):
+            raise ValueError("redacted config refs must include path/key/value")
+        text = str(ref["value"]).lower()
+        if "bearer " in text or "sk-" in text:
+            raise ValueError("local advisor config must not expose secret-like values")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local model advisor config must remain read-only")
+
+
+def stable_local_model_advisor_config_json(payload: dict[str, Any]) -> str:
+    validate_local_model_advisor_config(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_model_advisor_config_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_model_advisor_config(payload)
+    return payload
+
+
+def collect_local_model_advisor_metadata(
+    *,
+    model_used: bool,
+    model_provider: str,
+    model_name: str,
+    model_endpoint_type: str,
+    prompt_hash: str = "",
+    response_hash: str = "",
+    source_refs_used: list[str] | None = None,
+    evidence_refs_used: list[str] | None = None,
+    latency_ms: int = 0,
+    valid_json: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    source_refs = list(source_refs_used or [])
+    evidence_refs = list(evidence_refs_used or [])
+    payload = {
+        "local_model_advisor_metadata_version": LOCAL_MODEL_ADVISOR_METADATA_VERSION,
+        "local_model_advisor_metadata_id": "local-model-advisor-metadata-" + _local_advisor_safe_hash({
+            "model_used": model_used,
+            "model_provider": model_provider,
+            "model_name": model_name,
+            "model_endpoint_type": model_endpoint_type,
+            "prompt_hash": prompt_hash,
+            "response_hash": response_hash,
+            "source_refs_used": source_refs,
+            "evidence_refs_used": evidence_refs,
+            "version": LOCAL_MODEL_ADVISOR_METADATA_VERSION,
+        }),
+        "model_used": bool(model_used),
+        "model_provider": model_provider,
+        "model_name": model_name,
+        "model_endpoint_type": model_endpoint_type,
+        "prompt_hash": prompt_hash,
+        "response_hash": response_hash,
+        "source_refs_used": source_refs,
+        "evidence_refs_used": evidence_refs,
+        "latency_ms": int(latency_ms),
+        "valid_json": bool(valid_json),
+        "human_review_required": True,
+        "advisory_only": True,
+        "no_execution": True,
+        "no_approval_authority": True,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_model_advisor_metadata(payload)
+    return payload
+
+
+def validate_local_model_advisor_metadata(payload: dict[str, Any]) -> None:
+    required = (
+        "local_model_advisor_metadata_version", "local_model_advisor_metadata_id", "model_used",
+        "model_provider", "model_name", "model_endpoint_type", "prompt_hash", "response_hash",
+        "source_refs_used", "evidence_refs_used", "latency_ms", "valid_json",
+        "human_review_required", "advisory_only", "no_execution", "no_approval_authority",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local model advisor metadata missing field: {key}")
+    if payload["local_model_advisor_metadata_version"] != LOCAL_MODEL_ADVISOR_METADATA_VERSION:
+        raise ValueError("invalid local model advisor metadata version")
+    if not payload["local_model_advisor_metadata_id"].startswith("local-model-advisor-metadata-"):
+        raise ValueError("invalid local model advisor metadata id")
+    if payload["model_used"] is True:
+        if payload["model_endpoint_type"] != "local":
+            raise ValueError("model-backed advisor metadata must use local endpoint")
+        if not payload["prompt_hash"] or not payload["response_hash"]:
+            raise ValueError("model-backed advisor metadata requires prompt and response hashes")
+        if not payload["source_refs_used"]:
+            raise ValueError("model-backed research advisor metadata requires source refs")
+    if payload["human_review_required"] is not True or payload["advisory_only"] is not True or payload["no_execution"] is not True or payload["no_approval_authority"] is not True:
+        raise ValueError("local advisor metadata must be advisory only and require human review")
+    if not isinstance(payload["latency_ms"], int) or payload["latency_ms"] < 0:
+        raise ValueError("local advisor latency_ms must be non-negative")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local advisor metadata must remain read-only")
+
+
+def stable_local_model_advisor_metadata_json(payload: dict[str, Any]) -> str:
+    validate_local_model_advisor_metadata(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_model_advisor_metadata_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_model_advisor_metadata(payload)
+    return payload
+
+
+def collect_research_advisor_prompt_package(
+    research_target_intake: dict[str, Any] | None = None,
+    research_target_evidence_bundle: dict[str, Any] | None = None,
+    research_target_provenance_table: dict[str, Any] | None = None,
+    research_target_pattern_summary: dict[str, Any] | None = None,
+    research_target_upgrade_candidates: dict[str, Any] | None = None,
+    research_target_operator_report: dict[str, Any] | None = None,
+    research_target_upgrade_rationale_card: dict[str, Any] | None = None,
+    research_target_recommendation_specificity: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if any(item is None for item in (
+        research_target_intake, research_target_evidence_bundle, research_target_provenance_table,
+        research_target_pattern_summary, research_target_upgrade_candidates, research_target_operator_report,
+        research_target_upgrade_rationale_card, research_target_recommendation_specificity,
+    )):
+        context = build_source_aware_context_for_cli(str(source_path or ""))
+        intake = research_target_intake or context["research_target_intake"]
+        evidence = research_target_evidence_bundle or context["research_target_evidence_bundle"]
+        table = research_target_provenance_table or collect_research_target_provenance_table(intake, evidence, context["research_source_binding_context"])
+        patterns = research_target_pattern_summary or collect_research_target_pattern_summary(intake, evidence, table)
+        candidates = research_target_upgrade_candidates or context["research_target_upgrade_candidates"]
+        report = research_target_operator_report or collect_research_target_operator_report(source_path=str(source_path or ""), source_context=context)
+        rationale = research_target_upgrade_rationale_card or collect_research_target_upgrade_rationale_card(candidates, patterns, table, context["decision_chain"]["ranking"], context["decision_chain"]["trace"])
+        specificity = research_target_recommendation_specificity or collect_research_target_recommendation_specificity(report, rationale, patterns, table, context["operator_chain"]["task_draft"])
+    else:
+        intake = research_target_intake
+        evidence = research_target_evidence_bundle
+        table = research_target_provenance_table
+        patterns = research_target_pattern_summary
+        candidates = research_target_upgrade_candidates
+        report = research_target_operator_report
+        rationale = research_target_upgrade_rationale_card
+        specificity = research_target_recommendation_specificity
+    validate_research_target_intake(intake)
+    validate_research_target_evidence_bundle(evidence, intake)
+    source_refs = _compact_source_ref_summaries(evidence, limit=6)
+    evidence_refs = _compact_evidence_ref_summaries(evidence, limit=6)
+    provenance = [
+        {
+            "row_id": row["row_id"],
+            "display_path": row["display_path"],
+            "provenance_path": row["provenance_path"],
+            "evidence_type": row["evidence_type"],
+            "why_relevant": row["why_relevant"],
+        }
+        for row in table["provenance_rows"][:6]
+    ]
+    deterministic_candidates = [
+        {
+            "upgrade_candidate_id": item["upgrade_candidate_id"],
+            "title": item["title"],
+            "target_link_module": item["target_link_module"],
+            "description": item["description"],
+            "source_refs": item["source_refs"][:4],
+            "evidence_refs": item["evidence_refs"][:4],
+            "expected_value": item["expected_value"],
+            "risk_level": item["risk_level"],
+            "confidence_score": item["confidence_score"],
+            "effort_score": item["effort_score"],
+        }
+        for item in candidates["upgrade_candidates"][:5]
+    ]
+    body = {
+        "source_path": intake["source_path"],
+        "source_name": intake["source_name"],
+        "source_type": intake["source_type"],
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "research_target_evidence_bundle_id": evidence["research_target_evidence_bundle_id"],
+        "source_refs": source_refs,
+        "evidence_refs": evidence_refs,
+        "provenance_summaries": provenance,
+        "deterministic_upgrade_candidates": deterministic_candidates,
+        "deterministic_task_summary": report.get("task_draft_summary", {}),
+        "prompt_instructions": [
+            "Return strict JSON only.",
+            "Cite source_refs from this prompt for every pattern.",
+            "Cite evidence_refs for high-confidence recommendations.",
+            "Say insufficient evidence when unsure.",
+            "Do not recommend copying external code.",
+            "Do not recommend execution, scraping, outreach, package installation, patching, approvals, git, or network use.",
+        ],
+        "max_source_ref_count": 6,
+        "max_evidence_ref_count": 6,
+        "why_this_target": rationale["why_this_target"],
+        "why_this_upgrade": rationale["why_this_upgrade"],
+        "specificity_grade": specificity["specificity_grade"],
+        "specificity_score": specificity["specificity_score"],
+    }
+    prompt_hash = _research_target_hash_text(body)
+    payload = {
+        "research_advisor_prompt_package_version": RESEARCH_ADVISOR_PROMPT_PACKAGE_VERSION,
+        "research_advisor_prompt_package_id": "research-advisor-prompt-package-" + _local_advisor_safe_hash({
+            "source_path": intake["source_path"],
+            "prompt_hash": prompt_hash,
+            "version": RESEARCH_ADVISOR_PROMPT_PACKAGE_VERSION,
+        }),
+        **body,
+        "prompt_hash": prompt_hash,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_research_advisor_prompt_package(payload)
+    return payload
+
+
+def validate_research_advisor_prompt_package(payload: dict[str, Any]) -> None:
+    required = (
+        "research_advisor_prompt_package_version", "research_advisor_prompt_package_id", "source_path",
+        "source_name", "source_type", "research_target_intake_id", "research_target_evidence_bundle_id",
+        "source_refs", "evidence_refs", "provenance_summaries", "deterministic_upgrade_candidates",
+        "deterministic_task_summary", "prompt_instructions", "max_source_ref_count", "max_evidence_ref_count",
+        "prompt_hash", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"research advisor prompt package missing field: {key}")
+    if payload["research_advisor_prompt_package_version"] != RESEARCH_ADVISOR_PROMPT_PACKAGE_VERSION:
+        raise ValueError("invalid research advisor prompt package version")
+    if not payload["research_advisor_prompt_package_id"].startswith("research-advisor-prompt-package-"):
+        raise ValueError("invalid research advisor prompt package id")
+    if not payload["source_path"].startswith("research/"):
+        raise ValueError("research advisor prompt package source path must remain under research")
+    if not payload["source_refs"] or not payload["evidence_refs"]:
+        raise ValueError("research advisor prompt package requires source and evidence refs")
+    if len(payload["source_refs"]) > payload["max_source_ref_count"] or len(payload["evidence_refs"]) > payload["max_evidence_ref_count"]:
+        raise ValueError("research advisor prompt package exceeds compact ref limits")
+    package_text = _stable_ruflo_json(payload)
+    if "full source file contents" in package_text.lower() or len(package_text) > 60000:
+        raise ValueError("research advisor prompt package must remain compact and content-free")
+    if not any("insufficient evidence" in item.lower() for item in payload["prompt_instructions"]):
+        raise ValueError("research advisor prompt package must instruct insufficient evidence behavior")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("research advisor prompt package must remain read-only")
+
+
+def stable_research_advisor_prompt_package_json(payload: dict[str, Any]) -> str:
+    validate_research_advisor_prompt_package(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_research_advisor_prompt_package_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_research_advisor_prompt_package(payload)
+    return payload
+
+
+def _research_advisor_allowed_source_ids(prompt_package: dict[str, Any]) -> set[str]:
+    return {item["source_ref_id"] for item in prompt_package["source_refs"]}
+
+
+def _research_advisor_allowed_evidence_ids(prompt_package: dict[str, Any]) -> set[str]:
+    return {item["evidence_ref_id"] for item in prompt_package["evidence_refs"]}
+
+
+def _research_advisor_forbidden_text(value: Any) -> bool:
+    text = _stable_ruflo_json(value).lower() if not isinstance(value, str) else value.lower()
+    return any(term in text for term in LOCAL_ADVISOR_FORBIDDEN_RECOMMENDATIONS)
+
+
+def validate_local_model_research_grounding(review: dict[str, Any], prompt_package: dict[str, Any] | None = None) -> None:
+    package = prompt_package
+    allowed_sources = set(review.get("_allowed_source_refs", []))
+    allowed_evidence = set(review.get("_allowed_evidence_refs", []))
+    if package is not None:
+        validate_research_advisor_prompt_package(package)
+        allowed_sources = _research_advisor_allowed_source_ids(package)
+        allowed_evidence = _research_advisor_allowed_evidence_ids(package)
+    if not allowed_sources:
+        allowed_sources = {ref for item in review.get("patterns_found", []) for ref in item.get("source_refs", [])}
+    grounding_warnings = review.setdefault("grounding_warnings", [])
+    for pattern in review.get("patterns_found", []):
+        if not pattern.get("source_refs"):
+            raise ValueError("local research advisor patterns must cite source refs")
+        unknown_sources = [ref for ref in pattern.get("source_refs", []) if ref not in allowed_sources]
+        if unknown_sources:
+            raise ValueError(f"local research advisor cited unknown source refs: {unknown_sources}")
+        if int(pattern.get("confidence", 0)) >= 70 and not pattern.get("evidence_refs"):
+            grounding_warnings.append(f"high-confidence pattern lacks evidence refs: {pattern.get('pattern_name', '')}")
+        unknown_evidence = [ref for ref in pattern.get("evidence_refs", []) if allowed_evidence and ref not in allowed_evidence]
+        if unknown_evidence:
+            grounding_warnings.append(f"unknown evidence refs for pattern {pattern.get('pattern_name', '')}: {', '.join(unknown_evidence)}")
+    for critique in review.get("upgrade_candidate_critiques", []):
+        if int(critique.get("confidence", 0)) >= 70 and critique.get("source_grounding_status") not in {"grounded", "partially_grounded"}:
+            grounding_warnings.append(f"high-confidence critique is not grounded: {critique.get('upgrade_candidate_id', '')}")
+    checked_fields = {
+        "best_upgrade_suggestion": review.get("best_upgrade_suggestion", {}),
+        "recommended_next_action": review.get("recommended_next_action", ""),
+        "task_draft_improvements": review.get("task_draft_improvements", []),
+    }
+    if _research_advisor_forbidden_text(checked_fields):
+        raise ValueError("local research advisor output contains forbidden action recommendation")
+
+
+def _deterministic_advisor_patterns(prompt_package: dict[str, Any]) -> list[dict[str, Any]]:
+    patterns = []
+    source_refs = [item["source_ref_id"] for item in prompt_package["source_refs"]]
+    evidence_refs = [item["evidence_ref_id"] for item in prompt_package["evidence_refs"]]
+    for candidate in prompt_package["deterministic_upgrade_candidates"][:3]:
+        patterns.append({
+            "pattern_name": f"Deterministic signal for {candidate['target_link_module']}",
+            "why_it_matters": f"Link already found source-bound evidence for {candidate['title']} in {prompt_package['source_name']}.",
+            "source_refs": candidate.get("source_refs")[:2] or source_refs[:1],
+            "evidence_refs": candidate.get("evidence_refs")[:2] or evidence_refs[:1],
+            "target_link_module": candidate["target_link_module"],
+            "risk": candidate["risk_level"],
+            "confidence": min(85, int(candidate["confidence_score"])),
+        })
+    return patterns
+
+
+def _deterministic_advisor_critiques(prompt_package: dict[str, Any]) -> list[dict[str, Any]]:
+    critiques = []
+    for candidate in prompt_package["deterministic_upgrade_candidates"][:5]:
+        missing = [] if candidate.get("evidence_refs") else ["candidate evidence refs"]
+        critiques.append({
+            "upgrade_candidate_id": candidate["upgrade_candidate_id"],
+            "critique": f"Deterministic baseline supports {candidate['title']} but still requires human review for implementation specificity.",
+            "source_grounding_status": "grounded" if candidate.get("source_refs") else "insufficient_evidence",
+            "specificity_assessment": "source-bound" if candidate.get("source_refs") and candidate.get("evidence_refs") else "needs_more_evidence",
+            "missing_evidence": missing,
+            "confidence": int(candidate["confidence_score"]),
+        })
+    return critiques
+
+
+def _normalize_local_research_advisor_model_json(model_json: dict[str, Any], prompt_package: dict[str, Any]) -> dict[str, Any]:
+    source_ids = _research_advisor_allowed_source_ids(prompt_package)
+    evidence_ids = _research_advisor_allowed_evidence_ids(prompt_package)
+
+    def clean_pattern(item: dict[str, Any]) -> dict[str, Any]:
+        refs = [ref for ref in item.get("source_refs", []) if isinstance(ref, str)]
+        evs = [ref for ref in item.get("evidence_refs", []) if isinstance(ref, str)]
+        return {
+            "pattern_name": str(item.get("pattern_name") or "advisor pattern")[:120],
+            "why_it_matters": str(item.get("why_it_matters") or "insufficient evidence")[:300],
+            "source_refs": refs,
+            "evidence_refs": evs,
+            "target_link_module": str(item.get("target_link_module") or "unknown"),
+            "risk": str(item.get("risk") or "medium"),
+            "confidence": int(item.get("confidence", 0)),
+        }
+
+    def clean_critique(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "upgrade_candidate_id": str(item.get("upgrade_candidate_id") or "unknown"),
+            "critique": str(item.get("critique") or "insufficient evidence")[:400],
+            "source_grounding_status": str(item.get("source_grounding_status") or "insufficient_evidence"),
+            "specificity_assessment": str(item.get("specificity_assessment") or "needs_review"),
+            "missing_evidence": [str(value) for value in item.get("missing_evidence", []) if isinstance(value, str)][:8],
+            "confidence": int(item.get("confidence", 0)),
+        }
+
+    patterns = [clean_pattern(item) for item in model_json.get("patterns_found", []) if isinstance(item, dict)]
+    critiques = [clean_critique(item) for item in model_json.get("upgrade_candidate_critiques", []) if isinstance(item, dict)]
+    if not patterns:
+        patterns = _deterministic_advisor_patterns(prompt_package)
+    if not critiques:
+        critiques = _deterministic_advisor_critiques(prompt_package)
+    selected = prompt_package["deterministic_upgrade_candidates"][0]
+    best = model_json.get("best_upgrade_suggestion") if isinstance(model_json.get("best_upgrade_suggestion"), dict) else {}
+    return {
+        "patterns_found": patterns,
+        "upgrade_candidate_critiques": critiques,
+        "best_upgrade_suggestion": {
+            "title": str(best.get("title") or selected["title"])[:160],
+            "target_link_module": str(best.get("target_link_module") or selected["target_link_module"]),
+            "upgrade_candidate_id": str(best.get("upgrade_candidate_id") or selected["upgrade_candidate_id"]),
+            "why": str(best.get("why") or "Advisor should review deterministic source-bound candidate.")[:360],
+        },
+        "genericity_warnings": [str(item) for item in model_json.get("genericity_warnings", []) if isinstance(item, str)][:10],
+        "missing_evidence": [str(item) for item in model_json.get("missing_evidence", []) if isinstance(item, str)][:10],
+        "risks": [str(item) for item in model_json.get("risks", []) if isinstance(item, str)][:10],
+        "task_draft_improvements": [str(item) for item in model_json.get("task_draft_improvements", []) if isinstance(item, str)][:10],
+        "do_not_use": [str(item) for item in model_json.get("do_not_use", []) if isinstance(item, str)][:10] or list(LOCAL_ADVISOR_FORBIDDEN_RECOMMENDATIONS[:5]),
+        "grounding_warnings": [],
+        "_allowed_source_refs": sorted(source_ids),
+        "_allowed_evidence_refs": sorted(evidence_ids),
+    }
+
+
+def _call_local_research_advisor_model(config: dict[str, Any], prompt_package: dict[str, Any], *, timeout: int = 45) -> tuple[dict[str, Any], str, int]:
+    import json as _json
+    import time
+    import urllib.error
+    import urllib.request
+
+    validate_local_model_advisor_config(config)
+    validate_research_advisor_prompt_package(prompt_package)
+    if not config["usable_for_local_advisor"] or config["endpoint_type"] != "local":
+        raise ValueError("local advisor config is not usable for local inference")
+    if config["provider"].lower() != "ollama":
+        raise ValueError("only local ollama advisor calls are enabled in this experiment")
+    prompt = _stable_ruflo_json({
+        "task": "Review this Link research target and return strict JSON only.",
+        "expected_schema": {
+            "patterns_found": ["pattern_name", "why_it_matters", "source_refs", "evidence_refs", "target_link_module", "risk", "confidence"],
+            "upgrade_candidate_critiques": ["upgrade_candidate_id", "critique", "source_grounding_status", "specificity_assessment", "missing_evidence", "confidence"],
+            "best_upgrade_suggestion": {"title": "", "target_link_module": "", "upgrade_candidate_id": "", "why": ""},
+            "genericity_warnings": [],
+            "missing_evidence": [],
+            "risks": [],
+            "task_draft_improvements": [],
+            "do_not_use": [],
+        },
+        "prompt_package": prompt_package,
+    })
+    payload = {
+        "model": config["model_name"],
+        "messages": [
+            {"role": "system", "content": "You are a local-only advisory reviewer for Link. Return strict JSON only. Do not suggest execution, writes, approvals, network use, scraping, package installs, or copying external code."},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": 0},
+    }
+    endpoint = config["endpoint_summary"].rstrip("/") + "/api/chat"
+    request = urllib.request.Request(
+        endpoint,
+        data=_json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as exc:
+        raise ValueError(f"local advisor model request failed: {exc}") from exc
+    latency_ms = int((time.monotonic() - started) * 1000)
+    data = _json.loads(raw)
+    content = data.get("message", {}).get("content", "")
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("local advisor model returned empty content")
+    model_json = _json.loads(content)
+    return model_json, content, latency_ms
+
+
+def collect_local_model_research_advisor_review(
+    research_advisor_prompt_package: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    use_local_model: bool = False,
+    model_response_json: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    prompt_package = research_advisor_prompt_package or collect_research_advisor_prompt_package(source_path=source_path)
+    validate_research_advisor_prompt_package(prompt_package)
+    config = collect_local_model_advisor_config()
+    prompt_hash = prompt_package["prompt_hash"]
+    response_hash = ""
+    latency_ms = 0
+    valid_json = False
+    advisor_status = "preview_only"
+    if model_response_json is not None:
+        normalized = _normalize_local_research_advisor_model_json(model_response_json, prompt_package)
+        response_hash = _research_target_hash_text(model_response_json)
+        valid_json = True
+        advisor_status = "model_fixture_validated"
+        model_used = True
+    elif use_local_model:
+        model_json, raw_content, latency_ms = _call_local_research_advisor_model(config, prompt_package)
+        normalized = _normalize_local_research_advisor_model_json(model_json, prompt_package)
+        response_hash = _research_target_hash_text(raw_content)
+        valid_json = True
+        advisor_status = "model_reviewed"
+        model_used = True
+    else:
+        normalized = {
+            "patterns_found": _deterministic_advisor_patterns(prompt_package),
+            "upgrade_candidate_critiques": _deterministic_advisor_critiques(prompt_package),
+            "best_upgrade_suggestion": {
+                "title": prompt_package["deterministic_upgrade_candidates"][0]["title"],
+                "target_link_module": prompt_package["deterministic_upgrade_candidates"][0]["target_link_module"],
+                "upgrade_candidate_id": prompt_package["deterministic_upgrade_candidates"][0]["upgrade_candidate_id"],
+                "why": "Preview only: rerun with --local-model if a usable local model is available.",
+            },
+            "genericity_warnings": ["No local model was called; this is deterministic preview output."],
+            "missing_evidence": list(prompt_package.get("missing_evidence", [])),
+            "risks": ["Advisor output has not been reviewed by a model."],
+            "task_draft_improvements": ["Run with --local-model to request advisory critique of task specificity."],
+            "do_not_use": list(LOCAL_ADVISOR_FORBIDDEN_RECOMMENDATIONS),
+            "grounding_warnings": [],
+            "_allowed_source_refs": sorted(_research_advisor_allowed_source_ids(prompt_package)),
+            "_allowed_evidence_refs": sorted(_research_advisor_allowed_evidence_ids(prompt_package)),
+        }
+        model_used = False
+    source_refs_used = sorted({ref for item in normalized["patterns_found"] for ref in item.get("source_refs", [])}) or [item["source_ref_id"] for item in prompt_package["source_refs"][:1]]
+    evidence_refs_used = sorted({ref for item in normalized["patterns_found"] for ref in item.get("evidence_refs", [])})
+    model_metadata = collect_local_model_advisor_metadata(
+        model_used=model_used,
+        model_provider=config["provider"] if model_used else "none",
+        model_name=config["model_name"] if model_used else "none",
+        model_endpoint_type=config["endpoint_type"] if model_used else "none",
+        prompt_hash=prompt_hash,
+        response_hash=response_hash,
+        source_refs_used=source_refs_used,
+        evidence_refs_used=evidence_refs_used,
+        latency_ms=latency_ms,
+        valid_json=valid_json,
+    )
+    review = {
+        "local_model_research_advisor_review_version": LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION,
+        "local_model_research_advisor_review_id": "local-model-research-advisor-review-" + _local_advisor_safe_hash({
+            "prompt_package_id": prompt_package["research_advisor_prompt_package_id"],
+            "model_used": model_used,
+            "response_hash": response_hash,
+            "version": LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION,
+        }),
+        "research_advisor_prompt_package_id": prompt_package["research_advisor_prompt_package_id"],
+        "research_target_intake_id": prompt_package["research_target_intake_id"],
+        "research_target_evidence_bundle_id": prompt_package["research_target_evidence_bundle_id"],
+        "source_path": prompt_package["source_path"],
+        "source_name": prompt_package["source_name"],
+        "advisor_status": advisor_status,
+        "model_metadata": model_metadata,
+        "patterns_found": normalized["patterns_found"],
+        "upgrade_candidate_critiques": normalized["upgrade_candidate_critiques"],
+        "best_upgrade_suggestion": normalized["best_upgrade_suggestion"],
+        "genericity_warnings": normalized["genericity_warnings"],
+        "missing_evidence": normalized["missing_evidence"],
+        "risks": normalized["risks"],
+        "task_draft_improvements": normalized["task_draft_improvements"],
+        "do_not_use": normalized["do_not_use"],
+        "grounding_warnings": normalized["grounding_warnings"],
+        "recommended_next_action": "Review advisory findings manually; rerun with --local-model if this is preview-only." if not model_used else "Review grounded local advisor findings before changing deterministic Link plans.",
+        "human_review_required": True,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+        "_allowed_source_refs": normalized["_allowed_source_refs"],
+        "_allowed_evidence_refs": normalized["_allowed_evidence_refs"],
+    }
+    validate_local_model_research_advisor_review(review, prompt_package)
+    review.pop("_allowed_source_refs", None)
+    review.pop("_allowed_evidence_refs", None)
+    return review
+
+
+def validate_local_model_research_advisor_review(review: dict[str, Any], research_advisor_prompt_package: dict[str, Any] | None = None) -> None:
+    required = (
+        "local_model_research_advisor_review_version", "local_model_research_advisor_review_id",
+        "research_advisor_prompt_package_id", "research_target_intake_id", "source_path", "source_name",
+        "advisor_status", "model_metadata", "patterns_found", "upgrade_candidate_critiques",
+        "best_upgrade_suggestion", "genericity_warnings", "missing_evidence", "risks",
+        "task_draft_improvements", "do_not_use", "grounding_warnings", "recommended_next_action",
+        "human_review_required", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in review:
+            raise ValueError(f"local model research advisor review missing field: {key}")
+    if review["local_model_research_advisor_review_version"] != LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION:
+        raise ValueError("invalid local model research advisor review version")
+    if not review["local_model_research_advisor_review_id"].startswith("local-model-research-advisor-review-"):
+        raise ValueError("invalid local model research advisor review id")
+    if not review["source_path"].startswith("research/"):
+        raise ValueError("local research advisor review source_path required")
+    validate_local_model_advisor_metadata(review["model_metadata"])
+    for item in review["patterns_found"]:
+        for key in ("pattern_name", "why_it_matters", "source_refs", "evidence_refs", "target_link_module", "risk", "confidence"):
+            if key not in item:
+                raise ValueError(f"local advisor pattern missing field: {key}")
+        if item["target_link_module"] not in RESEARCH_TARGET_LINK_MODULES:
+            raise ValueError("local advisor pattern target module is invalid")
+        if item["risk"] not in {"low", "medium", "high"}:
+            raise ValueError("local advisor pattern risk is invalid")
+        if not isinstance(item["confidence"], int) or not 0 <= item["confidence"] <= 100:
+            raise ValueError("local advisor pattern confidence must be 0..100")
+    for item in review["upgrade_candidate_critiques"]:
+        for key in ("upgrade_candidate_id", "critique", "source_grounding_status", "specificity_assessment", "missing_evidence", "confidence"):
+            if key not in item:
+                raise ValueError(f"local advisor critique missing field: {key}")
+        if not isinstance(item["missing_evidence"], list):
+            raise ValueError("local advisor critique missing_evidence must be a list")
+        if not isinstance(item["confidence"], int) or not 0 <= item["confidence"] <= 100:
+            raise ValueError("local advisor critique confidence must be 0..100")
+    validate_local_model_research_grounding(review, research_advisor_prompt_package)
+    if review["human_review_required"] is not True:
+        raise ValueError("local advisor review must require human review")
+    if review["safety_metadata"] != _read_only_safety_metadata() or review["dry_run"] is not True or review["write_allowed"] is not False or review["automation_allowed"] is not False or review["writes"] != []:
+        raise ValueError("local advisor review must remain read-only")
+
+
+def stable_local_model_research_advisor_review_json(review: dict[str, Any]) -> str:
+    validate_local_model_research_advisor_review(review)
+    return _stable_ruflo_json(review, indent=2) + "\n"
+
+
+def parse_local_model_research_advisor_review_json(text: str) -> dict[str, Any]:
+    import json as _json
+    review = _json.loads(text)
+    validate_local_model_research_advisor_review(review)
+    return review
+
+
+def collect_local_model_advisor_comparison_card(
+    research_target_operator_report: dict[str, Any] | None = None,
+    research_target_upgrade_rationale_card: dict[str, Any] | None = None,
+    research_target_recommendation_specificity: dict[str, Any] | None = None,
+    local_model_research_advisor_review: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    use_local_model: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if any(item is None for item in (research_target_operator_report, research_target_upgrade_rationale_card, research_target_recommendation_specificity, local_model_research_advisor_review)):
+        context = build_source_aware_context_for_cli(str(source_path or ""))
+        report = research_target_operator_report or collect_research_target_operator_report(source_path=str(source_path or ""), source_context=context)
+        table = collect_research_target_provenance_table(context["research_target_intake"], context["research_target_evidence_bundle"], context["research_source_binding_context"])
+        patterns = collect_research_target_pattern_summary(context["research_target_intake"], context["research_target_evidence_bundle"], table)
+        rationale = research_target_upgrade_rationale_card or collect_research_target_upgrade_rationale_card(context["research_target_upgrade_candidates"], patterns, table, context["decision_chain"]["ranking"], context["decision_chain"]["trace"])
+        specificity = research_target_recommendation_specificity or collect_research_target_recommendation_specificity(report, rationale, patterns, table, context["operator_chain"]["task_draft"])
+        prompt_package = collect_research_advisor_prompt_package(context["research_target_intake"], context["research_target_evidence_bundle"], table, patterns, context["research_target_upgrade_candidates"], report, rationale, specificity)
+        advisor = local_model_research_advisor_review or collect_local_model_research_advisor_review(prompt_package, use_local_model=use_local_model)
+    else:
+        report = research_target_operator_report
+        rationale = research_target_upgrade_rationale_card
+        specificity = research_target_recommendation_specificity
+        advisor = local_model_research_advisor_review
+    validate_local_model_research_advisor_review(advisor)
+    deterministic_id = report["selected_upgrade_candidate_id"]
+    advisor_best = advisor["best_upgrade_suggestion"]
+    agreement = "preview_only" if advisor["advisor_status"] == "preview_only" else "agrees" if advisor_best.get("upgrade_candidate_id") == deterministic_id else "differs"
+    payload = {
+        "local_model_advisor_comparison_card_version": LOCAL_MODEL_ADVISOR_COMPARISON_CARD_VERSION,
+        "local_model_advisor_comparison_card_id": "local-model-advisor-comparison-card-" + _local_advisor_safe_hash({
+            "source_path": report["source_path"],
+            "deterministic": deterministic_id,
+            "advisor_review": advisor["local_model_research_advisor_review_id"],
+            "agreement": agreement,
+            "version": LOCAL_MODEL_ADVISOR_COMPARISON_CARD_VERSION,
+        }),
+        "source_path": report["source_path"],
+        "research_target_intake_id": report["research_target_intake_id"],
+        "deterministic_selected_upgrade_candidate_id": deterministic_id,
+        "advisor_best_upgrade_title": advisor_best.get("title", ""),
+        "agreement_status": agreement,
+        "advisor_added_value": advisor["genericity_warnings"][:3] + advisor["task_draft_improvements"][:3],
+        "advisor_risks": advisor["risks"][:5] + advisor["grounding_warnings"][:5],
+        "deterministic_output_better_at": ["safety gates", "stable IDs", "source path validation", "approval status"],
+        "local_model_output_better_at": ["semantic critique", "missing evidence suggestions", "human-readable rationale"] if advisor["model_metadata"]["model_used"] else [],
+        "human_review_required": True,
+        "recommended_next_action": "Use deterministic output as authority; use advisor comparison only as human-reviewed critique.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_model_advisor_comparison_card(payload)
+    return payload
+
+
+def validate_local_model_advisor_comparison_card(payload: dict[str, Any]) -> None:
+    required = (
+        "local_model_advisor_comparison_card_version", "local_model_advisor_comparison_card_id",
+        "source_path", "deterministic_selected_upgrade_candidate_id", "advisor_best_upgrade_title",
+        "agreement_status", "advisor_added_value", "advisor_risks", "deterministic_output_better_at",
+        "local_model_output_better_at", "human_review_required", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local model advisor comparison missing field: {key}")
+    if payload["local_model_advisor_comparison_card_version"] != LOCAL_MODEL_ADVISOR_COMPARISON_CARD_VERSION:
+        raise ValueError("invalid local model advisor comparison version")
+    if not payload["local_model_advisor_comparison_card_id"].startswith("local-model-advisor-comparison-card-"):
+        raise ValueError("invalid local model advisor comparison id")
+    if payload["agreement_status"] not in {"preview_only", "agrees", "differs"}:
+        raise ValueError("invalid local advisor comparison agreement status")
+    if payload["human_review_required"] is not True:
+        raise ValueError("local advisor comparison requires human review")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local advisor comparison must remain read-only")
+
+
+def stable_local_model_advisor_comparison_card_json(payload: dict[str, Any]) -> str:
+    validate_local_model_advisor_comparison_card(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_model_advisor_comparison_card_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_model_advisor_comparison_card(payload)
+    return payload
+
+
 def collect_research_target_operator_report(*, source_path: str, metadata: dict[str, Any] | None = None, source_context: dict[str, Any] | None = None) -> dict[str, Any]:
     context = source_context or build_source_aware_context_for_cli(source_path)
     intake = context["research_target_intake"]
@@ -14577,6 +15414,128 @@ def _research_target_print_specificity(payload: dict[str, Any]) -> None:
             print(f"  - {warning}")
     print(f"next_action: {payload['recommended_next_action']}")
     print("Read-only: no execution, no patches, no source mutation.")
+
+
+
+
+def advisor_local_config_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor local-config: safe local model advisor configuration")
+        print("  python3 link.py advisor local-config --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor local-config is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_local_model_advisor_config()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_model_advisor_config_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor local config", payload, [
+            ("id", payload["local_model_advisor_config_id"]),
+            ("status", payload["config_status"]),
+            ("provider", payload["provider"]),
+            ("model", payload["model_name"]),
+            ("endpoint_type", payload["endpoint_type"]),
+            ("usable", payload["usable_for_local_advisor"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def _research_advisor_print_review(review: dict[str, Any]) -> None:
+    print("Local model research advisor review")
+    print(f"source: {review['source_path']}")
+    print(f"status: {review['advisor_status']}")
+    print(f"model_used: {review['model_metadata']['model_used']}")
+    print("patterns:")
+    for pattern in review["patterns_found"][:5]:
+        print(f"  - {pattern['pattern_name']} | {pattern['target_link_module']} | confidence {pattern['confidence']} | refs {', '.join(pattern['source_refs'][:2])}")
+    print("best_upgrade_suggestion:")
+    best = review["best_upgrade_suggestion"]
+    print(f"  - {best.get('title', '')} | {best.get('target_link_module', '')} | {best.get('why', '')}")
+    if review["genericity_warnings"]:
+        print("genericity_warnings:")
+        for warning in review["genericity_warnings"][:5]:
+            print(f"  - {warning}")
+    if review["grounding_warnings"]:
+        print("grounding_warnings:")
+        for warning in review["grounding_warnings"][:5]:
+            print(f"  - {warning}")
+    print(f"next_action: {review['recommended_next_action']}")
+    print("Read-only advisor: no execution, no approvals, no writes.")
+
+
+def research_advisor_review_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research advisor-review: optional local model research advisor")
+        print("  python3 link.py research advisor-review --source <path> --json")
+        print("  python3 link.py research advisor-review --source <path> --local-model --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "advisor-review")
+    if rc is not None:
+        return rc
+    use_local_model = "--local-model" in args
+    try:
+        prompt_package = collect_research_advisor_prompt_package(source_path=source or "")
+        payload = collect_local_model_research_advisor_review(prompt_package, use_local_model=use_local_model)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_model_research_advisor_review_json(payload), end="")
+    else:
+        _research_advisor_print_review(payload)
+    return 0
+
+
+def _research_advisor_print_comparison(card: dict[str, Any]) -> None:
+    print("Local model advisor comparison")
+    print(f"source: {card['source_path']}")
+    print(f"deterministic_selected_upgrade_candidate_id: {card['deterministic_selected_upgrade_candidate_id']}")
+    print(f"advisor_best_upgrade_title: {card['advisor_best_upgrade_title']}")
+    print(f"agreement_status: {card['agreement_status']}")
+    if card["advisor_added_value"]:
+        print("advisor_added_value:")
+        for item in card["advisor_added_value"][:5]:
+            print(f"  - {item}")
+    if card["advisor_risks"]:
+        print("advisor_risks:")
+        for item in card["advisor_risks"][:5]:
+            print(f"  - {item}")
+    print(f"next_action: {card['recommended_next_action']}")
+    print("Read-only comparison: deterministic Link output remains authoritative.")
+
+
+def research_advisor_comparison_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research advisor-comparison: compare deterministic and advisor outputs")
+        print("  python3 link.py research advisor-comparison --source <path> --json")
+        print("  python3 link.py research advisor-comparison --source <path> --local-model --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "advisor-comparison")
+    if rc is not None:
+        return rc
+    use_local_model = "--local-model" in args
+    try:
+        payload = collect_local_model_advisor_comparison_card(source_path=source or "", use_local_model=use_local_model)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_model_advisor_comparison_card_json(payload), end="")
+    else:
+        _research_advisor_print_comparison(payload)
+    return 0
 
 
 def research_target_provenance_main(argv: list[str] | None = None) -> int:

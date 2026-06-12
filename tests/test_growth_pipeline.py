@@ -18972,6 +18972,236 @@ def check_source_aware_cross_target_specificity() -> None:
 
     print("source-aware cross-target specificity OK")
 
+
+
+def check_local_model_advisor_foundation_helpers() -> None:
+    from link_modes.growth.link_growth_console import (
+        collect_local_model_advisor_comparison_card,
+        collect_local_model_advisor_config,
+        collect_local_model_advisor_metadata,
+        collect_local_model_research_advisor_review,
+        collect_research_advisor_prompt_package,
+        parse_local_model_advisor_comparison_card_json,
+        parse_local_model_advisor_config_json,
+        parse_local_model_advisor_metadata_json,
+        parse_local_model_research_advisor_review_json,
+        parse_research_advisor_prompt_package_json,
+        stable_local_model_advisor_comparison_card_json,
+        stable_local_model_advisor_config_json,
+        stable_local_model_advisor_metadata_json,
+        stable_local_model_research_advisor_review_json,
+        stable_research_advisor_prompt_package_json,
+        validate_local_model_advisor_comparison_card,
+        validate_local_model_advisor_config,
+        validate_local_model_advisor_metadata,
+        validate_local_model_research_advisor_review,
+        validate_local_model_research_grounding,
+        validate_research_advisor_prompt_package,
+    )
+
+    zip_source, _, _ = _research_target_test_paths()
+    config = collect_local_model_advisor_config()
+    _require(config["write_allowed"] is False and config["automation_allowed"] is False,
+             "local advisor config must be read-only")
+    for ref in config["redacted_config_refs"]:
+        value = str(ref["value"]).lower()
+        _require("bearer " not in value and "sk-" not in value,
+                 "local advisor config must not expose secret-like values")
+    validate_local_model_advisor_config(config)
+    _require(parse_local_model_advisor_config_json(stable_local_model_advisor_config_json(config)) == config,
+             "local advisor config JSON must round trip")
+
+    external = json.loads(stable_local_model_advisor_config_json(config))
+    external["endpoint_type"] = "external"
+    external["endpoint_summary"] = "https://openrouter.ai/api"
+    external["usable_for_local_advisor"] = False
+    external["config_status"] = "blocked"
+    external["blocked_reasons"] = ["endpoint is not local-only"]
+    validate_local_model_advisor_config(external)
+    bad_external = json.loads(stable_local_model_advisor_config_json(config))
+    bad_external["endpoint_type"] = "external"
+    bad_external["usable_for_local_advisor"] = True
+    try:
+        validate_local_model_advisor_config(bad_external)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("external local advisor config must not be usable")
+
+    package = collect_research_advisor_prompt_package(source_path=zip_source)
+    same_package = collect_research_advisor_prompt_package(source_path=zip_source)
+    _require(package["research_advisor_prompt_package_id"] == same_package["research_advisor_prompt_package_id"],
+             "advisor prompt package id must be deterministic")
+    _require(package["source_refs"] and package["evidence_refs"],
+             "advisor prompt package must include source and evidence refs")
+    _require("full source file contents" not in stable_research_advisor_prompt_package_json(package).lower(),
+             "advisor prompt package must not include full file contents")
+    validate_research_advisor_prompt_package(package)
+    _require(parse_research_advisor_prompt_package_json(stable_research_advisor_prompt_package_json(package)) == package,
+             "advisor prompt package JSON must round trip")
+
+    metadata = collect_local_model_advisor_metadata(
+        model_used=True,
+        model_provider="ollama",
+        model_name=config["model_name"],
+        model_endpoint_type="local",
+        prompt_hash=package["prompt_hash"],
+        response_hash="abc123",
+        source_refs_used=[package["source_refs"][0]["source_ref_id"]],
+        evidence_refs_used=[package["evidence_refs"][0]["evidence_ref_id"]],
+        latency_ms=5,
+        valid_json=True,
+    )
+    validate_local_model_advisor_metadata(metadata)
+    _require(parse_local_model_advisor_metadata_json(stable_local_model_advisor_metadata_json(metadata)) == metadata,
+             "advisor metadata JSON must round trip")
+    bad_metadata = json.loads(stable_local_model_advisor_metadata_json(metadata))
+    bad_metadata["human_review_required"] = False
+    try:
+        validate_local_model_advisor_metadata(bad_metadata)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("advisor metadata must require human review")
+
+    source_ref = package["source_refs"][0]["source_ref_id"]
+    evidence_ref = package["evidence_refs"][0]["evidence_ref_id"]
+    candidate_id = package["deterministic_upgrade_candidates"][0]["upgrade_candidate_id"]
+    fixture = {
+        "patterns_found": [
+            {
+                "pattern_name": "Source governance intake pattern",
+                "why_it_matters": "It improves target-specific research interpretation.",
+                "source_refs": [source_ref],
+                "evidence_refs": [evidence_ref],
+                "target_link_module": "research",
+                "risk": "low",
+                "confidence": 82,
+            }
+        ],
+        "upgrade_candidate_critiques": [
+            {
+                "upgrade_candidate_id": candidate_id,
+                "critique": "Grounded candidate with enough local provenance for advisory review.",
+                "source_grounding_status": "grounded",
+                "specificity_assessment": "source-bound",
+                "missing_evidence": [],
+                "confidence": 80,
+            }
+        ],
+        "best_upgrade_suggestion": {
+            "title": "Improve research target interpretation",
+            "target_link_module": "research",
+            "upgrade_candidate_id": candidate_id,
+            "why": "The cited refs show local research target structure that Link can summarize better.",
+        },
+        "genericity_warnings": [],
+        "missing_evidence": [],
+        "risks": ["advisory output still needs human review"],
+        "task_draft_improvements": ["Add acceptance criteria tied to cited source refs"],
+        "do_not_use": ["copy external code", "execute task"],
+    }
+    review = collect_local_model_research_advisor_review(package, model_response_json=fixture)
+    _require(review["advisor_status"] == "model_fixture_validated", "fixture advisor review must validate as model-backed")
+    _require(review["model_metadata"]["model_used"] is True and review["human_review_required"] is True,
+             "advisor review must mark model output advisory and human-reviewed")
+    validate_local_model_research_advisor_review(review, package)
+    _require(parse_local_model_research_advisor_review_json(stable_local_model_research_advisor_review_json(review)) == review,
+             "advisor review JSON must round trip")
+
+    preview = collect_local_model_research_advisor_review(package)
+    _require(preview["advisor_status"] == "preview_only" and preview["model_metadata"]["model_used"] is False,
+             "advisor review without local model must stay preview-only")
+
+    hallucinated = json.loads(stable_local_model_research_advisor_review_json(review))
+    hallucinated["patterns_found"][0]["source_refs"] = ["research-target-ref-hallucinated"]
+    try:
+        validate_local_model_research_advisor_review(hallucinated, package)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("advisor grounding must reject hallucinated source refs")
+
+    missing_refs = json.loads(stable_local_model_research_advisor_review_json(review))
+    missing_refs["patterns_found"][0]["source_refs"] = []
+    try:
+        validate_local_model_research_advisor_review(missing_refs, package)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("advisor grounding must reject missing source refs")
+
+    forbidden = json.loads(stable_local_model_research_advisor_review_json(review))
+    forbidden["recommended_next_action"] = "patch files now"
+    forbidden["_allowed_source_refs"] = [source_ref]
+    forbidden["_allowed_evidence_refs"] = [evidence_ref]
+    try:
+        validate_local_model_research_grounding(forbidden, package)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("advisor grounding must block forbidden recommendations")
+
+    comparison = collect_local_model_advisor_comparison_card(source_path=zip_source)
+    _require(comparison["agreement_status"] == "preview_only" and comparison["human_review_required"] is True,
+             "advisor comparison without local model must remain preview-only")
+    validate_local_model_advisor_comparison_card(comparison)
+    _require(parse_local_model_advisor_comparison_card_json(stable_local_model_advisor_comparison_card_json(comparison)) == comparison,
+             "advisor comparison JSON must round trip")
+
+    print("local model advisor foundation helpers OK")
+
+
+def check_local_model_advisor_clis() -> None:
+    from link import _cmd_advisor, _cmd_research
+    from link_modes.growth.link_growth_console import (
+        parse_local_model_advisor_comparison_card_json,
+        parse_local_model_advisor_config_json,
+        parse_local_model_research_advisor_review_json,
+    )
+
+    zip_source, _, _ = _research_target_test_paths()
+    config_out = io.StringIO()
+    with contextlib.redirect_stdout(config_out):
+        config_rc = _cmd_advisor(["local-config", "--json"])
+    _require(config_rc == 0, "advisor local-config --json must return 0")
+    config = parse_local_model_advisor_config_json(config_out.getvalue())
+    _require(config["write_allowed"] is False, "advisor local-config must be read-only")
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = _cmd_research(["advisor-review", "--source", zip_source, "--json"])
+    _require(rc == 0, "research advisor-review preview --json must return 0")
+    review = parse_local_model_research_advisor_review_json(out.getvalue())
+    _require(review["advisor_status"] == "preview_only" and review["model_metadata"]["model_used"] is False,
+             "advisor-review without --local-model must not call model")
+    _require(review["source_path"] == zip_source, "advisor-review must preserve selected source")
+
+    comparison_out = io.StringIO()
+    with contextlib.redirect_stdout(comparison_out):
+        comparison_rc = _cmd_research(["advisor-comparison", "--source", zip_source, "--json"])
+    _require(comparison_rc == 0, "research advisor-comparison --json must return 0")
+    comparison = parse_local_model_advisor_comparison_card_json(comparison_out.getvalue())
+    _require(comparison["source_path"] == zip_source and comparison["agreement_status"] == "preview_only",
+             "advisor-comparison preview must preserve selected source")
+
+    for command in ("advisor-review", "advisor-comparison"):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            write_rc = _cmd_research([command, "--source", zip_source, "--write"])
+        _require(write_rc != 0 and "read-only" in err.getvalue(), f"research {command} --write must be rejected")
+        missing_err = io.StringIO()
+        with contextlib.redirect_stderr(missing_err):
+            missing_rc = _cmd_research([command, "--json"])
+        _require(missing_rc != 0 and "requires --source" in missing_err.getvalue(),
+                 f"research {command} missing --source must be rejected")
+        outside_err = io.StringIO()
+        with contextlib.redirect_stderr(outside_err):
+            outside_rc = _cmd_research([command, "--source", "../README.md", "--json"])
+        _require(outside_rc != 0, f"research {command} outside source must be rejected")
+
+    print("local model advisor CLIs OK")
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -19089,6 +19319,8 @@ def main() -> None:
     check_source_aware_provenance_specificity_helpers()
     check_source_aware_provenance_specificity_clis()
     check_source_aware_cross_target_specificity()
+    check_local_model_advisor_foundation_helpers()
+    check_local_model_advisor_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

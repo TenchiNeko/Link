@@ -155,6 +155,14 @@ def _cmd_modules(argv: list[str]) -> int:
 def _cmd_research(argv: list[str]) -> int:
     """Read-only local research target intake and evidence views."""
     subcommand = argv[0] if argv else ""
+    if subcommand == "advisor-review":
+        from link_modes.growth.link_growth_console import research_advisor_review_main as _research_advisor_review_main
+
+        return _research_advisor_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "advisor-comparison":
+        from link_modes.growth.link_growth_console import research_advisor_comparison_main as _research_advisor_comparison_main
+
+        return _research_advisor_comparison_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "source-binding":
         from link_modes.growth.link_growth_console import research_source_binding_main as _research_source_binding_main
 
@@ -213,6 +221,8 @@ def _cmd_research(argv: list[str]) -> int:
         return _research_target_flow_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Link research commands:")
+        print("  advisor-review       Preview or run local-only research advisor review")
+        print("  advisor-comparison   Compare deterministic output with advisor review")
         print("  source-binding        Build a downstream source binding context")
         print("  source-operator-flow  Preview source-bound downstream operator flow")
         print("  target-operator-report Preview compact source-aware operator report")
@@ -230,6 +240,22 @@ def _cmd_research(argv: list[str]) -> int:
         return 0
     print(f"research: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py research --help' for subcommands.", file=sys.stderr)
+    return 2
+
+
+def _cmd_advisor(argv: list[str]) -> int:
+    """Read-only local advisor configuration previews."""
+    subcommand = argv[0] if argv else ""
+    if subcommand == "local-config":
+        from link_modes.growth.link_growth_console import advisor_local_config_main as _advisor_local_config_main
+
+        return _advisor_local_config_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand in ("-h", "--help", "help", ""):
+        print("Advisor commands:")
+        print("  local-config  Preview safe local model advisor configuration")
+        return 0
+    print(f"advisor: unknown subcommand: {subcommand}", file=sys.stderr)
+    print("Run 'python3 link.py advisor --help' for subcommands.", file=sys.stderr)
     return 2
 
 
@@ -1175,6 +1201,7 @@ _LOCAL_COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "modes": (_cmd_modes, "List Link operating modes (base/growth/business)."),
     "roles": (_cmd_roles, "List worker safety profiles and business roles."),
     "modules": (_cmd_modules, "Preview Link module boundary registry."),
+    "advisor": (_cmd_advisor, "Preview optional local advisor configuration."),
     "research": (_cmd_research, "Read-only local research target intake."),
     "business-development": (_cmd_business_development, "Business Development governance previews."),
     "business-operations": (_cmd_business_operations, "Business Operations governance previews."),
