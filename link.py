@@ -175,6 +175,22 @@ def _cmd_research(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import research_target_sandbox_flow_main as _research_target_sandbox_flow_main
 
         return _research_target_sandbox_flow_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-provenance":
+        from link_modes.growth.link_growth_console import research_target_provenance_main as _research_target_provenance_main
+
+        return _research_target_provenance_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-patterns":
+        from link_modes.growth.link_growth_console import research_target_patterns_main as _research_target_patterns_main
+
+        return _research_target_patterns_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-upgrade-rationale":
+        from link_modes.growth.link_growth_console import research_target_upgrade_rationale_main as _research_target_upgrade_rationale_main
+
+        return _research_target_upgrade_rationale_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-specificity":
+        from link_modes.growth.link_growth_console import research_target_specificity_main as _research_target_specificity_main
+
+        return _research_target_specificity_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "target-intake":
         from link_modes.growth.link_growth_console import research_target_intake_main as _research_target_intake_main
 
@@ -202,6 +218,10 @@ def _cmd_research(argv: list[str]) -> int:
         print("  target-operator-report Preview compact source-aware operator report")
         print("  target-implementation-preview Preview source-bound implementation scope")
         print("  target-sandbox-flow   Preview source target to sandbox boundary flow")
+        print("  target-provenance     Preview compact source provenance table")
+        print("  target-patterns       Preview source-specific pattern summary")
+        print("  target-upgrade-rationale Explain why the selected upgrade fits the target")
+        print("  target-specificity    Score whether the recommendation is target-specific")
         print("  target-intake         Inspect a local research target without extraction")
         print("  target-evidence       Build evidence refs for a local research target")
         print("  target-upgrades       Preview Link upgrade candidates from a target")

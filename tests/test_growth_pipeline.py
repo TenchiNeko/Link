@@ -18768,6 +18768,210 @@ def check_source_aware_human_summary_clis() -> None:
 
     print("source-aware human summary CLIs OK")
 
+
+def check_source_aware_provenance_specificity_helpers() -> None:
+    from link_modes.growth.link_growth_console import (
+        build_source_aware_context_for_cli,
+        collect_research_target_operator_report,
+        collect_research_target_pattern_summary,
+        collect_research_target_provenance_table,
+        collect_research_target_recommendation_specificity,
+        collect_research_target_upgrade_rationale_card,
+        parse_research_target_pattern_summary_json,
+        parse_research_target_provenance_table_json,
+        parse_research_target_recommendation_specificity_json,
+        parse_research_target_upgrade_rationale_card_json,
+        stable_research_target_pattern_summary_json,
+        stable_research_target_provenance_table_json,
+        stable_research_target_recommendation_specificity_json,
+        stable_research_target_upgrade_rationale_card_json,
+        validate_research_target_pattern_summary,
+        validate_research_target_provenance_table,
+        validate_research_target_recommendation_specificity,
+        validate_research_target_upgrade_rationale_card,
+    )
+
+    zip_source, _, _ = _research_target_test_paths()
+    context = build_source_aware_context_for_cli(zip_source)
+    table = collect_research_target_provenance_table(
+        context["research_target_intake"],
+        context["research_target_evidence_bundle"],
+        context["research_source_binding_context"],
+    )
+    same_table = collect_research_target_provenance_table(
+        context["research_target_intake"],
+        context["research_target_evidence_bundle"],
+        context["research_source_binding_context"],
+    )
+    _require(table["research_target_provenance_table_id"] == same_table["research_target_provenance_table_id"],
+             "provenance table id must be deterministic")
+    _require(table["source_path"] == zip_source and table["provenance_rows"],
+             "provenance table must include selected source and rows")
+    _require(all("!" in row["provenance_path"] for row in table["provenance_rows"]),
+             "zip provenance rows must be archive-qualified")
+    _require(all("!" not in row["display_path"] for row in table["provenance_rows"]),
+             "zip display paths must remain clean")
+    validate_research_target_provenance_table(table)
+    _require(parse_research_target_provenance_table_json(stable_research_target_provenance_table_json(table)) == table,
+             "provenance table JSON must round trip")
+
+    patterns = collect_research_target_pattern_summary(
+        context["research_target_intake"],
+        context["research_target_evidence_bundle"],
+        table,
+    )
+    _require(patterns["detected_patterns"], "pattern summary must include detected patterns")
+    for pattern in patterns["detected_patterns"]:
+        _require(pattern["source_refs"] and pattern["evidence_refs"],
+                 "each detected pattern must include source/evidence refs")
+        _require(pattern["copying_caution"], "each detected pattern must include copying caution")
+    validate_research_target_pattern_summary(patterns)
+    _require(parse_research_target_pattern_summary_json(stable_research_target_pattern_summary_json(patterns)) == patterns,
+             "pattern summary JSON must round trip")
+
+    rationale = collect_research_target_upgrade_rationale_card(
+        context["research_target_upgrade_candidates"],
+        patterns,
+        table,
+        context["decision_chain"]["ranking"],
+        context["decision_chain"]["trace"],
+    )
+    _require(rationale["selected_upgrade_candidate_id"] == context["decision_chain"]["ranking"]["selected_upgrade_candidate_id"],
+             "rationale must preserve selected candidate id")
+    _require(zip_source in rationale["why_this_target"], "rationale why_this_target must reference selected source")
+    _require(rationale["source_name"] in rationale["why_this_upgrade"], "rationale why_this_upgrade must reference source name")
+    _require(rationale["supporting_patterns"] and rationale["supporting_provenance_rows"],
+             "rationale must include supporting patterns and provenance rows")
+    _require("generic fallback" not in rationale["why_this_target"].lower(),
+             "rationale must not use generic fallback language")
+    validate_research_target_upgrade_rationale_card(rationale)
+    _require(parse_research_target_upgrade_rationale_card_json(stable_research_target_upgrade_rationale_card_json(rationale)) == rationale,
+             "rationale JSON must round trip")
+
+    report = context["operator_chain"]["task_draft"]
+    operator_report = collect_research_target_operator_report(source_path=zip_source, source_context=context)
+    specificity = collect_research_target_recommendation_specificity(operator_report, rationale, patterns, table, report)
+    _require(specificity["specificity_grade"] != "generic", "gpt-crawler specificity must not be generic")
+    _require(specificity["specificity_score"] >= 65, "gpt-crawler specificity score must be acceptable or strong")
+    validate_research_target_recommendation_specificity(specificity)
+    _require(parse_research_target_recommendation_specificity_json(stable_research_target_recommendation_specificity_json(specificity)) == specificity,
+             "specificity JSON must round trip")
+
+    weak_table = json.loads(stable_research_target_provenance_table_json(table))
+    weak_table["provenance_rows"][0]["provenance_path"] = ""
+    weak_specificity = collect_research_target_recommendation_specificity(operator_report, rationale, patterns, weak_table, report)
+    _require(weak_specificity["specificity_score"] < specificity["specificity_score"],
+             "missing provenance must lower specificity score")
+    _require("provenance_paths_present" in weak_specificity["missing_specificity"],
+             "missing provenance must be reported as missing specificity")
+
+    print("source-aware provenance and specificity helpers OK")
+
+
+def check_source_aware_provenance_specificity_clis() -> None:
+    from link import _cmd_research
+    from link_modes.growth.link_growth_console import (
+        parse_research_target_pattern_summary_json,
+        parse_research_target_provenance_table_json,
+        parse_research_target_recommendation_specificity_json,
+        parse_research_target_upgrade_rationale_card_json,
+    )
+
+    zip_source, _, _ = _research_target_test_paths()
+    commands = [
+        ("target-provenance", parse_research_target_provenance_table_json, "research_target_provenance_table_id"),
+        ("target-patterns", parse_research_target_pattern_summary_json, "research_target_pattern_summary_id"),
+        ("target-upgrade-rationale", parse_research_target_upgrade_rationale_card_json, "research_target_upgrade_rationale_card_id"),
+        ("target-specificity", parse_research_target_recommendation_specificity_json, "research_target_recommendation_specificity_id"),
+    ]
+    for command, parser, id_key in commands:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = _cmd_research([command, "--source", zip_source, "--json"])
+        _require(rc == 0, f"research {command} --json must return 0")
+        payload = parser(out.getvalue())
+        _require(id_key in payload, f"research {command} must output its own payload")
+        _require(payload["source_path"] == zip_source and payload["write_allowed"] is False,
+                 f"research {command} must remain source-bound and read-only")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            write_rc = _cmd_research([command, "--source", zip_source, "--write"])
+        _require(write_rc != 0 and "read-only" in err.getvalue(), f"research {command} --write must be rejected")
+        missing_err = io.StringIO()
+        with contextlib.redirect_stderr(missing_err):
+            missing_rc = _cmd_research([command, "--json"])
+        _require(missing_rc != 0 and "requires --source" in missing_err.getvalue(),
+                 f"research {command} missing --source must be rejected")
+        outside_err = io.StringIO()
+        with contextlib.redirect_stderr(outside_err):
+            outside_rc = _cmd_research([command, "--source", "../README.md", "--json"])
+        _require(outside_rc != 0, f"research {command} outside source must be rejected")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        rc = _cmd_research(["target-provenance", "--source", zip_source])
+    human = human_out.getvalue()
+    _require(rc == 0 and "Research target provenance" in human and zip_source in human,
+             "target-provenance human mode must render concise table output")
+    _require("research/gpt-crawler-main.zip!" in human,
+             "target-provenance human mode must show archive-qualified provenance")
+
+    print("source-aware provenance and specificity CLIs OK")
+
+
+def check_source_aware_cross_target_specificity() -> None:
+    from link_modes.growth.link_growth_console import (
+        build_source_aware_context_for_cli,
+        collect_research_target_pattern_summary,
+        collect_research_target_provenance_table,
+        collect_research_target_recommendation_specificity,
+        collect_research_target_upgrade_rationale_card,
+        collect_research_target_operator_report,
+    )
+
+    primary = "research/gpt-crawler-main.zip"
+    comparison = "research/Agent-Reach-main.zip"
+    _require((ROOT / comparison).exists(), "comparison target Agent-Reach archive must exist")
+    primary_context = build_source_aware_context_for_cli(primary)
+    comparison_context = build_source_aware_context_for_cli(comparison)
+
+    def details(context: dict[str, Any], source: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+        table = collect_research_target_provenance_table(
+            context["research_target_intake"], context["research_target_evidence_bundle"], context["research_source_binding_context"])
+        patterns = collect_research_target_pattern_summary(context["research_target_intake"], context["research_target_evidence_bundle"], table)
+        rationale = collect_research_target_upgrade_rationale_card(
+            context["research_target_upgrade_candidates"], patterns, table,
+            context["decision_chain"]["ranking"], context["decision_chain"]["trace"])
+        report = collect_research_target_operator_report(source_path=source, source_context=context)
+        specificity = collect_research_target_recommendation_specificity(report, rationale, patterns, table, context["operator_chain"]["task_draft"])
+        return table, patterns, rationale, report, specificity
+
+    p_table, p_patterns, p_rationale, p_report, p_specificity = details(primary_context, primary)
+    c_table, c_patterns, c_rationale, c_report, c_specificity = details(comparison_context, comparison)
+    _require(p_specificity["research_target_recommendation_specificity_id"] != c_specificity["research_target_recommendation_specificity_id"],
+             "specificity ids must differ across targets")
+    _require(p_specificity["selected_upgrade_candidate_id"] != c_specificity["selected_upgrade_candidate_id"],
+             "selected upgrade candidate ids must differ across targets")
+    p_categories = {item["pattern_category"] for item in p_patterns["detected_patterns"]}
+    c_categories = {item["pattern_category"] for item in c_patterns["detected_patterns"]}
+    _require(p_categories != c_categories, "detected pattern categories should differ across targets")
+    _require(p_rationale["why_this_target"] != c_rationale["why_this_target"],
+             "why_this_target must differ across targets")
+    _require(all(primary in row["provenance_path"] for row in p_table["provenance_rows"]),
+             "primary provenance rows must reference primary archive")
+    _require(all(comparison in row["provenance_path"] for row in c_table["provenance_rows"]),
+             "comparison provenance rows must reference comparison archive")
+    _require(primary in p_report["task_draft_summary"]["objective"],
+             "primary task draft must reference primary source")
+    _require(comparison in c_report["task_draft_summary"]["objective"],
+             "comparison task draft must reference comparison source")
+    _require(not any(comparison in row["provenance_path"] for row in p_table["provenance_rows"]),
+             "primary provenance must not leak comparison refs")
+    _require(not any(primary in row["provenance_path"] for row in c_table["provenance_rows"]),
+             "comparison provenance must not leak primary refs")
+
+    print("source-aware cross-target specificity OK")
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -18882,6 +19086,9 @@ def main() -> None:
     check_source_aware_control_plane_dashboard_helpers()
     check_source_aware_control_plane_dashboard_clis()
     check_source_aware_human_summary_clis()
+    check_source_aware_provenance_specificity_helpers()
+    check_source_aware_provenance_specificity_clis()
+    check_source_aware_cross_target_specificity()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

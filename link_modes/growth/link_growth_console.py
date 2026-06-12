@@ -10948,10 +10948,10 @@ _RESEARCH_TARGET_LANGUAGE_BY_EXT = {
 _RESEARCH_TARGET_DOMAIN_KEYWORDS = {
     "scraping": ("scrap", "crawler", "crawl", "spider", "selenium", "playwright", "puppeteer", "browser"),
     "ecommerce": ("ecommerce", "commerce", "shopify", "amazon", "ebay", "etsy", "walmart", "product", "pricing", "dropshipping"),
-    "automation": ("automation", "automate", "activepieces", "zapier", "trigger", "action", "connector"),
-    "agent_memory": ("memory", "recall", "context", "embedding", "transcript"),
+    "automation": ("automation", "automate", "activepieces", "zapier", "trigger", "action", "connector", "cli", "command", "doctor", "dry-run", "safe"),
+    "agent_memory": ("memory", "recall", "context", "embedding", "transcript", "skill", "agent"),
     "workflow": ("workflow", "flow", "orchestr", "queue", "runbook", "pipeline"),
-    "market_research": ("market", "competitor", "seo", "keyword", "research", "validation"),
+    "market_research": ("market", "competitor", "seo", "keyword", "validation"),
     "data_collection": ("data", "dataset", "collector", "ingestion", "source", "extract"),
     "source_governance": ("provenance", "robots", "rate_limit", "rate-limit", "source", "compliance", "policy"),
     "business_development": ("lead", "vendor", "supplier", "sourcing", "sales", "crm", "revenue", "business"),
@@ -12538,6 +12538,15 @@ CONTROL_PLANE_TARGET_STATUS_VERSION = "link-control-plane-target-status-v1"
 OPERATOR_TARGET_REVIEW_VERSION = "link-operator-target-review-v1"
 SOURCE_AWARE_TARGET_DECISION_CARD_VERSION = "link-source-aware-target-decision-card-v1"
 SOURCE_AWARE_OPERATOR_DASHBOARD_VERSION = "link-source-aware-operator-dashboard-v1"
+RESEARCH_TARGET_PROVENANCE_TABLE_VERSION = "link-research-target-provenance-table-v1"
+RESEARCH_TARGET_PATTERN_SUMMARY_VERSION = "link-research-target-pattern-summary-v1"
+RESEARCH_TARGET_UPGRADE_RATIONALE_CARD_VERSION = "link-research-target-upgrade-rationale-card-v1"
+RESEARCH_TARGET_RECOMMENDATION_SPECIFICITY_VERSION = "link-research-target-recommendation-specificity-v1"
+RESEARCH_TARGET_PATTERN_CATEGORIES = (
+    "source_governance", "crawler_config", "workflow_automation", "dashboard_ux",
+    "operator_report", "evidence_provenance", "campaign_planning", "lead_research",
+    "ecommerce_data", "agent_memory", "unknown",
+)
 
 
 def _compact_source_ref_summaries(evidence_bundle: dict[str, Any], *, limit: int = 5) -> list[dict[str, Any]]:
@@ -12570,6 +12579,653 @@ def _compact_evidence_ref_summaries(evidence_bundle: dict[str, Any], *, limit: i
     return summaries
 
 
+def _research_target_domain_for_row(path_text: str, evidence_type: str) -> str:
+    domains = _research_target_detect_domains([path_text, evidence_type])
+    return next((item for item in domains if item != "unknown"), domains[0])
+
+
+def _research_target_provenance_row_id(source_path: str, evidence_ref: dict[str, Any]) -> str:
+    return "research-target-provenance-row-" + _research_target_hash_text({
+        "source_path": source_path,
+        "evidence_ref_id": evidence_ref["evidence_ref_id"],
+        "provenance_path": evidence_ref["provenance_path"],
+    })[:12]
+
+
+def _research_target_why_relevant(path_text: str, evidence_type: str, domain: str) -> str:
+    if evidence_type == "README":
+        return "Overview evidence explains target purpose and operator relevance."
+    if evidence_type == "package_manifest":
+        return "Package metadata exposes dependencies, scripts, and implementation shape."
+    if evidence_type == "workflow_definition":
+        return "Workflow evidence shows orchestration and automation patterns."
+    if evidence_type == "config_file":
+        return "Configuration evidence shows boundaries, source assumptions, or runtime settings."
+    if evidence_type == "source_code_pattern":
+        return f"Source pattern evidence supports {domain} analysis without copying code."
+    if domain != "unknown":
+        return f"File path and metadata match Link {domain} research signals."
+    return "Selected source ref provides local provenance for human review."
+
+
+def collect_research_target_provenance_table(
+    research_target_intake: dict[str, Any] | None = None,
+    research_target_evidence_bundle: dict[str, Any] | None = None,
+    research_source_binding_context: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if research_target_intake is None or research_target_evidence_bundle is None:
+        context = build_source_aware_context_for_cli(str(source_path or ""))
+        intake = research_target_intake or context["research_target_intake"]
+        evidence = research_target_evidence_bundle or context["research_target_evidence_bundle"]
+        binding = research_source_binding_context or context["research_source_binding_context"]
+    else:
+        intake = research_target_intake
+        evidence = research_target_evidence_bundle
+        binding = research_source_binding_context
+    validate_research_target_intake(intake)
+    validate_research_target_evidence_bundle(evidence, intake)
+    source_by_id = {item["source_ref_id"]: item for item in evidence["source_refs"]}
+    rows = []
+    for evidence_ref in evidence["evidence_refs"]:
+        source_ref = source_by_id[evidence_ref["source_ref_id"]]
+        domain = _research_target_domain_for_row(evidence_ref["display_path"], evidence_ref["evidence_type"])
+        rows.append({
+            "row_id": _research_target_provenance_row_id(intake["source_path"], evidence_ref),
+            "display_path": evidence_ref["display_path"],
+            "provenance_path": evidence_ref["provenance_path"],
+            "file_type": source_ref["file_type"],
+            "evidence_type": evidence_ref["evidence_type"],
+            "detected_domain": domain,
+            "confidence_score": evidence_ref["confidence_score"],
+            "risk_score": evidence_ref["risk_score"],
+            "why_relevant": _research_target_why_relevant(evidence_ref["display_path"], evidence_ref["evidence_type"], domain),
+            "linked_source_ref_id": evidence_ref["source_ref_id"],
+            "linked_evidence_ref_id": evidence_ref["evidence_ref_id"],
+        })
+    missing = []
+    if any(not row["provenance_path"] for row in rows):
+        missing.append("provenance_path")
+    if intake["source_type"] == "zip_archive" and any("!" not in row["provenance_path"] for row in rows):
+        missing.append("archive-qualified provenance_path")
+    digest = _research_target_hash_text({
+        "intake_id": intake["research_target_intake_id"],
+        "evidence_id": evidence["research_target_evidence_bundle_id"],
+        "row_ids": [row["row_id"] for row in rows],
+        "version": RESEARCH_TARGET_PROVENANCE_TABLE_VERSION,
+    })[:12]
+    table = {
+        "research_target_provenance_table_version": RESEARCH_TARGET_PROVENANCE_TABLE_VERSION,
+        "research_target_provenance_table_id": f"research-target-provenance-table-{digest}",
+        "source_bound": True,
+        "source_path": intake["source_path"],
+        "source_name": intake["source_name"],
+        "source_type": intake["source_type"],
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "research_target_evidence_bundle_id": evidence["research_target_evidence_bundle_id"],
+        "research_source_binding_context_id": binding["research_source_binding_context_id"] if isinstance(binding, dict) else "",
+        "provenance_rows": rows,
+        "source_ref_count": len(evidence["source_refs"]),
+        "evidence_ref_count": len(evidence["evidence_refs"]),
+        "archive_ref_count": sum(1 for row in rows if "!" in row["provenance_path"]),
+        "missing_provenance": missing,
+        "recommended_next_action": "Use these compact provenance rows to judge whether the selected upgrade is target-specific.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_research_target_provenance_table(table, intake, evidence)
+    return table
+
+
+def validate_research_target_provenance_table(table: dict[str, Any], research_target_intake: dict[str, Any] | None = None, research_target_evidence_bundle: dict[str, Any] | None = None) -> None:
+    required = (
+        "research_target_provenance_table_version", "research_target_provenance_table_id", "source_bound",
+        "source_path", "source_name", "source_type", "research_target_intake_id",
+        "research_target_evidence_bundle_id", "provenance_rows", "source_ref_count",
+        "evidence_ref_count", "archive_ref_count", "missing_provenance", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in table:
+            raise ValueError(f"research target provenance table missing field: {key}")
+    if table["research_target_provenance_table_version"] != RESEARCH_TARGET_PROVENANCE_TABLE_VERSION:
+        raise ValueError("invalid research target provenance table version")
+    if not table["research_target_provenance_table_id"].startswith("research-target-provenance-table-"):
+        raise ValueError("invalid research target provenance table id")
+    if table["source_bound"] is not True or not table["source_path"].startswith("research/"):
+        raise ValueError("research target provenance table must be source-bound under research")
+    if not isinstance(table["provenance_rows"], list) or not table["provenance_rows"]:
+        raise ValueError("research target provenance table rows must be non-empty")
+    for row in table["provenance_rows"]:
+        for key in ("row_id", "display_path", "provenance_path", "file_type", "evidence_type", "detected_domain", "confidence_score", "risk_score", "why_relevant", "linked_source_ref_id", "linked_evidence_ref_id"):
+            if key not in row:
+                raise ValueError(f"research target provenance row missing field: {key}")
+        if not row["row_id"].startswith("research-target-provenance-row-"):
+            raise ValueError("invalid research target provenance row id")
+        _research_target_validate_path_text(row["display_path"], "provenance display_path")
+        _research_target_validate_path_text(row["provenance_path"], "provenance provenance_path")
+        if "!" in row["display_path"]:
+            raise ValueError("provenance display_path must remain clean")
+        if table["source_type"] == "zip_archive" and "!" not in row["provenance_path"]:
+            raise ValueError("zip provenance rows must be archive-qualified")
+        if row["detected_domain"] not in RESEARCH_TARGET_DOMAINS:
+            raise ValueError("invalid provenance row domain")
+        for score in ("confidence_score", "risk_score"):
+            if not isinstance(row[score], int) or not 0 <= row[score] <= 100:
+                raise ValueError(f"provenance row {score} must be 0..100")
+    for field in ("source_ref_count", "evidence_ref_count", "archive_ref_count"):
+        if not isinstance(table[field], int) or table[field] < 0:
+            raise ValueError(f"{field} must be non-negative")
+    if table["source_ref_count"] <= 0 or table["evidence_ref_count"] <= 0:
+        raise ValueError("provenance table must count source and evidence refs")
+    if table["source_type"] == "zip_archive" and table["archive_ref_count"] <= 0:
+        raise ValueError("zip provenance table must count archive refs")
+    if table["safety_metadata"] != _read_only_safety_metadata() or table["dry_run"] is not True or table["write_allowed"] is not False or table["automation_allowed"] is not False or table["writes"] != []:
+        raise ValueError("research target provenance table must remain read-only")
+    if research_target_intake is not None:
+        validate_research_target_intake(research_target_intake)
+        if table["research_target_intake_id"] != research_target_intake["research_target_intake_id"]:
+            raise ValueError("provenance table intake id mismatch")
+    if research_target_evidence_bundle is not None:
+        validate_research_target_evidence_bundle(research_target_evidence_bundle, research_target_intake)
+        if table["research_target_evidence_bundle_id"] != research_target_evidence_bundle["research_target_evidence_bundle_id"]:
+            raise ValueError("provenance table evidence id mismatch")
+
+
+def stable_research_target_provenance_table_json(table: dict[str, Any]) -> str:
+    validate_research_target_provenance_table(table)
+    return _stable_ruflo_json(table, indent=2) + "\n"
+
+
+def parse_research_target_provenance_table_json(text: str) -> dict[str, Any]:
+    import json as _json
+    table = _json.loads(text)
+    validate_research_target_provenance_table(table)
+    return table
+
+
+def _research_target_pattern_category(row: dict[str, Any]) -> str:
+    text = " ".join([row.get("display_path", ""), row.get("evidence_type", ""), row.get("detected_domain", "")]).lower()
+    if any(token in text for token in ("crawler", "crawl", "scrap", "browser", "selenium", "playwright")):
+        return "crawler_config"
+    if any(token in text for token in ("workflow", "flow", "action", "trigger", "orchestr", ".yml", ".yaml")):
+        return "workflow_automation"
+    if any(token in text for token in ("dashboard", "card", "summary", "status", "report")):
+        return "dashboard_ux"
+    if any(token in text for token in ("readme", "cli", "operator", "review")):
+        return "operator_report"
+    if any(token in text for token in ("provenance", "source", "config", "package_manifest")):
+        return "evidence_provenance"
+    if any(token in text for token in ("market", "campaign", "competitor", "seo")):
+        return "campaign_planning"
+    if any(token in text for token in ("lead", "sales", "crm")):
+        return "lead_research"
+    if any(token in text for token in ("product", "pricing", "shop", "ecommerce")):
+        return "ecommerce_data"
+    if "memory" in text:
+        return "agent_memory"
+    if row.get("detected_domain") == "source_governance":
+        return "source_governance"
+    return "unknown"
+
+
+def collect_research_target_pattern_summary(
+    research_target_intake: dict[str, Any] | None = None,
+    research_target_evidence_bundle: dict[str, Any] | None = None,
+    research_target_provenance_table: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if research_target_intake is None or research_target_evidence_bundle is None or research_target_provenance_table is None:
+        context = build_source_aware_context_for_cli(str(source_path or ""))
+        intake = research_target_intake or context["research_target_intake"]
+        evidence = research_target_evidence_bundle or context["research_target_evidence_bundle"]
+        table = research_target_provenance_table or collect_research_target_provenance_table(intake, evidence, context["research_source_binding_context"])
+    else:
+        intake = research_target_intake
+        evidence = research_target_evidence_bundle
+        table = research_target_provenance_table
+    validate_research_target_intake(intake)
+    validate_research_target_evidence_bundle(evidence, intake)
+    validate_research_target_provenance_table(table, intake, evidence)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in table["provenance_rows"]:
+        category = _research_target_pattern_category(row)
+        grouped.setdefault(category, []).append(row)
+    patterns = []
+    for category, rows in sorted(grouped.items()):
+        refs = rows[:3]
+        confidence = max(row["confidence_score"] for row in rows)
+        risk = max(row["risk_score"] for row in rows)
+        pattern_id = "research-target-pattern-" + _research_target_hash_text({
+            "source_path": intake["source_path"],
+            "category": category,
+            "rows": [row["row_id"] for row in rows],
+        })[:12]
+        patterns.append({
+            "pattern_id": pattern_id,
+            "pattern_name": f"{category.replace('_', ' ')} pattern in {intake['source_name']}",
+            "pattern_category": category,
+            "description": f"{intake['source_path']} contains {len(rows)} provenance-backed {category.replace('_', ' ')} signal(s).",
+            "source_refs": [row["linked_source_ref_id"] for row in refs],
+            "evidence_refs": [row["linked_evidence_ref_id"] for row in refs],
+            "confidence_score": confidence,
+            "risk_score": risk,
+            "link_mapping": f"Map this {category.replace('_', ' ')} concept into a Link-native read-only planning/reporting slice.",
+            "implementation_hint": f"Use the cited provenance rows from {intake['source_name']} as evidence; do not copy external code.",
+            "copying_caution": "Concept only. Do not copy source code, dependencies, or runtime behavior from the research target.",
+        })
+    weak = []
+    if any(pattern["pattern_category"] == "unknown" for pattern in patterns):
+        weak.append("some selected refs have unknown pattern category")
+    dominant_domains = []
+    for row in table["provenance_rows"]:
+        domain = row["detected_domain"]
+        if domain not in dominant_domains:
+            dominant_domains.append(domain)
+    summary = {
+        "max_confidence_score": max((pattern["confidence_score"] for pattern in patterns), default=0),
+        "pattern_count": len(patterns),
+        "high_confidence_pattern_count": sum(1 for pattern in patterns if pattern["confidence_score"] >= 70),
+    }
+    digest = _research_target_hash_text({
+        "intake_id": intake["research_target_intake_id"],
+        "table_id": table["research_target_provenance_table_id"],
+        "pattern_ids": [pattern["pattern_id"] for pattern in patterns],
+        "version": RESEARCH_TARGET_PATTERN_SUMMARY_VERSION,
+    })[:12]
+    payload = {
+        "research_target_pattern_summary_version": RESEARCH_TARGET_PATTERN_SUMMARY_VERSION,
+        "research_target_pattern_summary_id": f"research-target-pattern-summary-{digest}",
+        "source_bound": True,
+        "source_path": intake["source_path"],
+        "source_name": intake["source_name"],
+        "source_type": intake["source_type"],
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "research_target_evidence_bundle_id": evidence["research_target_evidence_bundle_id"],
+        "research_target_provenance_table_id": table["research_target_provenance_table_id"],
+        "detected_patterns": patterns,
+        "dominant_domains": dominant_domains or ["unknown"],
+        "weak_signals": weak,
+        "pattern_confidence_summary": summary,
+        "recommended_next_action": "Use these target-specific patterns to explain why the selected upgrade fits this source.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_research_target_pattern_summary(payload, intake, evidence, table)
+    return payload
+
+
+def validate_research_target_pattern_summary(payload: dict[str, Any], research_target_intake: dict[str, Any] | None = None, research_target_evidence_bundle: dict[str, Any] | None = None, research_target_provenance_table: dict[str, Any] | None = None) -> None:
+    required = (
+        "research_target_pattern_summary_version", "research_target_pattern_summary_id", "source_bound",
+        "source_path", "research_target_intake_id", "research_target_evidence_bundle_id",
+        "research_target_provenance_table_id", "detected_patterns", "dominant_domains", "weak_signals",
+        "pattern_confidence_summary", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"research target pattern summary missing field: {key}")
+    if payload["research_target_pattern_summary_version"] != RESEARCH_TARGET_PATTERN_SUMMARY_VERSION:
+        raise ValueError("invalid research target pattern summary version")
+    if not payload["research_target_pattern_summary_id"].startswith("research-target-pattern-summary-"):
+        raise ValueError("invalid research target pattern summary id")
+    if payload["source_bound"] is not True or not payload["source_path"].startswith("research/"):
+        raise ValueError("research target pattern summary must be source-bound")
+    if not isinstance(payload["detected_patterns"], list) or not payload["detected_patterns"]:
+        raise ValueError("research target pattern summary requires detected patterns")
+    for pattern in payload["detected_patterns"]:
+        for key in ("pattern_id", "pattern_name", "pattern_category", "description", "source_refs", "evidence_refs", "confidence_score", "risk_score", "link_mapping", "implementation_hint", "copying_caution"):
+            if key not in pattern:
+                raise ValueError(f"research target pattern missing field: {key}")
+        if not pattern["pattern_id"].startswith("research-target-pattern-"):
+            raise ValueError("invalid research target pattern id")
+        if pattern["pattern_category"] not in RESEARCH_TARGET_PATTERN_CATEGORIES:
+            raise ValueError("invalid research target pattern category")
+        if not pattern["source_refs"] or not pattern["evidence_refs"]:
+            raise ValueError("research target pattern must include source and evidence refs")
+        if not pattern["copying_caution"]:
+            raise ValueError("research target pattern must include copying caution")
+        for score in ("confidence_score", "risk_score"):
+            if not isinstance(pattern[score], int) or not 0 <= pattern[score] <= 100:
+                raise ValueError(f"pattern {score} must be 0..100")
+    if not isinstance(payload["dominant_domains"], list) or not payload["dominant_domains"]:
+        raise ValueError("dominant domains must be non-empty")
+    if not isinstance(payload["weak_signals"], list):
+        raise ValueError("weak signals must be a list")
+    if not isinstance(payload["pattern_confidence_summary"], dict) or payload["pattern_confidence_summary"].get("pattern_count") != len(payload["detected_patterns"]):
+        raise ValueError("invalid pattern confidence summary")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("research target pattern summary must remain read-only")
+    if research_target_intake is not None and payload["research_target_intake_id"] != research_target_intake["research_target_intake_id"]:
+        raise ValueError("pattern summary intake id mismatch")
+    if research_target_evidence_bundle is not None and payload["research_target_evidence_bundle_id"] != research_target_evidence_bundle["research_target_evidence_bundle_id"]:
+        raise ValueError("pattern summary evidence id mismatch")
+    if research_target_provenance_table is not None and payload["research_target_provenance_table_id"] != research_target_provenance_table["research_target_provenance_table_id"]:
+        raise ValueError("pattern summary provenance id mismatch")
+
+
+def stable_research_target_pattern_summary_json(payload: dict[str, Any]) -> str:
+    validate_research_target_pattern_summary(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_research_target_pattern_summary_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_research_target_pattern_summary(payload)
+    return payload
+
+
+def collect_research_target_upgrade_rationale_card(
+    research_target_upgrade_candidates: dict[str, Any] | None = None,
+    research_target_pattern_summary: dict[str, Any] | None = None,
+    research_target_provenance_table: dict[str, Any] | None = None,
+    decision_ranking: dict[str, Any] | None = None,
+    decision_trace: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if research_target_upgrade_candidates is None or research_target_pattern_summary is None or research_target_provenance_table is None or decision_ranking is None or decision_trace is None:
+        context = build_source_aware_context_for_cli(str(source_path or ""))
+        intake = context["research_target_intake"]
+        evidence = context["research_target_evidence_bundle"]
+        candidates = research_target_upgrade_candidates or context["research_target_upgrade_candidates"]
+        table = research_target_provenance_table or collect_research_target_provenance_table(intake, evidence, context["research_source_binding_context"])
+        patterns = research_target_pattern_summary or collect_research_target_pattern_summary(intake, evidence, table)
+        ranking = decision_ranking or context["decision_chain"]["ranking"]
+        trace = decision_trace or context["decision_chain"]["trace"]
+    else:
+        candidates = research_target_upgrade_candidates
+        patterns = research_target_pattern_summary
+        table = research_target_provenance_table
+        ranking = decision_ranking
+        trace = decision_trace
+    validate_research_target_upgrade_candidates(candidates)
+    validate_research_target_pattern_summary(patterns)
+    validate_research_target_provenance_table(table)
+    selected_id = ranking["selected_upgrade_candidate_id"]
+    selected = next(item for item in candidates["upgrade_candidates"] if item["upgrade_candidate_id"] == selected_id)
+    supporting_patterns = patterns["detected_patterns"][:3]
+    supporting_rows = table["provenance_rows"][:5]
+    pattern_names = [item["pattern_name"] for item in supporting_patterns]
+    row_paths = [item["provenance_path"] for item in supporting_rows[:3]]
+    why_target = f"{table['source_path']} has {len(table['provenance_rows'])} provenance-backed row(s) across {', '.join(patterns['dominant_domains'])}; strongest patterns: {', '.join(pattern_names[:2])}."
+    why_upgrade = f"{selected['title']} fits {table['source_name']} because its cited patterns map to Link {selected['target_link_module']} work and are backed by refs such as {', '.join(row_paths)}."
+    rejected = [
+        {
+            "upgrade_candidate_id": item["upgrade_candidate_id"],
+            "title": item["title"],
+            "reason": f"Less specific to {table['source_name']} than {selected['title']}." if item["upgrade_candidate_id"] != selected_id else "selected",
+        }
+        for item in candidates["upgrade_candidates"]
+        if item["upgrade_candidate_id"] != selected_id
+    ][:3]
+    digest = _research_target_hash_text({
+        "source_path": table["source_path"],
+        "selected_id": selected_id,
+        "pattern_summary_id": patterns["research_target_pattern_summary_id"],
+        "provenance_table_id": table["research_target_provenance_table_id"],
+        "ranking_id": ranking["decision_ranking_id"],
+        "trace_id": trace["operator_decision_trace_package_id"],
+        "version": RESEARCH_TARGET_UPGRADE_RATIONALE_CARD_VERSION,
+    })[:12]
+    payload = {
+        "research_target_upgrade_rationale_card_version": RESEARCH_TARGET_UPGRADE_RATIONALE_CARD_VERSION,
+        "research_target_upgrade_rationale_card_id": f"research-target-upgrade-rationale-card-{digest}",
+        "source_bound": True,
+        "source_path": table["source_path"],
+        "source_name": table["source_name"],
+        "source_type": table["source_type"],
+        "research_target_intake_id": table["research_target_intake_id"],
+        "research_target_evidence_bundle_id": table["research_target_evidence_bundle_id"],
+        "research_target_provenance_table_id": table["research_target_provenance_table_id"],
+        "research_target_pattern_summary_id": patterns["research_target_pattern_summary_id"],
+        "selected_upgrade_candidate_id": selected_id,
+        "selected_upgrade_title": selected["title"],
+        "target_link_module": selected["target_link_module"],
+        "why_this_target": why_target,
+        "why_this_upgrade": why_upgrade,
+        "supporting_patterns": [
+            {
+                "pattern_id": item["pattern_id"],
+                "pattern_name": item["pattern_name"],
+                "pattern_category": item["pattern_category"],
+                "confidence_score": item["confidence_score"],
+            }
+            for item in supporting_patterns
+        ],
+        "supporting_provenance_rows": [
+            {
+                "row_id": item["row_id"],
+                "display_path": item["display_path"],
+                "provenance_path": item["provenance_path"],
+                "evidence_type": item["evidence_type"],
+                "why_relevant": item["why_relevant"],
+            }
+            for item in supporting_rows
+        ],
+        "expected_value": selected["expected_value"],
+        "risk_level": selected["risk_level"],
+        "confidence_score": selected["confidence_score"],
+        "effort_score": selected["effort_score"],
+        "rejected_alternatives_summary": rejected,
+        "recommended_next_action": "Use this rationale to decide whether the selected upgrade is target-specific enough for implementation planning.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_research_target_upgrade_rationale_card(payload, candidates, patterns, table)
+    return payload
+
+
+def validate_research_target_upgrade_rationale_card(payload: dict[str, Any], research_target_upgrade_candidates: dict[str, Any] | None = None, research_target_pattern_summary: dict[str, Any] | None = None, research_target_provenance_table: dict[str, Any] | None = None) -> None:
+    required = (
+        "research_target_upgrade_rationale_card_version", "research_target_upgrade_rationale_card_id",
+        "source_bound", "source_path", "research_target_intake_id", "selected_upgrade_candidate_id",
+        "selected_upgrade_title", "target_link_module", "why_this_target", "why_this_upgrade",
+        "supporting_patterns", "supporting_provenance_rows", "expected_value", "risk_level",
+        "confidence_score", "effort_score", "rejected_alternatives_summary", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"research target upgrade rationale missing field: {key}")
+    if payload["research_target_upgrade_rationale_card_version"] != RESEARCH_TARGET_UPGRADE_RATIONALE_CARD_VERSION:
+        raise ValueError("invalid research target upgrade rationale version")
+    if not payload["research_target_upgrade_rationale_card_id"].startswith("research-target-upgrade-rationale-card-"):
+        raise ValueError("invalid research target upgrade rationale id")
+    if payload["source_bound"] is not True or payload["source_path"] not in payload["why_this_target"] or payload["source_name"] not in payload["why_this_upgrade"]:
+        raise ValueError("upgrade rationale must be source-specific")
+    if payload["target_link_module"] not in RESEARCH_TARGET_LINK_MODULES:
+        raise ValueError("invalid rationale target module")
+    if not isinstance(payload["supporting_patterns"], list) or not payload["supporting_patterns"]:
+        raise ValueError("upgrade rationale requires supporting patterns")
+    if not isinstance(payload["supporting_provenance_rows"], list) or not payload["supporting_provenance_rows"]:
+        raise ValueError("upgrade rationale requires supporting provenance rows")
+    if payload["source_type"] == "zip_archive" and any("!" not in item["provenance_path"] for item in payload["supporting_provenance_rows"]):
+        raise ValueError("upgrade rationale zip provenance must be archive-qualified")
+    if payload["expected_value"] not in {"low", "medium", "high"} or payload["risk_level"] not in {"low", "medium", "high"}:
+        raise ValueError("invalid rationale value/risk")
+    for score in ("confidence_score", "effort_score"):
+        if not isinstance(payload[score], int) or not 0 <= payload[score] <= 100:
+            raise ValueError(f"rationale {score} must be 0..100")
+    if not isinstance(payload["rejected_alternatives_summary"], list):
+        raise ValueError("rejected alternatives summary must be a list")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("upgrade rationale must remain read-only")
+    if research_target_upgrade_candidates is not None:
+        validate_research_target_upgrade_candidates(research_target_upgrade_candidates)
+    if research_target_pattern_summary is not None and payload["research_target_pattern_summary_id"] != research_target_pattern_summary["research_target_pattern_summary_id"]:
+        raise ValueError("rationale pattern summary id mismatch")
+    if research_target_provenance_table is not None and payload["research_target_provenance_table_id"] != research_target_provenance_table["research_target_provenance_table_id"]:
+        raise ValueError("rationale provenance table id mismatch")
+
+
+def stable_research_target_upgrade_rationale_card_json(payload: dict[str, Any]) -> str:
+    validate_research_target_upgrade_rationale_card(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_research_target_upgrade_rationale_card_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_research_target_upgrade_rationale_card(payload)
+    return payload
+
+
+def _specificity_factor(name: str, passed: bool, points: int = 10) -> dict[str, Any]:
+    return {"factor": name, "passed": bool(passed), "points": points if passed else 0}
+
+
+def _specificity_grade(score: int) -> str:
+    if score >= 85:
+        return "strong"
+    if score >= 65:
+        return "acceptable"
+    if score >= 40:
+        return "weak"
+    return "generic"
+
+
+def collect_research_target_recommendation_specificity(
+    research_target_operator_report: dict[str, Any] | None = None,
+    research_target_upgrade_rationale_card: dict[str, Any] | None = None,
+    research_target_pattern_summary: dict[str, Any] | None = None,
+    research_target_provenance_table: dict[str, Any] | None = None,
+    operator_task_draft: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if research_target_operator_report is None or research_target_upgrade_rationale_card is None or research_target_pattern_summary is None or research_target_provenance_table is None or operator_task_draft is None:
+        context = build_source_aware_context_for_cli(str(source_path or ""))
+        report = research_target_operator_report or collect_research_target_operator_report(source_path=str(source_path or ""), source_context=context)
+        table = research_target_provenance_table or collect_research_target_provenance_table(context["research_target_intake"], context["research_target_evidence_bundle"], context["research_source_binding_context"])
+        patterns = research_target_pattern_summary or collect_research_target_pattern_summary(context["research_target_intake"], context["research_target_evidence_bundle"], table)
+        rationale = research_target_upgrade_rationale_card or collect_research_target_upgrade_rationale_card(context["research_target_upgrade_candidates"], patterns, table, context["decision_chain"]["ranking"], context["decision_chain"]["trace"])
+        task = operator_task_draft or context["operator_chain"]["task_draft"]
+    else:
+        report = research_target_operator_report
+        rationale = research_target_upgrade_rationale_card
+        patterns = research_target_pattern_summary
+        table = research_target_provenance_table
+        task = operator_task_draft
+    source_path_value = report.get("source_path") or rationale.get("source_path") or table.get("source_path")
+    factors = [
+        _specificity_factor("source_path_present", bool(source_path_value)),
+        _specificity_factor("source_refs_present", bool(report.get("source_refs"))),
+        _specificity_factor("evidence_refs_present", bool(report.get("evidence_refs"))),
+        _specificity_factor("provenance_paths_present", bool(table.get("provenance_rows")) and all(row.get("provenance_path") for row in table.get("provenance_rows", []))),
+        _specificity_factor("target_patterns_present", bool(patterns.get("detected_patterns"))),
+        _specificity_factor("likely_affected_files_present", bool(report.get("likely_affected_files"))),
+        _specificity_factor("expected_tests_present", bool(report.get("expected_tests"))),
+        _specificity_factor("why_this_target_present", bool(rationale.get("why_this_target")) and source_path_value in rationale.get("why_this_target", "")),
+        _specificity_factor("why_this_upgrade_present", bool(rationale.get("why_this_upgrade")) and rationale.get("source_name", "") in rationale.get("why_this_upgrade", "")),
+        _specificity_factor("task_draft_mentions_target", bool(source_path_value) and source_path_value in (task.get("objective", "") + " " + task.get("scope_summary", ""))),
+    ]
+    score = sum(item["points"] for item in factors)
+    missing = [item["factor"] for item in factors if not item["passed"]]
+    warnings = [f"missing specificity factor: {item}" for item in missing]
+    if score < 65:
+        warnings.append("recommendation may still be too generic for operator use")
+    digest = _research_target_hash_text({
+        "source_path": source_path_value,
+        "selected_upgrade_candidate_id": report.get("selected_upgrade_candidate_id") or rationale.get("selected_upgrade_candidate_id"),
+        "score": score,
+        "missing": missing,
+        "version": RESEARCH_TARGET_RECOMMENDATION_SPECIFICITY_VERSION,
+    })[:12]
+    payload = {
+        "research_target_recommendation_specificity_version": RESEARCH_TARGET_RECOMMENDATION_SPECIFICITY_VERSION,
+        "research_target_recommendation_specificity_id": f"research-target-recommendation-specificity-{digest}",
+        "source_bound": True,
+        "source_path": source_path_value,
+        "research_target_intake_id": report.get("research_target_intake_id") or rationale.get("research_target_intake_id"),
+        "research_target_evidence_bundle_id": report.get("research_target_evidence_bundle_id") or rationale.get("research_target_evidence_bundle_id"),
+        "selected_upgrade_candidate_id": report.get("selected_upgrade_candidate_id") or rationale.get("selected_upgrade_candidate_id"),
+        "specificity_score": score,
+        "specificity_grade": _specificity_grade(score),
+        "specificity_factors": factors,
+        "genericity_warnings": warnings,
+        "missing_specificity": missing,
+        "recommended_next_action": "Proceed only if the specificity grade is acceptable or strong; otherwise improve target evidence and rationale first.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_research_target_recommendation_specificity(payload)
+    return payload
+
+
+def validate_research_target_recommendation_specificity(payload: dict[str, Any]) -> None:
+    required = (
+        "research_target_recommendation_specificity_version", "research_target_recommendation_specificity_id",
+        "source_bound", "source_path", "selected_upgrade_candidate_id", "specificity_score",
+        "specificity_grade", "specificity_factors", "genericity_warnings", "missing_specificity",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"research target recommendation specificity missing field: {key}")
+    if payload["research_target_recommendation_specificity_version"] != RESEARCH_TARGET_RECOMMENDATION_SPECIFICITY_VERSION:
+        raise ValueError("invalid recommendation specificity version")
+    if not payload["research_target_recommendation_specificity_id"].startswith("research-target-recommendation-specificity-"):
+        raise ValueError("invalid recommendation specificity id")
+    if payload["source_bound"] is not True or not payload["source_path"].startswith("research/"):
+        raise ValueError("recommendation specificity must be source-bound")
+    if not isinstance(payload["specificity_score"], int) or not 0 <= payload["specificity_score"] <= 100:
+        raise ValueError("specificity score must be 0..100")
+    if payload["specificity_grade"] != _specificity_grade(payload["specificity_score"]):
+        raise ValueError("specificity grade does not match score")
+    factor_names = {item.get("factor") for item in payload["specificity_factors"] if isinstance(item, dict)}
+    required_factors = {
+        "source_path_present", "source_refs_present", "evidence_refs_present", "provenance_paths_present",
+        "target_patterns_present", "likely_affected_files_present", "expected_tests_present",
+        "why_this_target_present", "why_this_upgrade_present", "task_draft_mentions_target",
+    }
+    if factor_names != required_factors:
+        raise ValueError("specificity factors are incomplete")
+    for item in payload["specificity_factors"]:
+        if not isinstance(item.get("passed"), bool) or not isinstance(item.get("points"), int):
+            raise ValueError("specificity factor must include boolean passed and integer points")
+    if payload["specificity_grade"] == "generic" and not payload["genericity_warnings"]:
+        raise ValueError("generic specificity requires warnings")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("recommendation specificity must remain read-only")
+
+
+def stable_research_target_recommendation_specificity_json(payload: dict[str, Any]) -> str:
+    validate_research_target_recommendation_specificity(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_research_target_recommendation_specificity_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_research_target_recommendation_specificity(payload)
+    return payload
+
+
 def collect_research_target_operator_report(*, source_path: str, metadata: dict[str, Any] | None = None, source_context: dict[str, Any] | None = None) -> dict[str, Any]:
     context = source_context or build_source_aware_context_for_cli(source_path)
     intake = context["research_target_intake"]
@@ -12585,6 +13241,9 @@ def collect_research_target_operator_report(*, source_path: str, metadata: dict[
     selected = next(item for item in candidates["upgrade_candidates"] if item["upgrade_candidate_id"] == selected_candidate_id)
     selected_opportunity = next((item for item in scan["opportunities"] if item.get("selected_upgrade_candidate_id") == selected_candidate_id), scan["opportunities"][0])
     task = operator_chain["task_draft"]
+    provenance_table = collect_research_target_provenance_table(intake, evidence, binding)
+    pattern_summary = collect_research_target_pattern_summary(intake, evidence, provenance_table)
+    rationale = collect_research_target_upgrade_rationale_card(candidates, pattern_summary, provenance_table, decision["ranking"], decision["trace"])
     blockers = _normalize_implementation_branch_refs(list(review["blockers"]) + list(operator_chain["task_review"]["blockers"]))
     warnings = _normalize_implementation_branch_refs(list(review["warnings"]) + list(operator_chain["task_review"]["warnings"]))
     required_actions = _normalize_implementation_branch_refs(list(review["required_human_actions"]) + list(operator_chain["task_review"]["required_human_actions"]))
@@ -12606,8 +13265,13 @@ def collect_research_target_operator_report(*, source_path: str, metadata: dict[
         "research_target_intake_id": intake["research_target_intake_id"],
         "research_target_evidence_bundle_id": evidence["research_target_evidence_bundle_id"],
         "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "provenance_table_id": provenance_table["research_target_provenance_table_id"],
+        "pattern_summary_id": pattern_summary["research_target_pattern_summary_id"],
+        "upgrade_rationale_card_id": rationale["research_target_upgrade_rationale_card_id"],
         "selected_upgrade_candidate_id": selected_candidate_id,
         "target_link_module": selected["target_link_module"],
+        "why_this_target": rationale["why_this_target"],
+        "why_this_upgrade": rationale["why_this_upgrade"],
         "selected_upgrade_title": selected["title"],
         "selected_upgrade_summary": selected["description"],
         "evidence_strength": evidence["evidence_strength"],
@@ -12637,6 +13301,12 @@ def collect_research_target_operator_report(*, source_path: str, metadata: dict[
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    specificity = collect_research_target_recommendation_specificity(report, rationale, pattern_summary, provenance_table, task)
+    report.update({
+        "recommendation_specificity_id": specificity["research_target_recommendation_specificity_id"],
+        "specificity_score": specificity["specificity_score"],
+        "specificity_grade": specificity["specificity_grade"],
+    })
     validate_research_target_operator_report(report)
     return report
 
@@ -12645,8 +13315,10 @@ def validate_research_target_operator_report(report: dict[str, Any]) -> None:
     required = (
         "research_target_operator_report_version", "research_target_operator_report_id", "source_bound",
         "source_path", "source_name", "source_type", "research_target_intake_id",
-        "research_target_evidence_bundle_id", "research_source_binding_context_id", "selected_upgrade_candidate_id",
-        "target_link_module", "selected_upgrade_title", "selected_upgrade_summary", "evidence_strength",
+        "research_target_evidence_bundle_id", "research_source_binding_context_id", "provenance_table_id",
+        "pattern_summary_id", "upgrade_rationale_card_id", "recommendation_specificity_id",
+        "specificity_score", "specificity_grade", "selected_upgrade_candidate_id",
+        "target_link_module", "why_this_target", "why_this_upgrade", "selected_upgrade_title", "selected_upgrade_summary", "evidence_strength",
         "confidence_score", "risk_score", "effort_score", "source_refs_summary", "evidence_refs_summary",
         "source_refs", "evidence_refs", "task_draft_summary", "likely_affected_files", "expected_tests",
         "blockers", "warnings", "required_human_actions", "recommended_next_action", "safety_metadata",
@@ -12663,9 +13335,13 @@ def validate_research_target_operator_report(report: dict[str, Any]) -> None:
         raise ValueError("research target operator report must be source-bound")
     if report["target_link_module"] not in RESEARCH_TARGET_LINK_MODULES:
         raise ValueError("invalid target Link module in operator report")
-    for field in ("confidence_score", "risk_score", "effort_score"):
+    for field in ("confidence_score", "risk_score", "effort_score", "specificity_score"):
         if not isinstance(report[field], int) or not 0 <= report[field] <= 100:
             raise ValueError(f"operator report {field} must be 0..100")
+    if report["specificity_grade"] not in {"strong", "acceptable", "weak", "generic"}:
+        raise ValueError("operator report specificity grade is invalid")
+    if report["source_path"] not in report["why_this_target"] or report["source_name"] not in report["why_this_upgrade"]:
+        raise ValueError("operator report rationale fields must be source-specific")
     for field in ("source_refs_summary", "evidence_refs_summary", "likely_affected_files", "expected_tests", "blockers", "warnings", "required_human_actions"):
         if not isinstance(report[field], list) or not report[field]:
             raise ValueError(f"operator report {field} must be a non-empty list")
@@ -12744,6 +13420,14 @@ def collect_research_target_implementation_preview(*, source_path: str, metadata
         "research_target_intake_id": report["research_target_intake_id"],
         "research_target_evidence_bundle_id": report["research_target_evidence_bundle_id"],
         "research_source_binding_context_id": report["research_source_binding_context_id"],
+        "provenance_table_id": report["provenance_table_id"],
+        "pattern_summary_id": report["pattern_summary_id"],
+        "upgrade_rationale_card_id": report["upgrade_rationale_card_id"],
+        "recommendation_specificity_id": report["recommendation_specificity_id"],
+        "specificity_score": report["specificity_score"],
+        "specificity_grade": report["specificity_grade"],
+        "why_this_target": report["why_this_target"],
+        "why_this_upgrade": report["why_this_upgrade"],
         "selected_upgrade_candidate_id": report["selected_upgrade_candidate_id"],
         "objective": task["objective"],
         "implementation_scope": task["scope_summary"],
@@ -12777,7 +13461,10 @@ def validate_research_target_implementation_preview(preview: dict[str, Any], ope
         "research_target_implementation_preview_version", "research_target_implementation_preview_id",
         "research_target_operator_report_id", "operator_task_draft_id", "source_bound", "source_path",
         "source_name", "source_type", "research_target_intake_id", "research_target_evidence_bundle_id",
-        "research_source_binding_context_id", "selected_upgrade_candidate_id", "objective", "implementation_scope",
+        "research_source_binding_context_id", "provenance_table_id", "pattern_summary_id",
+        "upgrade_rationale_card_id", "recommendation_specificity_id", "specificity_score",
+        "specificity_grade", "why_this_target", "why_this_upgrade",
+        "selected_upgrade_candidate_id", "objective", "implementation_scope",
         "target_link_module", "likely_affected_files", "allowed_file_scope", "forbidden_file_scope",
         "expected_patch_shape", "acceptance_criteria", "expected_tests", "rollback_plan", "required_evidence",
         "required_approvals", "source_refs", "evidence_refs", "execution_allowed", "recommended_next_action",
@@ -12911,6 +13598,14 @@ def collect_research_target_sandbox_flow(*, source_path: str, metadata: dict[str
         "research_target_intake_id": report["research_target_intake_id"],
         "research_target_evidence_bundle_id": report["research_target_evidence_bundle_id"],
         "research_source_binding_context_id": report["research_source_binding_context_id"],
+        "provenance_table_id": report["provenance_table_id"],
+        "pattern_summary_id": report["pattern_summary_id"],
+        "upgrade_rationale_card_id": report["upgrade_rationale_card_id"],
+        "recommendation_specificity_id": report["recommendation_specificity_id"],
+        "specificity_score": report["specificity_score"],
+        "specificity_grade": report["specificity_grade"],
+        "why_this_target": report["why_this_target"],
+        "why_this_upgrade": report["why_this_upgrade"],
         "research_target_operator_report_id": report["research_target_operator_report_id"],
         "research_target_implementation_preview_id": preview["research_target_implementation_preview_id"],
         "sandbox_task_executor_boundary_id": boundary["sandbox_task_executor_boundary_id"],
@@ -12938,7 +13633,10 @@ def validate_research_target_sandbox_flow(flow: dict[str, Any]) -> None:
     required = (
         "research_target_sandbox_flow_version", "research_target_sandbox_flow_id", "source_bound", "source_path",
         "source_name", "source_type", "research_target_intake_id", "research_target_evidence_bundle_id",
-        "research_source_binding_context_id", "research_target_operator_report_id", "research_target_implementation_preview_id",
+        "research_source_binding_context_id", "provenance_table_id", "pattern_summary_id",
+        "upgrade_rationale_card_id", "recommendation_specificity_id", "specificity_score",
+        "specificity_grade", "why_this_target", "why_this_upgrade",
+        "research_target_operator_report_id", "research_target_implementation_preview_id",
         "sandbox_task_executor_boundary_id", "sandbox_execution_review_package_id", "selected_upgrade_candidate_id",
         "operator_task_draft_id", "execution_candidate_status", "blocker_count", "warning_count", "source_refs",
         "evidence_refs", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
@@ -12990,7 +13688,7 @@ def build_source_aware_dashboard_context_for_cli(source: str) -> dict[str, Any]:
 
 
 def _source_aware_target_metadata(report: dict[str, Any]) -> dict[str, Any]:
-    return {
+    metadata = {
         "source_bound": True,
         "source_path": report["source_path"],
         "source_name": report["source_name"],
@@ -13002,6 +13700,14 @@ def _source_aware_target_metadata(report: dict[str, Any]) -> dict[str, Any]:
         "source_refs": list(report["source_refs"]),
         "evidence_refs": list(report["evidence_refs"]),
     }
+    for key in (
+        "provenance_table_id", "pattern_summary_id", "upgrade_rationale_card_id",
+        "recommendation_specificity_id", "specificity_score", "specificity_grade",
+        "why_this_target", "why_this_upgrade",
+    ):
+        if key in report:
+            metadata[key] = report[key]
+    return metadata
 
 
 def collect_source_aware_target_status_card(*, source_path: str, metadata: dict[str, Any] | None = None, dashboard_context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -13625,6 +14331,10 @@ def render_source_aware_operator_brief(
     warnings = _source_aware_first(payloads, ("warnings",), fallback=[])
     blocker_count = _source_aware_first(payloads, ("blocker_count",), fallback=len(blockers) if isinstance(blockers, list) else 0)
     warning_count = _source_aware_first(payloads, ("warning_count",), fallback=len(warnings) if isinstance(warnings, list) else 0)
+    specificity_grade = _source_aware_first(payloads, ("specificity_grade",), fallback="not available")
+    specificity_score = _source_aware_first(payloads, ("specificity_score",), fallback="not available")
+    why_this_target = _source_aware_first(payloads, ("why_this_target",), fallback="source-bound evidence is available for review")
+    why_this_upgrade = _source_aware_first(payloads, ("why_this_upgrade",), fallback="selected upgrade is based on source-aware ranking")
     next_action = _source_aware_first(payloads, ("recommended_next_action",), fallback="review source-aware output before approving any implementation slice")
     lines = [
         title,
@@ -13639,6 +14349,11 @@ def render_source_aware_operator_brief(
         f"  id: {_source_aware_text(selected_id, max_chars=140)}",
         f"  module: {_source_aware_text(target_module)}",
         f"  confidence/risk/effort: {confidence}/{risk}/{effort}",
+        "",
+        "Specificity:",
+        f"  grade/score: {specificity_grade}/{specificity_score}",
+        f"  why this target: {_source_aware_text(why_this_target, max_chars=220)}",
+        f"  why this upgrade: {_source_aware_text(why_this_upgrade, max_chars=220)}",
         "",
     ]
     lines.extend(render_source_aware_evidence_table(payload, operator_report=operator_report))
@@ -13805,6 +14520,152 @@ def operator_source_dashboard_main(argv: list[str] | None = None) -> int:
             sandbox_flow=context["sandbox_flow"],
         ))
     return 0
+
+def _research_target_print_provenance_table(table: dict[str, Any], *, limit: int = 10) -> None:
+    print("Research target provenance")
+    print(f"source: {table['source_path']}")
+    print(f"rows: {len(table['provenance_rows'])}  archive_refs: {table['archive_ref_count']}")
+    print("Provenance rows:")
+    for row in table["provenance_rows"][:limit]:
+        print(f"  - {row['display_path']} | {row['evidence_type']} | {row['detected_domain']} | confidence {row['confidence_score']} | {row['provenance_path']} | {row['why_relevant']}")
+    if len(table["provenance_rows"]) > limit:
+        print(f"  - ... {len(table['provenance_rows']) - limit} more")
+    print(f"next_action: {table['recommended_next_action']}")
+    print("Read-only: no extraction, no network, no source mutation.")
+
+
+def _research_target_print_pattern_summary(summary: dict[str, Any], *, limit: int = 8) -> None:
+    print("Research target patterns")
+    print(f"source: {summary['source_path']}")
+    print(f"dominant_domains: {', '.join(summary['dominant_domains'])}")
+    print("Detected patterns:")
+    for pattern in summary["detected_patterns"][:limit]:
+        print(f"  - {pattern['pattern_name']} | {pattern['pattern_category']} | confidence {pattern['confidence_score']} | {pattern['link_mapping']}")
+    if len(summary["detected_patterns"]) > limit:
+        print(f"  - ... {len(summary['detected_patterns']) - limit} more")
+    print(f"next_action: {summary['recommended_next_action']}")
+    print("Read-only: concepts only; no copied code.")
+
+
+def _research_target_print_rationale_card(card: dict[str, Any]) -> None:
+    print("Research target upgrade rationale")
+    print(f"source: {card['source_path']}")
+    print(f"upgrade: {card['selected_upgrade_title']}")
+    print(f"module: {card['target_link_module']}")
+    print(f"confidence/risk/effort: {card['confidence_score']}/{card['risk_level']}/{card['effort_score']}")
+    print(f"why_this_target: {card['why_this_target']}")
+    print(f"why_this_upgrade: {card['why_this_upgrade']}")
+    print("supporting_provenance:")
+    for row in card["supporting_provenance_rows"][:3]:
+        print(f"  - {row['provenance_path']} | {row['evidence_type']} | {row['why_relevant']}")
+    print(f"next_action: {card['recommended_next_action']}")
+    print("Read-only: no execution, no patches, no source mutation.")
+
+
+def _research_target_print_specificity(payload: dict[str, Any]) -> None:
+    print("Research target recommendation specificity")
+    print(f"source: {payload['source_path']}")
+    print(f"selected_upgrade_candidate_id: {payload['selected_upgrade_candidate_id']}")
+    print(f"specificity: {payload['specificity_grade']} ({payload['specificity_score']})")
+    print("factors:")
+    for factor in payload["specificity_factors"]:
+        state = "pass" if factor["passed"] else "missing"
+        print(f"  - {factor['factor']}: {state}")
+    if payload["genericity_warnings"]:
+        print("warnings:")
+        for warning in payload["genericity_warnings"][:5]:
+            print(f"  - {warning}")
+    print(f"next_action: {payload['recommended_next_action']}")
+    print("Read-only: no execution, no patches, no source mutation.")
+
+
+def research_target_provenance_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-provenance: compact source provenance table")
+        print("  python3 link.py research target-provenance --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-provenance")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_provenance_table(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_provenance_table_json(payload), end="")
+    else:
+        _research_target_print_provenance_table(payload)
+    return 0
+
+
+def research_target_patterns_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-patterns: compact source pattern summary")
+        print("  python3 link.py research target-patterns --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-patterns")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_pattern_summary(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_pattern_summary_json(payload), end="")
+    else:
+        _research_target_print_pattern_summary(payload)
+    return 0
+
+
+def research_target_upgrade_rationale_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-upgrade-rationale: explain source-specific recommendation")
+        print("  python3 link.py research target-upgrade-rationale --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-upgrade-rationale")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_upgrade_rationale_card(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_upgrade_rationale_card_json(payload), end="")
+    else:
+        _research_target_print_rationale_card(payload)
+    return 0
+
+
+def research_target_specificity_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research target-specificity: score recommendation specificity")
+        print("  python3 link.py research target-specificity --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "target-specificity")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_research_target_recommendation_specificity(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_research_target_recommendation_specificity_json(payload), end="")
+    else:
+        _research_target_print_specificity(payload)
+    return 0
+
 
 def research_target_operator_report_main(argv: list[str] | None = None) -> int:
     args = _research_target_normalize_args(argv)
