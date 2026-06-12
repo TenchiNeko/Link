@@ -12533,6 +12533,11 @@ def parse_source_aware_operator_flow_json(text: str) -> dict[str, Any]:
 RESEARCH_TARGET_OPERATOR_REPORT_VERSION = "link-research-target-operator-report-v1"
 RESEARCH_TARGET_IMPLEMENTATION_PREVIEW_VERSION = "link-research-target-implementation-preview-v1"
 RESEARCH_TARGET_SANDBOX_FLOW_VERSION = "link-research-target-sandbox-flow-v1"
+SOURCE_AWARE_TARGET_STATUS_CARD_VERSION = "link-source-aware-target-status-card-v1"
+CONTROL_PLANE_TARGET_STATUS_VERSION = "link-control-plane-target-status-v1"
+OPERATOR_TARGET_REVIEW_VERSION = "link-operator-target-review-v1"
+SOURCE_AWARE_TARGET_DECISION_CARD_VERSION = "link-source-aware-target-decision-card-v1"
+SOURCE_AWARE_OPERATOR_DASHBOARD_VERSION = "link-source-aware-operator-dashboard-v1"
 
 
 def _compact_source_ref_summaries(evidence_bundle: dict[str, Any], *, limit: int = 5) -> list[dict[str, Any]]:
@@ -12976,6 +12981,490 @@ def parse_research_target_sandbox_flow_json(text: str) -> dict[str, Any]:
     validate_research_target_sandbox_flow(flow)
     return flow
 
+
+
+def build_source_aware_dashboard_context_for_cli(source: str) -> dict[str, Any]:
+    sandbox_context = build_source_aware_sandbox_context_for_cli(source)
+    sandbox_context["sandbox_flow"] = collect_research_target_sandbox_flow(source_path=source, sandbox_context=sandbox_context)
+    return sandbox_context
+
+
+def _source_aware_target_metadata(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_bound": True,
+        "source_path": report["source_path"],
+        "source_name": report["source_name"],
+        "source_type": report["source_type"],
+        "research_target_intake_id": report["research_target_intake_id"],
+        "research_target_evidence_bundle_id": report["research_target_evidence_bundle_id"],
+        "research_source_binding_context_id": report["research_source_binding_context_id"],
+        "selected_upgrade_candidate_id": report["selected_upgrade_candidate_id"],
+        "source_refs": list(report["source_refs"]),
+        "evidence_refs": list(report["evidence_refs"]),
+    }
+
+
+def collect_source_aware_target_status_card(*, source_path: str, metadata: dict[str, Any] | None = None, dashboard_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = dashboard_context or build_source_aware_dashboard_context_for_cli(source_path)
+    report = context["operator_report"]
+    preview = context["implementation_preview"]
+    sandbox_review = context["review"]
+    decision = context["source_context"]["decision_chain"]
+    task_review = context["task_review"]
+    blockers = _normalize_implementation_branch_refs(list(report["blockers"]) + list(sandbox_review["blockers"]))
+    warnings = _normalize_implementation_branch_refs(list(report["warnings"]) + list(sandbox_review["warnings"]))
+    card = {
+        "source_aware_target_status_card_version": SOURCE_AWARE_TARGET_STATUS_CARD_VERSION,
+        "source_aware_target_status_card_id": _source_aware_hash_id("source-aware-target-status-card", {
+            "report_id": report["research_target_operator_report_id"],
+            "preview_id": preview["research_target_implementation_preview_id"],
+            "sandbox_review_id": sandbox_review["sandbox_execution_review_package_id"],
+            "version": SOURCE_AWARE_TARGET_STATUS_CARD_VERSION,
+        }),
+        **_source_aware_target_metadata(report),
+        "research_target_operator_report_id": report["research_target_operator_report_id"],
+        "research_target_implementation_preview_id": preview["research_target_implementation_preview_id"],
+        "sandbox_execution_review_package_id": sandbox_review["sandbox_execution_review_package_id"],
+        "target_link_module": report["target_link_module"],
+        "source_status": "bound",
+        "evidence_status": "blocked" if report["blockers"] else "review_required",
+        "decision_status": "ranked" if decision["ranking"]["top_candidate_id"] else "blocked",
+        "task_status": task_review["task_status"],
+        "sandbox_candidate_status": sandbox_review["execution_candidate_status"],
+        "source_refs_summary": list(report["source_refs_summary"][:5]),
+        "evidence_refs_summary": list(report["evidence_refs_summary"][:5]),
+        "blocker_count": len(blockers),
+        "warning_count": len(warnings),
+        "recommended_next_action": "Review the operator target review for the selected target; do not execute without separate approval.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_aware_target_status_card(card)
+    return card
+
+
+def validate_source_aware_target_status_card(card: dict[str, Any]) -> None:
+    required = (
+        "source_aware_target_status_card_version", "source_aware_target_status_card_id", "source_bound",
+        "source_path", "source_name", "source_type", "research_target_intake_id",
+        "research_target_evidence_bundle_id", "research_source_binding_context_id", "selected_upgrade_candidate_id",
+        "research_target_operator_report_id", "research_target_implementation_preview_id", "sandbox_execution_review_package_id",
+        "target_link_module", "source_status", "evidence_status", "decision_status", "task_status",
+        "sandbox_candidate_status", "source_refs_summary", "evidence_refs_summary", "blocker_count",
+        "warning_count", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in card:
+            raise ValueError(f"source-aware target status card missing field: {key}")
+    if card["source_aware_target_status_card_version"] != SOURCE_AWARE_TARGET_STATUS_CARD_VERSION:
+        raise ValueError("invalid source-aware target status card version")
+    if not card["source_aware_target_status_card_id"].startswith("source-aware-target-status-card-"):
+        raise ValueError("invalid source-aware target status card id")
+    if card["source_status"] not in {"bound", "blocked"}:
+        raise ValueError("invalid source-aware target source status")
+    if card["evidence_status"] not in {"blocked", "review_required", "ready"}:
+        raise ValueError("invalid source-aware target evidence status")
+    if card["decision_status"] not in {"ranked", "blocked"}:
+        raise ValueError("invalid source-aware target decision status")
+    if card["task_status"] not in {"draft", "blocked", "review", "ready"}:
+        raise ValueError("invalid source-aware target task status")
+    if card["sandbox_candidate_status"] not in {"blocked", "candidate", "denied"}:
+        raise ValueError("invalid source-aware target sandbox status")
+    for field in ("blocker_count", "warning_count"):
+        if not isinstance(card[field], int) or card[field] < 0:
+            raise ValueError(f"source-aware target {field} must be non-negative")
+    for field in ("source_refs_summary", "evidence_refs_summary"):
+        if not isinstance(card[field], list) or not card[field]:
+            raise ValueError(f"source-aware target {field} must be non-empty")
+        for ref in card[field]:
+            if card["source_type"] == "zip_archive" and "!" not in ref.get("provenance_path", ""):
+                raise ValueError("source-aware target zip provenance must be archive-qualified")
+    validate_source_aware_provenance(card)
+    expected_id = _source_aware_hash_id("source-aware-target-status-card", {
+        "report_id": card["research_target_operator_report_id"],
+        "preview_id": card["research_target_implementation_preview_id"],
+        "sandbox_review_id": card["sandbox_execution_review_package_id"],
+        "version": SOURCE_AWARE_TARGET_STATUS_CARD_VERSION,
+    })
+    if card["source_aware_target_status_card_id"] != expected_id:
+        raise ValueError("source-aware target status card id is not deterministic")
+
+
+def stable_source_aware_target_status_card_json(card: dict[str, Any]) -> str:
+    validate_source_aware_target_status_card(card)
+    return _stable_ruflo_json(card, indent=2) + "\n"
+
+
+def parse_source_aware_target_status_card_json(text: str) -> dict[str, Any]:
+    import json as _json
+    card = _json.loads(text)
+    validate_source_aware_target_status_card(card)
+    return card
+
+
+def collect_control_plane_target_status(*, source_path: str, metadata: dict[str, Any] | None = None, dashboard_context: dict[str, Any] | None = None, status_card: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = dashboard_context or build_source_aware_dashboard_context_for_cli(source_path)
+    card = status_card or collect_source_aware_target_status_card(source_path=source_path, dashboard_context=context)
+    services = collect_link_shared_services_dashboard()
+    control_dashboard = collect_link_control_plane_dashboard(shared_services_dashboard=services)
+    health = collect_control_plane_health_package(control_dashboard, services)
+    review = collect_control_plane_review_package(control_dashboard, services, health)
+    payload = {
+        "control_plane_target_status_version": CONTROL_PLANE_TARGET_STATUS_VERSION,
+        "control_plane_target_status_id": _source_aware_hash_id("control-plane-target-status", {
+            "card_id": card["source_aware_target_status_card_id"],
+            "dashboard_id": control_dashboard["control_plane_dashboard_id"],
+            "health_id": health["control_plane_health_package_id"],
+            "review_id": review["control_plane_review_package_id"],
+            "services_id": services["shared_services_dashboard_id"],
+            "version": CONTROL_PLANE_TARGET_STATUS_VERSION,
+        }),
+        **_source_aware_target_metadata(context["operator_report"]),
+        "source_aware_target_status_card_id": card["source_aware_target_status_card_id"],
+        "control_plane_dashboard_id": control_dashboard["control_plane_dashboard_id"],
+        "control_plane_health_package_id": health["control_plane_health_package_id"],
+        "control_plane_review_package_id": review["control_plane_review_package_id"],
+        "shared_services_dashboard_id": services["shared_services_dashboard_id"],
+        "control_plane_status": review["health_status"],
+        "source_binding_status": card["source_status"],
+        "evidence_status": card["evidence_status"],
+        "operator_status": card["task_status"],
+        "sandbox_status": card["sandbox_candidate_status"],
+        "shared_services_status": "blocked" if services["blockers"] else "available",
+        "blocker_count": card["blocker_count"] + len(review["blockers"]),
+        "warning_count": card["warning_count"] + len(review["warnings"]) + len(services["warnings"]),
+        "recommended_next_action": "Use operator source-dashboard for the selected target before authorizing any implementation slice.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_control_plane_target_status(payload, card)
+    return payload
+
+
+def validate_control_plane_target_status(payload: dict[str, Any], status_card: dict[str, Any] | None = None) -> None:
+    required = (
+        "control_plane_target_status_version", "control_plane_target_status_id", "source_bound",
+        "source_path", "source_name", "source_type", "research_target_intake_id",
+        "research_target_evidence_bundle_id", "selected_upgrade_candidate_id", "control_plane_status",
+        "source_binding_status", "evidence_status", "operator_status", "sandbox_status",
+        "shared_services_status", "blocker_count", "warning_count", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"control-plane target status missing field: {key}")
+    if payload["control_plane_target_status_version"] != CONTROL_PLANE_TARGET_STATUS_VERSION:
+        raise ValueError("invalid control-plane target status version")
+    if not payload["control_plane_target_status_id"].startswith("control-plane-target-status-"):
+        raise ValueError("invalid control-plane target status id")
+    for field in ("blocker_count", "warning_count"):
+        if not isinstance(payload[field], int) or payload[field] < 0:
+            raise ValueError(f"control-plane target {field} must be non-negative")
+    validate_source_aware_provenance(payload)
+    if status_card is not None:
+        validate_source_aware_target_status_card(status_card)
+        if payload["source_aware_target_status_card_id"] != status_card["source_aware_target_status_card_id"]:
+            raise ValueError("control-plane target status card id mismatch")
+
+
+def stable_control_plane_target_status_json(payload: dict[str, Any]) -> str:
+    validate_control_plane_target_status(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_control_plane_target_status_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_control_plane_target_status(payload)
+    return payload
+
+
+def collect_operator_target_review(*, source_path: str, metadata: dict[str, Any] | None = None, dashboard_context: dict[str, Any] | None = None, status_card: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = dashboard_context or build_source_aware_dashboard_context_for_cli(source_path)
+    report = context["operator_report"]
+    preview = context["implementation_preview"]
+    sandbox_review = context["review"]
+    task_review = context["task_review"]
+    card = status_card or collect_source_aware_target_status_card(source_path=source_path, dashboard_context=context)
+    payload = {
+        "operator_target_review_version": OPERATOR_TARGET_REVIEW_VERSION,
+        "operator_target_review_id": _source_aware_hash_id("operator-target-review", {
+            "card_id": card["source_aware_target_status_card_id"],
+            "report_id": report["research_target_operator_report_id"],
+            "preview_id": preview["research_target_implementation_preview_id"],
+            "sandbox_review_id": sandbox_review["sandbox_execution_review_package_id"],
+            "task_review_id": task_review["operator_task_review_package_id"],
+            "version": OPERATOR_TARGET_REVIEW_VERSION,
+        }),
+        **_source_aware_target_metadata(report),
+        "selected_upgrade_title": report["selected_upgrade_title"],
+        "selected_upgrade_summary": report["selected_upgrade_summary"],
+        "implementation_preview_id": preview["research_target_implementation_preview_id"],
+        "sandbox_task_executor_boundary_id": sandbox_review["sandbox_task_executor_boundary_id"],
+        "operator_task_review_package_id": task_review["operator_task_review_package_id"],
+        "task_status": task_review["task_status"],
+        "evidence_status": card["evidence_status"],
+        "sandbox_candidate_status": sandbox_review["execution_candidate_status"],
+        "likely_affected_files": list(preview["likely_affected_files"]),
+        "expected_tests": list(preview["expected_tests"]),
+        "execution_allowed": False,
+        "blockers": _normalize_implementation_branch_refs(list(report["blockers"]) + list(sandbox_review["blockers"]) + list(task_review["blockers"])),
+        "warnings": _normalize_implementation_branch_refs(list(report["warnings"]) + list(sandbox_review["warnings"]) + list(task_review["warnings"])),
+        "required_human_actions": _normalize_implementation_branch_refs(list(report["required_human_actions"]) + list(sandbox_review["required_human_actions"]) + list(task_review["required_human_actions"])),
+        "review_recommendation": "Do not execute. Use this target review to decide whether to authorize a separate implementation slice.",
+        "recommended_next_action": "Review likely files, tests, and sandbox blockers before approving implementation planning.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_operator_target_review(payload)
+    return payload
+
+
+def validate_operator_target_review(payload: dict[str, Any]) -> None:
+    required = (
+        "operator_target_review_version", "operator_target_review_id", "source_bound", "source_path",
+        "source_name", "research_target_intake_id", "research_target_evidence_bundle_id",
+        "selected_upgrade_candidate_id", "selected_upgrade_title", "selected_upgrade_summary",
+        "implementation_preview_id", "sandbox_task_executor_boundary_id", "task_status",
+        "evidence_status", "sandbox_candidate_status", "likely_affected_files", "expected_tests",
+        "execution_allowed", "blockers", "warnings", "required_human_actions", "review_recommendation",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"operator target review missing field: {key}")
+    if payload["operator_target_review_version"] != OPERATOR_TARGET_REVIEW_VERSION:
+        raise ValueError("invalid operator target review version")
+    if not payload["operator_target_review_id"].startswith("operator-target-review-"):
+        raise ValueError("invalid operator target review id")
+    if payload["execution_allowed"] is not False:
+        raise ValueError("operator target review must remain non-executable")
+    for field in ("likely_affected_files", "expected_tests", "blockers", "warnings", "required_human_actions"):
+        if not isinstance(payload[field], list) or not payload[field]:
+            raise ValueError(f"operator target review {field} must be non-empty")
+    if payload["source_path"] not in payload["selected_upgrade_summary"] and payload["source_path"] not in " ".join(payload["source_refs"]):
+        raise ValueError("operator target review must reference selected source")
+    validate_source_aware_provenance(payload)
+
+
+def stable_operator_target_review_json(payload: dict[str, Any]) -> str:
+    validate_operator_target_review(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_operator_target_review_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_operator_target_review(payload)
+    return payload
+
+
+def collect_source_aware_target_decision_card(*, source_path: str, metadata: dict[str, Any] | None = None, dashboard_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = dashboard_context or build_source_aware_dashboard_context_for_cli(source_path)
+    report = context["operator_report"]
+    decision = context["source_context"]["decision_chain"]
+    candidate_set = decision["candidate_set"]
+    ranking = decision["ranking"]
+    trace = decision["trace"]
+    top_candidate = next(item for item in candidate_set["candidates"] if item["decision_candidate_id"] == ranking["top_candidate_id"])
+    rejected = [
+        {
+            "decision_candidate_id": item["decision_candidate_id"],
+            "title": item["title"],
+            "reason": "lower deterministic score than selected source-bound candidate",
+        }
+        for item in candidate_set["candidates"]
+        if item["decision_candidate_id"] != ranking["top_candidate_id"]
+    ][:3]
+    payload = {
+        "source_aware_target_decision_card_version": SOURCE_AWARE_TARGET_DECISION_CARD_VERSION,
+        "source_aware_target_decision_card_id": _source_aware_hash_id("source-aware-target-decision-card", {
+            "candidate_set_id": candidate_set["decision_candidate_set_id"],
+            "ranking_id": ranking["decision_ranking_id"],
+            "trace_id": trace["operator_decision_trace_package_id"],
+            "selected_upgrade_candidate_id": report["selected_upgrade_candidate_id"],
+            "version": SOURCE_AWARE_TARGET_DECISION_CARD_VERSION,
+        }),
+        **_source_aware_target_metadata(report),
+        "top_candidate_id": ranking["top_candidate_id"],
+        "decision_candidate_set_id": candidate_set["decision_candidate_set_id"],
+        "decision_ranking_id": ranking["decision_ranking_id"],
+        "operator_decision_trace_package_id": trace["operator_decision_trace_package_id"],
+        "decision_recommendation": f"Plan {top_candidate['title']} for {report['source_name']}.",
+        "score_summary": {
+            "top_candidate_id": ranking["top_candidate_id"],
+            "ranked_candidate_count": len(ranking["ranked_candidates"]),
+            "ranking_formula": ranking["ranking_formula"],
+        },
+        "why_this_candidate": trace["explanation_summary"],
+        "rejected_alternatives_summary": rejected,
+        "assumptions_summary": [
+            "source-bound candidates are ranked with deterministic readiness/risk/evidence/approval/effort scoring",
+            "execution remains disabled until a separate approved slice exists",
+        ],
+        "blockers": _normalize_implementation_branch_refs(list(top_candidate["blockers"]) + ["operator must review source-bound recommendation"]),
+        "warnings": _normalize_implementation_branch_refs(["ranking is deterministic but still requires human judgment", "external code must not be copied"]),
+        "recommended_next_action": "Review the operator target review and implementation preview for the selected candidate.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_aware_target_decision_card(payload)
+    return payload
+
+
+def validate_source_aware_target_decision_card(payload: dict[str, Any]) -> None:
+    required = (
+        "source_aware_target_decision_card_version", "source_aware_target_decision_card_id",
+        "source_bound", "source_path", "source_name", "research_target_intake_id", "selected_upgrade_candidate_id",
+        "top_candidate_id", "decision_recommendation", "score_summary", "why_this_candidate",
+        "rejected_alternatives_summary", "assumptions_summary", "blockers", "warnings",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source-aware target decision card missing field: {key}")
+    if payload["source_aware_target_decision_card_version"] != SOURCE_AWARE_TARGET_DECISION_CARD_VERSION:
+        raise ValueError("invalid source-aware target decision card version")
+    if not payload["source_aware_target_decision_card_id"].startswith("source-aware-target-decision-card-"):
+        raise ValueError("invalid source-aware target decision card id")
+    if not isinstance(payload["score_summary"], dict) or payload["score_summary"].get("top_candidate_id") != payload["top_candidate_id"]:
+        raise ValueError("decision card score summary must reference top candidate")
+    for field in ("why_this_candidate", "decision_recommendation"):
+        if payload["source_path"] not in payload[field] and payload["source_name"] not in payload[field]:
+            raise ValueError(f"decision card {field} must reference selected source")
+    for field in ("rejected_alternatives_summary", "assumptions_summary", "blockers", "warnings"):
+        if not isinstance(payload[field], list) or not payload[field]:
+            raise ValueError(f"decision card {field} must be non-empty")
+    validate_source_aware_provenance(payload)
+
+
+def stable_source_aware_target_decision_card_json(payload: dict[str, Any]) -> str:
+    validate_source_aware_target_decision_card(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_source_aware_target_decision_card_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_source_aware_target_decision_card(payload)
+    return payload
+
+
+def collect_source_aware_operator_dashboard(*, source_path: str, metadata: dict[str, Any] | None = None, dashboard_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = dashboard_context or build_source_aware_dashboard_context_for_cli(source_path)
+    card = collect_source_aware_target_status_card(source_path=source_path, dashboard_context=context)
+    control_status = collect_control_plane_target_status(source_path=source_path, dashboard_context=context, status_card=card)
+    operator_review = collect_operator_target_review(source_path=source_path, dashboard_context=context, status_card=card)
+    decision_card = collect_source_aware_target_decision_card(source_path=source_path, dashboard_context=context)
+    sandbox_flow = context["sandbox_flow"]
+    report = context["operator_report"]
+    blocker_count = max(card["blocker_count"], control_status["blocker_count"], len(operator_review["blockers"]), sandbox_flow["blocker_count"])
+    warning_count = max(card["warning_count"], control_status["warning_count"], len(operator_review["warnings"]), sandbox_flow["warning_count"])
+    payload = {
+        "source_aware_operator_dashboard_version": SOURCE_AWARE_OPERATOR_DASHBOARD_VERSION,
+        "source_aware_operator_dashboard_id": _source_aware_hash_id("source-aware-operator-dashboard", {
+            "card_id": card["source_aware_target_status_card_id"],
+            "control_status_id": control_status["control_plane_target_status_id"],
+            "operator_review_id": operator_review["operator_target_review_id"],
+            "decision_card_id": decision_card["source_aware_target_decision_card_id"],
+            "sandbox_flow_id": sandbox_flow["research_target_sandbox_flow_id"],
+            "version": SOURCE_AWARE_OPERATOR_DASHBOARD_VERSION,
+        }),
+        **_source_aware_target_metadata(report),
+        "selected_upgrade_title": report["selected_upgrade_title"],
+        "target_link_module": report["target_link_module"],
+        "source_aware_target_status_card_id": card["source_aware_target_status_card_id"],
+        "control_plane_target_status_id": control_status["control_plane_target_status_id"],
+        "operator_target_review_id": operator_review["operator_target_review_id"],
+        "source_aware_target_decision_card_id": decision_card["source_aware_target_decision_card_id"],
+        "research_target_sandbox_flow_id": sandbox_flow["research_target_sandbox_flow_id"],
+        "overall_status": "blocked" if blocker_count else "ready_for_review",
+        "evidence_status": card["evidence_status"],
+        "decision_status": card["decision_status"],
+        "task_status": card["task_status"],
+        "sandbox_status": card["sandbox_candidate_status"],
+        "blocker_count": blocker_count,
+        "warning_count": warning_count,
+        "key_findings": _normalize_implementation_branch_refs([
+            f"selected target: {report['source_path']}",
+            f"selected upgrade: {report['selected_upgrade_title']}",
+            f"target module: {report['target_link_module']}",
+            f"sandbox candidate status: {sandbox_flow['execution_candidate_status']}",
+        ]),
+        "next_actions": _normalize_implementation_branch_refs([
+            "review implementation preview scope",
+            "review operator target review",
+            "resolve sandbox executor blockers before any execution-capable slice",
+        ]),
+        "recommended_next_action": "Use this compact source dashboard as the selected-target operator starting point.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_aware_operator_dashboard(payload)
+    return payload
+
+
+def validate_source_aware_operator_dashboard(payload: dict[str, Any]) -> None:
+    required = (
+        "source_aware_operator_dashboard_version", "source_aware_operator_dashboard_id", "source_bound",
+        "source_path", "source_name", "source_type", "research_target_intake_id",
+        "research_target_evidence_bundle_id", "selected_upgrade_candidate_id", "selected_upgrade_title",
+        "target_link_module", "overall_status", "evidence_status", "decision_status", "task_status",
+        "sandbox_status", "blocker_count", "warning_count", "key_findings", "next_actions",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source-aware operator dashboard missing field: {key}")
+    if payload["source_aware_operator_dashboard_version"] != SOURCE_AWARE_OPERATOR_DASHBOARD_VERSION:
+        raise ValueError("invalid source-aware operator dashboard version")
+    if not payload["source_aware_operator_dashboard_id"].startswith("source-aware-operator-dashboard-"):
+        raise ValueError("invalid source-aware operator dashboard id")
+    if payload["overall_status"] not in {"blocked", "ready_for_review"}:
+        raise ValueError("invalid source-aware operator dashboard overall status")
+    for field in ("blocker_count", "warning_count"):
+        if not isinstance(payload[field], int) or payload[field] < 0:
+            raise ValueError(f"operator dashboard {field} must be non-negative")
+    for field in ("key_findings", "next_actions"):
+        if not isinstance(payload[field], list) or not payload[field]:
+            raise ValueError(f"operator dashboard {field} must be non-empty")
+    if payload["source_path"] not in " ".join(payload["key_findings"]):
+        raise ValueError("operator dashboard must reference selected source in findings")
+    validate_source_aware_provenance(payload)
+
+
+def stable_source_aware_operator_dashboard_json(payload: dict[str, Any]) -> str:
+    validate_source_aware_operator_dashboard(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_source_aware_operator_dashboard_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_source_aware_operator_dashboard(payload)
+    return payload
+
 def _research_target_cli_source_or_error(args: list[str], command_name: str) -> tuple[str | None, int | None]:
     if "--write" in args:
         print(f"error: research {command_name} is read-only; --write is not supported", file=sys.stderr)
@@ -12994,6 +13483,141 @@ def _research_target_print_summary(title: str, payload: dict[str, Any], lines: l
 
 
 
+
+
+
+def _source_target_cli_source_or_error(args: list[str], family: str, command_name: str) -> tuple[str | None, int | None]:
+    if "--write" in args:
+        print(f"error: {family} {command_name} is read-only; --write is not supported", file=sys.stderr)
+        return None, 2
+    source = _research_target_extract_source_arg(args)
+    if not source:
+        print(f"error: {family} {command_name} requires --source <path>", file=sys.stderr)
+        return None, 2
+    return source, None
+
+
+def control_plane_target_status_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Control-plane target-status: selected research target status")
+        print("  python3 link.py control-plane target-status --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _source_target_cli_source_or_error(args, "control-plane", "target-status")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_control_plane_target_status(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_control_plane_target_status_json(payload), end="")
+    else:
+        _research_target_print_summary("Control-plane target status", payload, [
+            ("id", payload["control_plane_target_status_id"]),
+            ("source_path", payload["source_path"]),
+            ("control_plane_status", payload["control_plane_status"]),
+            ("evidence_status", payload["evidence_status"]),
+            ("sandbox_status", payload["sandbox_status"]),
+            ("blockers", payload["blocker_count"]),
+            ("warnings", payload["warning_count"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def operator_target_review_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Operator target-review: selected research target review")
+        print("  python3 link.py operator target-review --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _source_target_cli_source_or_error(args, "operator", "target-review")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_operator_target_review(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_operator_target_review_json(payload), end="")
+    else:
+        _research_target_print_summary("Operator target review", payload, [
+            ("id", payload["operator_target_review_id"]),
+            ("source_path", payload["source_path"]),
+            ("selected upgrade", payload["selected_upgrade_title"]),
+            ("task_status", payload["task_status"]),
+            ("sandbox_status", payload["sandbox_candidate_status"]),
+            ("affected files", len(payload["likely_affected_files"])),
+            ("expected tests", len(payload["expected_tests"])),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def decision_target_card_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Decision target-card: selected research target decision card")
+        print("  python3 link.py decision target-card --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _source_target_cli_source_or_error(args, "decision", "target-card")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_source_aware_target_decision_card(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_source_aware_target_decision_card_json(payload), end="")
+    else:
+        _research_target_print_summary("Decision target card", payload, [
+            ("id", payload["source_aware_target_decision_card_id"]),
+            ("source_path", payload["source_path"]),
+            ("selected upgrade", payload["selected_upgrade_candidate_id"]),
+            ("top candidate", payload["top_candidate_id"]),
+            ("ranked candidates", payload["score_summary"]["ranked_candidate_count"]),
+            ("blockers", len(payload["blockers"])),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def operator_source_dashboard_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Operator source-dashboard: selected research target dashboard")
+        print("  python3 link.py operator source-dashboard --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _source_target_cli_source_or_error(args, "operator", "source-dashboard")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_source_aware_operator_dashboard(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_source_aware_operator_dashboard_json(payload), end="")
+    else:
+        _research_target_print_summary("Operator source dashboard", payload, [
+            ("id", payload["source_aware_operator_dashboard_id"]),
+            ("source_path", payload["source_path"]),
+            ("selected upgrade", payload["selected_upgrade_title"]),
+            ("overall_status", payload["overall_status"]),
+            ("sandbox_status", payload["sandbox_status"]),
+            ("blockers", payload["blocker_count"]),
+            ("warnings", payload["warning_count"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
 
 def research_target_operator_report_main(argv: list[str] | None = None) -> int:
     args = _research_target_normalize_args(argv)

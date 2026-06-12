@@ -18516,6 +18516,177 @@ def check_source_aware_operator_report_and_sandbox_clis() -> None:
 
     print("source-aware operator report and sandbox CLIs OK")
 
+
+def check_source_aware_control_plane_dashboard_helpers() -> None:
+    from link_modes.growth.link_growth_console import (
+        build_source_aware_dashboard_context_for_cli,
+        collect_control_plane_target_status,
+        collect_operator_target_review,
+        collect_source_aware_operator_dashboard,
+        collect_source_aware_target_decision_card,
+        collect_source_aware_target_status_card,
+        parse_control_plane_target_status_json,
+        parse_operator_target_review_json,
+        parse_source_aware_operator_dashboard_json,
+        parse_source_aware_target_decision_card_json,
+        parse_source_aware_target_status_card_json,
+        stable_control_plane_target_status_json,
+        stable_operator_target_review_json,
+        stable_source_aware_operator_dashboard_json,
+        stable_source_aware_target_decision_card_json,
+        stable_source_aware_target_status_card_json,
+        validate_control_plane_target_status,
+        validate_operator_target_review,
+        validate_source_aware_operator_dashboard,
+        validate_source_aware_target_decision_card,
+        validate_source_aware_target_status_card,
+    )
+
+    zip_source, _, _ = _research_target_test_paths()
+    context = build_source_aware_dashboard_context_for_cli(zip_source)
+    card = collect_source_aware_target_status_card(source_path=zip_source, dashboard_context=context)
+    same_card = collect_source_aware_target_status_card(source_path=zip_source, dashboard_context=context)
+    _require(card["source_aware_target_status_card_id"] == same_card["source_aware_target_status_card_id"],
+             "source-aware target status card id must be deterministic")
+    _require(card["source_bound"] is True and card["source_path"] == zip_source,
+             "source-aware target status card must reference selected source")
+    _require(card["selected_upgrade_candidate_id"], "target status card must include selected upgrade candidate")
+    _require(card["source_refs_summary"] and card["evidence_refs_summary"],
+             "target status card must include compact ref summaries")
+    _require(all("!" in item["provenance_path"] for item in card["source_refs_summary"]),
+             "target status card zip provenance must be archive-qualified")
+    _require("research_target_operator_report" not in card and "operator_task_draft" not in card,
+             "target status card must not embed full nested payloads")
+    validate_source_aware_target_status_card(card)
+    _require(parse_source_aware_target_status_card_json(stable_source_aware_target_status_card_json(card)) == card,
+             "target status card JSON must round trip")
+
+    control = collect_control_plane_target_status(source_path=zip_source, dashboard_context=context, status_card=card)
+    _require(control["source_path"] == zip_source and control["source_bound"] is True,
+             "control-plane target status must be source-bound")
+    _require(control["source_aware_target_status_card_id"] == card["source_aware_target_status_card_id"],
+             "control-plane target status must preserve status card id")
+    validate_control_plane_target_status(control, card)
+    _require(parse_control_plane_target_status_json(stable_control_plane_target_status_json(control)) == control,
+             "control-plane target status JSON must round trip")
+
+    review = collect_operator_target_review(source_path=zip_source, dashboard_context=context, status_card=card)
+    _require(review["source_path"] == zip_source and review["source_bound"] is True,
+             "operator target review must be source-bound")
+    _require(review["selected_upgrade_candidate_id"] == card["selected_upgrade_candidate_id"],
+             "operator target review must preserve selected candidate")
+    _require(review["likely_affected_files"] and review["expected_tests"],
+             "operator target review must include affected files and expected tests")
+    _require(review["execution_allowed"] is False,
+             "operator target review must remain non-executable")
+    validate_operator_target_review(review)
+    _require(parse_operator_target_review_json(stable_operator_target_review_json(review)) == review,
+             "operator target review JSON must round trip")
+
+    decision = collect_source_aware_target_decision_card(source_path=zip_source, dashboard_context=context)
+    _require(decision["source_path"] == zip_source and decision["source_bound"] is True,
+             "decision target card must be source-bound")
+    _require(decision["selected_upgrade_candidate_id"] == card["selected_upgrade_candidate_id"],
+             "decision target card must preserve selected candidate")
+    _require(decision["top_candidate_id"] and decision["why_this_candidate"],
+             "decision target card must explain the winning candidate")
+    _require(zip_source in decision["why_this_candidate"],
+             "decision target card explanation must reference selected target")
+    validate_source_aware_target_decision_card(decision)
+    _require(parse_source_aware_target_decision_card_json(stable_source_aware_target_decision_card_json(decision)) == decision,
+             "decision target card JSON must round trip")
+
+    dashboard = collect_source_aware_operator_dashboard(source_path=zip_source, dashboard_context=context)
+    same_dashboard = collect_source_aware_operator_dashboard(source_path=zip_source, dashboard_context=context)
+    _require(dashboard["source_aware_operator_dashboard_id"] == same_dashboard["source_aware_operator_dashboard_id"],
+             "source-aware operator dashboard id must be deterministic")
+    _require(dashboard["source_path"] == zip_source and dashboard["source_bound"] is True,
+             "source-aware operator dashboard must be source-bound")
+    _require(dashboard["research_target_intake_id"] == card["research_target_intake_id"],
+             "dashboard must preserve research target intake id")
+    _require(dashboard["selected_upgrade_candidate_id"] == card["selected_upgrade_candidate_id"],
+             "dashboard must preserve selected candidate")
+    _require(dashboard["source_aware_target_status_card_id"] == card["source_aware_target_status_card_id"],
+             "dashboard must preserve status card id")
+    _require(dashboard["control_plane_target_status_id"] == control["control_plane_target_status_id"],
+             "dashboard must preserve control-plane target status id")
+    _require(dashboard["operator_target_review_id"] == review["operator_target_review_id"],
+             "dashboard must preserve operator target review id")
+    _require(dashboard["source_aware_target_decision_card_id"] == decision["source_aware_target_decision_card_id"],
+             "dashboard must preserve decision card id")
+    _require(dashboard["key_findings"] and dashboard["next_actions"],
+             "dashboard must include compact findings and next actions")
+    _require("research_target_operator_report" not in dashboard and "operator_target_review" not in dashboard,
+             "dashboard must not embed full nested payloads")
+    validate_source_aware_operator_dashboard(dashboard)
+    _require(parse_source_aware_operator_dashboard_json(stable_source_aware_operator_dashboard_json(dashboard)) == dashboard,
+             "source-aware operator dashboard JSON must round trip")
+
+    bad_dashboard = json.loads(stable_source_aware_operator_dashboard_json(dashboard))
+    bad_dashboard["source_path"] = "research/other.zip"
+    try:
+        validate_source_aware_operator_dashboard(bad_dashboard)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("source-aware operator dashboard must reject mismatched source findings")
+
+    print("source-aware control-plane dashboard helpers OK")
+
+
+def check_source_aware_control_plane_dashboard_clis() -> None:
+    from link import _cmd_control_plane, _cmd_decision, _cmd_operator
+    from link_modes.growth.link_growth_console import (
+        parse_control_plane_target_status_json,
+        parse_operator_target_review_json,
+        parse_source_aware_operator_dashboard_json,
+        parse_source_aware_target_decision_card_json,
+    )
+
+    zip_source, _, _ = _research_target_test_paths()
+    commands = [
+        (_cmd_control_plane, "target-status", parse_control_plane_target_status_json, "control_plane_target_status_id"),
+        (_cmd_operator, "target-review", parse_operator_target_review_json, "operator_target_review_id"),
+        (_cmd_decision, "target-card", parse_source_aware_target_decision_card_json, "source_aware_target_decision_card_id"),
+        (_cmd_operator, "source-dashboard", parse_source_aware_operator_dashboard_json, "source_aware_operator_dashboard_id"),
+    ]
+    for dispatcher, command, parser, id_key in commands:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = dispatcher([command, "--source", zip_source, "--json"])
+        _require(rc == 0, f"{command} --source --json must return 0")
+        payload = parser(out.getvalue())
+        _require(id_key in payload, f"{command} JSON must output only its own payload")
+        _require(payload["source_bound"] is True and payload["source_path"] == zip_source,
+                 f"{command} must include selected source metadata")
+        _require(payload["selected_upgrade_candidate_id"].startswith("research-target-upgrade-candidate-"),
+                 f"{command} must include selected upgrade candidate id")
+        _require(payload["write_allowed"] is False and payload["automation_allowed"] is False and payload["writes"] == [],
+                 f"{command} must remain read-only")
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            write_rc = dispatcher([command, "--source", zip_source, "--write"])
+        _require(write_rc != 0 and "read-only" in err.getvalue(), f"{command} --write must be rejected")
+
+        missing_err = io.StringIO()
+        with contextlib.redirect_stderr(missing_err):
+            missing_rc = dispatcher([command, "--json"])
+        _require(missing_rc != 0 and "requires --source" in missing_err.getvalue(),
+                 f"{command} missing --source must be rejected")
+
+        outside_err = io.StringIO()
+        with contextlib.redirect_stderr(outside_err):
+            outside_rc = dispatcher([command, "--source", "../README.md", "--json"])
+        _require(outside_rc != 0, f"{command} outside source must be rejected")
+
+    no_source_out = io.StringIO()
+    with contextlib.redirect_stdout(no_source_out):
+        no_source_rc = _cmd_operator(["task-review", "--json"])
+    _require(no_source_rc == 0, "existing no-source operator task-review command must remain valid")
+
+    print("source-aware control-plane dashboard CLIs OK")
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -18627,6 +18798,8 @@ def main() -> None:
     check_source_aware_downstream_binding_clis()
     check_source_aware_operator_report_and_sandbox_helpers()
     check_source_aware_operator_report_and_sandbox_clis()
+    check_source_aware_control_plane_dashboard_helpers()
+    check_source_aware_control_plane_dashboard_clis()
     check_growth_code_brief_propose_batch()
     check_ruflo_upgrade_intake_helper()
     check_ruflo_upgrade_plan_helper()

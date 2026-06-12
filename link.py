@@ -414,6 +414,10 @@ def _cmd_control_plane(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import control_plane_status_main as _control_plane_status_main
 
         return _control_plane_status_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-status":
+        from link_modes.growth.link_growth_console import control_plane_target_status_main as _control_plane_target_status_main
+
+        return _control_plane_target_status_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "operator-cards":
         from link_modes.growth.link_growth_console import control_plane_operator_cards_main as _control_plane_operator_cards_main
 
@@ -433,6 +437,7 @@ def _cmd_control_plane(argv: list[str]) -> int:
         print("  health           Preview Link control-plane health package")
         print("  review           Preview Link control-plane review package")
         print("  status           Preview compact operator status summary")
+        print("  target-status    Preview selected research target status")
         print("  operator-cards   Preview operator-facing lane cards")
         print("  stale-artifacts  Preview stale generated artifact report")
         print("  operator-review  Preview operator status review package")
@@ -584,6 +589,10 @@ def _cmd_decision(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import operator_decision_trace_package_main as _operator_decision_trace_package_main
 
         return _operator_decision_trace_package_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-card":
+        from link_modes.growth.link_growth_console import decision_target_card_main as _decision_target_card_main
+
+        return _decision_target_card_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Decision commands:")
         print("  candidates              Preview remediation decision candidates")
@@ -594,6 +603,7 @@ def _cmd_decision(argv: list[str]) -> int:
         print("  rejected-alternatives   Explain why non-top candidates lost")
         print("  assumptions             Preview recommendation assumption ledger")
         print("  trace                   Preview operator decision trace package")
+        print("  target-card             Preview selected research target decision card")
         return 0
     print(f"decision: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py decision --help' for subcommands.", file=sys.stderr)
@@ -668,6 +678,14 @@ def _cmd_operator(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import operator_task_review_package_main as _operator_task_review_main
 
         return _operator_task_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-review":
+        from link_modes.growth.link_growth_console import operator_target_review_main as _operator_target_review_main
+
+        return _operator_target_review_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-dashboard":
+        from link_modes.growth.link_growth_console import operator_source_dashboard_main as _operator_source_dashboard_main
+
+        return _operator_source_dashboard_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Operator commands:")
         print("  action-plan       Preview the concrete next operator action plan")
@@ -678,6 +696,8 @@ def _cmd_operator(argv: list[str]) -> int:
         print("  task-scope        Preview task scope and boundary review")
         print("  task-tests        Preview task verification plan")
         print("  task-review       Preview operator task review package")
+        print("  target-review     Preview selected research target review")
+        print("  source-dashboard  Preview selected research target dashboard")
         return 0
     print(f"operator: unknown subcommand: {subcommand}", file=sys.stderr)
     print("Run 'python3 link.py operator --help' for subcommands.", file=sys.stderr)
