@@ -13238,6 +13238,8 @@ LOCAL_ADVISOR_AVAILABILITY_CARD_VERSION = "link-local-advisor-availability-card-
 OPENROUTER_ADVISOR_READINESS_CARD_VERSION = "link-openrouter-advisor-readiness-card-v1"
 ADVISOR_PROVIDER_STATUS_DASHBOARD_VERSION = "link-advisor-provider-status-dashboard-v1"
 ADVISOR_PROVIDER_OPERATOR_GUIDANCE_VERSION = "link-advisor-provider-operator-guidance-v1"
+SOURCE_AWARE_ADVISOR_PROVIDER_CARD_VERSION = "link-source-aware-advisor-provider-card-v1"
+SOURCE_AWARE_ADVISOR_COMMAND_PREVIEW_VERSION = "link-source-aware-advisor-command-preview-v1"
 LOCAL_MODEL_PROVIDER_BOUNDARY_VERSION = "link-local-model-provider-boundary-v1"
 LOCAL_MODEL_SMOKE_PLAN_VERSION = "link-local-model-smoke-plan-v1"
 LOCAL_MODEL_SMOKE_RESULT_VERSION = "link-local-model-smoke-result-v1"
@@ -15462,6 +15464,270 @@ def parse_local_model_advisor_comparison_card_json(text: str) -> dict[str, Any]:
     return payload
 
 
+
+def _source_aware_advisor_safe_command_source(source_path: str) -> str:
+    return str(source_path).replace("\n", " ").strip()
+
+
+def _source_aware_advisor_recommended_mode(local_status: str, local_available: bool, openrouter_enabled: bool) -> str:
+    if local_available:
+        return "local_advisor_available"
+    if openrouter_enabled:
+        return "openrouter_available_explicit_only"
+    if local_status in {"configured", "unavailable"}:
+        return "local_advisor_unavailable"
+    if not openrouter_enabled:
+        return "openrouter_disabled"
+    return "advisor_unavailable"
+
+
+def _source_aware_advisor_summary_fields(card: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "advisor_provider_card_id": card["source_aware_advisor_provider_card_id"],
+        "advisor_default_provider": card["default_provider"],
+        "advisor_local_status": card["local_provider_status"],
+        "advisor_local_endpoint_summary": card["local_endpoint_summary"],
+        "advisor_openrouter_status": card["openrouter_status"],
+        "advisor_review_available": card["advisor_review_available"],
+        "recommended_advisor_mode": card["recommended_advisor_mode"],
+        "recommended_advisor_command": card["recommended_advisor_command"],
+        "advisor_fallback_allowed": card["fallback_allowed"],
+    }
+
+
+def collect_source_aware_advisor_provider_card(
+    *,
+    source_path: str,
+    metadata: dict[str, Any] | None = None,
+    dashboard_context: dict[str, Any] | None = None,
+    operator_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    context = dashboard_context
+    if operator_report is None:
+        if context is None:
+            context = build_source_aware_sandbox_context_for_cli(source_path)
+        operator_report = context["operator_report"]
+    report = operator_report
+    validate_research_target_operator_report(report)
+    registry = collect_advisor_provider_registry()
+    local = collect_local_advisor_availability_card()
+    openrouter = collect_openrouter_advisor_readiness_card()
+    dashboard = collect_advisor_provider_status_dashboard()
+    guidance = collect_advisor_provider_operator_guidance()
+    local_available = local["provider_status"] == "reachable"
+    openrouter_enabled = bool(openrouter["enabled_for_advisor"])
+    recommended_mode = _source_aware_advisor_recommended_mode(local["provider_status"], local_available, openrouter_enabled)
+    source_arg = _source_aware_advisor_safe_command_source(report["source_path"])
+    deterministic_command = f"python3 link.py research advisor-review --source {source_arg} --json"
+    local_command = f"python3 link.py research advisor-review --source {source_arg} --provider llamacpp --local-model --json"
+    openrouter_command = f"python3 link.py research advisor-review --source {source_arg} --provider openrouter --openrouter --json"
+    if local_available:
+        recommended_command = local_command
+    else:
+        recommended_command = deterministic_command
+    blocked = _normalize_implementation_branch_refs(list(local["blocked_reasons"]) + list(openrouter["blocked_reasons"]))
+    warnings = _normalize_implementation_branch_refs([
+        "No advisor model call was made for this source-aware dashboard.",
+        "OpenRouter is external, paid, explicit-only, and never fallback.",
+        "Run local-smoke only after starting the local llama.cpp server.",
+    ])
+    if openrouter_enabled:
+        warnings.append("OpenRouter appears enabled but still requires explicit --openrouter for any future call.")
+    payload = {
+        "source_aware_advisor_provider_card_version": SOURCE_AWARE_ADVISOR_PROVIDER_CARD_VERSION,
+        "source_aware_advisor_provider_card_id": _source_aware_hash_id("source-aware-advisor-provider-card", {
+            "source_path": report["source_path"],
+            "research_target_intake_id": report["research_target_intake_id"],
+            "selected_upgrade_candidate_id": report["selected_upgrade_candidate_id"],
+            "registry_id": registry["advisor_provider_registry_id"],
+            "local_status_id": local["local_advisor_availability_card_id"],
+            "openrouter_status_id": openrouter["openrouter_advisor_readiness_card_id"],
+            "dashboard_id": dashboard["advisor_provider_status_dashboard_id"],
+            "guidance_id": guidance["advisor_provider_operator_guidance_id"],
+            "version": SOURCE_AWARE_ADVISOR_PROVIDER_CARD_VERSION,
+        }),
+        "source_bound": True,
+        "source_path": report["source_path"],
+        "source_name": report["source_name"],
+        "source_type": report["source_type"],
+        "research_target_intake_id": report["research_target_intake_id"],
+        "selected_upgrade_candidate_id": report["selected_upgrade_candidate_id"],
+        "default_provider": registry["default_provider"],
+        "local_provider_status": local["provider_status"],
+        "local_endpoint_summary": local["endpoint_summary"],
+        "local_model_name": local["model_name"],
+        "local_available": local_available,
+        "openrouter_status": "enabled" if openrouter_enabled else "disabled",
+        "openrouter_enabled": openrouter_enabled,
+        "openrouter_opt_in_required": openrouter["opt_in_required"],
+        "openrouter_key_present": bool(openrouter["api_key_present"]),
+        "paid_provider_warning": "OpenRouter is paid/external and explicit-only; no fallback is allowed.",
+        "fallback_allowed": False,
+        "advisor_review_available": local_available or openrouter_enabled,
+        "recommended_advisor_mode": recommended_mode,
+        "recommended_advisor_command": recommended_command,
+        "deterministic_preview_command": deterministic_command,
+        "local_advisor_command": local_command,
+        "openrouter_advisor_command": openrouter_command,
+        "advisor_provider_registry_id": registry["advisor_provider_registry_id"],
+        "local_advisor_availability_card_id": local["local_advisor_availability_card_id"],
+        "openrouter_advisor_readiness_card_id": openrouter["openrouter_advisor_readiness_card_id"],
+        "advisor_provider_status_dashboard_id": dashboard["advisor_provider_status_dashboard_id"],
+        "advisor_provider_operator_guidance_id": guidance["advisor_provider_operator_guidance_id"],
+        "blocked_reasons": blocked or ["local advisor endpoint was not probed; use deterministic advisor preview until local smoke passes"],
+        "warnings": warnings,
+        "recommended_next_action": "Use deterministic advisor preview now; start local llama.cpp and run advisor local-smoke before any local advisor review.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_aware_advisor_provider_card(payload)
+    return payload
+
+
+def validate_source_aware_advisor_provider_card(payload: dict[str, Any]) -> None:
+    required = (
+        "source_aware_advisor_provider_card_version", "source_aware_advisor_provider_card_id",
+        "source_bound", "source_path", "source_name", "source_type", "research_target_intake_id",
+        "selected_upgrade_candidate_id", "default_provider", "local_provider_status", "local_endpoint_summary",
+        "local_model_name", "local_available", "openrouter_status", "openrouter_enabled",
+        "openrouter_opt_in_required", "openrouter_key_present", "paid_provider_warning",
+        "fallback_allowed", "advisor_review_available", "recommended_advisor_mode",
+        "recommended_advisor_command", "blocked_reasons", "warnings", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source-aware advisor provider card missing field: {key}")
+    if payload["source_aware_advisor_provider_card_version"] != SOURCE_AWARE_ADVISOR_PROVIDER_CARD_VERSION:
+        raise ValueError("invalid source-aware advisor provider card version")
+    if not payload["source_aware_advisor_provider_card_id"].startswith("source-aware-advisor-provider-card-"):
+        raise ValueError("invalid source-aware advisor provider card id")
+    if payload["source_bound"] is not True or not payload["source_path"]:
+        raise ValueError("source-aware advisor provider card must be source-bound")
+    if payload["default_provider"] != "llamacpp":
+        raise ValueError("source-aware advisor provider card must preserve llamacpp default")
+    if payload["fallback_allowed"] is not False:
+        raise ValueError("source-aware advisor provider card must disable fallback")
+    if payload["recommended_advisor_mode"] not in {"deterministic_only", "local_advisor_available", "local_advisor_unavailable", "openrouter_disabled", "openrouter_available_explicit_only", "advisor_unavailable"}:
+        raise ValueError("invalid recommended advisor mode")
+    if not isinstance(payload["openrouter_key_present"], bool):
+        raise ValueError("OpenRouter key presence must be boolean only")
+    if not isinstance(payload["blocked_reasons"], list) or not payload["blocked_reasons"]:
+        raise ValueError("source-aware advisor card blocked reasons must be non-empty")
+    if not isinstance(payload["warnings"], list) or not payload["warnings"]:
+        raise ValueError("source-aware advisor card warnings must be non-empty")
+    text = _stable_ruflo_json(payload).lower()
+    if "sk-" in text or "bearer " in text:
+        raise ValueError("source-aware advisor provider card must not expose secrets")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("source-aware advisor provider card must remain read-only")
+
+
+def stable_source_aware_advisor_provider_card_json(payload: dict[str, Any]) -> str:
+    validate_source_aware_advisor_provider_card(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_source_aware_advisor_provider_card_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_source_aware_advisor_provider_card(payload)
+    return payload
+
+
+def collect_source_aware_advisor_command_preview(
+    *,
+    source_path: str,
+    metadata: dict[str, Any] | None = None,
+    dashboard_context: dict[str, Any] | None = None,
+    advisor_card: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    card = advisor_card or collect_source_aware_advisor_provider_card(source_path=source_path, dashboard_context=dashboard_context)
+    validate_source_aware_advisor_provider_card(card)
+    payload = {
+        "source_aware_advisor_command_preview_version": SOURCE_AWARE_ADVISOR_COMMAND_PREVIEW_VERSION,
+        "source_aware_advisor_command_preview_id": _source_aware_hash_id("source-aware-advisor-command-preview", {
+            "advisor_card_id": card["source_aware_advisor_provider_card_id"],
+            "source_path": card["source_path"],
+            "selected_upgrade_candidate_id": card["selected_upgrade_candidate_id"],
+            "version": SOURCE_AWARE_ADVISOR_COMMAND_PREVIEW_VERSION,
+        }),
+        "source_bound": True,
+        "source_path": card["source_path"],
+        "research_target_intake_id": card["research_target_intake_id"],
+        "selected_upgrade_candidate_id": card["selected_upgrade_candidate_id"],
+        "advisor_provider_card_id": card["source_aware_advisor_provider_card_id"],
+        "deterministic_preview_command": card["deterministic_preview_command"],
+        "local_advisor_command": card["local_advisor_command"],
+        "openrouter_advisor_command": card["openrouter_advisor_command"],
+        "recommended_command": card["recommended_advisor_command"],
+        "command_requires_local_model": card["recommended_advisor_command"] == card["local_advisor_command"],
+        "command_requires_openrouter_opt_in": card["recommended_advisor_command"] == card["openrouter_advisor_command"],
+        "command_requires_paid_provider": card["recommended_advisor_command"] == card["openrouter_advisor_command"],
+        "fallback_allowed": False,
+        "blocked_commands": [
+            "automatic OpenRouter fallback",
+            "advisor command execution without explicit provider flag",
+            "paid provider call without --openrouter and LINK_ALLOW_OPENROUTER_ADVISOR=1",
+        ],
+        "recommended_next_action": "Run the deterministic preview command first; only run local/OpenRouter advisor commands after explicit setup and approval.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_aware_advisor_command_preview(payload)
+    return payload
+
+
+def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> None:
+    required = (
+        "source_aware_advisor_command_preview_version", "source_aware_advisor_command_preview_id",
+        "source_bound", "source_path", "research_target_intake_id", "selected_upgrade_candidate_id",
+        "advisor_provider_card_id", "deterministic_preview_command", "local_advisor_command",
+        "openrouter_advisor_command", "recommended_command", "command_requires_local_model",
+        "command_requires_openrouter_opt_in", "command_requires_paid_provider", "fallback_allowed",
+        "blocked_commands", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source-aware advisor command preview missing field: {key}")
+    if payload["source_aware_advisor_command_preview_version"] != SOURCE_AWARE_ADVISOR_COMMAND_PREVIEW_VERSION:
+        raise ValueError("invalid source-aware advisor command preview version")
+    if not payload["source_aware_advisor_command_preview_id"].startswith("source-aware-advisor-command-preview-"):
+        raise ValueError("invalid source-aware advisor command preview id")
+    for field in ("deterministic_preview_command", "local_advisor_command", "openrouter_advisor_command", "recommended_command"):
+        if payload["source_path"] not in payload[field]:
+            raise ValueError(f"advisor command preview {field} must reference selected source")
+    if "--openrouter" not in payload["openrouter_advisor_command"] or "--provider openrouter" not in payload["openrouter_advisor_command"]:
+        raise ValueError("OpenRouter advisor command must be explicit")
+    if payload["fallback_allowed"] is not False:
+        raise ValueError("advisor command preview must disable fallback")
+    text = _stable_ruflo_json(payload).lower()
+    if "sk-" in text or "bearer " in text:
+        raise ValueError("advisor command preview must not expose secrets")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("advisor command preview must remain read-only")
+
+
+def stable_source_aware_advisor_command_preview_json(payload: dict[str, Any]) -> str:
+    validate_source_aware_advisor_command_preview(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_source_aware_advisor_command_preview_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_source_aware_advisor_command_preview(payload)
+    return payload
+
 def collect_research_target_operator_report(*, source_path: str, metadata: dict[str, Any] | None = None, source_context: dict[str, Any] | None = None) -> dict[str, Any]:
     context = source_context or build_source_aware_context_for_cli(source_path)
     intake = context["research_target_intake"]
@@ -15543,6 +15809,8 @@ def collect_research_target_operator_report(*, source_path: str, metadata: dict[
         "specificity_score": specificity["specificity_score"],
         "specificity_grade": specificity["specificity_grade"],
     })
+    advisor_card = collect_source_aware_advisor_provider_card(source_path=source_path, dashboard_context=None, operator_report=report)
+    report.update(_source_aware_advisor_summary_fields(advisor_card))
     validate_research_target_operator_report(report)
     return report
 
@@ -15688,6 +15956,8 @@ def collect_research_target_implementation_preview(*, source_path: str, metadata
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    advisor_card = collect_source_aware_advisor_provider_card(source_path=source_path, dashboard_context=context, operator_report=report)
+    preview.update(_source_aware_advisor_summary_fields(advisor_card))
     validate_research_target_implementation_preview(preview, report)
     return preview
 
@@ -15861,6 +16131,8 @@ def collect_research_target_sandbox_flow(*, source_path: str, metadata: dict[str
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    advisor_card = collect_source_aware_advisor_provider_card(source_path=source_path, dashboard_context=context, operator_report=report)
+    flow.update(_source_aware_advisor_summary_fields(advisor_card))
     validate_research_target_sandbox_flow(flow)
     return flow
 
@@ -15920,6 +16192,8 @@ def parse_research_target_sandbox_flow_json(text: str) -> dict[str, Any]:
 def build_source_aware_dashboard_context_for_cli(source: str) -> dict[str, Any]:
     sandbox_context = build_source_aware_sandbox_context_for_cli(source)
     sandbox_context["sandbox_flow"] = collect_research_target_sandbox_flow(source_path=source, sandbox_context=sandbox_context)
+    sandbox_context["advisor_provider_card"] = collect_source_aware_advisor_provider_card(source_path=source, dashboard_context=sandbox_context)
+    sandbox_context["advisor_command_preview"] = collect_source_aware_advisor_command_preview(source_path=source, dashboard_context=sandbox_context, advisor_card=sandbox_context["advisor_provider_card"])
     return sandbox_context
 
 
@@ -15985,6 +16259,8 @@ def collect_source_aware_target_status_card(*, source_path: str, metadata: dict[
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    advisor_card = context.get("advisor_provider_card") or collect_source_aware_advisor_provider_card(source_path=source_path, dashboard_context=context, operator_report=report)
+    card.update(_source_aware_advisor_summary_fields(advisor_card))
     validate_source_aware_target_status_card(card)
     return card
 
@@ -16088,6 +16364,8 @@ def collect_control_plane_target_status(*, source_path: str, metadata: dict[str,
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    advisor_card = context.get("advisor_provider_card") or collect_source_aware_advisor_provider_card(source_path=source_path, dashboard_context=context, operator_report=context["operator_report"])
+    payload.update(_source_aware_advisor_summary_fields(advisor_card))
     validate_control_plane_target_status(payload, card)
     return payload
 
@@ -16171,6 +16449,8 @@ def collect_operator_target_review(*, source_path: str, metadata: dict[str, Any]
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    advisor_card = context.get("advisor_provider_card") or collect_source_aware_advisor_provider_card(source_path=source_path, dashboard_context=context, operator_report=report)
+    payload.update(_source_aware_advisor_summary_fields(advisor_card))
     validate_operator_target_review(payload)
     return payload
 
@@ -16267,6 +16547,8 @@ def collect_source_aware_target_decision_card(*, source_path: str, metadata: dic
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    advisor_card = context.get("advisor_provider_card") or collect_source_aware_advisor_provider_card(source_path=source_path, dashboard_context=context, operator_report=report)
+    payload.update(_source_aware_advisor_summary_fields(advisor_card))
     validate_source_aware_target_decision_card(payload)
     return payload
 
@@ -16363,6 +16645,8 @@ def collect_source_aware_operator_dashboard(*, source_path: str, metadata: dict[
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    advisor_card = context.get("advisor_provider_card") or collect_source_aware_advisor_provider_card(source_path=source_path, dashboard_context=context, operator_report=report)
+    payload.update(_source_aware_advisor_summary_fields(advisor_card))
     validate_source_aware_operator_dashboard(payload)
     return payload
 
@@ -16543,6 +16827,26 @@ def render_source_aware_sandbox_card(payload: dict[str, Any], *, sandbox_flow: d
     ]
 
 
+
+def render_source_aware_advisor_card(payload: dict[str, Any]) -> list[str]:
+    default_provider = payload.get("advisor_default_provider", "llamacpp")
+    local_status = payload.get("advisor_local_status", "not available")
+    openrouter_status = payload.get("advisor_openrouter_status", "disabled")
+    fallback = "disabled" if payload.get("advisor_fallback_allowed") is False else "not available"
+    mode = payload.get("recommended_advisor_mode", "deterministic_only")
+    command = payload.get("recommended_advisor_command", "python3 link.py advisor status")
+    endpoint = payload.get("local_endpoint_summary") or payload.get("advisor_local_endpoint_summary") or "http://127.0.0.1:8084"
+    return [
+        "Advisor:",
+        f"  default provider: {_source_aware_text(default_provider)}",
+        f"  local status: {_source_aware_text(local_status)}",
+        f"  endpoint: {_source_aware_text(endpoint)}",
+        f"  OpenRouter: {_source_aware_text(openrouter_status)}, explicit-only, paid/external",
+        f"  fallback: {fallback}",
+        f"  mode: {_source_aware_text(mode)}",
+        f"  next: {_source_aware_text(command, max_chars=220)}",
+    ]
+
 def render_source_aware_operator_brief(
     title: str,
     payload: dict[str, Any],
@@ -16599,6 +16903,8 @@ def render_source_aware_operator_brief(
     lines.extend(render_source_aware_task_card(payload, implementation_preview=implementation_preview, operator_review=operator_review, operator_report=operator_report))
     lines.append("")
     lines.extend(render_source_aware_sandbox_card(payload, sandbox_flow=sandbox_flow, operator_review=operator_review))
+    lines.append("")
+    lines.extend(render_source_aware_advisor_card(payload))
     lines.extend([
         "",
         "Blockers / Warnings:",
@@ -16826,6 +17132,35 @@ def _advisor_cli_provider(args: list[str]) -> tuple[str | None, bool, int | None
         return None, True, 2
     return args[idx + 1], True, None
 
+
+
+def advisor_target_command_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor target-command: selected research target advisor command preview")
+        print("  python3 link.py advisor target-command --source <path> --json")
+        print("Read-only. No model calls. --write is not supported.")
+        return 0
+    source, rc = _source_target_cli_source_or_error(args, "advisor", "target-command")
+    if rc is not None:
+        return rc
+    try:
+        context = build_source_aware_dashboard_context_for_cli(source or "")
+        payload = context.get("advisor_command_preview") or collect_source_aware_advisor_command_preview(source_path=source or "", dashboard_context=context)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_source_aware_advisor_command_preview_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor target command", payload, [
+            ("id", payload["source_aware_advisor_command_preview_id"]),
+            ("source", payload["source_path"]),
+            ("recommended_command", payload["recommended_command"]),
+            ("fallback_allowed", payload["fallback_allowed"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
 
 def advisor_providers_main(argv: list[str] | None = None) -> int:
     args = _research_target_normalize_args(argv)

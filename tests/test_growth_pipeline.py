@@ -18522,21 +18522,29 @@ def check_source_aware_control_plane_dashboard_helpers() -> None:
         build_source_aware_dashboard_context_for_cli,
         collect_control_plane_target_status,
         collect_operator_target_review,
+        collect_source_aware_advisor_command_preview,
+        collect_source_aware_advisor_provider_card,
         collect_source_aware_operator_dashboard,
         collect_source_aware_target_decision_card,
         collect_source_aware_target_status_card,
         parse_control_plane_target_status_json,
         parse_operator_target_review_json,
+        parse_source_aware_advisor_command_preview_json,
+        parse_source_aware_advisor_provider_card_json,
         parse_source_aware_operator_dashboard_json,
         parse_source_aware_target_decision_card_json,
         parse_source_aware_target_status_card_json,
         stable_control_plane_target_status_json,
         stable_operator_target_review_json,
+        stable_source_aware_advisor_command_preview_json,
+        stable_source_aware_advisor_provider_card_json,
         stable_source_aware_operator_dashboard_json,
         stable_source_aware_target_decision_card_json,
         stable_source_aware_target_status_card_json,
         validate_control_plane_target_status,
         validate_operator_target_review,
+        validate_source_aware_advisor_command_preview,
+        validate_source_aware_advisor_provider_card,
         validate_source_aware_operator_dashboard,
         validate_source_aware_target_decision_card,
         validate_source_aware_target_status_card,
@@ -18544,6 +18552,27 @@ def check_source_aware_control_plane_dashboard_helpers() -> None:
 
     zip_source, _, _ = _research_target_test_paths()
     context = build_source_aware_dashboard_context_for_cli(zip_source)
+    advisor_card = collect_source_aware_advisor_provider_card(source_path=zip_source, dashboard_context=context)
+    same_advisor_card = collect_source_aware_advisor_provider_card(source_path=zip_source, dashboard_context=context)
+    _require(advisor_card["source_aware_advisor_provider_card_id"] == same_advisor_card["source_aware_advisor_provider_card_id"],
+             "source-aware advisor provider card id must be deterministic")
+    _require(advisor_card["source_path"] == zip_source and advisor_card["default_provider"] == "llamacpp",
+             "source-aware advisor card must preserve source and local default")
+    _require(advisor_card["fallback_allowed"] is False and advisor_card["openrouter_opt_in_required"] is True,
+             "source-aware advisor card must block fallback and show OpenRouter explicit opt-in")
+    _require(isinstance(advisor_card["openrouter_key_present"], bool),
+             "source-aware advisor card must expose OpenRouter key presence as boolean only")
+    validate_source_aware_advisor_provider_card(advisor_card)
+    _require(parse_source_aware_advisor_provider_card_json(stable_source_aware_advisor_provider_card_json(advisor_card)) == advisor_card,
+             "source-aware advisor provider card JSON must round trip")
+    command_preview = collect_source_aware_advisor_command_preview(source_path=zip_source, dashboard_context=context, advisor_card=advisor_card)
+    _require(zip_source in command_preview["deterministic_preview_command"] and zip_source in command_preview["local_advisor_command"],
+             "advisor command preview must reference selected source")
+    _require("--provider openrouter" in command_preview["openrouter_advisor_command"] and command_preview["fallback_allowed"] is False,
+             "advisor command preview must make OpenRouter explicit and block fallback")
+    validate_source_aware_advisor_command_preview(command_preview)
+    _require(parse_source_aware_advisor_command_preview_json(stable_source_aware_advisor_command_preview_json(command_preview)) == command_preview,
+             "source-aware advisor command preview JSON must round trip")
     card = collect_source_aware_target_status_card(source_path=zip_source, dashboard_context=context)
     same_card = collect_source_aware_target_status_card(source_path=zip_source, dashboard_context=context)
     _require(card["source_aware_target_status_card_id"] == same_card["source_aware_target_status_card_id"],
@@ -18566,6 +18595,8 @@ def check_source_aware_control_plane_dashboard_helpers() -> None:
              "control-plane target status must be source-bound")
     _require(control["source_aware_target_status_card_id"] == card["source_aware_target_status_card_id"],
              "control-plane target status must preserve status card id")
+    _require(control["advisor_local_status"] and control["advisor_openrouter_status"],
+             "control-plane target status must include advisor local/openrouter status")
     validate_control_plane_target_status(control, card)
     _require(parse_control_plane_target_status_json(stable_control_plane_target_status_json(control)) == control,
              "control-plane target status JSON must round trip")
@@ -18590,6 +18621,8 @@ def check_source_aware_control_plane_dashboard_helpers() -> None:
              "decision target card must preserve selected candidate")
     _require(decision["top_candidate_id"] and decision["why_this_candidate"],
              "decision target card must explain the winning candidate")
+    _require(decision["recommended_advisor_mode"],
+             "decision target card must include advisor mode")
     _require(zip_source in decision["why_this_candidate"],
              "decision target card explanation must reference selected target")
     validate_source_aware_target_decision_card(decision)
@@ -18606,6 +18639,12 @@ def check_source_aware_control_plane_dashboard_helpers() -> None:
              "dashboard must preserve research target intake id")
     _require(dashboard["selected_upgrade_candidate_id"] == card["selected_upgrade_candidate_id"],
              "dashboard must preserve selected candidate")
+    _require(dashboard["advisor_provider_card_id"] == advisor_card["source_aware_advisor_provider_card_id"],
+             "dashboard must include source-aware advisor provider card id")
+    _require(dashboard["recommended_advisor_command"] == advisor_card["recommended_advisor_command"],
+             "dashboard must include recommended advisor command")
+    _require(dashboard["advisor_fallback_allowed"] is False,
+             "dashboard must block advisor fallback")
     _require(dashboard["source_aware_target_status_card_id"] == card["source_aware_target_status_card_id"],
              "dashboard must preserve status card id")
     _require(dashboard["control_plane_target_status_id"] == control["control_plane_target_status_id"],
@@ -18635,10 +18674,11 @@ def check_source_aware_control_plane_dashboard_helpers() -> None:
 
 
 def check_source_aware_control_plane_dashboard_clis() -> None:
-    from link import _cmd_control_plane, _cmd_decision, _cmd_operator
+    from link import _cmd_advisor, _cmd_control_plane, _cmd_decision, _cmd_operator
     from link_modes.growth.link_growth_console import (
         parse_control_plane_target_status_json,
         parse_operator_target_review_json,
+        parse_source_aware_advisor_command_preview_json,
         parse_source_aware_operator_dashboard_json,
         parse_source_aware_target_decision_card_json,
     )
@@ -18663,6 +18703,10 @@ def check_source_aware_control_plane_dashboard_clis() -> None:
                  f"{command} must include selected upgrade candidate id")
         _require(payload["write_allowed"] is False and payload["automation_allowed"] is False and payload["writes"] == [],
                  f"{command} must remain read-only")
+        _require(payload.get("advisor_provider_card_id") and payload.get("recommended_advisor_command"),
+                 f"{command} must include compact advisor provider status")
+        _require(payload.get("advisor_fallback_allowed") is False,
+                 f"{command} must block advisor fallback")
 
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
@@ -18679,6 +18723,18 @@ def check_source_aware_control_plane_dashboard_clis() -> None:
         with contextlib.redirect_stderr(outside_err):
             outside_rc = dispatcher([command, "--source", "../README.md", "--json"])
         _require(outside_rc != 0, f"{command} outside source must be rejected")
+
+    command_out = io.StringIO()
+    with contextlib.redirect_stdout(command_out):
+        command_rc = _cmd_advisor(["target-command", "--source", zip_source, "--json"])
+    _require(command_rc == 0, "advisor target-command --source --json must return 0")
+    command_preview = parse_source_aware_advisor_command_preview_json(command_out.getvalue())
+    _require(zip_source in command_preview["recommended_command"] and command_preview["fallback_allowed"] is False,
+             "advisor target-command must preview selected-source command with fallback disabled")
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        write_rc = _cmd_advisor(["target-command", "--source", zip_source, "--write"])
+    _require(write_rc != 0 and "read-only" in err.getvalue(), "advisor target-command --write must be rejected")
 
     no_source_out = io.StringIO()
     with contextlib.redirect_stdout(no_source_out):
@@ -18727,6 +18783,9 @@ def check_source_aware_human_summary_clis() -> None:
         _require("Decision:" in output, f"{title} human summary must include decision section")
         _require("Task Draft:" in output, f"{title} human summary must include task draft section")
         _require("Sandbox Eligibility:" in output, f"{title} human summary must include sandbox section")
+        _require("Advisor:" in output, f"{title} human summary must include advisor section")
+        _require("fallback: disabled" in output, f"{title} human summary must show fallback disabled")
+        _require("llamacpp" in output and "OpenRouter" in output, f"{title} human summary must show local and OpenRouter providers")
         _require("Next Action:" in output, f"{title} human summary must include next action section")
         _require("Read-only:" in output, f"{title} human summary must state read-only behavior")
         _require("research/gpt-crawler-main.zip!" in output, f"{title} human summary must show archive-qualified provenance")
@@ -18747,6 +18806,8 @@ def check_source_aware_human_summary_clis() -> None:
         "affected files:",
         "expected tests:",
         "candidate status:",
+        "Advisor:",
+        "fallback: disabled",
     ):
         _require(expected in source_dashboard, f"operator source-dashboard summary missing {expected}")
 

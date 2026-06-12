@@ -274,6 +274,10 @@ def _cmd_advisor(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import advisor_guidance_main as _advisor_guidance_main
 
         return _advisor_guidance_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "target-command":
+        from link_modes.growth.link_growth_console import advisor_target_command_main as _advisor_target_command_main
+
+        return _advisor_target_command_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "smoke":
         from link_modes.growth.link_growth_console import advisor_smoke_main as _advisor_smoke_main
 
@@ -295,6 +299,7 @@ def _cmd_advisor(argv: list[str]) -> int:
         print("  openrouter-status Preview redacted OpenRouter readiness")
         print("  status            Show compact advisor provider status")
         print("  guidance          Show advisor provider operator guidance")
+        print("  target-command    Preview safe advisor commands for a selected source")
         print("  smoke             Preview or run explicit provider smoke")
         print("  local-smoke       Preview or run bounded local llama.cpp smoke")
         print("  local-config      Preview safe local model advisor configuration")
