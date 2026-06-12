@@ -18976,6 +18976,10 @@ def check_source_aware_cross_target_specificity() -> None:
 
 def check_local_model_advisor_foundation_helpers() -> None:
     from link_modes.growth.link_growth_console import (
+        collect_advisor_provider_registry,
+        collect_advisor_provider_selection_boundary,
+        collect_advisor_smoke_plan,
+        collect_advisor_smoke_result,
         collect_local_model_advisor_comparison_card,
         collect_local_model_advisor_config,
         collect_local_model_advisor_metadata,
@@ -18983,7 +18987,14 @@ def check_local_model_advisor_foundation_helpers() -> None:
         collect_local_model_research_advisor_review,
         collect_local_model_smoke_plan,
         collect_local_model_smoke_result,
+        collect_openrouter_advisor_config,
         collect_research_advisor_prompt_package,
+        parse_advisor_provider_registry_json,
+        parse_advisor_provider_selection_boundary_json,
+        parse_advisor_smoke_plan_json,
+        parse_advisor_smoke_result_json,
+        parse_advisor_provider_registry_json,
+        parse_advisor_smoke_plan_json,
         parse_local_model_advisor_comparison_card_json,
         parse_local_model_advisor_config_json,
         parse_local_model_advisor_metadata_json,
@@ -18991,7 +19002,12 @@ def check_local_model_advisor_foundation_helpers() -> None:
         parse_local_model_research_advisor_review_json,
         parse_local_model_smoke_plan_json,
         parse_local_model_smoke_result_json,
+        parse_openrouter_advisor_config_json,
         parse_research_advisor_prompt_package_json,
+        stable_advisor_provider_registry_json,
+        stable_advisor_provider_selection_boundary_json,
+        stable_advisor_smoke_plan_json,
+        stable_advisor_smoke_result_json,
         stable_local_model_advisor_comparison_card_json,
         stable_local_model_advisor_config_json,
         stable_local_model_advisor_metadata_json,
@@ -18999,7 +19015,12 @@ def check_local_model_advisor_foundation_helpers() -> None:
         stable_local_model_research_advisor_review_json,
         stable_local_model_smoke_plan_json,
         stable_local_model_smoke_result_json,
+        stable_openrouter_advisor_config_json,
         stable_research_advisor_prompt_package_json,
+        validate_advisor_provider_registry,
+        validate_advisor_provider_selection_boundary,
+        validate_advisor_smoke_plan,
+        validate_advisor_smoke_result,
         validate_local_model_advisor_comparison_card,
         validate_local_model_advisor_config,
         validate_local_model_advisor_metadata,
@@ -19008,10 +19029,63 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_local_model_research_grounding,
         validate_local_model_smoke_plan,
         validate_local_model_smoke_result,
+        validate_openrouter_advisor_config,
         validate_research_advisor_prompt_package,
     )
 
     zip_source, _, _ = _research_target_test_paths()
+    registry = collect_advisor_provider_registry()
+    _require(registry["default_provider"] == "llamacpp", "advisor registry default provider must be llamacpp")
+    providers = {item["provider_name"]: item for item in registry["available_providers"]}
+    _require(providers["openrouter"]["enabled_by_default"] is False and providers["openrouter"]["explicit_flag_required"] is True,
+             "OpenRouter must be disabled by default and explicit-only")
+    _require(all(item["fallback_allowed"] is False for item in registry["available_providers"]),
+             "advisor registry must block fallback for every provider")
+    validate_advisor_provider_registry(registry)
+    _require(parse_advisor_provider_registry_json(stable_advisor_provider_registry_json(registry)) == registry,
+             "advisor provider registry JSON must round trip")
+
+    openrouter_config = collect_openrouter_advisor_config()
+    _require(openrouter_config["api_key_redacted"] is True and openrouter_config["fallback_allowed"] is False,
+             "OpenRouter config must redact key and block fallback")
+    _require(openrouter_config["enabled_for_advisor"] is False or (openrouter_config["opt_in_env_present"] and openrouter_config["api_key_present"]),
+             "OpenRouter can only be enabled with explicit opt-in and API key presence")
+    validate_openrouter_advisor_config(openrouter_config)
+    _require(parse_openrouter_advisor_config_json(stable_openrouter_advisor_config_json(openrouter_config)) == openrouter_config,
+             "OpenRouter config JSON must round trip")
+
+    default_selection = collect_advisor_provider_selection_boundary(command_context="test")
+    _require(default_selection["selected_provider"] == "llamacpp" and default_selection["fallback_provider"] is None,
+             "no provider must select local default with no fallback")
+    local_selection = collect_advisor_provider_selection_boundary(requested_provider="llamacpp", explicit_provider_flag=True, command_context="test")
+    _require(local_selection["provider_allowed"] is True and local_selection["external_call_possible"] is False,
+             "explicit local provider must be allowed and local-only")
+    openrouter_blocked = collect_advisor_provider_selection_boundary(requested_provider="openrouter", explicit_provider_flag=True, command_context="test")
+    _require(openrouter_blocked["selected_provider"] == "openrouter" and openrouter_blocked["provider_allowed"] is False,
+             "OpenRouter without --openrouter and opt-in must be blocked")
+    unknown = collect_advisor_provider_selection_boundary(requested_provider="unknown", explicit_provider_flag=True, command_context="test")
+    _require(unknown["provider_allowed"] is False and unknown["fallback_provider"] is None,
+             "unknown provider must fail closed with no fallback")
+    validate_advisor_provider_selection_boundary(openrouter_blocked)
+    _require(parse_advisor_provider_selection_boundary_json(stable_advisor_provider_selection_boundary_json(openrouter_blocked)) == openrouter_blocked,
+             "advisor provider selection JSON must round trip")
+
+    local_plan = collect_advisor_smoke_plan(provider="llamacpp")
+    openrouter_plan = collect_advisor_smoke_plan(provider="openrouter")
+    _require(local_plan["selected_provider"] == "llamacpp" and local_plan["fallback_allowed"] is False,
+             "local provider smoke preview must validate with no fallback")
+    _require(openrouter_plan["selected_provider"] == "openrouter" and openrouter_plan["external_call_possible"] is True and openrouter_plan["paid_call_possible"] is True,
+             "OpenRouter smoke preview must show external paid call possibility")
+    validate_advisor_smoke_plan(openrouter_plan)
+    _require(parse_advisor_smoke_plan_json(stable_advisor_smoke_plan_json(openrouter_plan)) == openrouter_plan,
+             "advisor smoke plan JSON must round trip")
+    openrouter_result = collect_advisor_smoke_result(provider="openrouter", response_json={"ok": True, "role": "openrouter_advisor_smoke"}, raw_response='{"ok":true,"role":"openrouter_advisor_smoke"}', latency_ms=9)
+    _require(openrouter_result["selected_provider"] == "openrouter" and openrouter_result["paid_call_possible"] is True and openrouter_result["fallback_allowed"] is False,
+             "fixture OpenRouter smoke result must preserve paid/no-fallback metadata")
+    validate_advisor_smoke_result(openrouter_result)
+    _require(parse_advisor_smoke_result_json(stable_advisor_smoke_result_json(openrouter_result)) == openrouter_result,
+             "advisor smoke result JSON must round trip")
+
     boundary = collect_local_model_provider_boundary()
     _require(boundary["provider_name"] == "llamacpp", "canonical advisor provider must be llama.cpp")
     _require(boundary["canonical_wrapper_path"] == "link_core/models/link_local_llamacpp.py",
@@ -19163,6 +19237,15 @@ def check_local_model_advisor_foundation_helpers() -> None:
     }
     review = collect_local_model_research_advisor_review(package, model_response_json=fixture)
     _require(review["advisor_status"] == "model_fixture_validated", "fixture advisor review must validate as model-backed")
+    openrouter_review = collect_local_model_research_advisor_review(
+        package,
+        model_response_json=fixture,
+        requested_provider="openrouter",
+        explicit_provider_flag=True,
+    )
+    _require(openrouter_review["selected_provider"] == "openrouter" and openrouter_review["paid_call_possible"] is True and openrouter_review["fallback_allowed"] is False,
+             "fixture OpenRouter advisor review must validate with explicit provider metadata")
+    validate_local_model_research_advisor_review(openrouter_review, package)
     _require(review["model_metadata"]["model_provider"] == "llamacpp" and review["canonical_wrapper_path"] == "link_core/models/link_local_llamacpp.py",
              "fixture advisor review must use canonical llama.cpp metadata")
     _require(review["model_metadata"]["model_used"] is True and review["human_review_required"] is True,
@@ -19219,14 +19302,39 @@ def check_local_model_advisor_foundation_helpers() -> None:
 def check_local_model_advisor_clis() -> None:
     from link import _cmd_advisor, _cmd_research
     from link_modes.growth.link_growth_console import (
+        parse_advisor_provider_registry_json,
+        parse_advisor_smoke_plan_json,
         parse_local_model_advisor_comparison_card_json,
         parse_local_model_advisor_config_json,
         parse_local_model_provider_boundary_json,
         parse_local_model_research_advisor_review_json,
         parse_local_model_smoke_plan_json,
+        parse_openrouter_advisor_config_json,
     )
 
     zip_source, _, _ = _research_target_test_paths()
+    providers_out = io.StringIO()
+    with contextlib.redirect_stdout(providers_out):
+        providers_rc = _cmd_advisor(["providers", "--json"])
+    _require(providers_rc == 0, "advisor providers --json must return 0")
+    providers = parse_advisor_provider_registry_json(providers_out.getvalue())
+    _require(providers["default_provider"] == "llamacpp", "advisor providers must default to llamacpp")
+
+    openrouter_config_out = io.StringIO()
+    with contextlib.redirect_stdout(openrouter_config_out):
+        openrouter_config_rc = _cmd_advisor(["openrouter-config", "--json"])
+    _require(openrouter_config_rc == 0, "advisor openrouter-config --json must return 0")
+    openrouter_config = parse_openrouter_advisor_config_json(openrouter_config_out.getvalue())
+    _require(openrouter_config["api_key_redacted"] is True, "advisor openrouter-config must redact API key")
+
+    provider_smoke_out = io.StringIO()
+    with contextlib.redirect_stdout(provider_smoke_out):
+        provider_smoke_rc = _cmd_advisor(["smoke", "--provider", "openrouter", "--json"])
+    _require(provider_smoke_rc == 0, "advisor smoke --provider openrouter preview must return 0")
+    provider_smoke = parse_advisor_smoke_plan_json(provider_smoke_out.getvalue())
+    _require(provider_smoke["selected_provider"] == "openrouter" and provider_smoke["paid_call_possible"] is True,
+             "OpenRouter smoke preview must preserve paid provider warning")
+
     boundary_out = io.StringIO()
     with contextlib.redirect_stdout(boundary_out):
         boundary_rc = _cmd_advisor(["provider-boundary", "--json"])
@@ -19247,7 +19355,7 @@ def check_local_model_advisor_clis() -> None:
     _require(config_rc == 0, "advisor local-config --json must return 0")
     config = parse_local_model_advisor_config_json(config_out.getvalue())
     _require(config["write_allowed"] is False, "advisor local-config must be read-only")
-    for command in ("provider-boundary", "local-smoke", "local-config"):
+    for command in ("providers", "provider-boundary", "openrouter-config", "smoke", "local-smoke", "local-config"):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_advisor([command, "--write"])
@@ -19269,6 +19377,20 @@ def check_local_model_advisor_clis() -> None:
     comparison = parse_local_model_advisor_comparison_card_json(comparison_out.getvalue())
     _require(comparison["source_path"] == zip_source and comparison["agreement_status"] == "preview_only",
              "advisor-comparison preview must preserve selected source")
+
+    openrouter_review_out = io.StringIO()
+    with contextlib.redirect_stdout(openrouter_review_out):
+        openrouter_review_rc = _cmd_research(["advisor-review", "--source", zip_source, "--provider", "openrouter", "--json"])
+    _require(openrouter_review_rc == 0, "advisor-review OpenRouter preview must return 0 without model call")
+    openrouter_review = parse_local_model_research_advisor_review_json(openrouter_review_out.getvalue())
+    _require(openrouter_review["selected_provider"] == "openrouter" and openrouter_review["model_metadata"]["model_used"] is False,
+             "OpenRouter advisor-review preview must not call model")
+
+    invalid_err = io.StringIO()
+    with contextlib.redirect_stderr(invalid_err):
+        invalid_rc = _cmd_research(["advisor-review", "--source", zip_source, "--provider", "openrouter", "--local-model", "--json"])
+    _require(invalid_rc != 0 and "cannot be combined" in invalid_err.getvalue(),
+             "OpenRouter with --local-model must be rejected")
 
     for command in ("advisor-review", "advisor-comparison"):
         err = io.StringIO()

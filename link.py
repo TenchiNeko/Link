@@ -246,10 +246,22 @@ def _cmd_research(argv: list[str]) -> int:
 def _cmd_advisor(argv: list[str]) -> int:
     """Read-only local advisor configuration previews."""
     subcommand = argv[0] if argv else ""
+    if subcommand == "providers":
+        from link_modes.growth.link_growth_console import advisor_providers_main as _advisor_providers_main
+
+        return _advisor_providers_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "provider-boundary":
         from link_modes.growth.link_growth_console import advisor_provider_boundary_main as _advisor_provider_boundary_main
 
         return _advisor_provider_boundary_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "openrouter-config":
+        from link_modes.growth.link_growth_console import advisor_openrouter_config_main as _advisor_openrouter_config_main
+
+        return _advisor_openrouter_config_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "smoke":
+        from link_modes.growth.link_growth_console import advisor_smoke_main as _advisor_smoke_main
+
+        return _advisor_smoke_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "local-smoke":
         from link_modes.growth.link_growth_console import advisor_local_smoke_main as _advisor_local_smoke_main
 
@@ -260,7 +272,10 @@ def _cmd_advisor(argv: list[str]) -> int:
         return _advisor_local_config_main(argv[1:] if len(argv) > 1 else [])
     if subcommand in ("-h", "--help", "help", ""):
         print("Advisor commands:")
+        print("  providers         Preview advisor provider registry")
         print("  provider-boundary Preview canonical local llama.cpp provider boundary")
+        print("  openrouter-config Preview redacted OpenRouter advisor config")
+        print("  smoke             Preview or run explicit provider smoke")
         print("  local-smoke       Preview or run bounded local llama.cpp smoke")
         print("  local-config      Preview safe local model advisor configuration")
         return 0
