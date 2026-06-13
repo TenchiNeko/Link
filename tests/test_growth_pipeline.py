@@ -19043,6 +19043,9 @@ def check_local_model_advisor_foundation_helpers() -> None:
         collect_advisor_provider_status_dashboard,
         collect_advisor_smoke_plan,
         collect_advisor_smoke_result,
+        collect_compact_source_aware_advisor_context,
+        collect_local_advisor_prompt_budget,
+        collect_local_advisor_smoke_receipt,
         collect_local_model_advisor_comparison_card,
         collect_local_model_advisor_config,
         collect_local_model_advisor_metadata,
@@ -19062,6 +19065,9 @@ def check_local_model_advisor_foundation_helpers() -> None:
         parse_advisor_smoke_result_json,
         parse_advisor_provider_registry_json,
         parse_advisor_smoke_plan_json,
+        parse_compact_source_aware_advisor_context_json,
+        parse_local_advisor_prompt_budget_json,
+        parse_local_advisor_smoke_receipt_json,
         parse_local_model_advisor_comparison_card_json,
         parse_local_model_advisor_config_json,
         parse_local_advisor_availability_card_json,
@@ -19079,6 +19085,9 @@ def check_local_model_advisor_foundation_helpers() -> None:
         stable_advisor_provider_status_dashboard_json,
         stable_advisor_smoke_plan_json,
         stable_advisor_smoke_result_json,
+        stable_compact_source_aware_advisor_context_json,
+        stable_local_advisor_prompt_budget_json,
+        stable_local_advisor_smoke_receipt_json,
         stable_local_model_advisor_comparison_card_json,
         stable_local_model_advisor_config_json,
         stable_local_advisor_availability_card_json,
@@ -19096,6 +19105,10 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_advisor_provider_status_dashboard,
         validate_advisor_smoke_plan,
         validate_advisor_smoke_result,
+        validate_compact_local_advisor_prompt,
+        validate_compact_source_aware_advisor_context,
+        validate_local_advisor_prompt_budget,
+        validate_local_advisor_smoke_receipt,
         validate_local_model_advisor_comparison_card,
         validate_local_model_advisor_config,
         validate_local_advisor_availability_card,
@@ -19108,6 +19121,7 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_openrouter_advisor_config,
         validate_openrouter_advisor_readiness_card,
         validate_research_advisor_prompt_package,
+        render_compact_local_advisor_prompt,
     )
 
     zip_source, _, _ = _research_target_test_paths()
@@ -19303,6 +19317,43 @@ def check_local_model_advisor_foundation_helpers() -> None:
     _require(parse_research_advisor_prompt_package_json(stable_research_advisor_prompt_package_json(package)) == package,
              "advisor prompt package JSON must round trip")
 
+    budget = collect_local_advisor_prompt_budget()
+    _require(budget["provider_name"] == "llamacpp" and budget["strict_json_required"] is True,
+             "compact local advisor budget must target llama.cpp strict JSON")
+    _require(budget["fallback_allowed"] is False and 30 <= budget["timeout_seconds"] <= 120,
+             "compact local advisor budget must be bounded with no fallback")
+    validate_local_advisor_prompt_budget(budget)
+    _require(parse_local_advisor_prompt_budget_json(stable_local_advisor_prompt_budget_json(budget)) == budget,
+             "compact local advisor budget JSON must round trip")
+
+    compact_context = collect_compact_source_aware_advisor_context(package, prompt_budget=budget)
+    _require(compact_context["source_path"] == zip_source, "compact advisor context must preserve source path")
+    _require(compact_context["selected_upgrade_candidate_id"], "compact advisor context must include selected upgrade candidate")
+    _require(compact_context["estimated_prompt_chars"] <= budget["max_prompt_chars"],
+             "compact advisor context must stay within prompt budget")
+    _require(any("!" in row["provenance_path"] for row in compact_context["provenance_summary"]),
+             "compact advisor context must preserve archive-qualified provenance")
+    _require(compact_context["fallback_allowed"] is False and compact_context["advisory_only"] is True,
+             "compact advisor context must be advisory-only with no fallback")
+    validate_compact_source_aware_advisor_context(compact_context)
+    _require(parse_compact_source_aware_advisor_context_json(stable_compact_source_aware_advisor_context_json(compact_context)) == compact_context,
+             "compact advisor context JSON must round trip")
+
+    compact_prompt = render_compact_local_advisor_prompt(compact_context, budget)
+    _require("strict JSON only" in compact_prompt and "no_execution" in compact_prompt,
+             "compact local advisor prompt must include strict JSON and no-execution constraints")
+    _require(len(compact_prompt) <= budget["max_prompt_chars"], "compact local advisor prompt must fit budget")
+    _require("prompt_package" not in compact_prompt and "research_target_evidence_bundle" not in compact_prompt,
+             "compact local advisor prompt must not dump full nested payloads")
+    validate_compact_local_advisor_prompt(compact_prompt, budget)
+
+    smoke_receipt = collect_local_advisor_smoke_receipt()
+    _require(smoke_receipt["receipt_available"] is False and smoke_receipt["fallback_allowed"] is False,
+             "default local advisor smoke receipt should be no-receipt read-only state")
+    validate_local_advisor_smoke_receipt(smoke_receipt)
+    _require(parse_local_advisor_smoke_receipt_json(stable_local_advisor_smoke_receipt_json(smoke_receipt)) == smoke_receipt,
+             "local advisor smoke receipt JSON must round trip")
+
     metadata = collect_local_model_advisor_metadata(
         model_used=True,
         model_provider="llamacpp",
@@ -19366,6 +19417,25 @@ def check_local_model_advisor_foundation_helpers() -> None:
     }
     review = collect_local_model_research_advisor_review(package, model_response_json=fixture)
     _require(review["advisor_status"] == "model_fixture_validated", "fixture advisor review must validate as model-backed")
+    compact_fixture = {
+        "ok": True,
+        "advisor_role": "local_research_advisor",
+        "source_specificity_score": 78,
+        "recommendation_quality": "The recommendation is source-specific because cited workflow and README refs support the governance upgrade.",
+        "missing_evidence": ["implementation acceptance criteria tied to one selected module"],
+        "risk_notes": ["keep output advisory and human-reviewed"],
+        "task_draft_feedback": ["name the affected Link module and verification command explicitly"],
+        "suggested_next_step": "Review a compact implementation preview before any patching.",
+        "source_refs": [source_ref],
+        "evidence_refs": [evidence_ref],
+        "insufficient_evidence": False,
+    }
+    compact_review = collect_local_model_research_advisor_review(package, model_response_json=compact_fixture)
+    _require(compact_review["model_metadata"]["model_used"] is True and compact_review["patterns_found"][0]["source_refs"] == [source_ref],
+             "compact local advisor fixture must normalize into grounded review")
+    _require(compact_review["prompt_chars"] <= budget["max_prompt_chars"] and compact_review["fallback_allowed"] is False,
+             "compact local advisor fixture must carry prompt budget and no-fallback metadata")
+    validate_local_model_research_advisor_review(compact_review, package)
     openrouter_review = collect_local_model_research_advisor_review(
         package,
         model_response_json=fixture,
@@ -19435,6 +19505,9 @@ def check_local_model_advisor_clis() -> None:
         parse_advisor_provider_operator_guidance_json,
         parse_advisor_provider_status_dashboard_json,
         parse_advisor_smoke_plan_json,
+        parse_compact_source_aware_advisor_context_json,
+        parse_local_advisor_prompt_budget_json,
+        parse_local_advisor_smoke_receipt_json,
         parse_local_model_advisor_comparison_card_json,
         parse_local_advisor_availability_card_json,
         parse_local_model_advisor_config_json,
@@ -19527,7 +19600,31 @@ def check_local_model_advisor_clis() -> None:
     _require(config_rc == 0, "advisor local-config --json must return 0")
     config = parse_local_model_advisor_config_json(config_out.getvalue())
     _require(config["write_allowed"] is False, "advisor local-config must be read-only")
-    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config"):
+
+    budget_out = io.StringIO()
+    with contextlib.redirect_stdout(budget_out):
+        budget_rc = _cmd_advisor(["prompt-budget", "--json"])
+    _require(budget_rc == 0, "advisor prompt-budget --json must return 0")
+    budget_payload = parse_local_advisor_prompt_budget_json(budget_out.getvalue())
+    _require(budget_payload["strict_json_required"] is True and budget_payload["fallback_allowed"] is False,
+             "advisor prompt-budget must require strict JSON with no fallback")
+
+    compact_out = io.StringIO()
+    with contextlib.redirect_stdout(compact_out):
+        compact_rc = _cmd_advisor(["compact-context", "--source", zip_source, "--json"])
+    _require(compact_rc == 0, "advisor compact-context --json must return 0")
+    compact_payload = parse_compact_source_aware_advisor_context_json(compact_out.getvalue())
+    _require(compact_payload["source_path"] == zip_source and compact_payload["estimated_prompt_chars"] <= budget_payload["max_prompt_chars"],
+             "advisor compact-context must preserve source and stay within budget")
+
+    receipt_out = io.StringIO()
+    with contextlib.redirect_stdout(receipt_out):
+        receipt_rc = _cmd_advisor(["smoke-receipt", "--json"])
+    _require(receipt_rc == 0, "advisor smoke-receipt --json must return 0")
+    receipt_payload = parse_local_advisor_smoke_receipt_json(receipt_out.getvalue())
+    _require(receipt_payload["receipt_available"] is False and receipt_payload["fallback_allowed"] is False,
+             "advisor smoke-receipt must default to no receipt with no fallback")
+    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "smoke-receipt"):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_advisor([command, "--write"])

@@ -13245,6 +13245,9 @@ LOCAL_MODEL_SMOKE_PLAN_VERSION = "link-local-model-smoke-plan-v1"
 LOCAL_MODEL_SMOKE_RESULT_VERSION = "link-local-model-smoke-result-v1"
 LOCAL_MODEL_ADVISOR_METADATA_VERSION = "link-local-model-advisor-metadata-v1"
 RESEARCH_ADVISOR_PROMPT_PACKAGE_VERSION = "link-research-advisor-prompt-package-v1"
+LOCAL_ADVISOR_PROMPT_BUDGET_VERSION = "link-local-advisor-prompt-budget-v1"
+COMPACT_SOURCE_AWARE_ADVISOR_CONTEXT_VERSION = "link-compact-source-aware-advisor-context-v1"
+LOCAL_ADVISOR_SMOKE_RECEIPT_VERSION = "link-local-advisor-smoke-receipt-v1"
 LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION = "link-local-model-research-advisor-review-v1"
 LOCAL_MODEL_ADVISOR_COMPARISON_CARD_VERSION = "link-local-model-advisor-comparison-card-v1"
 LOCAL_ADVISOR_FORBIDDEN_RECOMMENDATIONS = (
@@ -14369,7 +14372,7 @@ def _parse_strict_local_model_json(text: str) -> dict[str, Any]:
     return parsed
 
 
-def _call_canonical_llamacpp_chat(*, prompt: str, system_prompt: str, timeout: int, model_name: str | None = None) -> tuple[dict[str, Any], str, int]:
+def _call_canonical_llamacpp_chat(*, prompt: str, system_prompt: str, timeout: int, model_name: str | None = None, max_tokens: int = 1200) -> tuple[dict[str, Any], str, int]:
     import json as _json
     import time
     import urllib.error
@@ -14387,7 +14390,7 @@ def _call_canonical_llamacpp_chat(*, prompt: str, system_prompt: str, timeout: i
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,
-        "max_tokens": 1200,
+        "max_tokens": max_tokens,
     }
     request = urllib.request.Request(
         endpoint,
@@ -14906,6 +14909,390 @@ def parse_research_advisor_prompt_package_json(text: str) -> dict[str, Any]:
     return payload
 
 
+
+def collect_local_advisor_prompt_budget(*, profile_name: str = "compact", metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    if profile_name != "compact":
+        raise ValueError("only compact local advisor prompt budget is supported")
+    payload = {
+        "local_advisor_prompt_budget_version": LOCAL_ADVISOR_PROMPT_BUDGET_VERSION,
+        "local_advisor_prompt_budget_id": "local-advisor-prompt-budget-" + _local_advisor_safe_hash({
+            "provider": "llamacpp",
+            "profile": profile_name,
+            "version": LOCAL_ADVISOR_PROMPT_BUDGET_VERSION,
+        }),
+        "provider_name": "llamacpp",
+        "profile_name": profile_name,
+        "max_prompt_chars": 5200,
+        "max_evidence_items": 2,
+        "max_source_refs": 5,
+        "max_upgrade_candidates": 1,
+        "max_task_draft_chars": 360,
+        "max_expected_response_chars": 900,
+        "timeout_seconds": 120,
+        "strict_json_required": True,
+        "fallback_allowed": False,
+        "advisory_only": True,
+        "recommended_next_action": "Use the compact prompt budget for local llama.cpp advisor-review; do not retry or fall back to OpenRouter on timeout.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_advisor_prompt_budget(payload)
+    return payload
+
+
+def validate_local_advisor_prompt_budget(payload: dict[str, Any]) -> None:
+    required = (
+        "local_advisor_prompt_budget_version", "local_advisor_prompt_budget_id", "provider_name",
+        "profile_name", "max_prompt_chars", "max_evidence_items", "max_source_refs",
+        "max_upgrade_candidates", "max_task_draft_chars", "max_expected_response_chars",
+        "timeout_seconds", "strict_json_required", "fallback_allowed", "advisory_only",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local advisor prompt budget missing field: {key}")
+    if payload["local_advisor_prompt_budget_version"] != LOCAL_ADVISOR_PROMPT_BUDGET_VERSION:
+        raise ValueError("invalid local advisor prompt budget version")
+    if not str(payload["local_advisor_prompt_budget_id"]).startswith("local-advisor-prompt-budget-"):
+        raise ValueError("invalid local advisor prompt budget id")
+    if payload["provider_name"] != "llamacpp" or payload["profile_name"] != "compact":
+        raise ValueError("local advisor prompt budget must be compact llama.cpp")
+    if not 1000 <= int(payload["max_prompt_chars"]) <= 9000:
+        raise ValueError("local advisor prompt budget max_prompt_chars must be bounded")
+    if not 1 <= int(payload["max_evidence_items"]) <= 12:
+        raise ValueError("local advisor prompt budget evidence item count must be bounded")
+    if not 1 <= int(payload["max_source_refs"]) <= 16:
+        raise ValueError("local advisor prompt budget source ref count must be bounded")
+    if not 1 <= int(payload["max_upgrade_candidates"]) <= 5:
+        raise ValueError("local advisor prompt budget candidate count must be bounded")
+    if not 30 <= int(payload["timeout_seconds"]) <= 120:
+        raise ValueError("local advisor prompt budget timeout must be bounded")
+    if payload["strict_json_required"] is not True or payload["fallback_allowed"] is not False or payload["advisory_only"] is not True:
+        raise ValueError("local advisor prompt budget must require strict JSON, no fallback, and advisory-only mode")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local advisor prompt budget must remain read-only")
+
+
+def stable_local_advisor_prompt_budget_json(payload: dict[str, Any]) -> str:
+    validate_local_advisor_prompt_budget(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_advisor_prompt_budget_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_advisor_prompt_budget(payload)
+    return payload
+
+
+def _advisor_short_text(value: Any, limit: int) -> str:
+    text = str(value or "").replace("\n", " ").strip()
+    while "  " in text:
+        text = text.replace("  ", " ")
+    return text[:limit]
+
+
+def collect_compact_source_aware_advisor_context(
+    research_advisor_prompt_package: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    prompt_budget: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    package = research_advisor_prompt_package or collect_research_advisor_prompt_package(source_path=source_path)
+    validate_research_advisor_prompt_package(package)
+    budget = prompt_budget or collect_local_advisor_prompt_budget()
+    validate_local_advisor_prompt_budget(budget)
+    candidates = package["deterministic_upgrade_candidates"][:budget["max_upgrade_candidates"]]
+    selected = candidates[0]
+    task_summary = package.get("deterministic_task_summary", {})
+    task_text = _stable_ruflo_json(task_summary) if isinstance(task_summary, dict) else str(task_summary)
+    evidence_summary = [
+        {
+            "evidence_ref_id": item["evidence_ref_id"],
+            "provenance_path": item.get("provenance_path", item.get("display_path", "")),
+            "evidence_type": item.get("evidence_type", "unknown"),
+            "summary": _advisor_short_text(item.get("summary") or item.get("why_relevant") or item.get("display_path"), 100),
+        }
+        for item in package["evidence_refs"][:budget["max_evidence_items"]]
+    ]
+    provenance_summary = [
+        {
+            "display_path": item["display_path"],
+            "provenance_path": item["provenance_path"],
+            "evidence_type": item["evidence_type"],
+            "why_relevant": _advisor_short_text(item["why_relevant"], 100),
+        }
+        for item in package["provenance_summaries"][:budget["max_evidence_items"]]
+    ]
+    pattern_summary = [
+        {
+            "candidate_id": item["upgrade_candidate_id"],
+            "title": _advisor_short_text(item["title"], 120),
+            "module": item["target_link_module"],
+            "confidence": item["confidence_score"],
+            "risk": item["risk_level"],
+            "source_refs": item.get("source_refs", [])[:1],
+            "evidence_refs": item.get("evidence_refs", [])[:1],
+        }
+        for item in candidates
+    ]
+    body = {
+        "source_path": package["source_path"],
+        "source_name": package["source_name"],
+        "research_target_intake_id": package["research_target_intake_id"],
+        "selected_upgrade_candidate_id": selected["upgrade_candidate_id"],
+        "target_summary": f"{package['source_name']} ({package['source_type']}) has deterministic specificity {package.get('specificity_grade', 'unknown')} score {package.get('specificity_score', 0)}.",
+        "evidence_summary": evidence_summary,
+        "provenance_summary": provenance_summary,
+        "pattern_summary": pattern_summary,
+        "selected_upgrade_summary": {
+            "title": _advisor_short_text(selected["title"], 140),
+            "module": selected["target_link_module"],
+            "description": _advisor_short_text(selected["description"], 140),
+            "why_this_target": _advisor_short_text(package.get("why_this_target", ""), 160),
+            "why_this_upgrade": _advisor_short_text(package.get("why_this_upgrade", ""), 180),
+            "confidence": selected["confidence_score"],
+            "risk": selected["risk_level"],
+            "effort": selected["effort_score"],
+        },
+        "task_draft_summary": _advisor_short_text(task_text, int(budget["max_task_draft_chars"])),
+        "constraints": [
+            "Use only the supplied source_refs and evidence_refs.",
+            "Say insufficient_evidence when evidence is missing.",
+            "Return strict JSON only.",
+            "Do not invent files, APIs, commands, or repository facts.",
+        ],
+        "forbidden_actions": [
+            "no execution", "no approvals", "no source mutation", "no OpenRouter fallback",
+            "no patching", "no scraping", "no package installation", "advisory only",
+        ],
+        "required_response_schema": {
+            "ok": True,
+            "advisor_role": "local_research_advisor",
+            "source_specificity_score": 0,
+            "recommendation_quality": "string",
+            "missing_evidence": [],
+            "risk_notes": [],
+            "task_draft_feedback": [],
+            "suggested_next_step": "string",
+            "source_refs": [],
+            "evidence_refs": [],
+            "insufficient_evidence": False,
+        },
+        "prompt_budget_id": budget["local_advisor_prompt_budget_id"],
+        "fallback_allowed": False,
+        "advisory_only": True,
+    }
+    was_truncated = False
+    try:
+        prompt = render_compact_local_advisor_prompt(body, budget)
+    except ValueError:
+        was_truncated = True
+        # Deterministic final trim keeps the prompt under budget without dropping IDs or safety rules.
+        body["task_draft_summary"] = _advisor_short_text(body["task_draft_summary"], 220)
+        body["evidence_summary"] = body["evidence_summary"][:2]
+        body["provenance_summary"] = body["provenance_summary"][:2]
+        body["pattern_summary"] = body["pattern_summary"][:2]
+        prompt = render_compact_local_advisor_prompt(body, budget)
+    was_truncated = bool(was_truncated or len(prompt) > budget["max_prompt_chars"])
+    payload = {
+        "compact_source_aware_advisor_context_version": COMPACT_SOURCE_AWARE_ADVISOR_CONTEXT_VERSION,
+        "compact_source_aware_advisor_context_id": "compact-source-aware-advisor-context-" + _local_advisor_safe_hash({
+            "source_path": package["source_path"],
+            "selected_upgrade_candidate_id": selected["upgrade_candidate_id"],
+            "prompt_budget_id": budget["local_advisor_prompt_budget_id"],
+            "prompt_hash": _research_target_hash_text(prompt),
+            "version": COMPACT_SOURCE_AWARE_ADVISOR_CONTEXT_VERSION,
+        }),
+        **body,
+        "estimated_prompt_chars": len(prompt),
+        "was_truncated": bool(was_truncated or len(prompt) > budget["max_prompt_chars"]),
+        "truncation_summary": "Trimmed evidence/task summaries to fit compact local advisor budget." if was_truncated else "No truncation needed.",
+        "prompt_hash": _research_target_hash_text(prompt),
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_compact_source_aware_advisor_context(payload)
+    return payload
+
+
+def validate_compact_source_aware_advisor_context(payload: dict[str, Any]) -> None:
+    required = (
+        "compact_source_aware_advisor_context_version", "compact_source_aware_advisor_context_id",
+        "source_path", "source_name", "research_target_intake_id", "selected_upgrade_candidate_id",
+        "target_summary", "evidence_summary", "provenance_summary", "pattern_summary",
+        "selected_upgrade_summary", "task_draft_summary", "constraints", "forbidden_actions",
+        "required_response_schema", "prompt_budget_id", "estimated_prompt_chars", "was_truncated",
+        "truncation_summary", "fallback_allowed", "advisory_only", "prompt_hash", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"compact source-aware advisor context missing field: {key}")
+    if payload["compact_source_aware_advisor_context_version"] != COMPACT_SOURCE_AWARE_ADVISOR_CONTEXT_VERSION:
+        raise ValueError("invalid compact source-aware advisor context version")
+    if not payload["compact_source_aware_advisor_context_id"].startswith("compact-source-aware-advisor-context-"):
+        raise ValueError("invalid compact source-aware advisor context id")
+    if not payload["source_path"].startswith("research/"):
+        raise ValueError("compact advisor context source_path must remain under research")
+    if not payload["evidence_summary"] or not payload["provenance_summary"] or not payload["pattern_summary"]:
+        raise ValueError("compact advisor context requires evidence, provenance, and pattern summaries")
+    if payload["estimated_prompt_chars"] > collect_local_advisor_prompt_budget()["max_prompt_chars"]:
+        raise ValueError("compact advisor context exceeds prompt budget")
+    if payload["fallback_allowed"] is not False or payload["advisory_only"] is not True:
+        raise ValueError("compact advisor context must be advisory-only with no fallback")
+    if not any("!" in str(item.get("provenance_path", "")) for item in payload["provenance_summary"]) and str(payload["source_path"]).endswith(".zip"):
+        raise ValueError("zip compact advisor context must preserve archive-qualified provenance")
+    text = _stable_ruflo_json(payload).lower()
+    import re as _re
+    if _re.search(r"\bsk-[A-Za-z0-9_\-]{12,}", text) or "bearer " in text:
+        raise ValueError("compact advisor context must not expose secrets")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("compact advisor context must remain read-only")
+
+
+def stable_compact_source_aware_advisor_context_json(payload: dict[str, Any]) -> str:
+    validate_compact_source_aware_advisor_context(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_compact_source_aware_advisor_context_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_compact_source_aware_advisor_context(payload)
+    return payload
+
+
+def render_compact_local_advisor_prompt(context: dict[str, Any], prompt_budget: dict[str, Any] | None = None) -> str:
+    budget = prompt_budget or collect_local_advisor_prompt_budget()
+    validate_local_advisor_prompt_budget(budget)
+    prompt_body = {
+        "task": "Return strict JSON only. Review whether Link's deterministic recommendation is source-specific and actionable.",
+        "advisor_limits": {
+            "advisory_only": True,
+            "fallback_allowed": False,
+            "no_execution": True,
+            "no_approvals": True,
+            "no_patching": True,
+            "no_openrouter": True,
+        },
+        "response_schema": context["required_response_schema"],
+        "rules": [
+            "Use only source_refs/evidence_refs visible below.",
+            "If unsure, set insufficient_evidence=true or mention insufficient_evidence.",
+            "Do not invent files, APIs, commands, repo facts, outreach, scraping, installs, approvals, or execution.",
+            "Keep suggested_next_step advisory and human-reviewed.",
+        ],
+        "source": {
+            "path": context["source_path"],
+            "name": context["source_name"],
+            "intake_id": context["research_target_intake_id"],
+        },
+        "target_summary": context["target_summary"],
+        "selected_upgrade": context["selected_upgrade_summary"],
+        "patterns": context["pattern_summary"],
+        "evidence": context["evidence_summary"],
+        "provenance": context["provenance_summary"],
+        "task_draft_summary": context["task_draft_summary"],
+        "forbidden_actions": context["forbidden_actions"],
+    }
+    prompt = _stable_ruflo_json(prompt_body, indent=2)
+    validate_compact_local_advisor_prompt(prompt, budget)
+    return prompt
+
+
+def validate_compact_local_advisor_prompt(prompt: str, prompt_budget: dict[str, Any] | None = None) -> None:
+    budget = prompt_budget or collect_local_advisor_prompt_budget()
+    validate_local_advisor_prompt_budget(budget)
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("compact local advisor prompt must be non-empty")
+    lower = prompt.lower()
+    for phrase in ("strict json only", "advisory_only", "no_execution", "fallback_allowed", "source_refs"):
+        if phrase not in lower:
+            raise ValueError(f"compact local advisor prompt missing required phrase: {phrase}")
+    if len(prompt) > int(budget["max_prompt_chars"]):
+        raise ValueError("compact local advisor prompt exceeds budget")
+    import re as _re
+    if _re.search(r"\bsk-[a-z0-9_\-]{12,}", lower) or "bearer " in lower:
+        raise ValueError("compact local advisor prompt must not expose secrets")
+
+
+def collect_local_advisor_smoke_receipt(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    local = collect_local_advisor_availability_card()
+    payload = {
+        "local_advisor_smoke_receipt_version": LOCAL_ADVISOR_SMOKE_RECEIPT_VERSION,
+        "local_advisor_smoke_receipt_id": "local-advisor-smoke-receipt-" + _local_advisor_safe_hash({
+            "provider": "llamacpp",
+            "endpoint": local["endpoint_summary"],
+            "available": False,
+            "version": LOCAL_ADVISOR_SMOKE_RECEIPT_VERSION,
+        }),
+        "receipt_available": False,
+        "provider_name": "llamacpp",
+        "endpoint_summary": local["endpoint_summary"],
+        "last_smoke_status": "no_receipt_available",
+        "last_smoke_latency_ms": None,
+        "last_failure_summary": "No persistent local advisor smoke receipt exists yet; run advisor smoke explicitly to test inference.",
+        "last_checked_at": None,
+        "source_path": "",
+        "fallback_allowed": False,
+        "recommended_next_action": "Run python3 link.py advisor smoke --provider llamacpp --local-model --json to create an explicit current smoke observation.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_advisor_smoke_receipt(payload)
+    return payload
+
+
+def validate_local_advisor_smoke_receipt(payload: dict[str, Any]) -> None:
+    required = (
+        "local_advisor_smoke_receipt_version", "local_advisor_smoke_receipt_id", "receipt_available",
+        "provider_name", "endpoint_summary", "last_smoke_status", "last_smoke_latency_ms",
+        "last_failure_summary", "last_checked_at", "source_path", "fallback_allowed",
+        "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local advisor smoke receipt missing field: {key}")
+    if payload["local_advisor_smoke_receipt_version"] != LOCAL_ADVISOR_SMOKE_RECEIPT_VERSION:
+        raise ValueError("invalid local advisor smoke receipt version")
+    if payload["provider_name"] != "llamacpp" or payload["fallback_allowed"] is not False:
+        raise ValueError("local advisor smoke receipt must be llama.cpp with fallback disabled")
+    if payload["receipt_available"] is False and payload["last_smoke_status"] != "no_receipt_available":
+        raise ValueError("missing local advisor smoke receipt must use no_receipt_available status")
+    text = _stable_ruflo_json(payload).lower()
+    if "sk-" in text or "bearer " in text:
+        raise ValueError("local advisor smoke receipt must not expose secrets")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local advisor smoke receipt must remain read-only")
+
+
+def stable_local_advisor_smoke_receipt_json(payload: dict[str, Any]) -> str:
+    validate_local_advisor_smoke_receipt(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_advisor_smoke_receipt_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_advisor_smoke_receipt(payload)
+    return payload
+
+
 def _research_advisor_allowed_source_ids(prompt_package: dict[str, Any]) -> set[str]:
     return {item["source_ref_id"] for item in prompt_package["source_refs"]}
 
@@ -14989,6 +15376,51 @@ def _normalize_local_research_advisor_model_json(model_json: dict[str, Any], pro
     source_ids = _research_advisor_allowed_source_ids(prompt_package)
     evidence_ids = _research_advisor_allowed_evidence_ids(prompt_package)
 
+    if "advisor_role" in model_json and "patterns_found" not in model_json:
+        first_source = next(iter(source_ids), "")
+        first_evidence = next(iter(evidence_ids), "")
+        selected_candidate = prompt_package["deterministic_upgrade_candidates"][0]
+        quality = str(model_json.get("recommendation_quality") or "insufficient evidence")
+        risk_notes = [str(item) for item in model_json.get("risk_notes", []) if isinstance(item, str)]
+        task_feedback = [str(item) for item in model_json.get("task_draft_feedback", []) if isinstance(item, str)]
+        cited_sources = [ref for ref in model_json.get("source_refs", []) if isinstance(ref, str)] or ([first_source] if first_source else [])
+        cited_evidence = [ref for ref in model_json.get("evidence_refs", []) if isinstance(ref, str)] or ([first_evidence] if first_evidence else [])
+        confidence = int(model_json.get("source_specificity_score", 0) or 0)
+        model_json = {
+            "patterns_found": [
+                {
+                    "pattern_name": "Local advisor specificity critique",
+                    "why_it_matters": quality,
+                    "source_refs": cited_sources,
+                    "evidence_refs": cited_evidence,
+                    "target_link_module": selected_candidate["target_link_module"],
+                    "risk": "medium" if risk_notes else "low",
+                    "confidence": max(0, min(100, confidence)),
+                }
+            ],
+            "upgrade_candidate_critiques": [
+                {
+                    "upgrade_candidate_id": selected_candidate["upgrade_candidate_id"],
+                    "critique": quality,
+                    "source_grounding_status": "grounded" if cited_sources else "insufficient_evidence",
+                    "specificity_assessment": "source-bound" if confidence >= 65 else "needs_more_evidence",
+                    "missing_evidence": [str(item) for item in model_json.get("missing_evidence", []) if isinstance(item, str)][:8],
+                    "confidence": max(0, min(100, confidence)),
+                }
+            ],
+            "best_upgrade_suggestion": {
+                "title": selected_candidate["title"],
+                "target_link_module": selected_candidate["target_link_module"],
+                "upgrade_candidate_id": selected_candidate["upgrade_candidate_id"],
+                "why": str(model_json.get("suggested_next_step") or quality)[:360],
+            },
+            "genericity_warnings": ["local advisor marked insufficient_evidence"] if model_json.get("insufficient_evidence") else [],
+            "missing_evidence": [str(item) for item in model_json.get("missing_evidence", []) if isinstance(item, str)][:10],
+            "risks": risk_notes[:10],
+            "task_draft_improvements": task_feedback[:10],
+            "do_not_use": list(LOCAL_ADVISOR_FORBIDDEN_RECOMMENDATIONS[:5]),
+        }
+
     def clean_pattern(item: dict[str, Any]) -> dict[str, Any]:
         refs = [ref for ref in item.get("source_refs", []) if isinstance(ref, str)]
         evs = [ref for ref in item.get("evidence_refs", []) if isinstance(ref, str)]
@@ -15040,38 +15472,31 @@ def _normalize_local_research_advisor_model_json(model_json: dict[str, Any], pro
     }
 
 
-def _call_local_research_advisor_model(config: dict[str, Any], prompt_package: dict[str, Any], *, timeout: int = 30) -> tuple[dict[str, Any], str, int]:
+def _call_local_research_advisor_model(
+    config: dict[str, Any],
+    prompt_package: dict[str, Any],
+    *,
+    timeout: int | None = None,
+) -> tuple[dict[str, Any], str, int, dict[str, Any], dict[str, Any]]:
     validate_local_model_advisor_config(config)
     validate_research_advisor_prompt_package(prompt_package)
     if not config["usable_for_local_advisor"] or config["endpoint_type"] != "local":
         raise ValueError("canonical local advisor config is not usable for local inference")
     if config["provider"] != "llamacpp":
         raise ValueError("only canonical llama.cpp advisor calls are enabled; no Ollama/OpenRouter fallback")
-    prompt = _stable_ruflo_json({
-        "task": "Review this Link research target and return strict JSON only.",
-        "expected_schema": {
-            "patterns_found": ["pattern_name", "why_it_matters", "source_refs", "evidence_refs", "target_link_module", "risk", "confidence"],
-            "upgrade_candidate_critiques": ["upgrade_candidate_id", "critique", "source_grounding_status", "specificity_assessment", "missing_evidence", "confidence"],
-            "best_upgrade_suggestion": {"title": "", "target_link_module": "", "upgrade_candidate_id": "", "why": ""},
-            "genericity_warnings": [],
-            "missing_evidence": [],
-            "risks": [],
-            "task_draft_improvements": [],
-            "do_not_use": [],
-        },
-        "grounding_rules": [
-            "cite only source_refs from the prompt",
-            "cite evidence_refs for high-confidence claims",
-            "say insufficient evidence when unsure",
-            "do not recommend execution, writes, approvals, scraping, package installation, git, or network use",
-        ],
-        "prompt_package": prompt_package,
-    })
-    return _call_canonical_llamacpp_chat(
-        prompt=prompt,
-        system_prompt="You are a local-only advisory reviewer for Link. Return strict JSON only. Do not suggest execution, writes, approvals, network use, scraping, package installs, git, or copying external code.",
-        timeout=timeout,
-        model_name=config["model_name"],
+    budget = collect_local_advisor_prompt_budget()
+    compact_context = collect_compact_source_aware_advisor_context(prompt_package, prompt_budget=budget)
+    prompt = render_compact_local_advisor_prompt(compact_context, budget)
+    return (
+        *_call_canonical_llamacpp_chat(
+            prompt=prompt,
+            system_prompt="You are a local-only advisory reviewer for Link. Return strict JSON only. You are advisory only: no execution, writes, approvals, network use, scraping, package installs, git, OpenRouter fallback, or copying external code.",
+            timeout=int(timeout or budget["timeout_seconds"]),
+            model_name=config["model_name"],
+            max_tokens=384,
+        ),
+        compact_context,
+        budget,
     )
 
 
@@ -15169,6 +15594,11 @@ def collect_local_model_research_advisor_review(
     latency_ms = 0
     valid_json = False
     advisor_status = "preview_only"
+    compact_context: dict[str, Any] | None = None
+    prompt_budget = collect_local_advisor_prompt_budget()
+    prompt_chars = 0
+    fail_closed = False
+    fail_closed_reason = ""
     if model_response_json is not None:
         normalized = _normalize_local_research_advisor_model_json(model_response_json, prompt_package)
         response_hash = _research_target_hash_text(model_response_json)
@@ -15176,12 +15606,41 @@ def collect_local_model_research_advisor_review(
         advisor_status = "model_fixture_validated"
         model_used = True
     elif use_local_model and provider_name == "llamacpp":
-        model_json, raw_content, latency_ms = _call_local_research_advisor_model(config, prompt_package)
-        normalized = _normalize_local_research_advisor_model_json(model_json, prompt_package)
-        response_hash = _research_target_hash_text(raw_content)
-        valid_json = True
-        advisor_status = "model_reviewed"
-        model_used = True
+        try:
+            model_json, raw_content, latency_ms, compact_context, prompt_budget = _call_local_research_advisor_model(config, prompt_package)
+            prompt_hash = compact_context["prompt_hash"]
+            prompt_chars = int(compact_context["estimated_prompt_chars"])
+            normalized = _normalize_local_research_advisor_model_json(model_json, prompt_package)
+            response_hash = _research_target_hash_text(raw_content)
+            valid_json = True
+            advisor_status = "model_reviewed"
+            model_used = True
+        except Exception as exc:
+            compact_context = collect_compact_source_aware_advisor_context(prompt_package, prompt_budget=prompt_budget)
+            prompt_hash = compact_context["prompt_hash"]
+            prompt_chars = int(compact_context["estimated_prompt_chars"])
+            fail_closed = True
+            fail_closed_reason = str(exc)[:240]
+            normalized = {
+                "patterns_found": _deterministic_advisor_patterns(prompt_package),
+                "upgrade_candidate_critiques": _deterministic_advisor_critiques(prompt_package),
+                "best_upgrade_suggestion": {
+                    "title": prompt_package["deterministic_upgrade_candidates"][0]["title"],
+                    "target_link_module": prompt_package["deterministic_upgrade_candidates"][0]["target_link_module"],
+                    "upgrade_candidate_id": prompt_package["deterministic_upgrade_candidates"][0]["upgrade_candidate_id"],
+                    "why": "Local compact advisor failed closed; use deterministic source-aware recommendation until local inference succeeds.",
+                },
+                "genericity_warnings": ["Local compact advisor failed closed: " + fail_closed_reason],
+                "missing_evidence": list(prompt_package.get("missing_evidence", [])),
+                "risks": ["Local model advisor output unavailable; deterministic Link output remains authoritative."],
+                "task_draft_improvements": ["Retry only after local smoke passes and prompt budget is still bounded."],
+                "do_not_use": list(LOCAL_ADVISOR_FORBIDDEN_RECOMMENDATIONS),
+                "grounding_warnings": [],
+                "_allowed_source_refs": sorted(_research_advisor_allowed_source_ids(prompt_package)),
+                "_allowed_evidence_refs": sorted(_research_advisor_allowed_evidence_ids(prompt_package)),
+            }
+            advisor_status = "fail_closed"
+            model_used = False
     elif openrouter_requested and provider_name == "openrouter" and selection["provider_allowed"]:
         model_json, raw_content, latency_ms = _call_openrouter_research_advisor_model(openrouter_config, prompt_package)
         normalized = _normalize_local_research_advisor_model_json(model_json, prompt_package)
@@ -15209,6 +15668,11 @@ def collect_local_model_research_advisor_review(
             "_allowed_evidence_refs": sorted(_research_advisor_allowed_evidence_ids(prompt_package)),
         }
         model_used = False
+    if compact_context is None:
+        compact_context = collect_compact_source_aware_advisor_context(prompt_package, prompt_budget=prompt_budget)
+        if prompt_hash == prompt_package["prompt_hash"]:
+            prompt_hash = compact_context["prompt_hash"]
+        prompt_chars = int(compact_context["estimated_prompt_chars"])
     source_refs_used = sorted({ref for item in normalized["patterns_found"] for ref in item.get("source_refs", [])}) or [item["source_ref_id"] for item in prompt_package["source_refs"][:1]]
     evidence_refs_used = sorted({ref for item in normalized["patterns_found"] for ref in item.get("evidence_refs", [])})
     model_metadata = collect_local_model_advisor_metadata(
@@ -15241,6 +15705,15 @@ def collect_local_model_research_advisor_review(
             "version": LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION,
         }),
         "research_advisor_prompt_package_id": prompt_package["research_advisor_prompt_package_id"],
+        "compact_context_id": compact_context["compact_source_aware_advisor_context_id"],
+        "prompt_budget_id": prompt_budget["local_advisor_prompt_budget_id"],
+        "prompt_hash": prompt_hash,
+        "response_hash": response_hash,
+        "prompt_chars": prompt_chars,
+        "timeout_seconds": prompt_budget["timeout_seconds"],
+        "fail_closed": fail_closed,
+        "fail_closed_reason": fail_closed_reason,
+        "local_model_latency_ms": latency_ms,
         "provider_selection_boundary_id": selection["advisor_provider_selection_boundary_id"],
         "selected_provider": provider_name,
         "local_model_provider_boundary_id": boundary["local_model_provider_boundary_id"],
@@ -15285,7 +15758,9 @@ def collect_local_model_research_advisor_review(
 def validate_local_model_research_advisor_review(review: dict[str, Any], research_advisor_prompt_package: dict[str, Any] | None = None) -> None:
     required = (
         "local_model_research_advisor_review_version", "local_model_research_advisor_review_id",
-        "research_advisor_prompt_package_id", "provider_selection_boundary_id", "selected_provider",
+        "research_advisor_prompt_package_id", "compact_context_id", "prompt_budget_id", "prompt_hash",
+        "response_hash", "prompt_chars", "timeout_seconds", "fail_closed", "fail_closed_reason",
+        "local_model_latency_ms", "provider_selection_boundary_id", "selected_provider",
         "local_model_provider_boundary_id", "canonical_wrapper_path", "external_call_used", "paid_call_possible",
         "fallback_allowed", "external_fallback_allowed", "openrouter_fallback_allowed", "research_target_intake_id", "source_path", "source_name",
         "advisor_status", "model_metadata", "patterns_found", "upgrade_candidate_critiques",
@@ -15304,6 +15779,24 @@ def validate_local_model_research_advisor_review(review: dict[str, Any], researc
         raise ValueError("local research advisor review source_path required")
     if review["selected_provider"] not in {"llamacpp", "openrouter"}:
         raise ValueError("local advisor review selected provider is invalid")
+    if not str(review["compact_context_id"]).startswith("compact-source-aware-advisor-context-"):
+        raise ValueError("local advisor review compact context id is invalid")
+    if not str(review["prompt_budget_id"]).startswith("local-advisor-prompt-budget-"):
+        raise ValueError("local advisor review prompt budget id is invalid")
+    if not review["prompt_hash"]:
+        raise ValueError("local advisor review prompt hash is required")
+    if not isinstance(review["prompt_chars"], int) or review["prompt_chars"] <= 0 or review["prompt_chars"] > collect_local_advisor_prompt_budget()["max_prompt_chars"]:
+        raise ValueError("local advisor review prompt chars must be positive and within budget")
+    if not 30 <= int(review["timeout_seconds"]) <= 120:
+        raise ValueError("local advisor review timeout must be bounded")
+    if not isinstance(review["fail_closed"], bool):
+        raise ValueError("local advisor review fail_closed must be boolean")
+    if review["fail_closed"] is True and not review["fail_closed_reason"]:
+        raise ValueError("local advisor review fail_closed must include reason")
+    if review["fail_closed"] is False and review["advisor_status"] == "fail_closed":
+        raise ValueError("local advisor review fail_closed status mismatch")
+    if not isinstance(review["local_model_latency_ms"], int) or review["local_model_latency_ms"] < 0:
+        raise ValueError("local advisor review latency must be non-negative")
     if review["selected_provider"] == "llamacpp" and review["canonical_wrapper_path"] != CANONICAL_LOCAL_MODEL_WRAPPER_PATH:
         raise ValueError("llamacpp advisor review must use canonical wrapper")
     if review["selected_provider"] == "openrouter" and review["external_call_used"] is True and review["model_metadata"]["model_provider"] != "openrouter":
@@ -15384,7 +15877,10 @@ def collect_local_model_advisor_comparison_card(
     validate_local_model_research_advisor_review(advisor)
     deterministic_id = report["selected_upgrade_candidate_id"]
     advisor_best = advisor["best_upgrade_suggestion"]
-    agreement = "preview_only" if advisor["advisor_status"] == "preview_only" else "agrees" if advisor_best.get("upgrade_candidate_id") == deterministic_id else "differs"
+    if advisor["advisor_status"] in {"preview_only", "fail_closed"}:
+        agreement = "advisor_unavailable" if advisor["advisor_status"] == "fail_closed" else "preview_only"
+    else:
+        agreement = "agrees" if advisor_best.get("upgrade_candidate_id") == deterministic_id else "differs"
     payload = {
         "local_model_advisor_comparison_card_version": LOCAL_MODEL_ADVISOR_COMPARISON_CARD_VERSION,
         "local_model_advisor_comparison_card_id": "local-model-advisor-comparison-card-" + _local_advisor_safe_hash({
@@ -15404,7 +15900,7 @@ def collect_local_model_advisor_comparison_card(
         "deterministic_selected_upgrade_candidate_id": deterministic_id,
         "advisor_best_upgrade_title": advisor_best.get("title", ""),
         "agreement_status": agreement,
-        "advisor_added_value": advisor["genericity_warnings"][:3] + advisor["task_draft_improvements"][:3],
+        "advisor_added_value": advisor["genericity_warnings"][:3] + advisor["task_draft_improvements"][:3] + (["local advisor failed closed; deterministic output remains authoritative"] if advisor["advisor_status"] == "fail_closed" else []),
         "advisor_risks": advisor["risks"][:5] + advisor["grounding_warnings"][:5],
         "deterministic_output_better_at": ["safety gates", "stable IDs", "source path validation", "approval status"],
         "local_model_output_better_at": ["semantic critique", "missing evidence suggestions", "human-readable rationale"] if advisor["model_metadata"]["model_used"] else [],
@@ -15444,7 +15940,7 @@ def validate_local_model_advisor_comparison_card(payload: dict[str, Any]) -> Non
     if payload["external_fallback_allowed"] is not False or payload["openrouter_fallback_allowed"] is not False:
         raise ValueError("local advisor comparison must block external fallback")
     validate_local_model_advisor_metadata(payload["model_metadata"])
-    if payload["agreement_status"] not in {"preview_only", "agrees", "differs"}:
+    if payload["agreement_status"] not in {"preview_only", "advisor_unavailable", "agrees", "differs"}:
         raise ValueError("invalid local advisor comparison agreement status")
     if payload["human_review_required"] is not True:
         raise ValueError("local advisor comparison requires human review")
@@ -17215,6 +17711,98 @@ def advisor_openrouter_config_main(argv: list[str] | None = None) -> int:
             ("paid_call_possible", payload["paid_call_possible"]),
             ("fallback_allowed", payload["fallback_allowed"]),
             ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+
+def advisor_prompt_budget_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor prompt-budget: compact local advisor prompt budget")
+        print("  python3 link.py advisor prompt-budget --json")
+        print("Read-only. No model call. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor prompt-budget is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_local_advisor_prompt_budget()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_advisor_prompt_budget_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor prompt budget", payload, [
+            ("provider", payload["provider_name"]),
+            ("profile", payload["profile_name"]),
+            ("max_prompt_chars", payload["max_prompt_chars"]),
+            ("timeout_seconds", payload["timeout_seconds"]),
+            ("strict_json_required", payload["strict_json_required"]),
+            ("fallback_allowed", payload["fallback_allowed"]),
+            ("next", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def advisor_compact_context_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor compact-context: compact source-aware context for local advisor")
+        print("  python3 link.py advisor compact-context --source <path> --json")
+        print("Read-only. No model call. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor compact-context is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "compact-context")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_compact_source_aware_advisor_context(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_compact_source_aware_advisor_context_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor compact context", payload, [
+            ("id", payload["compact_source_aware_advisor_context_id"]),
+            ("source", payload["source_path"]),
+            ("selected_upgrade_candidate_id", payload["selected_upgrade_candidate_id"]),
+            ("prompt_budget_id", payload["prompt_budget_id"]),
+            ("estimated_prompt_chars", payload["estimated_prompt_chars"]),
+            ("was_truncated", payload["was_truncated"]),
+            ("fallback_allowed", payload["fallback_allowed"]),
+        ])
+    return 0
+
+
+def advisor_smoke_receipt_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor smoke-receipt: latest local advisor smoke receipt status")
+        print("  python3 link.py advisor smoke-receipt --json")
+        print("Read-only. No model call. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor smoke-receipt is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_local_advisor_smoke_receipt()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_advisor_smoke_receipt_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor smoke receipt", payload, [
+            ("provider", payload["provider_name"]),
+            ("receipt_available", payload["receipt_available"]),
+            ("last_smoke_status", payload["last_smoke_status"]),
+            ("fallback_allowed", payload["fallback_allowed"]),
+            ("next", payload["recommended_next_action"]),
         ])
     return 0
 
