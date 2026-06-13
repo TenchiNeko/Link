@@ -19054,6 +19054,7 @@ def check_local_model_advisor_foundation_helpers() -> None:
         collect_compact_source_aware_advisor_context,
         collect_local_advisor_json_contract,
         collect_local_advisor_json_contract_result,
+        collect_local_advisor_ref_alias_map,
         collect_local_advisor_micro_contract,
         collect_local_advisor_micro_contract_result,
         collect_local_advisor_micro_diagnostic,
@@ -19083,6 +19084,7 @@ def check_local_model_advisor_foundation_helpers() -> None:
         parse_compact_source_aware_advisor_context_json,
         parse_local_advisor_json_contract_json,
         parse_local_advisor_json_contract_result_json,
+        parse_local_advisor_ref_alias_map_json,
         parse_local_advisor_micro_contract_json,
         parse_local_advisor_micro_contract_result_json,
         parse_local_advisor_micro_diagnostic_json,
@@ -19110,6 +19112,7 @@ def check_local_model_advisor_foundation_helpers() -> None:
         stable_compact_source_aware_advisor_context_json,
         stable_local_advisor_json_contract_json,
         stable_local_advisor_json_contract_result_json,
+        stable_local_advisor_ref_alias_map_json,
         stable_local_advisor_micro_contract_json,
         stable_local_advisor_micro_contract_result_json,
         stable_local_advisor_micro_diagnostic_json,
@@ -19138,6 +19141,8 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_compact_source_aware_advisor_context,
         validate_local_advisor_json_contract,
         validate_local_advisor_json_contract_result,
+        validate_local_advisor_alias_response_refs,
+        validate_local_advisor_ref_alias_map,
         validate_local_advisor_micro_contract,
         validate_local_advisor_micro_contract_result,
         validate_local_advisor_micro_diagnostic,
@@ -19159,6 +19164,7 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_openrouter_advisor_config,
         validate_openrouter_advisor_readiness_card,
         validate_research_advisor_prompt_package,
+        expand_local_advisor_ref_aliases,
         render_compact_local_advisor_prompt,
         render_minimal_local_json_contract_prompt,
         render_local_advisor_micro_prompt,
@@ -19390,6 +19396,28 @@ def check_local_model_advisor_foundation_helpers() -> None:
              "compact local advisor prompt must not dump full nested payloads")
     validate_compact_local_advisor_prompt(compact_prompt, budget)
 
+    alias_map = collect_local_advisor_ref_alias_map(package)
+    same_alias_map = collect_local_advisor_ref_alias_map(package)
+    _require(alias_map["local_advisor_ref_alias_map_id"] == same_alias_map["local_advisor_ref_alias_map_id"],
+             "local advisor ref alias map id must be deterministic")
+    _require(alias_map["source_ref_aliases"][0]["alias"] == "S1" and alias_map["evidence_ref_aliases"][0]["alias"] == "E1",
+             "local advisor ref alias map must use short S/E aliases")
+    _require(alias_map["source_ref_aliases"][0]["full_ref"] == source_ref and alias_map["evidence_ref_aliases"][0]["full_ref"] == evidence_ref,
+             "local advisor ref alias map must preserve full refs")
+    validate_local_advisor_ref_alias_map(alias_map)
+    _require(parse_local_advisor_ref_alias_map_json(stable_local_advisor_ref_alias_map_json(alias_map)) == alias_map,
+             "local advisor ref alias map JSON must round trip")
+    expanded = expand_local_advisor_ref_aliases(alias_map, ["S1"], ["E1"])
+    _require(expanded["refs_valid"] is True and expanded["expanded_source_refs"] == [source_ref] and expanded["expanded_evidence_refs"] == [evidence_ref],
+             "local advisor ref aliases must expand to full refs")
+    validate_local_advisor_alias_response_refs(alias_map, ["S1"], ["E1"])
+    unknown_alias = expand_local_advisor_ref_aliases(alias_map, ["S999"], ["E1"])
+    _require(unknown_alias["refs_valid"] is False and "S999" in unknown_alias["unknown_aliases"],
+             "unknown source alias must fail expansion")
+    wrong_type_alias = expand_local_advisor_ref_aliases(alias_map, ["E1"], ["S1"])
+    _require(wrong_type_alias["refs_valid"] is False,
+             "wrong-type aliases must fail expansion")
+
     micro_contracts = [collect_local_advisor_micro_contract(package, stage_number=stage) for stage in range(4)]
     for stage, micro_contract in enumerate(micro_contracts):
         _require(micro_contract["stage_number"] == stage and micro_contract["fallback_allowed"] is False,
@@ -19405,11 +19433,15 @@ def check_local_model_advisor_foundation_helpers() -> None:
              "micro stage 1 schema must require source path/binding")
     _require({"source_refs", "evidence_refs"}.issubset(micro_contracts[2]["required_response_schema"]),
              "micro stage 2 schema must require refs arrays")
+    _require(micro_contracts[2]["uses_ref_aliases"] is True and micro_contracts[2]["allowed_source_aliases"] == ["S1", "S2"],
+             "micro stage 2 contract must use ref aliases")
     _require({"critique", "missing_evidence", "risk_notes"}.issubset(micro_contracts[3]["required_response_schema"]),
              "micro stage 3 schema must require critique fields")
     micro_prompts = [render_local_advisor_micro_prompt(contract) for contract in micro_contracts]
     _require(len(micro_prompts[0]) <= 300 and len(micro_prompts[1]) <= 700 and len(micro_prompts[2]) <= 1200 and len(micro_prompts[3]) <= 2000,
              "local advisor micro prompts must stay within staged budgets")
+    _require("S1" in micro_prompts[2] and "E1" in micro_prompts[2] and source_ref not in micro_prompts[2],
+             "micro stage 2 prompt must use aliases instead of long full refs")
     for prompt, micro_contract in zip(micro_prompts, micro_contracts):
         _require("JSON" in prompt and "research_target_evidence_bundle" not in prompt,
                  "local advisor micro prompt must request JSON without giant payloads")
@@ -19424,8 +19456,8 @@ def check_local_model_advisor_foundation_helpers() -> None:
     micro_success_fixtures = [
         {"ok": True},
         {"ok": True, "source_bound": True, "source_path": zip_source},
-        {"ok": True, "source_bound": True, "source_path": zip_source, "source_refs": [source_ref], "evidence_refs": [evidence_ref]},
-        {"ok": True, "source_bound": True, "source_path": zip_source, "critique": "Source-bound critique.", "missing_evidence": [], "risk_notes": [], "source_refs": [source_ref], "evidence_refs": [evidence_ref], "insufficient_evidence": False},
+        {"ok": True, "source_bound": True, "source_path": zip_source, "source_refs": ["S1"], "evidence_refs": ["E1"]},
+        {"ok": True, "source_bound": True, "source_path": zip_source, "critique": "Source-bound critique.", "missing_evidence": [], "risk_notes": [], "source_refs": ["S1"], "evidence_refs": ["E1"], "insufficient_evidence": False},
     ]
     micro_results = []
     for micro_contract, fixture_payload in zip(micro_contracts, micro_success_fixtures):
@@ -19446,6 +19478,11 @@ def check_local_model_advisor_foundation_helpers() -> None:
     bad_refs_result = collect_local_advisor_micro_contract_result(micro_contracts[2], model_response_json=bad_refs)
     _require(bad_refs_result["micro_ok"] is False and bad_refs_result["likely_failure_mode"] == "refs_schema_failed_stage_2",
              "micro stage 2 bad refs must classify refs schema failure")
+    unknown_ref_fixture = dict(micro_success_fixtures[2])
+    unknown_ref_fixture["source_refs"] = ["S999"]
+    unknown_ref_result = collect_local_advisor_micro_contract_result(micro_contracts[2], model_response_json=unknown_ref_fixture)
+    _require(unknown_ref_result["micro_ok"] is False and unknown_ref_result["likely_failure_mode"] == "unknown_ref_alias_stage_2",
+             "micro stage 2 unknown alias must classify alias failure")
     forbidden_micro = dict(micro_success_fixtures[3])
     forbidden_micro["critique"] = "patch files now"
     forbidden_micro_result = collect_local_advisor_micro_contract_result(micro_contracts[3], model_response_json=forbidden_micro)
@@ -19714,6 +19751,7 @@ def check_local_model_advisor_clis() -> None:
         parse_local_advisor_micro_contract_json,
         parse_local_advisor_micro_contract_result_json,
         parse_local_advisor_micro_diagnostic_json,
+        parse_local_advisor_ref_alias_map_json,
         parse_local_advisor_prompt_budget_json,
         parse_local_advisor_smoke_receipt_json,
         parse_local_llamacpp_json_diagnostic_json,
@@ -19835,6 +19873,14 @@ def check_local_model_advisor_clis() -> None:
     _require(receipt_payload["receipt_available"] is False and receipt_payload["fallback_allowed"] is False,
              "advisor smoke-receipt must default to no receipt with no fallback")
 
+    alias_map_out = io.StringIO()
+    with contextlib.redirect_stdout(alias_map_out):
+        alias_map_rc = _cmd_advisor(["ref-alias-map", "--source", zip_source, "--json"])
+    _require(alias_map_rc == 0, "advisor ref-alias-map --source --json must return 0")
+    alias_map_payload = parse_local_advisor_ref_alias_map_json(alias_map_out.getvalue())
+    _require(alias_map_payload["source_ref_aliases"][0]["alias"] == "S1" and alias_map_payload["evidence_ref_aliases"][0]["alias"] == "E1",
+             "advisor ref-alias-map must output short source/evidence aliases")
+
     micro_contract_out = io.StringIO()
     with contextlib.redirect_stdout(micro_contract_out):
         micro_contract_rc = _cmd_advisor(["micro-contract", "--source", zip_source, "--stage", "2", "--json"])
@@ -19883,7 +19929,7 @@ def check_local_model_advisor_clis() -> None:
     _require(diagnostic_payload["diagnostic_status"] == "plan_only" and diagnostic_payload["fallback_allowed"] is False,
              "advisor local-json-diagnostic preview must be plan-only with no fallback")
 
-    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "smoke-receipt", "micro-contract", "micro-check", "micro-diagnostic", "json-contract", "json-check", "local-json-diagnostic"):
+    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "smoke-receipt", "ref-alias-map", "micro-contract", "micro-check", "micro-diagnostic", "json-contract", "json-check", "local-json-diagnostic"):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_advisor([command, "--write"])

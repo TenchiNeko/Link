@@ -13255,6 +13255,7 @@ LOCAL_LLAMACPP_JSON_DIAGNOSTIC_VERSION = "link-local-llamacpp-json-diagnostic-v1
 LOCAL_ADVISOR_MICRO_CONTRACT_VERSION = "link-local-advisor-micro-contract-v1"
 LOCAL_ADVISOR_MICRO_CONTRACT_RESULT_VERSION = "link-local-advisor-micro-contract-result-v1"
 LOCAL_ADVISOR_MICRO_DIAGNOSTIC_VERSION = "link-local-advisor-micro-diagnostic-v1"
+LOCAL_ADVISOR_REF_ALIAS_MAP_VERSION = "link-local-advisor-ref-alias-map-v1"
 LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION = "link-local-model-research-advisor-review-v1"
 LOCAL_MODEL_ADVISOR_COMPARISON_CARD_VERSION = "link-local-model-advisor-comparison-card-v1"
 LOCAL_ADVISOR_FORBIDDEN_RECOMMENDATIONS = (
@@ -15675,6 +15676,192 @@ def parse_local_advisor_json_contract_result_json(text: str) -> dict[str, Any]:
 
 
 
+
+def _local_advisor_ref_summary(item: dict[str, Any]) -> str:
+    for key in ("summary", "display_path", "provenance_path", "source_path", "source_name", "evidence_type", "source_ref_id", "evidence_ref_id"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            text = value.strip()
+            return text if len(text) <= 96 else text[:93] + "..."
+    return "selected source reference"
+
+
+def collect_local_advisor_ref_alias_map(
+    research_advisor_prompt_package: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    max_source_refs: int = 2,
+    max_evidence_refs: int = 2,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    package = research_advisor_prompt_package or collect_research_advisor_prompt_package(source_path=source_path)
+    validate_research_advisor_prompt_package(package)
+    source_entries = []
+    for idx, item in enumerate(package["source_refs"][:max_source_refs], start=1):
+        source_entries.append({
+            "alias": f"S{idx}",
+            "ref_type": "source_ref",
+            "full_ref": item["source_ref_id"],
+            "ref_summary": _local_advisor_ref_summary(item),
+            "used_in_prompt": True,
+        })
+    evidence_entries = []
+    for idx, item in enumerate(package["evidence_refs"][:max_evidence_refs], start=1):
+        evidence_entries.append({
+            "alias": f"E{idx}",
+            "ref_type": "evidence_ref",
+            "full_ref": item["evidence_ref_id"],
+            "ref_summary": _local_advisor_ref_summary(item),
+            "used_in_prompt": True,
+        })
+    payload = {
+        "local_advisor_ref_alias_map_version": LOCAL_ADVISOR_REF_ALIAS_MAP_VERSION,
+        "local_advisor_ref_alias_map_id": "local-advisor-ref-alias-map-" + _local_advisor_safe_hash({
+            "source_path": package["source_path"],
+            "source_refs": [item["full_ref"] for item in source_entries],
+            "evidence_refs": [item["full_ref"] for item in evidence_entries],
+            "version": LOCAL_ADVISOR_REF_ALIAS_MAP_VERSION,
+        }),
+        "source_path": package["source_path"],
+        "source_name": package["source_name"],
+        "research_target_intake_id": package["research_target_intake_id"],
+        "selected_upgrade_candidate_id": package["deterministic_upgrade_candidates"][0]["upgrade_candidate_id"],
+        "source_ref_aliases": source_entries,
+        "evidence_ref_aliases": evidence_entries,
+        "alias_policy": "Use short S#/E# aliases in local model prompts; Link deterministically expands aliases back to full refs.",
+        "alias_count": len(source_entries) + len(evidence_entries),
+        "fallback_allowed": False,
+        "advisory_only": True,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_advisor_ref_alias_map(payload)
+    return payload
+
+
+def validate_local_advisor_ref_alias_map(payload: dict[str, Any]) -> None:
+    required = (
+        "local_advisor_ref_alias_map_version", "local_advisor_ref_alias_map_id", "source_path",
+        "source_name", "research_target_intake_id", "selected_upgrade_candidate_id", "source_ref_aliases",
+        "evidence_ref_aliases", "alias_policy", "alias_count", "fallback_allowed", "advisory_only",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local advisor ref alias map missing field: {key}")
+    if payload["local_advisor_ref_alias_map_version"] != LOCAL_ADVISOR_REF_ALIAS_MAP_VERSION:
+        raise ValueError("invalid local advisor ref alias map version")
+    aliases: list[str] = []
+    for entries, prefix, ref_type in ((payload["source_ref_aliases"], "S", "source_ref"), (payload["evidence_ref_aliases"], "E", "evidence_ref")):
+        if not isinstance(entries, list) or not entries:
+            raise ValueError("local advisor alias map requires source/evidence aliases")
+        for item in entries:
+            for key in ("alias", "ref_type", "full_ref", "ref_summary", "used_in_prompt"):
+                if key not in item:
+                    raise ValueError(f"local advisor alias entry missing field: {key}")
+            if not str(item["alias"]).startswith(prefix) or len(str(item["alias"])) > 4:
+                raise ValueError("local advisor alias must be short and correctly prefixed")
+            if item["ref_type"] != ref_type or not item["full_ref"]:
+                raise ValueError("local advisor alias entry has invalid ref type/full ref")
+            aliases.append(item["alias"])
+    if len(aliases) != len(set(aliases)):
+        raise ValueError("local advisor aliases must be unique")
+    if payload["alias_count"] != len(aliases):
+        raise ValueError("local advisor alias count mismatch")
+    if payload["fallback_allowed"] is not False or payload["advisory_only"] is not True:
+        raise ValueError("local advisor alias map must be advisory-only and no-fallback")
+    text = _stable_ruflo_json(payload).lower()
+    if "sk-" in text or "bearer " in text:
+        raise ValueError("local advisor alias map must not expose secrets")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local advisor alias map must remain read-only")
+
+
+def stable_local_advisor_ref_alias_map_json(payload: dict[str, Any]) -> str:
+    validate_local_advisor_ref_alias_map(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_advisor_ref_alias_map_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_advisor_ref_alias_map(payload)
+    return payload
+
+
+def expand_local_advisor_ref_aliases(alias_map: dict[str, Any], source_refs: list[Any], evidence_refs: list[Any]) -> dict[str, Any]:
+    validate_local_advisor_ref_alias_map(alias_map)
+    source_alias_to_full = {item["alias"]: item["full_ref"] for item in alias_map["source_ref_aliases"]}
+    evidence_alias_to_full = {item["alias"]: item["full_ref"] for item in alias_map["evidence_ref_aliases"]}
+    source_full = {item["full_ref"] for item in alias_map["source_ref_aliases"]}
+    evidence_full = {item["full_ref"] for item in alias_map["evidence_ref_aliases"]}
+    expanded_source: list[str] = []
+    expanded_evidence: list[str] = []
+    unknown: list[str] = []
+    reasons: list[str] = []
+    source_aliases_returned: list[str] = []
+    evidence_aliases_returned: list[str] = []
+    if not isinstance(source_refs, list) or not isinstance(evidence_refs, list):
+        return {
+            "expanded_source_refs": [],
+            "expanded_evidence_refs": [],
+            "source_ref_aliases_returned": [],
+            "evidence_ref_aliases_returned": [],
+            "unknown_aliases": [],
+            "invalid_ref_reasons": ["source_refs and evidence_refs must be arrays"],
+            "refs_used_aliases": False,
+            "refs_valid": False,
+        }
+    for ref in source_refs:
+        value = str(ref)
+        if value in source_alias_to_full:
+            source_aliases_returned.append(value)
+            expanded_source.append(source_alias_to_full[value])
+        elif value in evidence_alias_to_full:
+            unknown.append(value)
+            reasons.append(f"wrong-type alias in source_refs: {value}")
+        elif value in source_full:
+            expanded_source.append(value)
+        else:
+            unknown.append(value)
+            reasons.append(f"unknown source ref alias: {value}")
+    for ref in evidence_refs:
+        value = str(ref)
+        if value in evidence_alias_to_full:
+            evidence_aliases_returned.append(value)
+            expanded_evidence.append(evidence_alias_to_full[value])
+        elif value in source_alias_to_full:
+            unknown.append(value)
+            reasons.append(f"wrong-type alias in evidence_refs: {value}")
+        elif value in evidence_full:
+            expanded_evidence.append(value)
+        else:
+            unknown.append(value)
+            reasons.append(f"unknown evidence ref alias: {value}")
+    refs_used_aliases = bool(source_aliases_returned or evidence_aliases_returned)
+    refs_valid = not reasons
+    return {
+        "expanded_source_refs": expanded_source,
+        "expanded_evidence_refs": expanded_evidence,
+        "source_ref_aliases_returned": source_aliases_returned,
+        "evidence_ref_aliases_returned": evidence_aliases_returned,
+        "unknown_aliases": unknown,
+        "invalid_ref_reasons": reasons,
+        "refs_used_aliases": refs_used_aliases,
+        "refs_valid": refs_valid,
+    }
+
+
+def validate_local_advisor_alias_response_refs(alias_map: dict[str, Any], source_refs: list[Any], evidence_refs: list[Any]) -> dict[str, Any]:
+    result = expand_local_advisor_ref_aliases(alias_map, source_refs, evidence_refs)
+    if not result["refs_valid"]:
+        raise ValueError("; ".join(result["invalid_ref_reasons"]) or "invalid local advisor ref aliases")
+    return result
+
 LOCAL_ADVISOR_MICRO_STAGE_DEFINITIONS: dict[int, dict[str, Any]] = {
     0: {
         "stage_name": "minimal_ok",
@@ -15741,6 +15928,14 @@ def collect_local_advisor_micro_contract(
     config = collect_local_model_advisor_config()
     stage_def = LOCAL_ADVISOR_MICRO_STAGE_DEFINITIONS[stage]
     source_refs, evidence_refs = _local_json_contract_refs(package, source_limit=2, evidence_limit=2)
+    alias_map = collect_local_advisor_ref_alias_map(package)
+    uses_aliases = stage >= 2
+    source_aliases = [item["alias"] for item in alias_map["source_ref_aliases"]]
+    evidence_aliases = [item["alias"] for item in alias_map["evidence_ref_aliases"]]
+    schema = dict(stage_def["schema"])
+    if uses_aliases:
+        schema["source_refs"] = [source_aliases[0]]
+        schema["evidence_refs"] = [evidence_aliases[0]]
     payload = {
         "local_advisor_micro_contract_version": LOCAL_ADVISOR_MICRO_CONTRACT_VERSION,
         "local_advisor_micro_contract_id": "local-advisor-micro-contract-" + _local_advisor_safe_hash({
@@ -15765,7 +15960,11 @@ def collect_local_advisor_micro_contract(
         "max_prompt_chars": stage_def["max_prompt_chars"],
         "timeout_seconds": stage_def["timeout_seconds"],
         "max_tokens": stage_def["max_tokens"],
-        "required_response_schema": dict(stage_def["schema"]),
+        "required_response_schema": schema,
+        "ref_alias_map_id": alias_map["local_advisor_ref_alias_map_id"],
+        "uses_ref_aliases": uses_aliases,
+        "allowed_source_aliases": source_aliases if uses_aliases else [],
+        "allowed_evidence_aliases": evidence_aliases if uses_aliases else [],
         "allowed_source_refs": source_refs,
         "allowed_evidence_refs": evidence_refs,
         "forbidden_actions": [
@@ -15789,7 +15988,8 @@ def validate_local_advisor_micro_contract(payload: dict[str, Any]) -> None:
         "source_name", "research_target_intake_id", "selected_upgrade_candidate_id", "stage_number",
         "stage_name", "provider_name", "endpoint_type", "model_name", "strict_json_required",
         "advisory_only", "fallback_allowed", "max_prompt_chars", "timeout_seconds", "max_tokens",
-        "required_response_schema", "allowed_source_refs", "allowed_evidence_refs", "forbidden_actions",
+        "required_response_schema", "ref_alias_map_id", "uses_ref_aliases", "allowed_source_aliases",
+        "allowed_evidence_aliases", "allowed_source_refs", "allowed_evidence_refs", "forbidden_actions",
         "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
     )
     for key in required:
@@ -15819,6 +16019,13 @@ def validate_local_advisor_micro_contract(payload: dict[str, Any]) -> None:
         raise ValueError("micro contract stage 1+ must require source path and source bound")
     if stage >= 2 and ("source_refs" not in schema or "evidence_refs" not in schema):
         raise ValueError("micro contract stage 2+ must require refs arrays")
+    if stage >= 2:
+        if payload["uses_ref_aliases"] is not True or not payload["ref_alias_map_id"]:
+            raise ValueError("micro contract stage 2+ must use ref aliases")
+        if not payload["allowed_source_aliases"] or not payload["allowed_evidence_aliases"]:
+            raise ValueError("micro contract stage 2+ must include allowed aliases")
+    elif payload["uses_ref_aliases"] is not False or payload["allowed_source_aliases"] or payload["allowed_evidence_aliases"]:
+        raise ValueError("micro contract stage 0/1 must not use ref aliases")
     if stage >= 3 and ("critique" not in schema or "missing_evidence" not in schema or "risk_notes" not in schema):
         raise ValueError("micro contract stage 3 must require critique arrays")
     if not payload["allowed_source_refs"] or not payload["allowed_evidence_refs"]:
@@ -15848,13 +16055,13 @@ def render_local_advisor_micro_prompt(contract: dict[str, Any]) -> str:
     elif stage == 1:
         prompt = f'Return JSON only. Advisory only. No fallback. Use this source_path exactly: {source_path}. Schema: {{"ok":true,"source_bound":true,"source_path":"{source_path}"}}'
     elif stage == 2:
-        source_ref = contract["allowed_source_refs"][0]
-        evidence_ref = contract["allowed_evidence_refs"][0]
-        prompt = f'Return JSON only. Advisory only. No fallback. Use source_path exactly: {source_path}. Use only these refs: source_refs=["{source_ref}"], evidence_refs=["{evidence_ref}"]. Schema: {{"ok":true,"source_bound":true,"source_path":"{source_path}","source_refs":["{source_ref}"],"evidence_refs":["{evidence_ref}"]}}'
+        source_alias = contract["allowed_source_aliases"][0]
+        evidence_alias = contract["allowed_evidence_aliases"][0]
+        prompt = f'Return JSON only. Advisory only. No fallback. Use source_path exactly: {source_path}. Aliases: {source_alias}=source ref, {evidence_alias}=evidence ref. Return only these aliases. Schema: {{"ok":true,"source_bound":true,"source_path":"{source_path}","source_refs":["{source_alias}"],"evidence_refs":["{evidence_alias}"]}}'
     else:
-        source_ref = contract["allowed_source_refs"][0]
-        evidence_ref = contract["allowed_evidence_refs"][0]
-        prompt = f'Return JSON only. Advisory only. No fallback. One short critique sentence. Use source_path exactly: {source_path}. Use only refs source_refs=["{source_ref}"] evidence_refs=["{evidence_ref}"]. Schema: {{"ok":true,"source_bound":true,"source_path":"{source_path}","critique":"short source-bound critique","missing_evidence":[],"risk_notes":[],"source_refs":["{source_ref}"],"evidence_refs":["{evidence_ref}"],"insufficient_evidence":false}}'
+        source_alias = contract["allowed_source_aliases"][0]
+        evidence_alias = contract["allowed_evidence_aliases"][0]
+        prompt = f'Return JSON only. Advisory only. No fallback. One short critique sentence. Use source_path exactly: {source_path}. Aliases: {source_alias}=source ref, {evidence_alias}=evidence ref. Return only these aliases. Schema: {{"ok":true,"source_bound":true,"source_path":"{source_path}","critique":"short source-bound critique","missing_evidence":[],"risk_notes":[],"source_refs":["{source_alias}"],"evidence_refs":["{evidence_alias}"],"insufficient_evidence":false}}'
     validate_local_advisor_micro_prompt(prompt, contract)
     return prompt
 
@@ -15879,44 +16086,53 @@ def validate_local_advisor_micro_prompt(prompt: str, contract: dict[str, Any]) -
         raise ValueError("local advisor micro prompt must not include giant nested payloads")
 
 
-def _validate_micro_contract_model_payload(model_json: dict[str, Any], contract: dict[str, Any]) -> tuple[bool, str, dict[str, bool]]:
+def _validate_micro_contract_model_payload(model_json: dict[str, Any], contract: dict[str, Any]) -> tuple[bool, str, dict[str, bool], dict[str, Any]]:
     validate_local_advisor_micro_contract(contract)
     stage = contract["stage_number"]
     flags = {"schema_valid": False, "source_bound_valid": stage == 0, "refs_valid": stage < 2, "critique_valid": stage < 3}
+    alias_result = {
+        "expanded_source_refs": [],
+        "expanded_evidence_refs": [],
+        "source_ref_aliases_returned": [],
+        "evidence_ref_aliases_returned": [],
+        "unknown_aliases": [],
+        "invalid_ref_reasons": [],
+        "refs_used_aliases": False,
+        "refs_valid": stage < 2,
+    }
     for key in contract["required_response_schema"]:
         if key not in model_json:
-            return False, f"schema missing key: {key}", flags
+            return False, f"schema missing key: {key}", flags, alias_result
     if model_json.get("ok") is not True:
-        return False, "ok must be true", flags
+        return False, "ok must be true", flags, alias_result
     if _research_advisor_forbidden_text(model_json):
-        return False, "forbidden action recommendation detected", flags
+        return False, "forbidden action recommendation detected", flags, alias_result
     flags["schema_valid"] = True
     if stage >= 1:
         if model_json.get("source_path") != contract["source_path"]:
-            return False, "source_path mismatch", flags
+            return False, "source_path mismatch", flags, alias_result
         if model_json.get("source_bound") is not True:
-            return False, "source_bound must be true", flags
+            return False, "source_bound must be true", flags, alias_result
         flags["source_bound_valid"] = True
     if stage >= 2:
         source_refs = model_json.get("source_refs")
         evidence_refs = model_json.get("evidence_refs")
         if not isinstance(source_refs, list) or not isinstance(evidence_refs, list):
-            return False, "source_refs and evidence_refs must be arrays", flags
-        if any(ref not in contract["allowed_source_refs"] for ref in source_refs):
-            return False, "unknown source_refs cited", flags
-        if any(ref not in contract["allowed_evidence_refs"] for ref in evidence_refs):
-            return False, "unknown evidence_refs cited", flags
+            return False, "source_refs and evidence_refs must be arrays", flags, alias_result
+        alias_map = collect_local_advisor_ref_alias_map(source_path=contract["source_path"])
+        alias_result = expand_local_advisor_ref_aliases(alias_map, source_refs, evidence_refs)
+        if not alias_result["refs_valid"]:
+            return False, "; ".join(alias_result["invalid_ref_reasons"]) or "alias expansion failed", flags, alias_result
         flags["refs_valid"] = True
     if stage >= 3:
         if not isinstance(model_json.get("critique"), str) or not model_json.get("critique", "").strip():
-            return False, "critique must be non-empty string", flags
+            return False, "critique must be non-empty string", flags, alias_result
         if not isinstance(model_json.get("missing_evidence"), list) or not isinstance(model_json.get("risk_notes"), list):
-            return False, "missing_evidence and risk_notes must be arrays", flags
+            return False, "missing_evidence and risk_notes must be arrays", flags, alias_result
         if not isinstance(model_json.get("insufficient_evidence"), bool):
-            return False, "insufficient_evidence must be boolean", flags
+            return False, "insufficient_evidence must be boolean", flags, alias_result
         flags["critique_valid"] = True
-    return True, "", flags
-
+    return True, "", flags, alias_result
 
 def _local_advisor_micro_failure_mode(stage: int, reason: str, assistant_present: bool, valid_json: bool) -> str:
     lower = reason.lower()
@@ -15928,8 +16144,14 @@ def _local_advisor_micro_failure_mode(stage: int, reason: str, assistant_present
         return f"invalid_json_stage_{stage}"
     if stage == 1 and ("source_path" in lower or "source_bound" in lower):
         return "source_binding_failed_stage_1"
+    if stage == 2 and "wrong-type alias" in lower:
+        return "ref_alias_type_mismatch_stage_2"
+    if stage == 2 and ("unknown" in lower or "alias" in lower):
+        return "unknown_ref_alias_stage_2"
     if stage == 2 and "ref" in lower:
         return "refs_schema_failed_stage_2"
+    if stage == 3 and ("alias" in lower or "ref" in lower):
+        return "critique_alias_expansion_failed_stage_3"
     if stage == 3 and ("critique" in lower or "missing_evidence" in lower or "risk_notes" in lower):
         return "critique_schema_failed_stage_3"
     if "request" in lower or "connection" in lower:
@@ -15961,6 +16183,7 @@ def collect_local_advisor_micro_contract_result(
     assistant_chars = 0
     valid_json = False
     flags = {"schema_valid": False, "source_bound_valid": contract["stage_number"] == 0, "refs_valid": contract["stage_number"] < 2, "critique_valid": contract["stage_number"] < 3}
+    alias_result = {"expanded_source_refs": [], "expanded_evidence_refs": [], "source_ref_aliases_returned": [], "evidence_ref_aliases_returned": [], "unknown_aliases": [], "invalid_ref_reasons": [], "refs_used_aliases": False, "refs_valid": contract["stage_number"] < 2}
     model_used = False
     fail_reason = ""
     response_shape: dict[str, Any] = {}
@@ -15972,7 +16195,7 @@ def collect_local_advisor_micro_contract_result(
         response_hash = _research_target_hash_text(raw_response or assistant_content)
         raw_preview = _sanitize_local_advisor_preview(raw_response or assistant_content)
         valid_json = True
-        micro_ok, fail_reason, flags = _validate_micro_contract_model_payload(dict(model_response_json), contract)
+        micro_ok, fail_reason, flags, alias_result = _validate_micro_contract_model_payload(dict(model_response_json), contract)
     elif use_local_model:
         model_used = True
         try:
@@ -15999,7 +16222,7 @@ def collect_local_advisor_micro_contract_result(
                     fail_reason = "assistant content was not a JSON object"
                     micro_ok = False
                 else:
-                    micro_ok, fail_reason, flags = _validate_micro_contract_model_payload(parsed, contract)
+                    micro_ok, fail_reason, flags, alias_result = _validate_micro_contract_model_payload(parsed, contract)
         except Exception as exc:
             fail_reason = str(exc)[:220]
             response_hash = _research_target_hash_text(fail_reason)
@@ -16040,6 +16263,14 @@ def collect_local_advisor_micro_contract_result(
         "source_bound_valid": bool(flags["source_bound_valid"]),
         "refs_valid": bool(flags["refs_valid"]),
         "critique_valid": bool(flags["critique_valid"]),
+        "ref_alias_map_id": contract.get("ref_alias_map_id", ""),
+        "refs_used_aliases": bool(alias_result["refs_used_aliases"]),
+        "source_ref_aliases_returned": list(alias_result["source_ref_aliases_returned"]),
+        "evidence_ref_aliases_returned": list(alias_result["evidence_ref_aliases_returned"]),
+        "expanded_source_refs": list(alias_result["expanded_source_refs"]),
+        "expanded_evidence_refs": list(alias_result["expanded_evidence_refs"]),
+        "unknown_aliases": list(alias_result["unknown_aliases"]),
+        "alias_expansion_valid": bool(alias_result["refs_valid"]),
         "micro_ok": bool(micro_ok),
         "fail_closed": not bool(micro_ok),
         "fail_closed_reason": "" if micro_ok else (fail_reason or "local advisor micro-check failed closed"),
@@ -16067,7 +16298,9 @@ def validate_local_advisor_micro_contract_result(payload: dict[str, Any], contra
         "model_used", "endpoint_type", "prompt_hash", "response_hash", "prompt_chars", "timeout_seconds",
         "max_tokens", "latency_ms", "http_status", "raw_response_preview_sanitized",
         "assistant_content_present", "assistant_content_chars", "valid_json", "schema_valid",
-        "source_bound_valid", "refs_valid", "critique_valid", "micro_ok", "fail_closed",
+        "source_bound_valid", "refs_valid", "critique_valid", "ref_alias_map_id", "refs_used_aliases",
+        "source_ref_aliases_returned", "evidence_ref_aliases_returned", "expanded_source_refs",
+        "expanded_evidence_refs", "unknown_aliases", "alias_expansion_valid", "micro_ok", "fail_closed",
         "fail_closed_reason", "likely_failure_mode", "recommended_next_action", "human_review_required",
         "fallback_allowed", "advisory_only", "safety_metadata", "dry_run", "write_allowed",
         "automation_allowed", "writes",
@@ -16089,8 +16322,8 @@ def validate_local_advisor_micro_contract_result(payload: dict[str, Any], contra
             raise ValueError("successful micro-check must use model, valid JSON, and valid schema")
         if stage >= 1 and payload["source_bound_valid"] is not True:
             raise ValueError("successful stage 1+ micro-check must be source-bound")
-        if stage >= 2 and payload["refs_valid"] is not True:
-            raise ValueError("successful stage 2+ micro-check must have valid refs")
+        if stage >= 2 and (payload["refs_valid"] is not True or payload["alias_expansion_valid"] is not True):
+            raise ValueError("successful stage 2+ micro-check must have valid expanded refs")
         if stage >= 3 and payload["critique_valid"] is not True:
             raise ValueError("successful stage 3 micro-check must have valid critique")
     else:
@@ -16163,6 +16396,8 @@ def collect_local_advisor_micro_diagnostic(
     else:
         first_fail_value = first_fail
         status = "failed_closed"
+    stage2_result = next((item for item in results if int(item.get("stage_number", -1)) == 2), {})
+    stage3_result = next((item for item in results if int(item.get("stage_number", -1)) == 3), {})
     payload = {
         "local_advisor_micro_diagnostic_version": LOCAL_ADVISOR_MICRO_DIAGNOSTIC_VERSION,
         "local_advisor_micro_diagnostic_id": "local-advisor-micro-diagnostic-" + _local_advisor_safe_hash({
@@ -16178,6 +16413,9 @@ def collect_local_advisor_micro_diagnostic(
         "highest_passing_stage": highest,
         "first_failing_stage": first_fail_value,
         "likely_failure_mode": likely,
+        "uses_ref_aliases": True,
+        "stage2_alias_expansion_valid": bool(stage2_result.get("alias_expansion_valid", False)),
+        "stage3_alias_expansion_valid": bool(stage3_result.get("alias_expansion_valid", False)),
         "recommended_next_action": "Micro gate passed through refs stage; JSON contract may be attempted." if highest >= LOCAL_ADVISOR_REQUIRED_MICRO_STAGE else "Do not run richer advisor review; fix the first failing micro stage first.",
         "fallback_allowed": False,
         "safety_metadata": _read_only_safety_metadata(),
@@ -16195,7 +16433,8 @@ def validate_local_advisor_micro_diagnostic(payload: dict[str, Any]) -> None:
     required = (
         "local_advisor_micro_diagnostic_version", "local_advisor_micro_diagnostic_id", "source_path",
         "provider_name", "endpoint_type", "diagnostic_status", "stage_results", "highest_passing_stage",
-        "first_failing_stage", "likely_failure_mode", "recommended_next_action", "fallback_allowed",
+        "first_failing_stage", "likely_failure_mode", "uses_ref_aliases", "stage2_alias_expansion_valid",
+        "stage3_alias_expansion_valid", "recommended_next_action", "fallback_allowed",
         "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
     )
     for key in required:
@@ -16263,6 +16502,7 @@ def collect_two_stage_local_advisor_gate(
     else:
         micro = collect_local_advisor_micro_diagnostic(source_path=source_path, use_local_model=use_local_model)
     validate_local_advisor_micro_diagnostic(micro)
+    alias_map = collect_local_advisor_ref_alias_map(source_path=source_path)
     micro_gate_passed = int(micro["highest_passing_stage"]) >= required_stage
     json_contract_attempted = bool(stage1_result is not None or micro_gate_passed)
     contract = collect_local_advisor_json_contract(package)
@@ -16296,7 +16536,9 @@ def collect_two_stage_local_advisor_gate(
         }),
         "source_path": source_path,
         "micro_diagnostic_id": micro["local_advisor_micro_diagnostic_id"],
+        "ref_alias_map_id": alias_map["local_advisor_ref_alias_map_id"],
         "highest_passing_micro_stage": micro["highest_passing_stage"],
+        "stage2_alias_expansion_valid": micro.get("stage2_alias_expansion_valid", False),
         "first_failing_micro_stage": micro["first_failing_stage"],
         "required_micro_stage": required_stage,
         "micro_gate_passed": micro_gate_passed,
@@ -16330,7 +16572,7 @@ def collect_two_stage_local_advisor_gate(
 def validate_two_stage_local_advisor_gate(payload: dict[str, Any]) -> None:
     required = (
         "two_stage_local_advisor_gate_version", "two_stage_local_advisor_gate_id", "source_path",
-        "micro_diagnostic_id", "highest_passing_micro_stage", "first_failing_micro_stage",
+        "micro_diagnostic_id", "ref_alias_map_id", "highest_passing_micro_stage", "stage2_alias_expansion_valid", "first_failing_micro_stage",
         "required_micro_stage", "micro_gate_passed", "json_contract_attempted",
         "json_contract_passed", "rich_review_attempted", "rich_review_passed",
         "stage1_contract_id", "stage1_result_id", "stage1_passed", "stage2_attempted",
@@ -17327,6 +17569,7 @@ def collect_source_aware_advisor_provider_card(
     recommended_mode = _source_aware_advisor_recommended_mode(local["provider_status"], local_available, openrouter_enabled)
     source_arg = _source_aware_advisor_safe_command_source(report["source_path"])
     deterministic_command = f"python3 link.py research advisor-review --source {source_arg} --json"
+    ref_alias_map_command = f"python3 link.py advisor ref-alias-map --source {source_arg} --json"
     micro_diagnostic_command = f"python3 link.py advisor micro-diagnostic --source {source_arg} --local-model --json"
     micro_stage_commands = [
         f"python3 link.py advisor micro-check --source {source_arg} --stage {stage} --local-model --json"
@@ -17384,6 +17627,9 @@ def collect_source_aware_advisor_provider_card(
         "recommended_advisor_command": recommended_command,
         "deterministic_preview_command": deterministic_command,
         "local_advisor_command": local_command,
+        "ref_alias_map_command": ref_alias_map_command,
+        "alias_aware_micro_diagnostic_command": micro_diagnostic_command,
+        "recommended_alias_tuning_note": "Stages 2/3 use S#/E# aliases; Link expands aliases back to full refs deterministically.",
         "recommended_micro_diagnostic_command": micro_diagnostic_command,
         "recommended_micro_stage_commands": micro_stage_commands,
         "recommended_json_check_command": json_check_command,
@@ -17487,6 +17733,9 @@ def collect_source_aware_advisor_command_preview(
         "advisor_provider_card_id": card["source_aware_advisor_provider_card_id"],
         "deterministic_preview_command": card["deterministic_preview_command"],
         "local_advisor_command": card["local_advisor_command"],
+        "ref_alias_map_command": card["ref_alias_map_command"],
+        "alias_aware_micro_diagnostic_command": card["alias_aware_micro_diagnostic_command"],
+        "recommended_alias_tuning_note": card["recommended_alias_tuning_note"],
         "recommended_micro_diagnostic_command": card["recommended_micro_diagnostic_command"],
         "recommended_micro_stage_commands": card["recommended_micro_stage_commands"],
         "recommended_json_check_command": card["recommended_json_check_command"],
@@ -17497,6 +17746,7 @@ def collect_source_aware_advisor_command_preview(
         "recommended_rich_review_command": card["recommended_rich_review_command"],
         "openrouter_advisor_command": card["openrouter_advisor_command"],
         "recommended_sequence": [
+            card["ref_alias_map_command"],
             card["recommended_micro_diagnostic_command"],
             card["recommended_json_check_command"],
             card["recommended_two_stage_local_command"],
@@ -17529,6 +17779,7 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         "source_aware_advisor_command_preview_version", "source_aware_advisor_command_preview_id",
         "source_bound", "source_path", "research_target_intake_id", "selected_upgrade_candidate_id",
         "advisor_provider_card_id", "deterministic_preview_command", "local_advisor_command",
+        "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "recommended_alias_tuning_note",
         "recommended_micro_diagnostic_command", "recommended_micro_stage_commands",
         "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command",
         "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command",
@@ -17544,7 +17795,7 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("invalid source-aware advisor command preview version")
     if not payload["source_aware_advisor_command_preview_id"].startswith("source-aware-advisor-command-preview-"):
         raise ValueError("invalid source-aware advisor command preview id")
-    for field in ("deterministic_preview_command", "local_advisor_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
+    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
         if payload["source_path"] not in payload[field]:
             raise ValueError(f"advisor command preview {field} must reference selected source")
     if not isinstance(payload["recommended_micro_stage_commands"], list) or len(payload["recommended_micro_stage_commands"]) != 4:
@@ -19087,6 +19338,40 @@ def _advisor_cli_stage(args: list[str], default: int = 0) -> tuple[int, int | No
         print(f"error: {exc}", file=sys.stderr)
         return default, 2
 
+
+
+def advisor_ref_alias_map_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor ref-alias-map: deterministic short aliases for source/evidence refs")
+        print("  python3 link.py advisor ref-alias-map --source <path> --json")
+        print("Read-only. No model call. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor ref-alias-map is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "ref-alias-map")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_local_advisor_ref_alias_map(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_advisor_ref_alias_map_json(payload), end="")
+    else:
+        print("Advisor ref alias map")
+        print(f"source: {payload['source_path']}")
+        print("source aliases:")
+        for item in payload["source_ref_aliases"]:
+            print(f"  - {item['alias']}: {item['ref_summary']}")
+        print("evidence aliases:")
+        for item in payload["evidence_ref_aliases"]:
+            print(f"  - {item['alias']}: {item['ref_summary']}")
+        print("full refs: kept internally by Link")
+        print(f"fallback_allowed: {payload['fallback_allowed']}")
+    return 0
 
 def advisor_micro_contract_main(argv: list[str] | None = None) -> int:
     args = _research_target_normalize_args(argv)
