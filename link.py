@@ -283,6 +283,18 @@ def _cmd_advisor(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import advisor_target_command_main as _advisor_target_command_main
 
         return _advisor_target_command_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "micro-contract":
+        from link_modes.growth.link_growth_console import advisor_micro_contract_main as _advisor_micro_contract_main
+
+        return _advisor_micro_contract_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "micro-check":
+        from link_modes.growth.link_growth_console import advisor_micro_check_main as _advisor_micro_check_main
+
+        return _advisor_micro_check_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "micro-diagnostic":
+        from link_modes.growth.link_growth_console import advisor_micro_diagnostic_main as _advisor_micro_diagnostic_main
+
+        return _advisor_micro_diagnostic_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "json-contract":
         from link_modes.growth.link_growth_console import advisor_json_contract_main as _advisor_json_contract_main
 
@@ -329,6 +341,9 @@ def _cmd_advisor(argv: list[str]) -> int:
         print("  status            Show compact advisor provider status")
         print("  guidance          Show advisor provider operator guidance")
         print("  target-command    Preview safe advisor commands for a selected source")
+        print("  micro-contract    Preview staged tiny local JSON contract")
+        print("  micro-check       Run one staged local JSON micro-check")
+        print("  micro-diagnostic  Run staged local JSON diagnostics")
         print("  json-contract     Preview minimal source-bound local JSON contract")
         print("  json-check        Run minimal local JSON contract check")
         print("  local-json-diagnostic Diagnose local llama.cpp JSON behavior")

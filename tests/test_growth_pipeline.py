@@ -18568,6 +18568,8 @@ def check_source_aware_control_plane_dashboard_helpers() -> None:
     command_preview = collect_source_aware_advisor_command_preview(source_path=zip_source, dashboard_context=context, advisor_card=advisor_card)
     _require(zip_source in command_preview["deterministic_preview_command"] and zip_source in command_preview["local_advisor_command"],
              "advisor command preview must reference selected source")
+    _require("micro-diagnostic" in command_preview["recommended_micro_diagnostic_command"] and len(command_preview["recommended_micro_stage_commands"]) == 4,
+             "advisor command preview must include micro diagnostic and four micro stage commands")
     _require("--provider openrouter" in command_preview["openrouter_advisor_command"] and command_preview["fallback_allowed"] is False,
              "advisor command preview must make OpenRouter explicit and block fallback")
     validate_source_aware_advisor_command_preview(command_preview)
@@ -18731,6 +18733,8 @@ def check_source_aware_control_plane_dashboard_clis() -> None:
     command_preview = parse_source_aware_advisor_command_preview_json(command_out.getvalue())
     _require(zip_source in command_preview["recommended_command"] and command_preview["fallback_allowed"] is False,
              "advisor target-command must preview selected-source command with fallback disabled")
+    _require("micro-diagnostic" in command_preview["recommended_micro_diagnostic_command"],
+             "advisor target-command must recommend micro-diagnostic before richer local advisor flow")
     _require("json-check" in command_preview["recommended_json_check_command"] and "advisor-two-stage" in command_preview["recommended_two_stage_local_command"],
              "advisor target-command must recommend JSON check and two-stage local advisor flow")
     _require(not any("openrouter" in item.lower() and "fallback" in item.lower() for item in command_preview["recommended_sequence"]),
@@ -19050,6 +19054,9 @@ def check_local_model_advisor_foundation_helpers() -> None:
         collect_compact_source_aware_advisor_context,
         collect_local_advisor_json_contract,
         collect_local_advisor_json_contract_result,
+        collect_local_advisor_micro_contract,
+        collect_local_advisor_micro_contract_result,
+        collect_local_advisor_micro_diagnostic,
         collect_local_advisor_prompt_budget,
         collect_local_advisor_smoke_receipt,
         collect_local_llamacpp_json_diagnostic,
@@ -19076,6 +19083,9 @@ def check_local_model_advisor_foundation_helpers() -> None:
         parse_compact_source_aware_advisor_context_json,
         parse_local_advisor_json_contract_json,
         parse_local_advisor_json_contract_result_json,
+        parse_local_advisor_micro_contract_json,
+        parse_local_advisor_micro_contract_result_json,
+        parse_local_advisor_micro_diagnostic_json,
         parse_local_advisor_prompt_budget_json,
         parse_local_advisor_smoke_receipt_json,
         parse_local_llamacpp_json_diagnostic_json,
@@ -19100,6 +19110,9 @@ def check_local_model_advisor_foundation_helpers() -> None:
         stable_compact_source_aware_advisor_context_json,
         stable_local_advisor_json_contract_json,
         stable_local_advisor_json_contract_result_json,
+        stable_local_advisor_micro_contract_json,
+        stable_local_advisor_micro_contract_result_json,
+        stable_local_advisor_micro_diagnostic_json,
         stable_local_advisor_prompt_budget_json,
         stable_local_advisor_smoke_receipt_json,
         stable_local_llamacpp_json_diagnostic_json,
@@ -19125,6 +19138,10 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_compact_source_aware_advisor_context,
         validate_local_advisor_json_contract,
         validate_local_advisor_json_contract_result,
+        validate_local_advisor_micro_contract,
+        validate_local_advisor_micro_contract_result,
+        validate_local_advisor_micro_diagnostic,
+        validate_local_advisor_micro_prompt,
         validate_local_advisor_prompt_budget,
         validate_local_advisor_smoke_receipt,
         validate_local_llamacpp_json_diagnostic,
@@ -19144,6 +19161,7 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_research_advisor_prompt_package,
         render_compact_local_advisor_prompt,
         render_minimal_local_json_contract_prompt,
+        render_local_advisor_micro_prompt,
     )
 
     zip_source, _, _ = _research_target_test_paths()
@@ -19371,6 +19389,84 @@ def check_local_model_advisor_foundation_helpers() -> None:
     _require("prompt_package" not in compact_prompt and "research_target_evidence_bundle" not in compact_prompt,
              "compact local advisor prompt must not dump full nested payloads")
     validate_compact_local_advisor_prompt(compact_prompt, budget)
+
+    micro_contracts = [collect_local_advisor_micro_contract(package, stage_number=stage) for stage in range(4)]
+    for stage, micro_contract in enumerate(micro_contracts):
+        _require(micro_contract["stage_number"] == stage and micro_contract["fallback_allowed"] is False,
+                 "local advisor micro contract must preserve stage and disable fallback")
+        _require(micro_contract["strict_json_required"] is True and micro_contract["advisory_only"] is True,
+                 "local advisor micro contract must be strict JSON and advisory-only")
+        validate_local_advisor_micro_contract(micro_contract)
+        _require(parse_local_advisor_micro_contract_json(stable_local_advisor_micro_contract_json(micro_contract)) == micro_contract,
+                 "local advisor micro contract JSON must round trip")
+    _require(set(micro_contracts[0]["required_response_schema"].keys()) == {"ok"},
+             "micro stage 0 schema must be minimal")
+    _require({"source_path", "source_bound"}.issubset(micro_contracts[1]["required_response_schema"]),
+             "micro stage 1 schema must require source path/binding")
+    _require({"source_refs", "evidence_refs"}.issubset(micro_contracts[2]["required_response_schema"]),
+             "micro stage 2 schema must require refs arrays")
+    _require({"critique", "missing_evidence", "risk_notes"}.issubset(micro_contracts[3]["required_response_schema"]),
+             "micro stage 3 schema must require critique fields")
+    micro_prompts = [render_local_advisor_micro_prompt(contract) for contract in micro_contracts]
+    _require(len(micro_prompts[0]) <= 300 and len(micro_prompts[1]) <= 700 and len(micro_prompts[2]) <= 1200 and len(micro_prompts[3]) <= 2000,
+             "local advisor micro prompts must stay within staged budgets")
+    for prompt, micro_contract in zip(micro_prompts, micro_contracts):
+        _require("JSON" in prompt and "research_target_evidence_bundle" not in prompt,
+                 "local advisor micro prompt must request JSON without giant payloads")
+        validate_local_advisor_micro_prompt(prompt, micro_contract)
+    try:
+        collect_local_advisor_micro_contract(package, stage_number=9)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid local advisor micro stage must be rejected")
+
+    micro_success_fixtures = [
+        {"ok": True},
+        {"ok": True, "source_bound": True, "source_path": zip_source},
+        {"ok": True, "source_bound": True, "source_path": zip_source, "source_refs": [source_ref], "evidence_refs": [evidence_ref]},
+        {"ok": True, "source_bound": True, "source_path": zip_source, "critique": "Source-bound critique.", "missing_evidence": [], "risk_notes": [], "source_refs": [source_ref], "evidence_refs": [evidence_ref], "insufficient_evidence": False},
+    ]
+    micro_results = []
+    for micro_contract, fixture_payload in zip(micro_contracts, micro_success_fixtures):
+        result = collect_local_advisor_micro_contract_result(micro_contract, model_response_json=fixture_payload)
+        _require(result["micro_ok"] is True and result["fail_closed"] is False,
+                 "valid local advisor micro fixture must pass")
+        validate_local_advisor_micro_contract_result(result, micro_contract)
+        _require(parse_local_advisor_micro_contract_result_json(stable_local_advisor_micro_contract_result_json(result)) == result,
+                 "local advisor micro result JSON must round trip")
+        micro_results.append(result)
+    wrong_micro_source = dict(micro_success_fixtures[1])
+    wrong_micro_source["source_path"] = "research/other.zip"
+    wrong_micro_source_result = collect_local_advisor_micro_contract_result(micro_contracts[1], model_response_json=wrong_micro_source)
+    _require(wrong_micro_source_result["micro_ok"] is False and "source_path" in wrong_micro_source_result["fail_closed_reason"],
+             "micro stage 1 wrong source must fail closed")
+    bad_refs = dict(micro_success_fixtures[2])
+    bad_refs["source_refs"] = "not-a-list"
+    bad_refs_result = collect_local_advisor_micro_contract_result(micro_contracts[2], model_response_json=bad_refs)
+    _require(bad_refs_result["micro_ok"] is False and bad_refs_result["likely_failure_mode"] == "refs_schema_failed_stage_2",
+             "micro stage 2 bad refs must classify refs schema failure")
+    forbidden_micro = dict(micro_success_fixtures[3])
+    forbidden_micro["critique"] = "patch files now"
+    forbidden_micro_result = collect_local_advisor_micro_contract_result(micro_contracts[3], model_response_json=forbidden_micro)
+    _require(forbidden_micro_result["micro_ok"] is False and "forbidden" in forbidden_micro_result["fail_closed_reason"],
+             "micro stage 3 forbidden action must fail closed")
+    micro_plan = collect_local_advisor_micro_diagnostic(source_path=zip_source)
+    _require(micro_plan["diagnostic_status"] == "plan_only" and micro_plan["fallback_allowed"] is False,
+             "local advisor micro diagnostic preview must be plan-only and no-fallback")
+    validate_local_advisor_micro_diagnostic(micro_plan)
+    _require(parse_local_advisor_micro_diagnostic_json(stable_local_advisor_micro_diagnostic_json(micro_plan)) == micro_plan,
+             "local advisor micro diagnostic JSON must round trip")
+    micro_all_pass = collect_local_advisor_micro_diagnostic(source_path=zip_source, stage_results=micro_results)
+    _require(micro_all_pass["highest_passing_stage"] == 3 and micro_all_pass["first_failing_stage"] is None,
+             "all-pass local advisor micro diagnostic fixture must pass through stage 3")
+    validate_local_advisor_micro_diagnostic(micro_all_pass)
+    micro_stage1_fail = collect_local_advisor_micro_diagnostic(source_path=zip_source, stage_results=[micro_results[0], wrong_micro_source_result])
+    _require(micro_stage1_fail["first_failing_stage"] == 1 and micro_stage1_fail["likely_failure_mode"] == "source_binding_failed_stage_1",
+             "micro diagnostic must classify source binding failure at stage 1")
+    micro_stage2_fail = collect_local_advisor_micro_diagnostic(source_path=zip_source, stage_results=[micro_results[0], micro_results[1], bad_refs_result])
+    _require(micro_stage2_fail["first_failing_stage"] == 2 and micro_stage2_fail["likely_failure_mode"] == "refs_schema_failed_stage_2",
+             "micro diagnostic must classify refs failure at stage 2")
 
     smoke_receipt = collect_local_advisor_smoke_receipt()
     _require(smoke_receipt["receipt_available"] is False and smoke_receipt["fallback_allowed"] is False,
@@ -19615,6 +19711,9 @@ def check_local_model_advisor_clis() -> None:
         parse_compact_source_aware_advisor_context_json,
         parse_local_advisor_json_contract_json,
         parse_local_advisor_json_contract_result_json,
+        parse_local_advisor_micro_contract_json,
+        parse_local_advisor_micro_contract_result_json,
+        parse_local_advisor_micro_diagnostic_json,
         parse_local_advisor_prompt_budget_json,
         parse_local_advisor_smoke_receipt_json,
         parse_local_llamacpp_json_diagnostic_json,
@@ -19736,6 +19835,30 @@ def check_local_model_advisor_clis() -> None:
     _require(receipt_payload["receipt_available"] is False and receipt_payload["fallback_allowed"] is False,
              "advisor smoke-receipt must default to no receipt with no fallback")
 
+    micro_contract_out = io.StringIO()
+    with contextlib.redirect_stdout(micro_contract_out):
+        micro_contract_rc = _cmd_advisor(["micro-contract", "--source", zip_source, "--stage", "2", "--json"])
+    _require(micro_contract_rc == 0, "advisor micro-contract --source --stage --json must return 0")
+    micro_contract_payload = parse_local_advisor_micro_contract_json(micro_contract_out.getvalue())
+    _require(micro_contract_payload["stage_number"] == 2 and micro_contract_payload["fallback_allowed"] is False,
+             "advisor micro-contract must preserve stage and block fallback")
+
+    micro_check_out = io.StringIO()
+    with contextlib.redirect_stdout(micro_check_out):
+        micro_check_rc = _cmd_advisor(["micro-check", "--source", zip_source, "--stage", "1", "--json"])
+    _require(micro_check_rc == 0, "advisor micro-check preview --json must return 0")
+    micro_check_payload = parse_local_advisor_micro_contract_result_json(micro_check_out.getvalue())
+    _require(micro_check_payload["model_used"] is False and micro_check_payload["fail_closed"] is True,
+             "advisor micro-check without --local-model must be preview fail-closed")
+
+    micro_diagnostic_out = io.StringIO()
+    with contextlib.redirect_stdout(micro_diagnostic_out):
+        micro_diagnostic_rc = _cmd_advisor(["micro-diagnostic", "--source", zip_source, "--json"])
+    _require(micro_diagnostic_rc == 0, "advisor micro-diagnostic preview --json must return 0")
+    micro_diagnostic_payload = parse_local_advisor_micro_diagnostic_json(micro_diagnostic_out.getvalue())
+    _require(micro_diagnostic_payload["diagnostic_status"] == "plan_only" and micro_diagnostic_payload["fallback_allowed"] is False,
+             "advisor micro-diagnostic preview must be plan-only with no fallback")
+
     contract_out = io.StringIO()
     with contextlib.redirect_stdout(contract_out):
         contract_rc = _cmd_advisor(["json-contract", "--source", zip_source, "--json"])
@@ -19760,7 +19883,7 @@ def check_local_model_advisor_clis() -> None:
     _require(diagnostic_payload["diagnostic_status"] == "plan_only" and diagnostic_payload["fallback_allowed"] is False,
              "advisor local-json-diagnostic preview must be plan-only with no fallback")
 
-    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "smoke-receipt", "json-contract", "json-check", "local-json-diagnostic"):
+    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "smoke-receipt", "micro-contract", "micro-check", "micro-diagnostic", "json-contract", "json-check", "local-json-diagnostic"):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_advisor([command, "--write"])

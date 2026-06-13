@@ -13252,6 +13252,9 @@ LOCAL_ADVISOR_JSON_CONTRACT_VERSION = "link-local-advisor-json-contract-v1"
 LOCAL_ADVISOR_JSON_CONTRACT_RESULT_VERSION = "link-local-advisor-json-contract-result-v1"
 TWO_STAGE_LOCAL_ADVISOR_GATE_VERSION = "link-two-stage-local-advisor-gate-v1"
 LOCAL_LLAMACPP_JSON_DIAGNOSTIC_VERSION = "link-local-llamacpp-json-diagnostic-v1"
+LOCAL_ADVISOR_MICRO_CONTRACT_VERSION = "link-local-advisor-micro-contract-v1"
+LOCAL_ADVISOR_MICRO_CONTRACT_RESULT_VERSION = "link-local-advisor-micro-contract-result-v1"
+LOCAL_ADVISOR_MICRO_DIAGNOSTIC_VERSION = "link-local-advisor-micro-diagnostic-v1"
 LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION = "link-local-model-research-advisor-review-v1"
 LOCAL_MODEL_ADVISOR_COMPARISON_CARD_VERSION = "link-local-model-advisor-comparison-card-v1"
 LOCAL_ADVISOR_FORBIDDEN_RECOMMENDATIONS = (
@@ -15671,19 +15674,605 @@ def parse_local_advisor_json_contract_result_json(text: str) -> dict[str, Any]:
     return payload
 
 
+
+LOCAL_ADVISOR_MICRO_STAGE_DEFINITIONS: dict[int, dict[str, Any]] = {
+    0: {
+        "stage_name": "minimal_ok",
+        "max_prompt_chars": 300,
+        "timeout_seconds": 20,
+        "max_tokens": 24,
+        "schema": {"ok": True},
+    },
+    1: {
+        "stage_name": "source_bound",
+        "max_prompt_chars": 700,
+        "timeout_seconds": 25,
+        "max_tokens": 64,
+        "schema": {"ok": True, "source_bound": True, "source_path": "string"},
+    },
+    2: {
+        "stage_name": "refs_bound",
+        "max_prompt_chars": 1200,
+        "timeout_seconds": 35,
+        "max_tokens": 96,
+        "schema": {"ok": True, "source_bound": True, "source_path": "string", "source_refs": [], "evidence_refs": []},
+    },
+    3: {
+        "stage_name": "critique_bound",
+        "max_prompt_chars": 2000,
+        "timeout_seconds": 45,
+        "max_tokens": 160,
+        "schema": {
+            "ok": True,
+            "source_bound": True,
+            "source_path": "string",
+            "critique": "string",
+            "missing_evidence": [],
+            "risk_notes": [],
+            "source_refs": [],
+            "evidence_refs": [],
+            "insufficient_evidence": False,
+        },
+    },
+}
+LOCAL_ADVISOR_REQUIRED_MICRO_STAGE = 2
+
+
+def _local_advisor_micro_stage(stage: int | str) -> int:
+    try:
+        value = int(stage)
+    except Exception as exc:
+        raise ValueError("micro contract stage must be an integer 0-3") from exc
+    if value not in LOCAL_ADVISOR_MICRO_STAGE_DEFINITIONS:
+        raise ValueError("micro contract stage must be one of 0, 1, 2, or 3")
+    return value
+
+
+def collect_local_advisor_micro_contract(
+    research_advisor_prompt_package: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    stage_number: int | str = 0,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    stage = _local_advisor_micro_stage(stage_number)
+    package = research_advisor_prompt_package or collect_research_advisor_prompt_package(source_path=source_path)
+    validate_research_advisor_prompt_package(package)
+    config = collect_local_model_advisor_config()
+    stage_def = LOCAL_ADVISOR_MICRO_STAGE_DEFINITIONS[stage]
+    source_refs, evidence_refs = _local_json_contract_refs(package, source_limit=2, evidence_limit=2)
+    payload = {
+        "local_advisor_micro_contract_version": LOCAL_ADVISOR_MICRO_CONTRACT_VERSION,
+        "local_advisor_micro_contract_id": "local-advisor-micro-contract-" + _local_advisor_safe_hash({
+            "source_path": package["source_path"],
+            "intake": package["research_target_intake_id"],
+            "selected": package["deterministic_upgrade_candidates"][0]["upgrade_candidate_id"],
+            "stage": stage,
+            "version": LOCAL_ADVISOR_MICRO_CONTRACT_VERSION,
+        }),
+        "source_path": package["source_path"],
+        "source_name": package["source_name"],
+        "research_target_intake_id": package["research_target_intake_id"],
+        "selected_upgrade_candidate_id": package["deterministic_upgrade_candidates"][0]["upgrade_candidate_id"],
+        "stage_number": stage,
+        "stage_name": stage_def["stage_name"],
+        "provider_name": "llamacpp",
+        "endpoint_type": config["endpoint_type"],
+        "model_name": config["model_name"],
+        "strict_json_required": True,
+        "advisory_only": True,
+        "fallback_allowed": False,
+        "max_prompt_chars": stage_def["max_prompt_chars"],
+        "timeout_seconds": stage_def["timeout_seconds"],
+        "max_tokens": stage_def["max_tokens"],
+        "required_response_schema": dict(stage_def["schema"]),
+        "allowed_source_refs": source_refs,
+        "allowed_evidence_refs": evidence_refs,
+        "forbidden_actions": [
+            "execute task", "patch files", "approve proposal", "mutate source", "scrape now",
+            "install package", "push commit", "OpenRouter fallback", "external provider fallback",
+        ],
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_advisor_micro_contract(payload)
+    return payload
+
+
+def validate_local_advisor_micro_contract(payload: dict[str, Any]) -> None:
+    required = (
+        "local_advisor_micro_contract_version", "local_advisor_micro_contract_id", "source_path",
+        "source_name", "research_target_intake_id", "selected_upgrade_candidate_id", "stage_number",
+        "stage_name", "provider_name", "endpoint_type", "model_name", "strict_json_required",
+        "advisory_only", "fallback_allowed", "max_prompt_chars", "timeout_seconds", "max_tokens",
+        "required_response_schema", "allowed_source_refs", "allowed_evidence_refs", "forbidden_actions",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local advisor micro contract missing field: {key}")
+    if payload["local_advisor_micro_contract_version"] != LOCAL_ADVISOR_MICRO_CONTRACT_VERSION:
+        raise ValueError("invalid local advisor micro contract version")
+    if not str(payload["local_advisor_micro_contract_id"]).startswith("local-advisor-micro-contract-"):
+        raise ValueError("invalid local advisor micro contract id")
+    stage = _local_advisor_micro_stage(payload["stage_number"])
+    stage_def = LOCAL_ADVISOR_MICRO_STAGE_DEFINITIONS[stage]
+    if payload["stage_name"] != stage_def["stage_name"]:
+        raise ValueError("local advisor micro contract stage name mismatch")
+    if payload["provider_name"] != "llamacpp" or payload["endpoint_type"] != "local":
+        raise ValueError("local advisor micro contract must use local llama.cpp")
+    if payload["strict_json_required"] is not True or payload["advisory_only"] is not True or payload["fallback_allowed"] is not False:
+        raise ValueError("local advisor micro contract must be strict JSON, advisory-only, and no-fallback")
+    if int(payload["max_prompt_chars"]) != stage_def["max_prompt_chars"] or int(payload["max_tokens"]) != stage_def["max_tokens"]:
+        raise ValueError("local advisor micro contract budget must match stage definition")
+    if not 10 <= int(payload["timeout_seconds"]) <= 60:
+        raise ValueError("local advisor micro contract timeout must be bounded")
+    schema = payload["required_response_schema"]
+    for key in stage_def["schema"]:
+        if key not in schema:
+            raise ValueError(f"local advisor micro contract schema missing key: {key}")
+    if stage >= 1 and ("source_path" not in schema or "source_bound" not in schema):
+        raise ValueError("micro contract stage 1+ must require source path and source bound")
+    if stage >= 2 and ("source_refs" not in schema or "evidence_refs" not in schema):
+        raise ValueError("micro contract stage 2+ must require refs arrays")
+    if stage >= 3 and ("critique" not in schema or "missing_evidence" not in schema or "risk_notes" not in schema):
+        raise ValueError("micro contract stage 3 must require critique arrays")
+    if not payload["allowed_source_refs"] or not payload["allowed_evidence_refs"]:
+        raise ValueError("local advisor micro contract must include allowed refs")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local advisor micro contract must remain read-only")
+
+
+def stable_local_advisor_micro_contract_json(payload: dict[str, Any]) -> str:
+    validate_local_advisor_micro_contract(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_advisor_micro_contract_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_advisor_micro_contract(payload)
+    return payload
+
+
+def render_local_advisor_micro_prompt(contract: dict[str, Any]) -> str:
+    validate_local_advisor_micro_contract(contract)
+    stage = contract["stage_number"]
+    source_path = contract["source_path"]
+    if stage == 0:
+        prompt = 'Return exactly this JSON object and nothing else: {"ok":true}'
+    elif stage == 1:
+        prompt = f'Return JSON only. Advisory only. No fallback. Use this source_path exactly: {source_path}. Schema: {{"ok":true,"source_bound":true,"source_path":"{source_path}"}}'
+    elif stage == 2:
+        source_ref = contract["allowed_source_refs"][0]
+        evidence_ref = contract["allowed_evidence_refs"][0]
+        prompt = f'Return JSON only. Advisory only. No fallback. Use source_path exactly: {source_path}. Use only these refs: source_refs=["{source_ref}"], evidence_refs=["{evidence_ref}"]. Schema: {{"ok":true,"source_bound":true,"source_path":"{source_path}","source_refs":["{source_ref}"],"evidence_refs":["{evidence_ref}"]}}'
+    else:
+        source_ref = contract["allowed_source_refs"][0]
+        evidence_ref = contract["allowed_evidence_refs"][0]
+        prompt = f'Return JSON only. Advisory only. No fallback. One short critique sentence. Use source_path exactly: {source_path}. Use only refs source_refs=["{source_ref}"] evidence_refs=["{evidence_ref}"]. Schema: {{"ok":true,"source_bound":true,"source_path":"{source_path}","critique":"short source-bound critique","missing_evidence":[],"risk_notes":[],"source_refs":["{source_ref}"],"evidence_refs":["{evidence_ref}"],"insufficient_evidence":false}}'
+    validate_local_advisor_micro_prompt(prompt, contract)
+    return prompt
+
+
+def validate_local_advisor_micro_prompt(prompt: str, contract: dict[str, Any]) -> None:
+    validate_local_advisor_micro_contract(contract)
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("local advisor micro prompt must be non-empty")
+    if len(prompt) > int(contract["max_prompt_chars"]):
+        raise ValueError("local advisor micro prompt exceeds stage budget")
+    lower = prompt.lower()
+    if "json" not in lower:
+        raise ValueError("local advisor micro prompt must require JSON")
+    if contract["stage_number"] >= 1 and contract["source_path"] not in prompt:
+        raise ValueError("local advisor micro prompt must include source path for stage 1+")
+    if contract["stage_number"] >= 1 and ("advisory" not in lower or "fallback" not in lower):
+        raise ValueError("local advisor micro prompt must include advisory/no-fallback constraints")
+    for key in contract["required_response_schema"]:
+        if key not in prompt:
+            raise ValueError(f"local advisor micro prompt missing schema key: {key}")
+    if "research_target_evidence_bundle" in prompt or "prompt_package" in prompt:
+        raise ValueError("local advisor micro prompt must not include giant nested payloads")
+
+
+def _validate_micro_contract_model_payload(model_json: dict[str, Any], contract: dict[str, Any]) -> tuple[bool, str, dict[str, bool]]:
+    validate_local_advisor_micro_contract(contract)
+    stage = contract["stage_number"]
+    flags = {"schema_valid": False, "source_bound_valid": stage == 0, "refs_valid": stage < 2, "critique_valid": stage < 3}
+    for key in contract["required_response_schema"]:
+        if key not in model_json:
+            return False, f"schema missing key: {key}", flags
+    if model_json.get("ok") is not True:
+        return False, "ok must be true", flags
+    if _research_advisor_forbidden_text(model_json):
+        return False, "forbidden action recommendation detected", flags
+    flags["schema_valid"] = True
+    if stage >= 1:
+        if model_json.get("source_path") != contract["source_path"]:
+            return False, "source_path mismatch", flags
+        if model_json.get("source_bound") is not True:
+            return False, "source_bound must be true", flags
+        flags["source_bound_valid"] = True
+    if stage >= 2:
+        source_refs = model_json.get("source_refs")
+        evidence_refs = model_json.get("evidence_refs")
+        if not isinstance(source_refs, list) or not isinstance(evidence_refs, list):
+            return False, "source_refs and evidence_refs must be arrays", flags
+        if any(ref not in contract["allowed_source_refs"] for ref in source_refs):
+            return False, "unknown source_refs cited", flags
+        if any(ref not in contract["allowed_evidence_refs"] for ref in evidence_refs):
+            return False, "unknown evidence_refs cited", flags
+        flags["refs_valid"] = True
+    if stage >= 3:
+        if not isinstance(model_json.get("critique"), str) or not model_json.get("critique", "").strip():
+            return False, "critique must be non-empty string", flags
+        if not isinstance(model_json.get("missing_evidence"), list) or not isinstance(model_json.get("risk_notes"), list):
+            return False, "missing_evidence and risk_notes must be arrays", flags
+        if not isinstance(model_json.get("insufficient_evidence"), bool):
+            return False, "insufficient_evidence must be boolean", flags
+        flags["critique_valid"] = True
+    return True, "", flags
+
+
+def _local_advisor_micro_failure_mode(stage: int, reason: str, assistant_present: bool, valid_json: bool) -> str:
+    lower = reason.lower()
+    if "timed out" in lower or "timeout" in lower:
+        return f"timeout_stage_{stage}"
+    if not assistant_present or "empty assistant" in lower:
+        return "empty_assistant_content"
+    if not valid_json or "json" in lower or "expecting value" in lower:
+        return f"invalid_json_stage_{stage}"
+    if stage == 1 and ("source_path" in lower or "source_bound" in lower):
+        return "source_binding_failed_stage_1"
+    if stage == 2 and "ref" in lower:
+        return "refs_schema_failed_stage_2"
+    if stage == 3 and ("critique" in lower or "missing_evidence" in lower or "risk_notes" in lower):
+        return "critique_schema_failed_stage_3"
+    if "request" in lower or "connection" in lower:
+        return "endpoint_unavailable"
+    return "model_not_json_reliable"
+
+
+def collect_local_advisor_micro_contract_result(
+    local_advisor_micro_contract: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    stage_number: int | str = 0,
+    use_local_model: bool = False,
+    model_response_json: dict[str, Any] | None = None,
+    raw_response: str | None = None,
+    latency_ms: int = 0,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    import json as _json
+
+    contract = local_advisor_micro_contract or collect_local_advisor_micro_contract(source_path=source_path, stage_number=stage_number)
+    validate_local_advisor_micro_contract(contract)
+    prompt = render_local_advisor_micro_prompt(contract)
+    response_hash = ""
+    raw_preview = ""
+    http_status = 0
+    assistant_content = ""
+    assistant_present = False
+    assistant_chars = 0
+    valid_json = False
+    flags = {"schema_valid": False, "source_bound_valid": contract["stage_number"] == 0, "refs_valid": contract["stage_number"] < 2, "critique_valid": contract["stage_number"] < 3}
+    model_used = False
+    fail_reason = ""
+    response_shape: dict[str, Any] = {}
+    if model_response_json is not None:
+        model_used = True
+        assistant_content = _stable_ruflo_json(model_response_json)
+        assistant_present = True
+        assistant_chars = len(assistant_content)
+        response_hash = _research_target_hash_text(raw_response or assistant_content)
+        raw_preview = _sanitize_local_advisor_preview(raw_response or assistant_content)
+        valid_json = True
+        micro_ok, fail_reason, flags = _validate_micro_contract_model_payload(dict(model_response_json), contract)
+    elif use_local_model:
+        model_used = True
+        try:
+            response_json, raw, latency_ms = _call_canonical_llamacpp_chat_raw(
+                prompt=prompt,
+                system_prompt="Return strict JSON only. Local-only advisor diagnostic. No markdown.",
+                timeout=int(contract["timeout_seconds"]),
+                model_name=contract["model_name"],
+                max_tokens=int(contract["max_tokens"]),
+            )
+            http_status = int(response_json.get("_http_status", 0) or 0)
+            assistant_content, response_shape = _extract_llamacpp_assistant_content(response_json)
+            assistant_present = bool(assistant_content.strip())
+            assistant_chars = len(assistant_content)
+            response_hash = _research_target_hash_text(raw)
+            raw_preview = _sanitize_local_advisor_preview(assistant_content or raw)
+            if not assistant_present:
+                fail_reason = "empty assistant content"
+                micro_ok = False
+            else:
+                parsed = _json.loads(assistant_content)
+                valid_json = isinstance(parsed, dict)
+                if not valid_json:
+                    fail_reason = "assistant content was not a JSON object"
+                    micro_ok = False
+                else:
+                    micro_ok, fail_reason, flags = _validate_micro_contract_model_payload(parsed, contract)
+        except Exception as exc:
+            fail_reason = str(exc)[:220]
+            response_hash = _research_target_hash_text(fail_reason)
+            raw_preview = _sanitize_local_advisor_preview(fail_reason)
+            micro_ok = False
+    else:
+        fail_reason = "preview_only; rerun with --local-model to perform local micro-check"
+        micro_ok = False
+    likely = "passed" if micro_ok else _local_advisor_micro_failure_mode(contract["stage_number"], fail_reason, assistant_present, valid_json)
+    payload = {
+        "local_advisor_micro_contract_result_version": LOCAL_ADVISOR_MICRO_CONTRACT_RESULT_VERSION,
+        "local_advisor_micro_contract_result_id": "local-advisor-micro-contract-result-" + _local_advisor_safe_hash({
+            "contract": contract["local_advisor_micro_contract_id"],
+            "model_used": model_used,
+            "response_hash": response_hash,
+            "micro_ok": micro_ok,
+            "version": LOCAL_ADVISOR_MICRO_CONTRACT_RESULT_VERSION,
+        }),
+        "local_advisor_micro_contract_id": contract["local_advisor_micro_contract_id"],
+        "source_path": contract["source_path"],
+        "stage_number": contract["stage_number"],
+        "stage_name": contract["stage_name"],
+        "provider_name": "llamacpp",
+        "model_used": bool(model_used),
+        "endpoint_type": "local",
+        "prompt_hash": _research_target_hash_text(prompt),
+        "response_hash": response_hash,
+        "prompt_chars": len(prompt),
+        "timeout_seconds": contract["timeout_seconds"],
+        "max_tokens": contract["max_tokens"],
+        "latency_ms": int(latency_ms or 0),
+        "http_status": int(http_status or 0),
+        "raw_response_preview_sanitized": raw_preview,
+        "assistant_content_present": bool(assistant_present),
+        "assistant_content_chars": int(assistant_chars),
+        "valid_json": bool(valid_json),
+        "schema_valid": bool(flags["schema_valid"]),
+        "source_bound_valid": bool(flags["source_bound_valid"]),
+        "refs_valid": bool(flags["refs_valid"]),
+        "critique_valid": bool(flags["critique_valid"]),
+        "micro_ok": bool(micro_ok),
+        "fail_closed": not bool(micro_ok),
+        "fail_closed_reason": "" if micro_ok else (fail_reason or "local advisor micro-check failed closed"),
+        "likely_failure_mode": likely,
+        "response_shape": response_shape,
+        "recommended_next_action": "Proceed to the next micro stage or two-stage gate." if micro_ok else "Stop richer local advisor flow; inspect micro-diagnostic failure mode before retrying.",
+        "human_review_required": True,
+        "fallback_allowed": False,
+        "advisory_only": True,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_advisor_micro_contract_result(payload, contract)
+    return payload
+
+
+def validate_local_advisor_micro_contract_result(payload: dict[str, Any], contract: dict[str, Any] | None = None) -> None:
+    required = (
+        "local_advisor_micro_contract_result_version", "local_advisor_micro_contract_result_id",
+        "local_advisor_micro_contract_id", "source_path", "stage_number", "stage_name", "provider_name",
+        "model_used", "endpoint_type", "prompt_hash", "response_hash", "prompt_chars", "timeout_seconds",
+        "max_tokens", "latency_ms", "http_status", "raw_response_preview_sanitized",
+        "assistant_content_present", "assistant_content_chars", "valid_json", "schema_valid",
+        "source_bound_valid", "refs_valid", "critique_valid", "micro_ok", "fail_closed",
+        "fail_closed_reason", "likely_failure_mode", "recommended_next_action", "human_review_required",
+        "fallback_allowed", "advisory_only", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local advisor micro contract result missing field: {key}")
+    if payload["local_advisor_micro_contract_result_version"] != LOCAL_ADVISOR_MICRO_CONTRACT_RESULT_VERSION:
+        raise ValueError("invalid local advisor micro contract result version")
+    stage = _local_advisor_micro_stage(payload["stage_number"])
+    if payload["stage_name"] != LOCAL_ADVISOR_MICRO_STAGE_DEFINITIONS[stage]["stage_name"]:
+        raise ValueError("local advisor micro contract result stage name mismatch")
+    if payload["provider_name"] != "llamacpp" or payload["endpoint_type"] != "local":
+        raise ValueError("local advisor micro contract result must use local llama.cpp")
+    if len(str(payload["raw_response_preview_sanitized"])) > 260:
+        raise ValueError("local advisor micro contract result raw preview must be bounded")
+    if payload["micro_ok"] is True:
+        if payload["fail_closed"] is not False or not payload["model_used"] or not payload["valid_json"] or not payload["schema_valid"]:
+            raise ValueError("successful micro-check must use model, valid JSON, and valid schema")
+        if stage >= 1 and payload["source_bound_valid"] is not True:
+            raise ValueError("successful stage 1+ micro-check must be source-bound")
+        if stage >= 2 and payload["refs_valid"] is not True:
+            raise ValueError("successful stage 2+ micro-check must have valid refs")
+        if stage >= 3 and payload["critique_valid"] is not True:
+            raise ValueError("successful stage 3 micro-check must have valid critique")
+    else:
+        if payload["fail_closed"] is not True or not payload["fail_closed_reason"]:
+            raise ValueError("failed micro-check must fail closed with reason")
+    if contract is not None and payload["local_advisor_micro_contract_id"] != contract["local_advisor_micro_contract_id"]:
+        raise ValueError("local advisor micro contract result contract mismatch")
+    if payload["human_review_required"] is not True or payload["fallback_allowed"] is not False or payload["advisory_only"] is not True:
+        raise ValueError("local advisor micro contract result must be advisory-only, human-reviewed, and no-fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local advisor micro contract result must remain read-only")
+
+
+def stable_local_advisor_micro_contract_result_json(payload: dict[str, Any]) -> str:
+    validate_local_advisor_micro_contract_result(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_advisor_micro_contract_result_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_advisor_micro_contract_result(payload)
+    return payload
+
+
+def collect_local_advisor_micro_diagnostic(
+    *,
+    source_path: str,
+    use_local_model: bool = False,
+    stage_results: list[dict[str, Any]] | None = None,
+    stop_on_failure: bool = True,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    results: list[dict[str, Any]] = []
+    if stage_results is not None:
+        results = list(stage_results)
+    elif use_local_model:
+        for stage in range(4):
+            result = collect_local_advisor_micro_contract_result(source_path=source_path, stage_number=stage, use_local_model=True)
+            results.append(result)
+            if stop_on_failure and not result["micro_ok"]:
+                break
+    else:
+        for stage in range(4):
+            contract = collect_local_advisor_micro_contract(source_path=source_path, stage_number=stage)
+            results.append({
+                "stage_number": stage,
+                "stage_name": contract["stage_name"],
+                "planned": True,
+                "micro_ok": False,
+                "likely_failure_mode": "not_run",
+                "local_advisor_micro_contract_id": contract["local_advisor_micro_contract_id"],
+            })
+    highest = -1
+    first_fail: int | None = None
+    likely = "not_run" if not use_local_model and stage_results is None else "all_micro_stages_passed"
+    for item in results:
+        stage = int(item["stage_number"])
+        if item.get("micro_ok") is True:
+            highest = max(highest, stage)
+        elif first_fail is None:
+            first_fail = stage
+            likely = str(item.get("likely_failure_mode") or "model_not_json_reliable")
+    if first_fail is None and results and all(item.get("micro_ok") is True for item in results):
+        first_fail_value: int | None = None
+        status = "passed"
+    elif not use_local_model and stage_results is None:
+        first_fail_value = 0
+        status = "plan_only"
+    else:
+        first_fail_value = first_fail
+        status = "failed_closed"
+    payload = {
+        "local_advisor_micro_diagnostic_version": LOCAL_ADVISOR_MICRO_DIAGNOSTIC_VERSION,
+        "local_advisor_micro_diagnostic_id": "local-advisor-micro-diagnostic-" + _local_advisor_safe_hash({
+            "source_path": source_path,
+            "results": [item.get("local_advisor_micro_contract_result_id", item.get("local_advisor_micro_contract_id", "")) for item in results],
+            "version": LOCAL_ADVISOR_MICRO_DIAGNOSTIC_VERSION,
+        }),
+        "source_path": source_path,
+        "provider_name": "llamacpp",
+        "endpoint_type": "local",
+        "diagnostic_status": status,
+        "stage_results": results,
+        "highest_passing_stage": highest,
+        "first_failing_stage": first_fail_value,
+        "likely_failure_mode": likely,
+        "recommended_next_action": "Micro gate passed through refs stage; JSON contract may be attempted." if highest >= LOCAL_ADVISOR_REQUIRED_MICRO_STAGE else "Do not run richer advisor review; fix the first failing micro stage first.",
+        "fallback_allowed": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_advisor_micro_diagnostic(payload)
+    return payload
+
+
+def validate_local_advisor_micro_diagnostic(payload: dict[str, Any]) -> None:
+    required = (
+        "local_advisor_micro_diagnostic_version", "local_advisor_micro_diagnostic_id", "source_path",
+        "provider_name", "endpoint_type", "diagnostic_status", "stage_results", "highest_passing_stage",
+        "first_failing_stage", "likely_failure_mode", "recommended_next_action", "fallback_allowed",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local advisor micro diagnostic missing field: {key}")
+    if payload["local_advisor_micro_diagnostic_version"] != LOCAL_ADVISOR_MICRO_DIAGNOSTIC_VERSION:
+        raise ValueError("invalid local advisor micro diagnostic version")
+    if payload["provider_name"] != "llamacpp" or payload["endpoint_type"] != "local":
+        raise ValueError("local advisor micro diagnostic must use local llama.cpp")
+    if payload["fallback_allowed"] is not False:
+        raise ValueError("local advisor micro diagnostic must disable fallback")
+    if not isinstance(payload["stage_results"], list) or not payload["stage_results"]:
+        raise ValueError("local advisor micro diagnostic requires stage results")
+    for item in payload["stage_results"]:
+        if "stage_number" not in item or "stage_name" not in item:
+            raise ValueError("local advisor micro diagnostic stage result missing stage fields")
+        _local_advisor_micro_stage(item["stage_number"])
+    if not isinstance(payload["highest_passing_stage"], int) or payload["highest_passing_stage"] < -1 or payload["highest_passing_stage"] > 3:
+        raise ValueError("invalid highest passing micro stage")
+    if payload["first_failing_stage"] is not None:
+        _local_advisor_micro_stage(payload["first_failing_stage"])
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local advisor micro diagnostic must remain read-only")
+
+
+def stable_local_advisor_micro_diagnostic_json(payload: dict[str, Any]) -> str:
+    validate_local_advisor_micro_diagnostic(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_advisor_micro_diagnostic_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_advisor_micro_diagnostic(payload)
+    return payload
+
 def collect_two_stage_local_advisor_gate(
     *,
     source_path: str,
     use_local_model: bool = False,
     stage1_result: dict[str, Any] | None = None,
     stage2_review: dict[str, Any] | None = None,
+    micro_diagnostic: dict[str, Any] | None = None,
+    required_micro_stage: int = LOCAL_ADVISOR_REQUIRED_MICRO_STAGE,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     package = collect_research_advisor_prompt_package(source_path=source_path)
+    required_stage = _local_advisor_micro_stage(required_micro_stage)
+    if micro_diagnostic is not None:
+        micro = micro_diagnostic
+    elif stage1_result is not None:
+        micro = collect_local_advisor_micro_diagnostic(
+            source_path=source_path,
+            stage_results=[
+                {
+                    "stage_number": stage,
+                    "stage_name": LOCAL_ADVISOR_MICRO_STAGE_DEFINITIONS[stage]["stage_name"],
+                    "micro_ok": True,
+                    "likely_failure_mode": "fixture_passed",
+                    "local_advisor_micro_contract_result_id": f"fixture-stage-{stage}",
+                }
+                for stage in range(required_stage + 1)
+            ],
+        )
+    else:
+        micro = collect_local_advisor_micro_diagnostic(source_path=source_path, use_local_model=use_local_model)
+    validate_local_advisor_micro_diagnostic(micro)
+    micro_gate_passed = int(micro["highest_passing_stage"]) >= required_stage
+    json_contract_attempted = bool(stage1_result is not None or micro_gate_passed)
     contract = collect_local_advisor_json_contract(package)
-    result = stage1_result or collect_local_advisor_json_contract_result(contract, use_local_model=use_local_model)
+    result = stage1_result
+    if json_contract_attempted and result is None:
+        result = collect_local_advisor_json_contract_result(contract, use_local_model=use_local_model)
+    if result is None:
+        result = collect_local_advisor_json_contract_result(contract, use_local_model=False)
     validate_local_advisor_json_contract_result(result, contract)
-    stage1_passed = bool(result["smoke_ok"])
+    stage1_passed = bool(result["smoke_ok"]) if json_contract_attempted else False
     stage2_attempted = False
     review = stage2_review
     if stage1_passed:
@@ -15700,24 +16289,34 @@ def collect_two_stage_local_advisor_gate(
         "two_stage_local_advisor_gate_version": TWO_STAGE_LOCAL_ADVISOR_GATE_VERSION,
         "two_stage_local_advisor_gate_id": "two-stage-local-advisor-gate-" + _local_advisor_safe_hash({
             "source_path": source_path,
+            "micro": micro["local_advisor_micro_diagnostic_id"],
             "stage1": result["local_advisor_json_contract_result_id"],
             "stage2": review.get("local_model_research_advisor_review_id") if isinstance(review, dict) else "",
             "version": TWO_STAGE_LOCAL_ADVISOR_GATE_VERSION,
         }),
         "source_path": source_path,
+        "micro_diagnostic_id": micro["local_advisor_micro_diagnostic_id"],
+        "highest_passing_micro_stage": micro["highest_passing_stage"],
+        "first_failing_micro_stage": micro["first_failing_stage"],
+        "required_micro_stage": required_stage,
+        "micro_gate_passed": micro_gate_passed,
+        "json_contract_attempted": json_contract_attempted,
+        "json_contract_passed": stage1_passed,
+        "rich_review_attempted": stage2_attempted,
+        "rich_review_passed": stage2_passed,
         "stage1_contract_id": contract["local_advisor_json_contract_id"],
         "stage1_result_id": result["local_advisor_json_contract_result_id"],
         "stage1_passed": stage1_passed,
         "stage2_attempted": stage2_attempted,
         "stage2_advisor_review_id": review.get("local_model_research_advisor_review_id", "") if isinstance(review, dict) else "",
         "stage2_passed": stage2_passed,
-        "stage1_fail_closed_reason": "" if stage1_passed else result["fail_closed_reason"],
+        "stage1_fail_closed_reason": "" if stage1_passed else ("micro gate failed before JSON contract" if not json_contract_attempted else result["fail_closed_reason"]),
         "stage2_fail_closed_reason": "" if stage2_passed or not isinstance(review, dict) else review.get("fail_closed_reason", ""),
         "selected_provider": "llamacpp",
         "fallback_allowed": False,
         "advisory_only": True,
         "human_review_required": True,
-        "recommended_next_action": "Stage 1 passed and Stage 2 produced a model review; human-review advisory output before any planning change." if stage2_passed else ("Stage 1 failed; do not run richer advisor review until local JSON contract passes." if not stage1_passed else "Stage 2 failed closed; keep deterministic Link output authoritative."),
+        "recommended_next_action": "Micro, JSON contract, and rich review passed; human-review advisory output before any planning change." if stage2_passed else ("Micro gate failed; do not run JSON contract or richer advisor review." if not micro_gate_passed else ("JSON contract failed; do not run richer advisor review." if not stage1_passed else "Rich advisor review failed closed; keep deterministic Link output authoritative.")),
         "safety_metadata": _read_only_safety_metadata(),
         "dry_run": True,
         "write_allowed": False,
@@ -15728,10 +16327,12 @@ def collect_two_stage_local_advisor_gate(
     validate_two_stage_local_advisor_gate(payload)
     return payload
 
-
 def validate_two_stage_local_advisor_gate(payload: dict[str, Any]) -> None:
     required = (
         "two_stage_local_advisor_gate_version", "two_stage_local_advisor_gate_id", "source_path",
+        "micro_diagnostic_id", "highest_passing_micro_stage", "first_failing_micro_stage",
+        "required_micro_stage", "micro_gate_passed", "json_contract_attempted",
+        "json_contract_passed", "rich_review_attempted", "rich_review_passed",
         "stage1_contract_id", "stage1_result_id", "stage1_passed", "stage2_attempted",
         "stage2_advisor_review_id", "stage2_passed", "selected_provider", "fallback_allowed",
         "advisory_only", "human_review_required", "recommended_next_action", "safety_metadata",
@@ -15744,10 +16345,21 @@ def validate_two_stage_local_advisor_gate(payload: dict[str, Any]) -> None:
         raise ValueError("invalid two-stage local advisor gate version")
     if payload["selected_provider"] != "llamacpp":
         raise ValueError("two-stage local advisor gate must use llama.cpp")
+    _local_advisor_micro_stage(payload["required_micro_stage"])
+    if not isinstance(payload["highest_passing_micro_stage"], int) or payload["highest_passing_micro_stage"] < -1 or payload["highest_passing_micro_stage"] > 3:
+        raise ValueError("two-stage local advisor gate has invalid highest passing micro stage")
+    if payload["first_failing_micro_stage"] is not None:
+        _local_advisor_micro_stage(payload["first_failing_micro_stage"])
+    if payload["micro_gate_passed"] is False and payload["json_contract_attempted"] is True:
+        raise ValueError("two-stage local advisor gate must not run JSON contract after micro gate failure")
+    if payload["json_contract_attempted"] is False and payload["stage1_passed"] is True:
+        raise ValueError("two-stage local advisor gate cannot pass JSON contract without attempting it")
     if payload["stage1_passed"] is False and payload["stage2_attempted"] is True:
         raise ValueError("two-stage local advisor gate must not run stage2 after stage1 failure")
     if payload["stage2_passed"] is True and not payload["stage2_attempted"]:
         raise ValueError("two-stage local advisor gate cannot pass stage2 without attempting it")
+    if payload["json_contract_passed"] != payload["stage1_passed"] or payload["rich_review_attempted"] != payload["stage2_attempted"] or payload["rich_review_passed"] != payload["stage2_passed"]:
+        raise ValueError("two-stage local advisor gate compatibility fields must match new gate fields")
     if payload["fallback_allowed"] is not False or payload["advisory_only"] is not True or payload["human_review_required"] is not True:
         raise ValueError("two-stage local advisor gate must be advisory-only, human-reviewed, and no-fallback")
     if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
@@ -16715,6 +17327,11 @@ def collect_source_aware_advisor_provider_card(
     recommended_mode = _source_aware_advisor_recommended_mode(local["provider_status"], local_available, openrouter_enabled)
     source_arg = _source_aware_advisor_safe_command_source(report["source_path"])
     deterministic_command = f"python3 link.py research advisor-review --source {source_arg} --json"
+    micro_diagnostic_command = f"python3 link.py advisor micro-diagnostic --source {source_arg} --local-model --json"
+    micro_stage_commands = [
+        f"python3 link.py advisor micro-check --source {source_arg} --stage {stage} --local-model --json"
+        for stage in range(4)
+    ]
     json_check_command = f"python3 link.py advisor json-check --source {source_arg} --local-model --json"
     two_stage_command = f"python3 link.py research advisor-two-stage --source {source_arg} --local-model --json"
     diagnostic_command = f"python3 link.py advisor local-json-diagnostic --source {source_arg} --local-model --json"
@@ -16767,10 +17384,14 @@ def collect_source_aware_advisor_provider_card(
         "recommended_advisor_command": recommended_command,
         "deterministic_preview_command": deterministic_command,
         "local_advisor_command": local_command,
+        "recommended_micro_diagnostic_command": micro_diagnostic_command,
+        "recommended_micro_stage_commands": micro_stage_commands,
         "recommended_json_check_command": json_check_command,
         "recommended_two_stage_local_command": two_stage_command,
+        "recommended_two_stage_command": two_stage_command,
         "recommended_diagnostic_command": diagnostic_command,
         "richer_advisor_command": local_command,
+        "recommended_rich_review_command": local_command,
         "openrouter_advisor_command": openrouter_command,
         "advisor_provider_registry_id": registry["advisor_provider_registry_id"],
         "local_advisor_availability_card_id": local["local_advisor_availability_card_id"],
@@ -16779,7 +17400,7 @@ def collect_source_aware_advisor_provider_card(
         "advisor_provider_operator_guidance_id": guidance["advisor_provider_operator_guidance_id"],
         "blocked_reasons": blocked or ["local advisor endpoint was not probed; use deterministic advisor preview until local smoke passes"],
         "warnings": warnings,
-        "recommended_next_action": "Use deterministic advisor preview now; run local JSON check before richer advisor review.",
+        "recommended_next_action": "Use deterministic advisor preview now; run micro-diagnostic before local JSON check or richer advisor review.",
         "safety_metadata": _read_only_safety_metadata(),
         "dry_run": True,
         "write_allowed": False,
@@ -16866,12 +17487,17 @@ def collect_source_aware_advisor_command_preview(
         "advisor_provider_card_id": card["source_aware_advisor_provider_card_id"],
         "deterministic_preview_command": card["deterministic_preview_command"],
         "local_advisor_command": card["local_advisor_command"],
+        "recommended_micro_diagnostic_command": card["recommended_micro_diagnostic_command"],
+        "recommended_micro_stage_commands": card["recommended_micro_stage_commands"],
         "recommended_json_check_command": card["recommended_json_check_command"],
         "recommended_two_stage_local_command": card["recommended_two_stage_local_command"],
+        "recommended_two_stage_command": card["recommended_two_stage_command"],
         "recommended_diagnostic_command": card["recommended_diagnostic_command"],
         "richer_advisor_command": card["richer_advisor_command"],
+        "recommended_rich_review_command": card["recommended_rich_review_command"],
         "openrouter_advisor_command": card["openrouter_advisor_command"],
         "recommended_sequence": [
+            card["recommended_micro_diagnostic_command"],
             card["recommended_json_check_command"],
             card["recommended_two_stage_local_command"],
             card["richer_advisor_command"],
@@ -16903,8 +17529,10 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         "source_aware_advisor_command_preview_version", "source_aware_advisor_command_preview_id",
         "source_bound", "source_path", "research_target_intake_id", "selected_upgrade_candidate_id",
         "advisor_provider_card_id", "deterministic_preview_command", "local_advisor_command",
-        "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_diagnostic_command",
-        "richer_advisor_command", "openrouter_advisor_command", "recommended_sequence", "recommended_command", "command_requires_local_model",
+        "recommended_micro_diagnostic_command", "recommended_micro_stage_commands",
+        "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command",
+        "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command",
+        "openrouter_advisor_command", "recommended_sequence", "recommended_command", "command_requires_local_model",
         "command_requires_openrouter_opt_in", "command_requires_paid_provider", "fallback_allowed",
         "blocked_commands", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
         "automation_allowed", "writes",
@@ -16916,12 +17544,19 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("invalid source-aware advisor command preview version")
     if not payload["source_aware_advisor_command_preview_id"].startswith("source-aware-advisor-command-preview-"):
         raise ValueError("invalid source-aware advisor command preview id")
-    for field in ("deterministic_preview_command", "local_advisor_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_diagnostic_command", "richer_advisor_command", "openrouter_advisor_command", "recommended_command"):
+    for field in ("deterministic_preview_command", "local_advisor_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
         if payload["source_path"] not in payload[field]:
             raise ValueError(f"advisor command preview {field} must reference selected source")
+    if not isinstance(payload["recommended_micro_stage_commands"], list) or len(payload["recommended_micro_stage_commands"]) != 4:
+        raise ValueError("advisor command preview must include four micro stage commands")
+    for command in payload["recommended_micro_stage_commands"]:
+        if payload["source_path"] not in command or "micro-check" not in command:
+            raise ValueError("advisor micro stage command must reference selected source and micro-check")
+    if "micro-diagnostic" not in payload["recommended_micro_diagnostic_command"]:
+        raise ValueError("advisor command preview must recommend micro diagnostic")
     if "json-check" not in payload["recommended_json_check_command"] or "advisor-two-stage" not in payload["recommended_two_stage_local_command"]:
         raise ValueError("advisor command preview must recommend JSON check and two-stage gate")
-    if not isinstance(payload["recommended_sequence"], list) or len(payload["recommended_sequence"]) < 2:
+    if not isinstance(payload["recommended_sequence"], list) or len(payload["recommended_sequence"]) < 4:
         raise ValueError("advisor command preview must include recommended sequence")
     if "--openrouter" not in payload["openrouter_advisor_command"] or "--provider openrouter" not in payload["openrouter_advisor_command"]:
         raise ValueError("OpenRouter advisor command must be explicit")
@@ -18438,6 +19073,129 @@ def advisor_openrouter_config_main(argv: list[str] | None = None) -> int:
 
 
 
+
+def _advisor_cli_stage(args: list[str], default: int = 0) -> tuple[int, int | None]:
+    if "--stage" not in args:
+        return default, None
+    idx = args.index("--stage")
+    if idx + 1 >= len(args):
+        print("error: --stage requires a value", file=sys.stderr)
+        return default, 2
+    try:
+        return _local_advisor_micro_stage(args[idx + 1]), None
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return default, 2
+
+
+def advisor_micro_contract_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor micro-contract: tiny local JSON contract by stage")
+        print("  python3 link.py advisor micro-contract --source <path> --stage 0 --json")
+        print("Read-only. No model call. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor micro-contract is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "micro-contract")
+    if rc is not None:
+        return rc
+    stage, stage_rc = _advisor_cli_stage(args)
+    if stage_rc is not None:
+        return stage_rc
+    try:
+        payload = collect_local_advisor_micro_contract(source_path=source or "", stage_number=stage)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_advisor_micro_contract_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor micro contract", payload, [
+            ("id", payload["local_advisor_micro_contract_id"]),
+            ("source", payload["source_path"]),
+            ("stage", f"{payload['stage_number']} {payload['stage_name']}"),
+            ("max_prompt_chars", payload["max_prompt_chars"]),
+            ("max_tokens", payload["max_tokens"]),
+            ("fallback_allowed", payload["fallback_allowed"]),
+        ])
+    return 0
+
+
+def advisor_micro_check_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor micro-check: run one tiny local JSON stage")
+        print("  python3 link.py advisor micro-check --source <path> --stage 0 --local-model --json")
+        print("Read-only. Local llama.cpp only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor micro-check is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "micro-check")
+    if rc is not None:
+        return rc
+    stage, stage_rc = _advisor_cli_stage(args)
+    if stage_rc is not None:
+        return stage_rc
+    try:
+        payload = collect_local_advisor_micro_contract_result(source_path=source or "", stage_number=stage, use_local_model="--local-model" in args)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_advisor_micro_contract_result_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor micro check", payload, [
+            ("id", payload["local_advisor_micro_contract_result_id"]),
+            ("source", payload["source_path"]),
+            ("stage", f"{payload['stage_number']} {payload['stage_name']}"),
+            ("micro_ok", payload["micro_ok"]),
+            ("likely_failure_mode", payload["likely_failure_mode"]),
+            ("fail_closed", payload["fail_closed"]),
+            ("fallback_allowed", payload["fallback_allowed"]),
+            ("next", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def advisor_micro_diagnostic_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor micro-diagnostic: run staged local JSON diagnostics")
+        print("  python3 link.py advisor micro-diagnostic --source <path> --json")
+        print("  python3 link.py advisor micro-diagnostic --source <path> --local-model --json")
+        print("Read-only. Local llama.cpp only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor micro-diagnostic is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "micro-diagnostic")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_local_advisor_micro_diagnostic(source_path=source or "", use_local_model="--local-model" in args)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_advisor_micro_diagnostic_json(payload), end="")
+    else:
+        print("Local advisor micro diagnostic")
+        print(f"source: {payload['source_path']}")
+        print(f"status: {payload['diagnostic_status']}")
+        print(f"highest_passing_stage: {payload['highest_passing_stage']}")
+        print(f"first_failing_stage: {payload['first_failing_stage']}")
+        print(f"likely_failure_mode: {payload['likely_failure_mode']}")
+        print("stages:")
+        for item in payload["stage_results"][:4]:
+            state = "pass" if item.get("micro_ok") else item.get("likely_failure_mode", "planned")
+            print(f"  - {item['stage_number']} {item['stage_name']}: {state}")
+        print(f"fallback_allowed: {payload['fallback_allowed']}")
+        print(f"next_action: {payload['recommended_next_action']}")
+    return 0
+
 def advisor_json_contract_main(argv: list[str] | None = None) -> int:
     args = _research_target_normalize_args(argv)
     if any(arg in {"-h", "--help", "help"} for arg in args):
@@ -18936,6 +19694,11 @@ def advisor_local_config_main(argv: list[str] | None = None) -> int:
 def _research_advisor_print_two_stage(payload: dict[str, Any]) -> None:
     print("Two-stage local advisor gate")
     print(f"source: {payload['source_path']}")
+    print(f"highest_passing_micro_stage: {payload.get('highest_passing_micro_stage', '')}")
+    print(f"first_failing_micro_stage: {payload.get('first_failing_micro_stage', '')}")
+    print(f"required_micro_stage: {payload.get('required_micro_stage', '')}")
+    print(f"micro_gate_passed: {payload.get('micro_gate_passed', '')}")
+    print(f"json_contract_attempted: {payload.get('json_contract_attempted', '')}")
     print(f"stage1_passed: {payload['stage1_passed']}")
     print(f"stage2_attempted: {payload['stage2_attempted']}")
     print(f"stage2_passed: {payload['stage2_passed']}")
