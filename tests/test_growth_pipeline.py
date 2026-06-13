@@ -18570,6 +18570,10 @@ def check_source_aware_control_plane_dashboard_helpers() -> None:
              "advisor command preview must reference selected source")
     _require("micro-diagnostic" in command_preview["recommended_micro_diagnostic_command"] and len(command_preview["recommended_micro_stage_commands"]) == 4,
              "advisor command preview must include micro diagnostic and four micro stage commands")
+    _require("compression-policy" in command_preview["compression_policy_command"] and "compression-preview" in command_preview["compression_preview_command"],
+             "advisor command preview must include compression policy and preview commands")
+    _require(command_preview["compression_enabled_by_default"] is False,
+             "advisor command preview must keep compression disabled by default")
     _require("--provider openrouter" in command_preview["openrouter_advisor_command"] and command_preview["fallback_allowed"] is False,
              "advisor command preview must make OpenRouter explicit and block fallback")
     validate_source_aware_advisor_command_preview(command_preview)
@@ -18735,6 +18739,8 @@ def check_source_aware_control_plane_dashboard_clis() -> None:
              "advisor target-command must preview selected-source command with fallback disabled")
     _require("micro-diagnostic" in command_preview["recommended_micro_diagnostic_command"],
              "advisor target-command must recommend micro-diagnostic before richer local advisor flow")
+    _require("compression-preview" in command_preview["compression_preview_command"] and command_preview["compression_enabled_by_default"] is False,
+             "advisor target-command must expose disabled compression preview")
     _require("json-check" in command_preview["recommended_json_check_command"] and "advisor-two-stage" in command_preview["recommended_two_stage_local_command"],
              "advisor target-command must recommend JSON check and two-stage local advisor flow")
     _require(not any("openrouter" in item.lower() and "fallback" in item.lower() for item in command_preview["recommended_sequence"]),
@@ -19051,6 +19057,8 @@ def check_local_model_advisor_foundation_helpers() -> None:
         collect_advisor_provider_status_dashboard,
         collect_advisor_smoke_plan,
         collect_advisor_smoke_result,
+        collect_advisor_context_compression_policy,
+        collect_advisor_context_compression_preview,
         collect_compact_source_aware_advisor_context,
         collect_local_advisor_json_contract,
         collect_local_advisor_json_contract_result,
@@ -19079,8 +19087,12 @@ def check_local_model_advisor_foundation_helpers() -> None:
         parse_advisor_provider_status_dashboard_json,
         parse_advisor_smoke_plan_json,
         parse_advisor_smoke_result_json,
+        parse_advisor_context_compression_policy_json,
+        parse_advisor_context_compression_preview_json,
         parse_advisor_provider_registry_json,
         parse_advisor_smoke_plan_json,
+        parse_advisor_context_compression_policy_json,
+        parse_advisor_context_compression_preview_json,
         parse_compact_source_aware_advisor_context_json,
         parse_local_advisor_json_contract_json,
         parse_local_advisor_json_contract_result_json,
@@ -19109,6 +19121,8 @@ def check_local_model_advisor_foundation_helpers() -> None:
         stable_advisor_provider_status_dashboard_json,
         stable_advisor_smoke_plan_json,
         stable_advisor_smoke_result_json,
+        stable_advisor_context_compression_policy_json,
+        stable_advisor_context_compression_preview_json,
         stable_compact_source_aware_advisor_context_json,
         stable_local_advisor_json_contract_json,
         stable_local_advisor_json_contract_result_json,
@@ -19137,6 +19151,8 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_advisor_provider_status_dashboard,
         validate_advisor_smoke_plan,
         validate_advisor_smoke_result,
+        validate_advisor_context_compression_policy,
+        validate_advisor_context_compression_preview,
         validate_compact_local_advisor_prompt,
         validate_compact_source_aware_advisor_context,
         validate_local_advisor_json_contract,
@@ -19417,6 +19433,28 @@ def check_local_model_advisor_foundation_helpers() -> None:
     wrong_type_alias = expand_local_advisor_ref_aliases(alias_map, ["E1"], ["S1"])
     _require(wrong_type_alias["refs_valid"] is False,
              "wrong-type aliases must fail expansion")
+
+    compression_policy = collect_advisor_context_compression_policy()
+    _require(compression_policy["compression_enabled_by_default"] is False,
+             "advisor context compression must be disabled by default")
+    _require(compression_policy["preserve_source_refs"] is True and compression_policy["preserve_evidence_refs"] is True and compression_policy["preserve_alias_map"] is True,
+             "advisor context compression policy must preserve refs and aliases")
+    _require(compression_policy["external_network_allowed"] is False and compression_policy["openrouter_allowed"] is False,
+             "advisor context compression policy must block network and OpenRouter")
+    validate_advisor_context_compression_policy(compression_policy)
+    _require(parse_advisor_context_compression_policy_json(stable_advisor_context_compression_policy_json(compression_policy)) == compression_policy,
+             "advisor context compression policy JSON must round trip")
+
+    compression_preview = collect_advisor_context_compression_preview(source_path=zip_source, compact_context=compact_context, policy=compression_policy, alias_map=alias_map)
+    _require(compression_preview["source_path"] == zip_source and compression_preview["compression_attempted"] is False,
+             "advisor context compression preview must be source-bound and must not execute compression")
+    _require(compression_preview["source_refs_preserved"] is True and compression_preview["evidence_refs_preserved"] is True and compression_preview["alias_map_preserved"] is True,
+             "advisor context compression preview must preserve refs and aliases")
+    _require(compression_preview["preserved_aliases_count"] == alias_map["alias_count"],
+             "advisor context compression preview must preserve alias count")
+    validate_advisor_context_compression_preview(compression_preview)
+    _require(parse_advisor_context_compression_preview_json(stable_advisor_context_compression_preview_json(compression_preview)) == compression_preview,
+             "advisor context compression preview JSON must round trip")
 
     micro_contracts = [collect_local_advisor_micro_contract(package, stage_number=stage) for stage in range(4)]
     for stage, micro_contract in enumerate(micro_contracts):
@@ -19745,6 +19783,8 @@ def check_local_model_advisor_clis() -> None:
         parse_advisor_provider_operator_guidance_json,
         parse_advisor_provider_status_dashboard_json,
         parse_advisor_smoke_plan_json,
+        parse_advisor_context_compression_policy_json,
+        parse_advisor_context_compression_preview_json,
         parse_compact_source_aware_advisor_context_json,
         parse_local_advisor_json_contract_json,
         parse_local_advisor_json_contract_result_json,
@@ -19865,6 +19905,33 @@ def check_local_model_advisor_clis() -> None:
     _require(compact_payload["source_path"] == zip_source and compact_payload["estimated_prompt_chars"] <= budget_payload["max_prompt_chars"],
              "advisor compact-context must preserve source and stay within budget")
 
+    compression_policy_out = io.StringIO()
+    with contextlib.redirect_stdout(compression_policy_out):
+        compression_policy_rc = _cmd_advisor(["compression-policy", "--json"])
+    _require(compression_policy_rc == 0, "advisor compression-policy --json must return 0")
+    compression_policy = parse_advisor_context_compression_policy_json(compression_policy_out.getvalue())
+    _require(compression_policy["compression_enabled_by_default"] is False and compression_policy["external_network_allowed"] is False,
+             "advisor compression-policy must be disabled by default and local-only")
+
+    compression_preview_out = io.StringIO()
+    with contextlib.redirect_stdout(compression_preview_out):
+        compression_preview_rc = _cmd_advisor(["compression-preview", "--source", zip_source, "--json"])
+    _require(compression_preview_rc == 0, "advisor compression-preview --source --json must return 0")
+    compression_preview = parse_advisor_context_compression_preview_json(compression_preview_out.getvalue())
+    _require(compression_preview["source_path"] == zip_source and compression_preview["compression_attempted"] is False,
+             "advisor compression-preview must preserve source and avoid compressor execution")
+    _require(compression_preview["source_refs_preserved"] is True and compression_preview["alias_map_preserved"] is True,
+             "advisor compression-preview must preserve refs and alias map")
+
+    human_compression_out = io.StringIO()
+    with contextlib.redirect_stdout(human_compression_out):
+        human_compression_rc = _cmd_advisor(["compression-preview", "--source", zip_source])
+    human_compression = human_compression_out.getvalue()
+    _require(human_compression_rc == 0 and "Advisor context compression preview" in human_compression,
+             "advisor compression-preview human output must render a summary")
+    _require("alias_map_preserved: True" in human_compression and not human_compression.lstrip().startswith("{"),
+             "advisor compression-preview human output must show alias preservation without raw JSON")
+
     receipt_out = io.StringIO()
     with contextlib.redirect_stdout(receipt_out):
         receipt_rc = _cmd_advisor(["smoke-receipt", "--json"])
@@ -19929,7 +19996,7 @@ def check_local_model_advisor_clis() -> None:
     _require(diagnostic_payload["diagnostic_status"] == "plan_only" and diagnostic_payload["fallback_allowed"] is False,
              "advisor local-json-diagnostic preview must be plan-only with no fallback")
 
-    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "smoke-receipt", "ref-alias-map", "micro-contract", "micro-check", "micro-diagnostic", "json-contract", "json-check", "local-json-diagnostic"):
+    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "compression-policy", "compression-preview", "smoke-receipt", "ref-alias-map", "micro-contract", "micro-check", "micro-diagnostic", "json-contract", "json-check", "local-json-diagnostic"):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_advisor([command, "--write"])

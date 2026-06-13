@@ -287,6 +287,14 @@ def _cmd_advisor(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import advisor_ref_alias_map_main as _advisor_ref_alias_map_main
 
         return _advisor_ref_alias_map_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "compression-policy":
+        from link_modes.growth.link_growth_console import advisor_compression_policy_main as _advisor_compression_policy_main
+
+        return _advisor_compression_policy_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "compression-preview":
+        from link_modes.growth.link_growth_console import advisor_compression_preview_main as _advisor_compression_preview_main
+
+        return _advisor_compression_preview_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "micro-contract":
         from link_modes.growth.link_growth_console import advisor_micro_contract_main as _advisor_micro_contract_main
 
@@ -346,6 +354,8 @@ def _cmd_advisor(argv: list[str]) -> int:
         print("  guidance          Show advisor provider operator guidance")
         print("  target-command    Preview safe advisor commands for a selected source")
         print("  ref-alias-map     Preview deterministic S/E ref aliases")
+        print("  compression-policy Preview optional advisor context compression boundary")
+        print("  compression-preview Preview selected-source compression readiness")
         print("  micro-contract    Preview staged tiny local JSON contract")
         print("  micro-check       Run one staged local JSON micro-check")
         print("  micro-diagnostic  Run staged local JSON diagnostics")

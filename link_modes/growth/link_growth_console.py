@@ -13247,6 +13247,8 @@ LOCAL_MODEL_ADVISOR_METADATA_VERSION = "link-local-model-advisor-metadata-v1"
 RESEARCH_ADVISOR_PROMPT_PACKAGE_VERSION = "link-research-advisor-prompt-package-v1"
 LOCAL_ADVISOR_PROMPT_BUDGET_VERSION = "link-local-advisor-prompt-budget-v1"
 COMPACT_SOURCE_AWARE_ADVISOR_CONTEXT_VERSION = "link-compact-source-aware-advisor-context-v1"
+ADVISOR_CONTEXT_COMPRESSION_POLICY_VERSION = "link-advisor-context-compression-policy-v1"
+ADVISOR_CONTEXT_COMPRESSION_PREVIEW_VERSION = "link-advisor-context-compression-preview-v1"
 LOCAL_ADVISOR_SMOKE_RECEIPT_VERSION = "link-local-advisor-smoke-receipt-v1"
 LOCAL_ADVISOR_JSON_CONTRACT_VERSION = "link-local-advisor-json-contract-v1"
 LOCAL_ADVISOR_JSON_CONTRACT_RESULT_VERSION = "link-local-advisor-json-contract-result-v1"
@@ -15178,6 +15180,270 @@ def parse_compact_source_aware_advisor_context_json(text: str) -> dict[str, Any]
     import json as _json
     payload = _json.loads(text)
     validate_compact_source_aware_advisor_context(payload)
+    return payload
+
+
+
+def _detect_local_context_compressor_candidate() -> dict[str, Any]:
+    """Return a redacted local compressor candidate summary without importing or executing it."""
+    from pathlib import Path as _Path
+
+    tokentrim_path = _Path("/home/user/venv/lib/python3.12/site-packages/tokentrim")
+    tokentrim_metadata = _Path("/home/user/venv/lib/python3.12/site-packages/tokentrim-0.1.13.dist-info/METADATA")
+    if tokentrim_path.exists():
+        return {
+            "candidate_name": "tokentrim",
+            "candidate_path": str(tokentrim_path),
+            "metadata_path": str(tokentrim_metadata) if tokentrim_metadata.exists() else "",
+            "candidate_kind": "installed_python_package",
+            "matches_requested_repo_description": False,
+            "api_clear_for_link_advisor": False,
+            "reason": "Local tokentrim package trims OpenAI-style message arrays; it is not the described tool-output/log/file/RAG compressor repo with proxy/MCP surface.",
+        }
+    return {
+        "candidate_name": "none_found",
+        "candidate_path": "",
+        "metadata_path": "",
+        "candidate_kind": "not_found",
+        "matches_requested_repo_description": False,
+        "api_clear_for_link_advisor": False,
+        "reason": "Requested local searches did not find the described compression repo or a clear local compressor API.",
+    }
+
+
+def collect_advisor_context_compression_policy(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    candidate = _detect_local_context_compressor_candidate()
+    compressor_found = bool(candidate.get("candidate_path")) and bool(candidate.get("matches_requested_repo_description"))
+    api_clear = bool(candidate.get("api_clear_for_link_advisor"))
+    blocked_reasons = []
+    if not compressor_found:
+        blocked_reasons.append("described compression repo was not found in the bounded local search scope")
+    if candidate.get("candidate_name") == "tokentrim":
+        blocked_reasons.append("tokentrim is present but only exposes message trimming, not the requested tool/log/file/RAG compression API")
+    if not api_clear:
+        blocked_reasons.append("no clear local-only compressor API is available without installing packages or starting MCP/proxy services")
+    payload = {
+        "advisor_context_compression_policy_version": ADVISOR_CONTEXT_COMPRESSION_POLICY_VERSION,
+        "advisor_context_compression_policy_id": "advisor-context-compression-policy-" + _local_advisor_safe_hash({
+            "candidate": candidate,
+            "version": ADVISOR_CONTEXT_COMPRESSION_POLICY_VERSION,
+        }),
+        "compression_enabled_by_default": False,
+        "compressor_provider": candidate["candidate_name"],
+        "compressor_repo_path": candidate["candidate_path"],
+        "integration_mode": "deterministic_preview_only" if not api_clear else "local_library_adapter_candidate",
+        "allowed_payload_types": [
+            "advisor_compact_context",
+            "micro_contract_alias_summaries",
+            "source_evidence_summaries",
+            "provenance_snippets",
+            "task_draft_summary",
+        ],
+        "prohibited_payload_types": [
+            "canonical_source_refs",
+            "canonical_evidence_refs",
+            "alias_map",
+            "safety_metadata",
+            "approval_state",
+            "execution_state",
+            "secrets",
+        ],
+        "must_preserve_fields": [
+            "source_path",
+            "research_target_intake_id",
+            "selected_upgrade_candidate_id",
+            "source_refs",
+            "evidence_refs",
+            "source_ref_aliases",
+            "evidence_ref_aliases",
+            "safety_metadata",
+        ],
+        "max_input_chars": 12000,
+        "max_output_chars": 5200,
+        "preserve_source_refs": True,
+        "preserve_evidence_refs": True,
+        "preserve_alias_map": True,
+        "fallback_to_uncompressed_allowed": True,
+        "external_network_allowed": False,
+        "openrouter_allowed": False,
+        "compression_available": bool(api_clear),
+        "blocked_reasons": blocked_reasons,
+        "discovered_local_candidates": [candidate],
+        "recommended_next_action": "Keep compression disabled; provide the compression repo path or a clear local Python/CLI API before enabling an adapter.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_advisor_context_compression_policy(payload)
+    return payload
+
+
+def validate_advisor_context_compression_policy(payload: dict[str, Any]) -> None:
+    required = (
+        "advisor_context_compression_policy_version", "advisor_context_compression_policy_id",
+        "compression_enabled_by_default", "compressor_provider", "compressor_repo_path",
+        "integration_mode", "allowed_payload_types", "prohibited_payload_types", "must_preserve_fields",
+        "max_input_chars", "max_output_chars", "preserve_source_refs", "preserve_evidence_refs",
+        "preserve_alias_map", "fallback_to_uncompressed_allowed", "external_network_allowed",
+        "openrouter_allowed", "compression_available", "blocked_reasons", "recommended_next_action",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"advisor context compression policy missing field: {key}")
+    if payload["advisor_context_compression_policy_version"] != ADVISOR_CONTEXT_COMPRESSION_POLICY_VERSION:
+        raise ValueError("invalid advisor context compression policy version")
+    if not str(payload["advisor_context_compression_policy_id"]).startswith("advisor-context-compression-policy-"):
+        raise ValueError("invalid advisor context compression policy id")
+    if payload["compression_enabled_by_default"] is not False:
+        raise ValueError("advisor context compression must be disabled by default")
+    if payload["preserve_source_refs"] is not True or payload["preserve_evidence_refs"] is not True or payload["preserve_alias_map"] is not True:
+        raise ValueError("advisor context compression policy must preserve refs and aliases")
+    for field in ("source_path", "source_refs", "evidence_refs", "source_ref_aliases", "evidence_ref_aliases", "safety_metadata"):
+        if field not in payload["must_preserve_fields"]:
+            raise ValueError(f"advisor context compression policy must preserve {field}")
+    if payload["external_network_allowed"] is not False or payload["openrouter_allowed"] is not False:
+        raise ValueError("advisor context compression policy must not allow network or OpenRouter")
+    if payload["fallback_to_uncompressed_allowed"] is not True:
+        raise ValueError("advisor context compression policy must allow deterministic uncompressed fallback")
+    if not 1000 <= int(payload["max_output_chars"]) <= int(payload["max_input_chars"]) <= 20000:
+        raise ValueError("advisor context compression policy character bounds are invalid")
+    text = _stable_ruflo_json(payload).lower()
+    if "sk-" in text or "bearer " in text:
+        raise ValueError("advisor context compression policy must not expose secrets")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("advisor context compression policy must remain read-only")
+
+
+def stable_advisor_context_compression_policy_json(payload: dict[str, Any]) -> str:
+    validate_advisor_context_compression_policy(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_advisor_context_compression_policy_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_advisor_context_compression_policy(payload)
+    return payload
+
+
+def collect_advisor_context_compression_preview(
+    *,
+    source_path: str,
+    compact_context: dict[str, Any] | None = None,
+    policy: dict[str, Any] | None = None,
+    alias_map: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    context = compact_context or collect_compact_source_aware_advisor_context(source_path=source_path)
+    validate_compact_source_aware_advisor_context(context)
+    compression_policy = policy or collect_advisor_context_compression_policy()
+    validate_advisor_context_compression_policy(compression_policy)
+    aliases = alias_map or collect_local_advisor_ref_alias_map(source_path=source_path)
+    validate_local_advisor_ref_alias_map(aliases)
+    context_text = _stable_ruflo_json({
+        "target_summary": context["target_summary"],
+        "evidence_summary": context["evidence_summary"],
+        "provenance_summary": context["provenance_summary"],
+        "pattern_summary": context["pattern_summary"],
+        "selected_upgrade_summary": context["selected_upgrade_summary"],
+        "task_draft_summary": context["task_draft_summary"],
+    })
+    input_chars = len(context_text)
+    compression_available = bool(compression_policy["compression_available"])
+    compression_attempted = False
+    output_chars = input_chars
+    blocked_reasons = list(compression_policy.get("blocked_reasons", []))
+    compression_status = "preview_only_no_compressor_available"
+    if compression_available:
+        compression_status = "available_not_attempted"
+        blocked_reasons.append("compression adapter execution is intentionally not enabled in this preview batch")
+    estimated_reduction = 0 if input_chars == 0 else max(0, round((1 - (output_chars / input_chars)) * 100, 2))
+    payload = {
+        "advisor_context_compression_preview_version": ADVISOR_CONTEXT_COMPRESSION_PREVIEW_VERSION,
+        "advisor_context_compression_preview_id": "advisor-context-compression-preview-" + _local_advisor_safe_hash({
+            "source_path": context["source_path"],
+            "compact_context_id": context["compact_source_aware_advisor_context_id"],
+            "policy_id": compression_policy["advisor_context_compression_policy_id"],
+            "alias_map_id": aliases["local_advisor_ref_alias_map_id"],
+            "version": ADVISOR_CONTEXT_COMPRESSION_PREVIEW_VERSION,
+        }),
+        "source_path": context["source_path"],
+        "compact_context_id": context["compact_source_aware_advisor_context_id"],
+        "compression_policy_id": compression_policy["advisor_context_compression_policy_id"],
+        "compression_attempted": compression_attempted,
+        "compression_available": compression_available,
+        "input_chars": input_chars,
+        "output_chars": output_chars,
+        "estimated_reduction_percent": estimated_reduction,
+        "preserved_source_refs_count": len(context["provenance_summary"]),
+        "preserved_evidence_refs_count": len(context["evidence_summary"]),
+        "preserved_aliases_count": int(aliases["alias_count"]),
+        "source_refs_preserved": True,
+        "evidence_refs_preserved": True,
+        "alias_map_preserved": True,
+        "compression_status": compression_status,
+        "blocked_reasons": blocked_reasons,
+        "recommended_next_action": "Use uncompressed compact context for now; enable a local compressor adapter only after a clear repo API is identified and fixture-tested.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_advisor_context_compression_preview(payload)
+    return payload
+
+
+def validate_advisor_context_compression_preview(payload: dict[str, Any]) -> None:
+    required = (
+        "advisor_context_compression_preview_version", "advisor_context_compression_preview_id",
+        "source_path", "compact_context_id", "compression_policy_id", "compression_attempted",
+        "compression_available", "input_chars", "output_chars", "estimated_reduction_percent",
+        "preserved_source_refs_count", "preserved_evidence_refs_count", "preserved_aliases_count",
+        "source_refs_preserved", "evidence_refs_preserved", "alias_map_preserved",
+        "compression_status", "blocked_reasons", "recommended_next_action", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"advisor context compression preview missing field: {key}")
+    if payload["advisor_context_compression_preview_version"] != ADVISOR_CONTEXT_COMPRESSION_PREVIEW_VERSION:
+        raise ValueError("invalid advisor context compression preview version")
+    if not str(payload["advisor_context_compression_preview_id"]).startswith("advisor-context-compression-preview-"):
+        raise ValueError("invalid advisor context compression preview id")
+    if not str(payload["source_path"]).startswith("research/"):
+        raise ValueError("advisor context compression preview must be source-bound under research")
+    if payload["compression_attempted"] is not False:
+        raise ValueError("advisor context compression preview must not execute compression in this batch")
+    if payload["source_refs_preserved"] is not True or payload["evidence_refs_preserved"] is not True or payload["alias_map_preserved"] is not True:
+        raise ValueError("advisor context compression preview must preserve refs and aliases")
+    if int(payload["input_chars"]) <= 0 or int(payload["output_chars"]) <= 0:
+        raise ValueError("advisor context compression preview must report positive character counts")
+    if int(payload["preserved_aliases_count"]) < 1:
+        raise ValueError("advisor context compression preview must preserve aliases")
+    if not isinstance(payload["blocked_reasons"], list):
+        raise ValueError("advisor context compression preview blocked_reasons must be a list")
+    text = _stable_ruflo_json(payload).lower()
+    if "sk-" in text or "bearer " in text:
+        raise ValueError("advisor context compression preview must not expose secrets")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("advisor context compression preview must remain read-only")
+
+
+def stable_advisor_context_compression_preview_json(payload: dict[str, Any]) -> str:
+    validate_advisor_context_compression_preview(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_advisor_context_compression_preview_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_advisor_context_compression_preview(payload)
     return payload
 
 
@@ -17736,6 +18002,11 @@ def collect_source_aware_advisor_command_preview(
         "ref_alias_map_command": card["ref_alias_map_command"],
         "alias_aware_micro_diagnostic_command": card["alias_aware_micro_diagnostic_command"],
         "recommended_alias_tuning_note": card["recommended_alias_tuning_note"],
+        "compression_policy_command": "python3 link.py advisor compression-policy --json",
+        "compression_preview_command": f"python3 link.py advisor compression-preview --source {card['source_path']} --json",
+        "recommended_compression_mode": "disabled_preview_only",
+        "compression_enabled_by_default": False,
+        "compression_next_action": "Inspect compression-preview before enabling any local compressor adapter; refs and aliases remain Link-owned.",
         "recommended_micro_diagnostic_command": card["recommended_micro_diagnostic_command"],
         "recommended_micro_stage_commands": card["recommended_micro_stage_commands"],
         "recommended_json_check_command": card["recommended_json_check_command"],
@@ -17746,6 +18017,8 @@ def collect_source_aware_advisor_command_preview(
         "recommended_rich_review_command": card["recommended_rich_review_command"],
         "openrouter_advisor_command": card["openrouter_advisor_command"],
         "recommended_sequence": [
+            "python3 link.py advisor compression-policy --json",
+            f"python3 link.py advisor compression-preview --source {card['source_path']} --json",
             card["ref_alias_map_command"],
             card["recommended_micro_diagnostic_command"],
             card["recommended_json_check_command"],
@@ -17780,6 +18053,8 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         "source_bound", "source_path", "research_target_intake_id", "selected_upgrade_candidate_id",
         "advisor_provider_card_id", "deterministic_preview_command", "local_advisor_command",
         "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "recommended_alias_tuning_note",
+        "compression_policy_command", "compression_preview_command", "recommended_compression_mode",
+        "compression_enabled_by_default", "compression_next_action",
         "recommended_micro_diagnostic_command", "recommended_micro_stage_commands",
         "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command",
         "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command",
@@ -17795,7 +18070,7 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("invalid source-aware advisor command preview version")
     if not payload["source_aware_advisor_command_preview_id"].startswith("source-aware-advisor-command-preview-"):
         raise ValueError("invalid source-aware advisor command preview id")
-    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
+    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "compression_preview_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
         if payload["source_path"] not in payload[field]:
             raise ValueError(f"advisor command preview {field} must reference selected source")
     if not isinstance(payload["recommended_micro_stage_commands"], list) or len(payload["recommended_micro_stage_commands"]) != 4:
@@ -17803,6 +18078,8 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
     for command in payload["recommended_micro_stage_commands"]:
         if payload["source_path"] not in command or "micro-check" not in command:
             raise ValueError("advisor micro stage command must reference selected source and micro-check")
+    if payload["compression_enabled_by_default"] is not False or "compression-policy" not in payload["compression_policy_command"] or "compression-preview" not in payload["compression_preview_command"]:
+        raise ValueError("advisor command preview must expose disabled compression policy and preview commands")
     if "micro-diagnostic" not in payload["recommended_micro_diagnostic_command"]:
         raise ValueError("advisor command preview must recommend micro diagnostic")
     if "json-check" not in payload["recommended_json_check_command"] or "advisor-two-stage" not in payload["recommended_two_stage_local_command"]:
@@ -19339,6 +19616,80 @@ def _advisor_cli_stage(args: list[str], default: int = 0) -> tuple[int, int | No
         return default, 2
 
 
+
+
+def advisor_compression_policy_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor compression-policy: optional local context compression boundary")
+        print("  python3 link.py advisor compression-policy --json")
+        print("Read-only. No compressor, model, network, MCP, or proxy call is made.")
+        return 0
+    if "--write" in args:
+        print("error: advisor compression-policy is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_advisor_context_compression_policy()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_advisor_context_compression_policy_json(payload), end="")
+    else:
+        print("Advisor context compression policy")
+        print(f"compressor: {payload['compressor_provider']}")
+        print(f"repo_path: {payload['compressor_repo_path'] or 'not found'}")
+        print(f"enabled_by_default: {payload['compression_enabled_by_default']}")
+        print(f"integration_mode: {payload['integration_mode']}")
+        print(f"local_only: {not payload['external_network_allowed']}")
+        print(f"refs_preserved_by_link: {payload['preserve_source_refs'] and payload['preserve_evidence_refs']}")
+        print(f"aliases_preserved_by_link: {payload['preserve_alias_map']}")
+        if payload["blocked_reasons"]:
+            print("blocked_reasons:")
+            for reason in payload["blocked_reasons"][:4]:
+                print(f"  - {reason}")
+        print(f"next_action: {payload['recommended_next_action']}")
+    return 0
+
+
+def advisor_compression_preview_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor compression-preview: selected target context compression preview")
+        print("  python3 link.py advisor compression-preview --source <path> --json")
+        print("Read-only. No model, OpenRouter, MCP, proxy, or compressor execution is performed.")
+        return 0
+    if "--write" in args:
+        print("error: advisor compression-preview is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "compression-preview")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_advisor_context_compression_preview(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_advisor_context_compression_preview_json(payload), end="")
+    else:
+        print("Advisor context compression preview")
+        print(f"source: {payload['source_path']}")
+        print(f"compression_available: {payload['compression_available']}")
+        print(f"compression_attempted: {payload['compression_attempted']}")
+        print(f"input_chars: {payload['input_chars']}")
+        print(f"output_chars: {payload['output_chars']}")
+        print(f"estimated_reduction_percent: {payload['estimated_reduction_percent']}")
+        print(f"source_refs_preserved: {payload['source_refs_preserved']}")
+        print(f"evidence_refs_preserved: {payload['evidence_refs_preserved']}")
+        print(f"alias_map_preserved: {payload['alias_map_preserved']}")
+        print(f"status: {payload['compression_status']}")
+        if payload["blocked_reasons"]:
+            print("blocked_reasons:")
+            for reason in payload["blocked_reasons"][:4]:
+                print(f"  - {reason}")
+        print(f"next_action: {payload['recommended_next_action']}")
+    return 0
 
 def advisor_ref_alias_map_main(argv: list[str] | None = None) -> int:
     args = _research_target_normalize_args(argv)
