@@ -13249,6 +13249,9 @@ LOCAL_ADVISOR_PROMPT_BUDGET_VERSION = "link-local-advisor-prompt-budget-v1"
 COMPACT_SOURCE_AWARE_ADVISOR_CONTEXT_VERSION = "link-compact-source-aware-advisor-context-v1"
 ADVISOR_CONTEXT_COMPRESSION_POLICY_VERSION = "link-advisor-context-compression-policy-v1"
 ADVISOR_CONTEXT_COMPRESSION_PREVIEW_VERSION = "link-advisor-context-compression-preview-v1"
+HEADROOM_COMPRESSION_REPO_DESCRIPTOR_VERSION = "link-headroom-compression-repo-descriptor-v1"
+HEADROOM_ADVISOR_COMPRESSION_POLICY_VERSION = "link-headroom-advisor-compression-policy-v1"
+HEADROOM_ADVISOR_COMPRESSION_PREVIEW_VERSION = "link-headroom-advisor-compression-preview-v1"
 LOCAL_ADVISOR_SMOKE_RECEIPT_VERSION = "link-local-advisor-smoke-receipt-v1"
 LOCAL_ADVISOR_JSON_CONTRACT_VERSION = "link-local-advisor-json-contract-v1"
 LOCAL_ADVISOR_JSON_CONTRACT_RESULT_VERSION = "link-local-advisor-json-contract-result-v1"
@@ -15444,6 +15447,383 @@ def parse_advisor_context_compression_preview_json(text: str) -> dict[str, Any]:
     import json as _json
     payload = _json.loads(text)
     validate_advisor_context_compression_preview(payload)
+    return payload
+
+
+
+HEADROOM_COMPRESSION_REPO_PATH = "/home/user/link/research/headroom-main.zip"
+
+
+def _headroom_zip_names(repo_path: str = HEADROOM_COMPRESSION_REPO_PATH) -> list[str]:
+    import zipfile as _zipfile
+    try:
+        with _zipfile.ZipFile(repo_path) as zf:
+            return list(zf.namelist())
+    except Exception:
+        return []
+
+
+def _headroom_zip_text(member: str, repo_path: str = HEADROOM_COMPRESSION_REPO_PATH, limit: int = 24000) -> str:
+    import zipfile as _zipfile
+    try:
+        with _zipfile.ZipFile(repo_path) as zf:
+            data = zf.read(member)
+    except Exception:
+        return ""
+    text = data.decode("utf-8", errors="replace")
+    return text[:limit]
+
+
+def _headroom_top_level_prefix(names: list[str]) -> str:
+    counts: dict[str, int] = {}
+    for name in names:
+        if "/" in name:
+            prefix = name.split("/", 1)[0]
+            counts[prefix] = counts.get(prefix, 0) + 1
+    if not counts:
+        return ""
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def collect_headroom_compression_repo_descriptor(*, repo_path: str = HEADROOM_COMPRESSION_REPO_PATH, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    from pathlib import Path as _Path
+
+    path = _Path(repo_path)
+    repo_found = path.exists() and path.is_file()
+    names = _headroom_zip_names(repo_path) if repo_found else []
+    prefix = _headroom_top_level_prefix(names)
+    package_files = [
+        item for item in (
+            f"{prefix}/README.md",
+            f"{prefix}/pyproject.toml",
+            f"{prefix}/Cargo.toml",
+            f"{prefix}/package.json",
+            f"{prefix}/setup.py",
+            f"{prefix}/requirements.txt",
+        )
+        if item in names
+    ]
+    readme = _headroom_zip_text(f"{prefix}/README.md", repo_path) if prefix else ""
+    pyproject = _headroom_zip_text(f"{prefix}/pyproject.toml", repo_path) if prefix else ""
+    joined_names = "\n".join(names).lower()
+    readme_lower = readme.lower()
+    pyproject_lower = pyproject.lower()
+    library_api_found = "from headroom import compress" in readme_lower or f"{prefix}/headroom/compress.py" in names
+    cli_api_found = f"{prefix}/headroom/cli/main.py" in names or "headroom proxy" in readme_lower
+    proxy_found = "proxy" in readme_lower or "headroom/cli/proxy.py" in joined_names or "crates/headroom-proxy" in joined_names
+    mcp_found = "mcp" in readme_lower or "headroom/integrations/mcp" in joined_names or "headroom/cli/mcp.py" in joined_names
+    available_modes = []
+    if library_api_found:
+        available_modes.append("python_library_compress_messages")
+    if cli_api_found:
+        available_modes.append("cli")
+    if proxy_found:
+        available_modes.append("proxy")
+    if mcp_found:
+        available_modes.append("mcp")
+    if "crates/headroom-core" in joined_names:
+        available_modes.append("rust_core")
+    install_required = bool(repo_found and ("maturin" in pyproject_lower or "pip install" in readme_lower or "cargo" in readme_lower))
+    network_required = bool("huggingface.co" in readme_lower or "cdn.pyke.io" in readme_lower or "external api" in readme_lower)
+    blocked = []
+    if not repo_found:
+        blocked.append("headroom zip was not found")
+    if install_required:
+        blocked.append("safe runnable adapter would require install/build or extraction, which is out of scope")
+    if proxy_found:
+        blocked.append("proxy mode exists but must not be started in this batch")
+    if mcp_found:
+        blocked.append("MCP mode exists but must not be started in this batch")
+    if network_required:
+        blocked.append("some optional Headroom assets/providers can require network; Link preview keeps network disabled")
+    payload = {
+        "headroom_compression_repo_descriptor_version": HEADROOM_COMPRESSION_REPO_DESCRIPTOR_VERSION,
+        "headroom_compression_repo_descriptor_id": "headroom-compression-repo-descriptor-" + _local_advisor_safe_hash({
+            "repo_path": str(path),
+            "prefix": prefix,
+            "package_files": package_files,
+            "version": HEADROOM_COMPRESSION_REPO_DESCRIPTOR_VERSION,
+        }),
+        "repo_path": str(path),
+        "repo_type": "zip",
+        "repo_found": bool(repo_found),
+        "top_level_prefix": prefix,
+        "likely_language": "python+rust" if "Cargo.toml" in " ".join(package_files) and "pyproject.toml" in " ".join(package_files) else "unknown",
+        "package_files_found": package_files,
+        "available_modes": available_modes,
+        "safest_mode": "preview_only_adapter_boundary",
+        "library_api_found": bool(library_api_found),
+        "cli_api_found": bool(cli_api_found),
+        "proxy_found": bool(proxy_found),
+        "mcp_found": bool(mcp_found),
+        "install_required": bool(install_required),
+        "network_required": False,
+        "api_key_required": False,
+        "stores_data": bool("ccr" in readme_lower or "memory" in readme_lower or "shared store" in readme_lower),
+        "can_compress_text": bool("compress(messages" in readme_lower or f"{prefix}/headroom/compress.py" in names),
+        "can_preserve_metadata": False,
+        "blocked_reasons": blocked,
+        "recommended_next_action": "Use Headroom as a preview-only compression candidate until a local installed library or bounded CLI adapter is explicitly approved and fixture-tested.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_headroom_compression_repo_descriptor(payload)
+    return payload
+
+
+def validate_headroom_compression_repo_descriptor(payload: dict[str, Any]) -> None:
+    required = (
+        "headroom_compression_repo_descriptor_version", "headroom_compression_repo_descriptor_id",
+        "repo_path", "repo_type", "repo_found", "top_level_prefix", "likely_language",
+        "package_files_found", "available_modes", "safest_mode", "library_api_found",
+        "cli_api_found", "proxy_found", "mcp_found", "install_required", "network_required",
+        "api_key_required", "stores_data", "can_compress_text", "can_preserve_metadata",
+        "blocked_reasons", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"headroom descriptor missing field: {key}")
+    if payload["headroom_compression_repo_descriptor_version"] != HEADROOM_COMPRESSION_REPO_DESCRIPTOR_VERSION:
+        raise ValueError("invalid headroom descriptor version")
+    if not str(payload["headroom_compression_repo_descriptor_id"]).startswith("headroom-compression-repo-descriptor-"):
+        raise ValueError("invalid headroom descriptor id")
+    if payload["repo_type"] != "zip":
+        raise ValueError("headroom descriptor repo_type must be zip")
+    if payload["repo_found"] is not True or not str(payload["repo_path"]).endswith("research/headroom-main.zip"):
+        raise ValueError("headroom descriptor must point at the expected research zip")
+    if payload["top_level_prefix"] != "headroom-main":
+        raise ValueError("headroom descriptor must detect headroom-main prefix")
+    if payload["proxy_found"] is not True or payload["mcp_found"] is not True:
+        raise ValueError("headroom descriptor should detect proxy and MCP surfaces")
+    if payload["safest_mode"] != "preview_only_adapter_boundary":
+        raise ValueError("headroom descriptor must choose preview-only safest mode")
+    if payload["network_required"] is not False or payload["api_key_required"] is not False:
+        raise ValueError("headroom descriptor must not require network or API key for preview")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("headroom descriptor must remain read-only")
+
+
+def stable_headroom_compression_repo_descriptor_json(payload: dict[str, Any]) -> str:
+    validate_headroom_compression_repo_descriptor(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_headroom_compression_repo_descriptor_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_headroom_compression_repo_descriptor(payload)
+    return payload
+
+
+def collect_headroom_advisor_compression_policy(*, descriptor: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    desc = descriptor or collect_headroom_compression_repo_descriptor()
+    validate_headroom_compression_repo_descriptor(desc)
+    payload = {
+        "headroom_advisor_compression_policy_version": HEADROOM_ADVISOR_COMPRESSION_POLICY_VERSION,
+        "headroom_advisor_compression_policy_id": "headroom-advisor-compression-policy-" + _local_advisor_safe_hash({
+            "descriptor_id": desc["headroom_compression_repo_descriptor_id"],
+            "version": HEADROOM_ADVISOR_COMPRESSION_POLICY_VERSION,
+        }),
+        "descriptor_id": desc["headroom_compression_repo_descriptor_id"],
+        "compression_enabled_by_default": False,
+        "compressor_name": "headroom",
+        "compressor_repo_path": desc["repo_path"],
+        "selected_integration_mode": "preview_only_adapter_boundary",
+        "allowed_modes": ["descriptor", "policy", "preview", "future_local_library_adapter", "future_bounded_cli_adapter"],
+        "prohibited_modes": ["mcp_server", "proxy", "wrap", "learn", "memory_writer", "network_fetch", "provider_gateway"],
+        "allowed_payload_types": ["advisor_compact_context", "source_evidence_summaries", "provenance_snippets", "micro_contract_alias_summaries", "task_draft_summary"],
+        "prohibited_payload_types": ["canonical_source_refs", "canonical_evidence_refs", "alias_map", "source_path", "safety_metadata", "provider_selection", "approval_state", "execution_state", "secrets"],
+        "must_preserve_fields": ["source_path", "research_target_intake_id", "selected_upgrade_candidate_id", "source_refs", "evidence_refs", "source_ref_aliases", "evidence_ref_aliases", "safety_metadata", "fallback_allowed", "advisory_only"],
+        "max_input_chars": 12000,
+        "max_output_chars": 5200,
+        "preserve_source_refs": True,
+        "preserve_evidence_refs": True,
+        "preserve_alias_map": True,
+        "preserve_safety_metadata": True,
+        "external_network_allowed": False,
+        "mcp_server_allowed": False,
+        "proxy_allowed": False,
+        "openrouter_allowed": False,
+        "fallback_to_uncompressed_allowed": True,
+        "recommended_next_action": "Use headroom-preview only; do not enable Headroom in advisor prompts until a local adapter preserves Link-owned refs and aliases in tests.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_headroom_advisor_compression_policy(payload)
+    return payload
+
+
+def validate_headroom_advisor_compression_policy(payload: dict[str, Any]) -> None:
+    required = (
+        "headroom_advisor_compression_policy_version", "headroom_advisor_compression_policy_id",
+        "descriptor_id", "compression_enabled_by_default", "compressor_name", "compressor_repo_path",
+        "selected_integration_mode", "allowed_modes", "prohibited_modes", "allowed_payload_types",
+        "prohibited_payload_types", "must_preserve_fields", "max_input_chars", "max_output_chars",
+        "preserve_source_refs", "preserve_evidence_refs", "preserve_alias_map", "preserve_safety_metadata",
+        "external_network_allowed", "mcp_server_allowed", "proxy_allowed", "openrouter_allowed",
+        "fallback_to_uncompressed_allowed", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"headroom policy missing field: {key}")
+    if payload["headroom_advisor_compression_policy_version"] != HEADROOM_ADVISOR_COMPRESSION_POLICY_VERSION:
+        raise ValueError("invalid headroom policy version")
+    if payload["compression_enabled_by_default"] is not False:
+        raise ValueError("Headroom compression must be disabled by default")
+    if payload["mcp_server_allowed"] is not False or payload["proxy_allowed"] is not False or payload["external_network_allowed"] is not False or payload["openrouter_allowed"] is not False:
+        raise ValueError("Headroom policy must prohibit MCP, proxy, network, and OpenRouter")
+    if payload["preserve_source_refs"] is not True or payload["preserve_evidence_refs"] is not True or payload["preserve_alias_map"] is not True or payload["preserve_safety_metadata"] is not True:
+        raise ValueError("Headroom policy must preserve refs, aliases, and safety metadata")
+    if "mcp_server" not in payload["prohibited_modes"] or "proxy" not in payload["prohibited_modes"]:
+        raise ValueError("Headroom policy must prohibit MCP/proxy")
+    if payload["fallback_to_uncompressed_allowed"] is not True:
+        raise ValueError("Headroom policy must allow deterministic uncompressed fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("Headroom policy must remain read-only")
+
+
+def stable_headroom_advisor_compression_policy_json(payload: dict[str, Any]) -> str:
+    validate_headroom_advisor_compression_policy(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_headroom_advisor_compression_policy_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_headroom_advisor_compression_policy(payload)
+    return payload
+
+
+def collect_headroom_advisor_compression_preview(
+    *,
+    source_path: str,
+    descriptor: dict[str, Any] | None = None,
+    policy: dict[str, Any] | None = None,
+    compact_context: dict[str, Any] | None = None,
+    alias_map: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    desc = descriptor or collect_headroom_compression_repo_descriptor()
+    validate_headroom_compression_repo_descriptor(desc)
+    pol = policy or collect_headroom_advisor_compression_policy(descriptor=desc)
+    validate_headroom_advisor_compression_policy(pol)
+    context = compact_context or collect_compact_source_aware_advisor_context(source_path=source_path)
+    validate_compact_source_aware_advisor_context(context)
+    aliases = alias_map or collect_local_advisor_ref_alias_map(source_path=source_path)
+    validate_local_advisor_ref_alias_map(aliases)
+    context_text = _stable_ruflo_json({
+        "target_summary": context["target_summary"],
+        "evidence_summary": context["evidence_summary"],
+        "provenance_summary": context["provenance_summary"],
+        "pattern_summary": context["pattern_summary"],
+        "selected_upgrade_summary": context["selected_upgrade_summary"],
+        "task_draft_summary": context["task_draft_summary"],
+        "aliases": {
+            "source": aliases["source_ref_aliases"],
+            "evidence": aliases["evidence_ref_aliases"],
+        },
+    })
+    input_chars = len(context_text)
+    compression_attempted = False
+    compression_available = bool(desc["library_api_found"] and not desc["install_required"])
+    output_chars = input_chars
+    blocked = list(desc.get("blocked_reasons", []))
+    if desc["library_api_found"]:
+        blocked.append("Headroom library API exists but is not runnable without install/build in this batch")
+    warnings = [
+        "Headroom proxy and MCP surfaces were detected but intentionally not used.",
+        "Link keeps canonical refs and aliases outside compressor output.",
+    ]
+    payload = {
+        "headroom_advisor_compression_preview_version": HEADROOM_ADVISOR_COMPRESSION_PREVIEW_VERSION,
+        "headroom_advisor_compression_preview_id": "headroom-advisor-compression-preview-" + _local_advisor_safe_hash({
+            "source_path": context["source_path"],
+            "descriptor_id": desc["headroom_compression_repo_descriptor_id"],
+            "policy_id": pol["headroom_advisor_compression_policy_id"],
+            "compact_context_id": context["compact_source_aware_advisor_context_id"],
+            "alias_map_id": aliases["local_advisor_ref_alias_map_id"],
+            "version": HEADROOM_ADVISOR_COMPRESSION_PREVIEW_VERSION,
+        }),
+        "source_path": context["source_path"],
+        "descriptor_id": desc["headroom_compression_repo_descriptor_id"],
+        "policy_id": pol["headroom_advisor_compression_policy_id"],
+        "compact_context_id": context["compact_source_aware_advisor_context_id"],
+        "ref_alias_map_id": aliases["local_advisor_ref_alias_map_id"],
+        "compression_attempted": compression_attempted,
+        "compression_available": compression_available,
+        "integration_mode_used": "preview_only_adapter_boundary",
+        "input_chars": input_chars,
+        "output_chars": output_chars,
+        "estimated_reduction_percent": 0,
+        "preserved_source_refs_count": len(context["provenance_summary"]),
+        "preserved_evidence_refs_count": len(context["evidence_summary"]),
+        "preserved_aliases_count": int(aliases["alias_count"]),
+        "source_refs_preserved": True,
+        "evidence_refs_preserved": True,
+        "alias_map_preserved": True,
+        "compression_status": "preview_only_not_run",
+        "blocked_reasons": blocked,
+        "warnings": warnings,
+        "recommended_next_action": "Keep Headroom disabled; add a local adapter only after installing/building Headroom is explicitly approved and fixture tests prove refs/aliases survive.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_headroom_advisor_compression_preview(payload)
+    return payload
+
+
+def validate_headroom_advisor_compression_preview(payload: dict[str, Any]) -> None:
+    required = (
+        "headroom_advisor_compression_preview_version", "headroom_advisor_compression_preview_id",
+        "source_path", "descriptor_id", "policy_id", "compact_context_id", "ref_alias_map_id",
+        "compression_attempted", "compression_available", "integration_mode_used", "input_chars", "output_chars",
+        "estimated_reduction_percent", "preserved_source_refs_count", "preserved_evidence_refs_count",
+        "preserved_aliases_count", "source_refs_preserved", "evidence_refs_preserved", "alias_map_preserved",
+        "compression_status", "blocked_reasons", "warnings", "recommended_next_action", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"headroom preview missing field: {key}")
+    if payload["headroom_advisor_compression_preview_version"] != HEADROOM_ADVISOR_COMPRESSION_PREVIEW_VERSION:
+        raise ValueError("invalid headroom preview version")
+    if not str(payload["source_path"]).startswith("research/"):
+        raise ValueError("Headroom preview must be source-bound under research")
+    if payload["compression_attempted"] is not False:
+        raise ValueError("Headroom preview must not execute compression in this batch")
+    if payload["integration_mode_used"] != "preview_only_adapter_boundary":
+        raise ValueError("Headroom preview integration mode must be preview-only")
+    if payload["source_refs_preserved"] is not True or payload["evidence_refs_preserved"] is not True or payload["alias_map_preserved"] is not True:
+        raise ValueError("Headroom preview must preserve Link-owned refs and aliases")
+    if int(payload["input_chars"]) <= 0 or int(payload["output_chars"]) <= 0 or int(payload["preserved_aliases_count"]) < 1:
+        raise ValueError("Headroom preview must report context and alias counts")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("Headroom preview must remain read-only")
+
+
+def stable_headroom_advisor_compression_preview_json(payload: dict[str, Any]) -> str:
+    validate_headroom_advisor_compression_preview(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_headroom_advisor_compression_preview_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_headroom_advisor_compression_preview(payload)
     return payload
 
 
@@ -18004,9 +18384,12 @@ def collect_source_aware_advisor_command_preview(
         "recommended_alias_tuning_note": card["recommended_alias_tuning_note"],
         "compression_policy_command": "python3 link.py advisor compression-policy --json",
         "compression_preview_command": f"python3 link.py advisor compression-preview --source {card['source_path']} --json",
-        "recommended_compression_mode": "disabled_preview_only",
+        "headroom_descriptor_command": "python3 link.py advisor headroom-descriptor --json",
+        "headroom_policy_command": "python3 link.py advisor headroom-policy --json",
+        "headroom_preview_command": f"python3 link.py advisor headroom-preview --source {card['source_path']} --json",
+        "recommended_compression_mode": "headroom_preview_only_disabled",
         "compression_enabled_by_default": False,
-        "compression_next_action": "Inspect compression-preview before enabling any local compressor adapter; refs and aliases remain Link-owned.",
+        "compression_next_action": "Inspect headroom-preview before enabling any local compressor adapter; refs and aliases remain Link-owned.",
         "recommended_micro_diagnostic_command": card["recommended_micro_diagnostic_command"],
         "recommended_micro_stage_commands": card["recommended_micro_stage_commands"],
         "recommended_json_check_command": card["recommended_json_check_command"],
@@ -18019,6 +18402,9 @@ def collect_source_aware_advisor_command_preview(
         "recommended_sequence": [
             "python3 link.py advisor compression-policy --json",
             f"python3 link.py advisor compression-preview --source {card['source_path']} --json",
+            "python3 link.py advisor headroom-descriptor --json",
+            "python3 link.py advisor headroom-policy --json",
+            f"python3 link.py advisor headroom-preview --source {card['source_path']} --json",
             card["ref_alias_map_command"],
             card["recommended_micro_diagnostic_command"],
             card["recommended_json_check_command"],
@@ -18053,7 +18439,8 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         "source_bound", "source_path", "research_target_intake_id", "selected_upgrade_candidate_id",
         "advisor_provider_card_id", "deterministic_preview_command", "local_advisor_command",
         "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "recommended_alias_tuning_note",
-        "compression_policy_command", "compression_preview_command", "recommended_compression_mode",
+        "compression_policy_command", "compression_preview_command", "headroom_descriptor_command",
+        "headroom_policy_command", "headroom_preview_command", "recommended_compression_mode",
         "compression_enabled_by_default", "compression_next_action",
         "recommended_micro_diagnostic_command", "recommended_micro_stage_commands",
         "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command",
@@ -18070,7 +18457,7 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("invalid source-aware advisor command preview version")
     if not payload["source_aware_advisor_command_preview_id"].startswith("source-aware-advisor-command-preview-"):
         raise ValueError("invalid source-aware advisor command preview id")
-    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "compression_preview_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
+    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "compression_preview_command", "headroom_preview_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
         if payload["source_path"] not in payload[field]:
             raise ValueError(f"advisor command preview {field} must reference selected source")
     if not isinstance(payload["recommended_micro_stage_commands"], list) or len(payload["recommended_micro_stage_commands"]) != 4:
@@ -18080,6 +18467,12 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
             raise ValueError("advisor micro stage command must reference selected source and micro-check")
     if payload["compression_enabled_by_default"] is not False or "compression-policy" not in payload["compression_policy_command"] or "compression-preview" not in payload["compression_preview_command"]:
         raise ValueError("advisor command preview must expose disabled compression policy and preview commands")
+    if "headroom-descriptor" not in payload["headroom_descriptor_command"] or "headroom-policy" not in payload["headroom_policy_command"] or "headroom-preview" not in payload["headroom_preview_command"]:
+        raise ValueError("advisor command preview must expose Headroom descriptor/policy/preview commands")
+    if any("mcp" in str(item).lower() and "headroom" in str(item).lower() for item in payload["recommended_sequence"]):
+        raise ValueError("advisor command preview must not recommend Headroom MCP")
+    if any("proxy" in str(item).lower() and "headroom" in str(item).lower() for item in payload["recommended_sequence"]):
+        raise ValueError("advisor command preview must not recommend Headroom proxy")
     if "micro-diagnostic" not in payload["recommended_micro_diagnostic_command"]:
         raise ValueError("advisor command preview must recommend micro diagnostic")
     if "json-check" not in payload["recommended_json_check_command"] or "advisor-two-stage" not in payload["recommended_two_stage_local_command"]:
@@ -19616,6 +20009,113 @@ def _advisor_cli_stage(args: list[str], default: int = 0) -> tuple[int, int | No
         return default, 2
 
 
+
+
+
+def advisor_headroom_descriptor_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor headroom-descriptor: inspect Headroom compression repo zip")
+        print("  python3 link.py advisor headroom-descriptor --json")
+        print("Read-only. No extraction, install, proxy, MCP, model, or network call is made.")
+        return 0
+    if "--write" in args:
+        print("error: advisor headroom-descriptor is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_headroom_compression_repo_descriptor()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_headroom_compression_repo_descriptor_json(payload), end="")
+    else:
+        print("Headroom compression repo descriptor")
+        print(f"repo_path: {payload['repo_path']}")
+        print(f"top_level_prefix: {payload['top_level_prefix']}")
+        print(f"likely_language: {payload['likely_language']}")
+        print(f"safest_mode: {payload['safest_mode']}")
+        print(f"library_api_found: {payload['library_api_found']}")
+        print(f"cli_api_found: {payload['cli_api_found']}")
+        print(f"proxy_found: {payload['proxy_found']}")
+        print(f"mcp_found: {payload['mcp_found']}")
+        print(f"install_required: {payload['install_required']}")
+        print(f"local_only_preview: {not payload['network_required']}")
+        print(f"next_action: {payload['recommended_next_action']}")
+    return 0
+
+
+def advisor_headroom_policy_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor headroom-policy: Link-owned Headroom compression policy")
+        print("  python3 link.py advisor headroom-policy --json")
+        print("Read-only. Compression disabled by default; MCP/proxy not allowed.")
+        return 0
+    if "--write" in args:
+        print("error: advisor headroom-policy is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_headroom_advisor_compression_policy()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_headroom_advisor_compression_policy_json(payload), end="")
+    else:
+        print("Headroom advisor compression policy")
+        print(f"compressor: {payload['compressor_name']}")
+        print(f"repo_path: {payload['compressor_repo_path']}")
+        print(f"enabled_by_default: {payload['compression_enabled_by_default']}")
+        print(f"selected_mode: {payload['selected_integration_mode']}")
+        print(f"mcp_server_allowed: {payload['mcp_server_allowed']}")
+        print(f"proxy_allowed: {payload['proxy_allowed']}")
+        print(f"openrouter_allowed: {payload['openrouter_allowed']}")
+        print(f"refs_preserved_by_link: {payload['preserve_source_refs'] and payload['preserve_evidence_refs']}")
+        print(f"aliases_preserved_by_link: {payload['preserve_alias_map']}")
+        print(f"next_action: {payload['recommended_next_action']}")
+    return 0
+
+
+def advisor_headroom_preview_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor headroom-preview: selected target Headroom compression preview")
+        print("  python3 link.py advisor headroom-preview --source <path> --json")
+        print("Read-only. No Headroom execution, MCP, proxy, model, OpenRouter, or network call is made.")
+        return 0
+    if "--write" in args:
+        print("error: advisor headroom-preview is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "headroom-preview")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_headroom_advisor_compression_preview(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_headroom_advisor_compression_preview_json(payload), end="")
+    else:
+        print("Headroom advisor compression preview")
+        print(f"source: {payload['source_path']}")
+        print(f"integration_mode: {payload['integration_mode_used']}")
+        print(f"compression_available: {payload['compression_available']}")
+        print(f"compression_attempted: {payload['compression_attempted']}")
+        print(f"input_chars: {payload['input_chars']}")
+        print(f"output_chars: {payload['output_chars']}")
+        print(f"estimated_reduction_percent: {payload['estimated_reduction_percent']}")
+        print(f"source_refs_preserved: {payload['source_refs_preserved']}")
+        print(f"evidence_refs_preserved: {payload['evidence_refs_preserved']}")
+        print(f"alias_map_preserved: {payload['alias_map_preserved']}")
+        print(f"status: {payload['compression_status']}")
+        if payload["blocked_reasons"]:
+            print("blocked_reasons:")
+            for reason in payload["blocked_reasons"][:5]:
+                print(f"  - {reason}")
+        print(f"next_action: {payload['recommended_next_action']}")
+    return 0
 
 
 def advisor_compression_policy_main(argv: list[str] | None = None) -> int:

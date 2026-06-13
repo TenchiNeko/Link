@@ -287,6 +287,18 @@ def _cmd_advisor(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import advisor_ref_alias_map_main as _advisor_ref_alias_map_main
 
         return _advisor_ref_alias_map_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "headroom-descriptor":
+        from link_modes.growth.link_growth_console import advisor_headroom_descriptor_main as _advisor_headroom_descriptor_main
+
+        return _advisor_headroom_descriptor_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "headroom-policy":
+        from link_modes.growth.link_growth_console import advisor_headroom_policy_main as _advisor_headroom_policy_main
+
+        return _advisor_headroom_policy_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "headroom-preview":
+        from link_modes.growth.link_growth_console import advisor_headroom_preview_main as _advisor_headroom_preview_main
+
+        return _advisor_headroom_preview_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "compression-policy":
         from link_modes.growth.link_growth_console import advisor_compression_policy_main as _advisor_compression_policy_main
 
@@ -354,6 +366,9 @@ def _cmd_advisor(argv: list[str]) -> int:
         print("  guidance          Show advisor provider operator guidance")
         print("  target-command    Preview safe advisor commands for a selected source")
         print("  ref-alias-map     Preview deterministic S/E ref aliases")
+        print("  headroom-descriptor Preview Headroom compression repo descriptor")
+        print("  headroom-policy Preview Headroom advisor compression policy")
+        print("  headroom-preview Preview selected-source Headroom compression readiness")
         print("  compression-policy Preview optional advisor context compression boundary")
         print("  compression-preview Preview selected-source compression readiness")
         print("  micro-contract    Preview staged tiny local JSON contract")

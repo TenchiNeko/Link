@@ -18741,6 +18741,10 @@ def check_source_aware_control_plane_dashboard_clis() -> None:
              "advisor target-command must recommend micro-diagnostic before richer local advisor flow")
     _require("compression-preview" in command_preview["compression_preview_command"] and command_preview["compression_enabled_by_default"] is False,
              "advisor target-command must expose disabled compression preview")
+    _require("headroom-preview" in command_preview["headroom_preview_command"] and "headroom-descriptor" in command_preview["headroom_descriptor_command"],
+             "advisor target-command must expose Headroom descriptor and preview")
+    _require(not any("headroom mcp" in item.lower() or "headroom proxy" in item.lower() for item in command_preview["recommended_sequence"]),
+             "advisor target-command must not recommend Headroom MCP/proxy")
     _require("json-check" in command_preview["recommended_json_check_command"] and "advisor-two-stage" in command_preview["recommended_two_stage_local_command"],
              "advisor target-command must recommend JSON check and two-stage local advisor flow")
     _require(not any("openrouter" in item.lower() and "fallback" in item.lower() for item in command_preview["recommended_sequence"]),
@@ -19059,6 +19063,9 @@ def check_local_model_advisor_foundation_helpers() -> None:
         collect_advisor_smoke_result,
         collect_advisor_context_compression_policy,
         collect_advisor_context_compression_preview,
+        collect_headroom_compression_repo_descriptor,
+        collect_headroom_advisor_compression_policy,
+        collect_headroom_advisor_compression_preview,
         collect_compact_source_aware_advisor_context,
         collect_local_advisor_json_contract,
         collect_local_advisor_json_contract_result,
@@ -19089,10 +19096,19 @@ def check_local_model_advisor_foundation_helpers() -> None:
         parse_advisor_smoke_result_json,
         parse_advisor_context_compression_policy_json,
         parse_advisor_context_compression_preview_json,
+        parse_headroom_compression_repo_descriptor_json,
+        parse_headroom_advisor_compression_policy_json,
+        parse_headroom_advisor_compression_preview_json,
+        parse_headroom_compression_repo_descriptor_json,
+        parse_headroom_advisor_compression_policy_json,
+        parse_headroom_advisor_compression_preview_json,
         parse_advisor_provider_registry_json,
         parse_advisor_smoke_plan_json,
         parse_advisor_context_compression_policy_json,
         parse_advisor_context_compression_preview_json,
+        parse_headroom_compression_repo_descriptor_json,
+        parse_headroom_advisor_compression_policy_json,
+        parse_headroom_advisor_compression_preview_json,
         parse_compact_source_aware_advisor_context_json,
         parse_local_advisor_json_contract_json,
         parse_local_advisor_json_contract_result_json,
@@ -19123,6 +19139,9 @@ def check_local_model_advisor_foundation_helpers() -> None:
         stable_advisor_smoke_result_json,
         stable_advisor_context_compression_policy_json,
         stable_advisor_context_compression_preview_json,
+        stable_headroom_compression_repo_descriptor_json,
+        stable_headroom_advisor_compression_policy_json,
+        stable_headroom_advisor_compression_preview_json,
         stable_compact_source_aware_advisor_context_json,
         stable_local_advisor_json_contract_json,
         stable_local_advisor_json_contract_result_json,
@@ -19153,6 +19172,9 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_advisor_smoke_result,
         validate_advisor_context_compression_policy,
         validate_advisor_context_compression_preview,
+        validate_headroom_compression_repo_descriptor,
+        validate_headroom_advisor_compression_policy,
+        validate_headroom_advisor_compression_preview,
         validate_compact_local_advisor_prompt,
         validate_compact_source_aware_advisor_context,
         validate_local_advisor_json_contract,
@@ -19455,6 +19477,41 @@ def check_local_model_advisor_foundation_helpers() -> None:
     validate_advisor_context_compression_preview(compression_preview)
     _require(parse_advisor_context_compression_preview_json(stable_advisor_context_compression_preview_json(compression_preview)) == compression_preview,
              "advisor context compression preview JSON must round trip")
+
+    headroom_descriptor = collect_headroom_compression_repo_descriptor()
+    _require(headroom_descriptor["repo_path"].endswith("research/headroom-main.zip") and headroom_descriptor["repo_type"] == "zip",
+             "Headroom descriptor must record the research zip")
+    _require(headroom_descriptor["top_level_prefix"] == "headroom-main" and headroom_descriptor["repo_found"] is True,
+             "Headroom descriptor must detect top-level zip prefix")
+    _require(headroom_descriptor["library_api_found"] is True and headroom_descriptor["proxy_found"] is True and headroom_descriptor["mcp_found"] is True,
+             "Headroom descriptor must detect library, proxy, and MCP surfaces")
+    _require(headroom_descriptor["safest_mode"] == "preview_only_adapter_boundary",
+             "Headroom descriptor must choose preview-only safest mode")
+    validate_headroom_compression_repo_descriptor(headroom_descriptor)
+    _require(parse_headroom_compression_repo_descriptor_json(stable_headroom_compression_repo_descriptor_json(headroom_descriptor)) == headroom_descriptor,
+             "Headroom descriptor JSON must round trip")
+
+    headroom_policy = collect_headroom_advisor_compression_policy(descriptor=headroom_descriptor)
+    _require(headroom_policy["compression_enabled_by_default"] is False,
+             "Headroom compression must be disabled by default")
+    _require(headroom_policy["mcp_server_allowed"] is False and headroom_policy["proxy_allowed"] is False and headroom_policy["openrouter_allowed"] is False,
+             "Headroom policy must prohibit MCP, proxy, and OpenRouter")
+    _require(headroom_policy["preserve_source_refs"] is True and headroom_policy["preserve_evidence_refs"] is True and headroom_policy["preserve_alias_map"] is True,
+             "Headroom policy must preserve refs and aliases")
+    validate_headroom_advisor_compression_policy(headroom_policy)
+    _require(parse_headroom_advisor_compression_policy_json(stable_headroom_advisor_compression_policy_json(headroom_policy)) == headroom_policy,
+             "Headroom policy JSON must round trip")
+
+    headroom_preview = collect_headroom_advisor_compression_preview(source_path=zip_source, descriptor=headroom_descriptor, policy=headroom_policy, compact_context=compact_context, alias_map=alias_map)
+    _require(headroom_preview["source_path"] == zip_source and headroom_preview["compression_attempted"] is False,
+             "Headroom preview must preserve source and avoid execution")
+    _require(headroom_preview["source_refs_preserved"] is True and headroom_preview["evidence_refs_preserved"] is True and headroom_preview["alias_map_preserved"] is True,
+             "Headroom preview must preserve refs and aliases")
+    _require(headroom_preview["integration_mode_used"] == "preview_only_adapter_boundary",
+             "Headroom preview must be preview-only")
+    validate_headroom_advisor_compression_preview(headroom_preview)
+    _require(parse_headroom_advisor_compression_preview_json(stable_headroom_advisor_compression_preview_json(headroom_preview)) == headroom_preview,
+             "Headroom preview JSON must round trip")
 
     micro_contracts = [collect_local_advisor_micro_contract(package, stage_number=stage) for stage in range(4)]
     for stage, micro_contract in enumerate(micro_contracts):
@@ -19785,6 +19842,9 @@ def check_local_model_advisor_clis() -> None:
         parse_advisor_smoke_plan_json,
         parse_advisor_context_compression_policy_json,
         parse_advisor_context_compression_preview_json,
+        parse_headroom_compression_repo_descriptor_json,
+        parse_headroom_advisor_compression_policy_json,
+        parse_headroom_advisor_compression_preview_json,
         parse_compact_source_aware_advisor_context_json,
         parse_local_advisor_json_contract_json,
         parse_local_advisor_json_contract_result_json,
@@ -19923,6 +19983,32 @@ def check_local_model_advisor_clis() -> None:
     _require(compression_preview["source_refs_preserved"] is True and compression_preview["alias_map_preserved"] is True,
              "advisor compression-preview must preserve refs and alias map")
 
+    headroom_descriptor_out = io.StringIO()
+    with contextlib.redirect_stdout(headroom_descriptor_out):
+        headroom_descriptor_rc = _cmd_advisor(["headroom-descriptor", "--json"])
+    _require(headroom_descriptor_rc == 0, "advisor headroom-descriptor --json must return 0")
+    headroom_descriptor = parse_headroom_compression_repo_descriptor_json(headroom_descriptor_out.getvalue())
+    _require(headroom_descriptor["top_level_prefix"] == "headroom-main" and headroom_descriptor["library_api_found"] is True,
+             "advisor headroom-descriptor must detect Headroom zip and library API")
+
+    headroom_policy_out = io.StringIO()
+    with contextlib.redirect_stdout(headroom_policy_out):
+        headroom_policy_rc = _cmd_advisor(["headroom-policy", "--json"])
+    _require(headroom_policy_rc == 0, "advisor headroom-policy --json must return 0")
+    headroom_policy = parse_headroom_advisor_compression_policy_json(headroom_policy_out.getvalue())
+    _require(headroom_policy["compression_enabled_by_default"] is False and headroom_policy["mcp_server_allowed"] is False and headroom_policy["proxy_allowed"] is False,
+             "advisor headroom-policy must keep compression disabled and prohibit MCP/proxy")
+
+    headroom_preview_out = io.StringIO()
+    with contextlib.redirect_stdout(headroom_preview_out):
+        headroom_preview_rc = _cmd_advisor(["headroom-preview", "--source", zip_source, "--json"])
+    _require(headroom_preview_rc == 0, "advisor headroom-preview --source --json must return 0")
+    headroom_preview = parse_headroom_advisor_compression_preview_json(headroom_preview_out.getvalue())
+    _require(headroom_preview["source_path"] == zip_source and headroom_preview["compression_attempted"] is False,
+             "advisor headroom-preview must preserve source and avoid execution")
+    _require(headroom_preview["alias_map_preserved"] is True and headroom_preview["source_refs_preserved"] is True,
+             "advisor headroom-preview must preserve aliases and refs")
+
     human_compression_out = io.StringIO()
     with contextlib.redirect_stdout(human_compression_out):
         human_compression_rc = _cmd_advisor(["compression-preview", "--source", zip_source])
@@ -19931,6 +20017,17 @@ def check_local_model_advisor_clis() -> None:
              "advisor compression-preview human output must render a summary")
     _require("alias_map_preserved: True" in human_compression and not human_compression.lstrip().startswith("{"),
              "advisor compression-preview human output must show alias preservation without raw JSON")
+
+    human_headroom_out = io.StringIO()
+    with contextlib.redirect_stdout(human_headroom_out):
+        human_headroom_rc = _cmd_advisor(["headroom-preview", "--source", zip_source])
+    human_headroom = human_headroom_out.getvalue()
+    _require(human_headroom_rc == 0 and "Headroom advisor compression preview" in human_headroom,
+             "advisor headroom-preview human output must render a summary")
+    _require("alias_map_preserved: True" in human_headroom and "compression_attempted: False" in human_headroom,
+             "advisor headroom-preview human output must show disabled execution and alias preservation")
+    _require(not human_headroom.lstrip().startswith("{"),
+             "advisor headroom-preview human output must not be raw JSON")
 
     receipt_out = io.StringIO()
     with contextlib.redirect_stdout(receipt_out):
@@ -19996,7 +20093,7 @@ def check_local_model_advisor_clis() -> None:
     _require(diagnostic_payload["diagnostic_status"] == "plan_only" and diagnostic_payload["fallback_allowed"] is False,
              "advisor local-json-diagnostic preview must be plan-only with no fallback")
 
-    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "compression-policy", "compression-preview", "smoke-receipt", "ref-alias-map", "micro-contract", "micro-check", "micro-diagnostic", "json-contract", "json-check", "local-json-diagnostic"):
+    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "compression-policy", "compression-preview", "headroom-descriptor", "headroom-policy", "headroom-preview", "smoke-receipt", "ref-alias-map", "micro-contract", "micro-check", "micro-diagnostic", "json-contract", "json-check", "local-json-diagnostic"):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_advisor([command, "--write"])
