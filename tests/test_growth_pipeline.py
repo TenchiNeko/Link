@@ -18731,6 +18731,10 @@ def check_source_aware_control_plane_dashboard_clis() -> None:
     command_preview = parse_source_aware_advisor_command_preview_json(command_out.getvalue())
     _require(zip_source in command_preview["recommended_command"] and command_preview["fallback_allowed"] is False,
              "advisor target-command must preview selected-source command with fallback disabled")
+    _require("json-check" in command_preview["recommended_json_check_command"] and "advisor-two-stage" in command_preview["recommended_two_stage_local_command"],
+             "advisor target-command must recommend JSON check and two-stage local advisor flow")
+    _require(not any("openrouter" in item.lower() and "fallback" in item.lower() for item in command_preview["recommended_sequence"]),
+             "advisor target-command must not recommend OpenRouter fallback")
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         write_rc = _cmd_advisor(["target-command", "--source", zip_source, "--write"])
@@ -19044,8 +19048,12 @@ def check_local_model_advisor_foundation_helpers() -> None:
         collect_advisor_smoke_plan,
         collect_advisor_smoke_result,
         collect_compact_source_aware_advisor_context,
+        collect_local_advisor_json_contract,
+        collect_local_advisor_json_contract_result,
         collect_local_advisor_prompt_budget,
         collect_local_advisor_smoke_receipt,
+        collect_local_llamacpp_json_diagnostic,
+        collect_two_stage_local_advisor_gate,
         collect_local_model_advisor_comparison_card,
         collect_local_model_advisor_config,
         collect_local_model_advisor_metadata,
@@ -19066,8 +19074,12 @@ def check_local_model_advisor_foundation_helpers() -> None:
         parse_advisor_provider_registry_json,
         parse_advisor_smoke_plan_json,
         parse_compact_source_aware_advisor_context_json,
+        parse_local_advisor_json_contract_json,
+        parse_local_advisor_json_contract_result_json,
         parse_local_advisor_prompt_budget_json,
         parse_local_advisor_smoke_receipt_json,
+        parse_local_llamacpp_json_diagnostic_json,
+        parse_two_stage_local_advisor_gate_json,
         parse_local_model_advisor_comparison_card_json,
         parse_local_model_advisor_config_json,
         parse_local_advisor_availability_card_json,
@@ -19086,8 +19098,12 @@ def check_local_model_advisor_foundation_helpers() -> None:
         stable_advisor_smoke_plan_json,
         stable_advisor_smoke_result_json,
         stable_compact_source_aware_advisor_context_json,
+        stable_local_advisor_json_contract_json,
+        stable_local_advisor_json_contract_result_json,
         stable_local_advisor_prompt_budget_json,
         stable_local_advisor_smoke_receipt_json,
+        stable_local_llamacpp_json_diagnostic_json,
+        stable_two_stage_local_advisor_gate_json,
         stable_local_model_advisor_comparison_card_json,
         stable_local_model_advisor_config_json,
         stable_local_advisor_availability_card_json,
@@ -19107,8 +19123,13 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_advisor_smoke_result,
         validate_compact_local_advisor_prompt,
         validate_compact_source_aware_advisor_context,
+        validate_local_advisor_json_contract,
+        validate_local_advisor_json_contract_result,
         validate_local_advisor_prompt_budget,
         validate_local_advisor_smoke_receipt,
+        validate_local_llamacpp_json_diagnostic,
+        validate_minimal_local_json_contract_prompt,
+        validate_two_stage_local_advisor_gate,
         validate_local_model_advisor_comparison_card,
         validate_local_model_advisor_config,
         validate_local_advisor_availability_card,
@@ -19122,6 +19143,7 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_openrouter_advisor_readiness_card,
         validate_research_advisor_prompt_package,
         render_compact_local_advisor_prompt,
+        render_minimal_local_json_contract_prompt,
     )
 
     zip_source, _, _ = _research_target_test_paths()
@@ -19316,6 +19338,9 @@ def check_local_model_advisor_foundation_helpers() -> None:
     validate_research_advisor_prompt_package(package)
     _require(parse_research_advisor_prompt_package_json(stable_research_advisor_prompt_package_json(package)) == package,
              "advisor prompt package JSON must round trip")
+    source_ref = package["source_refs"][0]["source_ref_id"]
+    evidence_ref = package["evidence_refs"][0]["evidence_ref_id"]
+    candidate_id = package["deterministic_upgrade_candidates"][0]["upgrade_candidate_id"]
 
     budget = collect_local_advisor_prompt_budget()
     _require(budget["provider_name"] == "llamacpp" and budget["strict_json_required"] is True,
@@ -19354,6 +19379,84 @@ def check_local_model_advisor_foundation_helpers() -> None:
     _require(parse_local_advisor_smoke_receipt_json(stable_local_advisor_smoke_receipt_json(smoke_receipt)) == smoke_receipt,
              "local advisor smoke receipt JSON must round trip")
 
+    contract = collect_local_advisor_json_contract(package)
+    _require(contract["source_path"] == zip_source and contract["fallback_allowed"] is False,
+             "local advisor JSON contract must preserve source and block fallback")
+    _require(contract["strict_json_required"] is True and contract["advisory_only"] is True,
+             "local advisor JSON contract must require strict JSON and advisory-only mode")
+    validate_local_advisor_json_contract(contract)
+    _require(parse_local_advisor_json_contract_json(stable_local_advisor_json_contract_json(contract)) == contract,
+             "local advisor JSON contract JSON must round trip")
+
+    minimal_prompt = render_minimal_local_json_contract_prompt(contract)
+    _require(zip_source in minimal_prompt and "strict JSON" in minimal_prompt and "source_bound" in minimal_prompt,
+             "minimal local JSON contract prompt must be source-bound and strict JSON")
+    _require(len(minimal_prompt) <= contract["max_prompt_chars"],
+             "minimal local JSON contract prompt must fit contract budget")
+    validate_minimal_local_json_contract_prompt(minimal_prompt, contract)
+
+    contract_success = {
+        "ok": True,
+        "advisor_role": "local_source_bound_json_check",
+        "source_path": zip_source,
+        "source_bound": True,
+        "critique": "The selected recommendation is source-bound and still requires human review.",
+        "missing_evidence": [],
+        "risk_notes": ["advisory only"],
+        "source_refs": [source_ref],
+        "evidence_refs": [evidence_ref],
+        "insufficient_evidence": False,
+    }
+    contract_result = collect_local_advisor_json_contract_result(contract, model_response_json=contract_success)
+    _require(contract_result["smoke_ok"] is True and contract_result["fail_closed"] is False,
+             "valid local advisor JSON contract fixture must pass")
+    validate_local_advisor_json_contract_result(contract_result, contract)
+    _require(parse_local_advisor_json_contract_result_json(stable_local_advisor_json_contract_result_json(contract_result)) == contract_result,
+             "local advisor JSON contract result JSON must round trip")
+
+    empty_result = collect_local_advisor_json_contract_result(contract, use_local_model=False)
+    _require(empty_result["smoke_ok"] is False and empty_result["fail_closed"] is True,
+             "preview/no-model JSON contract result must fail closed")
+    wrong_source = dict(contract_success)
+    wrong_source["source_path"] = "research/other.zip"
+    wrong_source_result = collect_local_advisor_json_contract_result(contract, model_response_json=wrong_source)
+    _require(wrong_source_result["smoke_ok"] is False and "source_path" in wrong_source_result["fail_closed_reason"],
+             "wrong source_path JSON contract fixture must fail closed")
+    unbound = dict(contract_success)
+    unbound["source_bound"] = False
+    unbound_result = collect_local_advisor_json_contract_result(contract, model_response_json=unbound)
+    _require(unbound_result["smoke_ok"] is False and unbound_result["fail_closed"] is True,
+             "source_bound false JSON contract fixture must fail closed")
+    forbidden_contract = dict(contract_success)
+    forbidden_contract["critique"] = "patch files now"
+    forbidden_result = collect_local_advisor_json_contract_result(contract, model_response_json=forbidden_contract)
+    _require(forbidden_result["smoke_ok"] is False and "forbidden" in forbidden_result["fail_closed_reason"],
+             "forbidden recommendation JSON contract fixture must fail closed")
+
+    stage1_fail_gate = collect_two_stage_local_advisor_gate(source_path=zip_source, stage1_result=empty_result)
+    _require(stage1_fail_gate["stage1_passed"] is False and stage1_fail_gate["stage2_attempted"] is False,
+             "two-stage gate must not attempt stage2 when stage1 fails")
+    validate_two_stage_local_advisor_gate(stage1_fail_gate)
+    diagnostic_plan = collect_local_llamacpp_json_diagnostic(source_path=zip_source)
+    _require(diagnostic_plan["diagnostic_status"] == "plan_only" and diagnostic_plan["fallback_allowed"] is False,
+             "local JSON diagnostic plan must be no-model and no-fallback")
+    validate_local_llamacpp_json_diagnostic(diagnostic_plan)
+    _require(parse_local_llamacpp_json_diagnostic_json(stable_local_llamacpp_json_diagnostic_json(diagnostic_plan)) == diagnostic_plan,
+             "local JSON diagnostic JSON must round trip")
+    diagnostic_empty = collect_local_llamacpp_json_diagnostic(
+        source_path=zip_source,
+        use_local_model=True,
+        fixture_variants=[{
+            "variant_name": "minimal_ok",
+            "prompt_hash": "fixture",
+            "status": "empty_assistant_content",
+            "raw_preview_sanitized": "",
+        }],
+    )
+    _require(diagnostic_empty["likely_failure_mode"] == "empty_assistant_content",
+             "diagnostic fixture must identify empty assistant content")
+    validate_local_llamacpp_json_diagnostic(diagnostic_empty)
+
     metadata = collect_local_model_advisor_metadata(
         model_used=True,
         model_provider="llamacpp",
@@ -19378,9 +19481,6 @@ def check_local_model_advisor_foundation_helpers() -> None:
     else:
         raise AssertionError("advisor metadata must require human review")
 
-    source_ref = package["source_refs"][0]["source_ref_id"]
-    evidence_ref = package["evidence_refs"][0]["evidence_ref_id"]
-    candidate_id = package["deterministic_upgrade_candidates"][0]["upgrade_candidate_id"]
     fixture = {
         "patterns_found": [
             {
@@ -19436,6 +19536,13 @@ def check_local_model_advisor_foundation_helpers() -> None:
     _require(compact_review["prompt_chars"] <= budget["max_prompt_chars"] and compact_review["fallback_allowed"] is False,
              "compact local advisor fixture must carry prompt budget and no-fallback metadata")
     validate_local_model_research_advisor_review(compact_review, package)
+    stage2_success_gate = collect_two_stage_local_advisor_gate(source_path=zip_source, stage1_result=contract_result, stage2_review=compact_review)
+    _require(stage2_success_gate["stage1_passed"] is True and stage2_success_gate["stage2_attempted"] is True,
+             "two-stage gate must attempt stage2 when stage1 passes")
+    validate_two_stage_local_advisor_gate(stage2_success_gate)
+    _require(parse_two_stage_local_advisor_gate_json(stable_two_stage_local_advisor_gate_json(stage2_success_gate)) == stage2_success_gate,
+             "two-stage local advisor gate JSON must round trip")
+
     openrouter_review = collect_local_model_research_advisor_review(
         package,
         model_response_json=fixture,
@@ -19506,8 +19613,12 @@ def check_local_model_advisor_clis() -> None:
         parse_advisor_provider_status_dashboard_json,
         parse_advisor_smoke_plan_json,
         parse_compact_source_aware_advisor_context_json,
+        parse_local_advisor_json_contract_json,
+        parse_local_advisor_json_contract_result_json,
         parse_local_advisor_prompt_budget_json,
         parse_local_advisor_smoke_receipt_json,
+        parse_local_llamacpp_json_diagnostic_json,
+        parse_two_stage_local_advisor_gate_json,
         parse_local_model_advisor_comparison_card_json,
         parse_local_advisor_availability_card_json,
         parse_local_model_advisor_config_json,
@@ -19624,7 +19735,32 @@ def check_local_model_advisor_clis() -> None:
     receipt_payload = parse_local_advisor_smoke_receipt_json(receipt_out.getvalue())
     _require(receipt_payload["receipt_available"] is False and receipt_payload["fallback_allowed"] is False,
              "advisor smoke-receipt must default to no receipt with no fallback")
-    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "smoke-receipt"):
+
+    contract_out = io.StringIO()
+    with contextlib.redirect_stdout(contract_out):
+        contract_rc = _cmd_advisor(["json-contract", "--source", zip_source, "--json"])
+    _require(contract_rc == 0, "advisor json-contract --source --json must return 0")
+    contract_payload = parse_local_advisor_json_contract_json(contract_out.getvalue())
+    _require(contract_payload["source_path"] == zip_source and contract_payload["fallback_allowed"] is False,
+             "advisor json-contract must preserve source and block fallback")
+
+    json_check_out = io.StringIO()
+    with contextlib.redirect_stdout(json_check_out):
+        json_check_rc = _cmd_advisor(["json-check", "--source", zip_source, "--json"])
+    _require(json_check_rc == 0, "advisor json-check preview --json must return 0")
+    json_check_payload = parse_local_advisor_json_contract_result_json(json_check_out.getvalue())
+    _require(json_check_payload["model_used"] is False and json_check_payload["fail_closed"] is True,
+             "advisor json-check without --local-model must be preview fail-closed")
+
+    diagnostic_out = io.StringIO()
+    with contextlib.redirect_stdout(diagnostic_out):
+        diagnostic_rc = _cmd_advisor(["local-json-diagnostic", "--source", zip_source, "--json"])
+    _require(diagnostic_rc == 0, "advisor local-json-diagnostic preview --json must return 0")
+    diagnostic_payload = parse_local_llamacpp_json_diagnostic_json(diagnostic_out.getvalue())
+    _require(diagnostic_payload["diagnostic_status"] == "plan_only" and diagnostic_payload["fallback_allowed"] is False,
+             "advisor local-json-diagnostic preview must be plan-only with no fallback")
+
+    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "smoke-receipt", "json-contract", "json-check", "local-json-diagnostic"):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_advisor([command, "--write"])
@@ -19647,6 +19783,14 @@ def check_local_model_advisor_clis() -> None:
     _require(comparison["source_path"] == zip_source and comparison["agreement_status"] == "preview_only",
              "advisor-comparison preview must preserve selected source")
 
+    two_stage_out = io.StringIO()
+    with contextlib.redirect_stdout(two_stage_out):
+        two_stage_rc = _cmd_research(["advisor-two-stage", "--source", zip_source, "--json"])
+    _require(two_stage_rc == 0, "research advisor-two-stage preview --json must return 0")
+    two_stage = parse_two_stage_local_advisor_gate_json(two_stage_out.getvalue())
+    _require(two_stage["stage1_passed"] is False and two_stage["stage2_attempted"] is False,
+             "advisor-two-stage preview must not run stage2 without local model")
+
     openrouter_review_out = io.StringIO()
     with contextlib.redirect_stdout(openrouter_review_out):
         openrouter_review_rc = _cmd_research(["advisor-review", "--source", zip_source, "--provider", "openrouter", "--json"])
@@ -19661,7 +19805,7 @@ def check_local_model_advisor_clis() -> None:
     _require(invalid_rc != 0 and "cannot be combined" in invalid_err.getvalue(),
              "OpenRouter with --local-model must be rejected")
 
-    for command in ("advisor-review", "advisor-comparison"):
+    for command in ("advisor-review", "advisor-comparison", "advisor-two-stage"):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_research([command, "--source", zip_source, "--write"])

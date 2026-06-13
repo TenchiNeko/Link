@@ -13248,6 +13248,10 @@ RESEARCH_ADVISOR_PROMPT_PACKAGE_VERSION = "link-research-advisor-prompt-package-
 LOCAL_ADVISOR_PROMPT_BUDGET_VERSION = "link-local-advisor-prompt-budget-v1"
 COMPACT_SOURCE_AWARE_ADVISOR_CONTEXT_VERSION = "link-compact-source-aware-advisor-context-v1"
 LOCAL_ADVISOR_SMOKE_RECEIPT_VERSION = "link-local-advisor-smoke-receipt-v1"
+LOCAL_ADVISOR_JSON_CONTRACT_VERSION = "link-local-advisor-json-contract-v1"
+LOCAL_ADVISOR_JSON_CONTRACT_RESULT_VERSION = "link-local-advisor-json-contract-result-v1"
+TWO_STAGE_LOCAL_ADVISOR_GATE_VERSION = "link-two-stage-local-advisor-gate-v1"
+LOCAL_LLAMACPP_JSON_DIAGNOSTIC_VERSION = "link-local-llamacpp-json-diagnostic-v1"
 LOCAL_MODEL_RESEARCH_ADVISOR_REVIEW_VERSION = "link-local-model-research-advisor-review-v1"
 LOCAL_MODEL_ADVISOR_COMPARISON_CARD_VERSION = "link-local-model-advisor-comparison-card-v1"
 LOCAL_ADVISOR_FORBIDDEN_RECOMMENDATIONS = (
@@ -15227,6 +15231,702 @@ def validate_compact_local_advisor_prompt(prompt: str, prompt_budget: dict[str, 
         raise ValueError("compact local advisor prompt must not expose secrets")
 
 
+
+def _sanitize_local_advisor_preview(value: str, *, limit: int = 240) -> str:
+    import re as _re
+    text = str(value or "").replace("\n", " ").strip()
+    text = _re.sub(r"\bsk-[A-Za-z0-9_\-]{8,}", "<redacted>", text)
+    text = _re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]+", "bearer <redacted>", text)
+    return text[:limit]
+
+
+def _call_canonical_llamacpp_chat_raw(*, prompt: str, system_prompt: str, timeout: int, model_name: str | None = None, max_tokens: int = 192) -> tuple[dict[str, Any], str, int]:
+    import json as _json
+    import time
+    import urllib.error
+    import urllib.request
+
+    boundary = collect_local_model_provider_boundary(model_name=model_name)
+    validate_local_model_provider_boundary(boundary)
+    if boundary["provider_status"] != "usable_local_provider" or boundary["endpoint_type"] != "local":
+        raise ValueError("canonical llama.cpp provider boundary is not usable for local inference")
+    endpoint = boundary["endpoint_summary"].rstrip("/") + boundary["api_path"]
+    payload = {
+        "model": boundary["model_name"],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": max_tokens,
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=_json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            http_status = getattr(response, "status", 0)
+    except urllib.error.URLError as exc:
+        raise ValueError(f"canonical local llama.cpp request failed: {exc}") from exc
+    latency_ms = int((time.monotonic() - started) * 1000)
+    data = _json.loads(raw)
+    data["_http_status"] = http_status
+    return data, raw, latency_ms
+
+
+def _local_json_contract_refs(prompt_package: dict[str, Any], *, source_limit: int = 2, evidence_limit: int = 2) -> tuple[list[str], list[str]]:
+    validate_research_advisor_prompt_package(prompt_package)
+    source_refs = [item["source_ref_id"] for item in prompt_package["source_refs"][:source_limit]]
+    evidence_refs = [item["evidence_ref_id"] for item in prompt_package["evidence_refs"][:evidence_limit]]
+    return source_refs, evidence_refs
+
+
+def collect_local_advisor_json_contract(
+    research_advisor_prompt_package: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    package = research_advisor_prompt_package or collect_research_advisor_prompt_package(source_path=source_path)
+    validate_research_advisor_prompt_package(package)
+    config = collect_local_model_advisor_config()
+    source_refs, evidence_refs = _local_json_contract_refs(package)
+    schema = {
+        "ok": True,
+        "advisor_role": "local_source_bound_json_check",
+        "source_path": "string",
+        "source_bound": True,
+        "critique": "string",
+        "missing_evidence": [],
+        "risk_notes": [],
+        "source_refs": [],
+        "evidence_refs": [],
+        "insufficient_evidence": False,
+    }
+    payload = {
+        "local_advisor_json_contract_version": LOCAL_ADVISOR_JSON_CONTRACT_VERSION,
+        "local_advisor_json_contract_id": "local-advisor-json-contract-" + _local_advisor_safe_hash({
+            "source_path": package["source_path"],
+            "intake": package["research_target_intake_id"],
+            "selected": package["deterministic_upgrade_candidates"][0]["upgrade_candidate_id"],
+            "version": LOCAL_ADVISOR_JSON_CONTRACT_VERSION,
+        }),
+        "source_path": package["source_path"],
+        "source_name": package["source_name"],
+        "research_target_intake_id": package["research_target_intake_id"],
+        "selected_upgrade_candidate_id": package["deterministic_upgrade_candidates"][0]["upgrade_candidate_id"],
+        "provider_name": "llamacpp",
+        "endpoint_type": config["endpoint_type"],
+        "model_name": config["model_name"],
+        "strict_json_required": True,
+        "advisory_only": True,
+        "fallback_allowed": False,
+        "max_prompt_chars": 1800,
+        "timeout_seconds": 45,
+        "required_response_schema": schema,
+        "allowed_source_refs": source_refs,
+        "allowed_evidence_refs": evidence_refs,
+        "forbidden_actions": [
+            "execute task", "patch files", "approve proposal", "mutate source", "scrape now",
+            "install package", "push commit", "OpenRouter fallback", "external provider fallback",
+        ],
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_advisor_json_contract(payload)
+    return payload
+
+
+def validate_local_advisor_json_contract(payload: dict[str, Any]) -> None:
+    required = (
+        "local_advisor_json_contract_version", "local_advisor_json_contract_id", "source_path",
+        "source_name", "research_target_intake_id", "selected_upgrade_candidate_id", "provider_name",
+        "endpoint_type", "model_name", "strict_json_required", "advisory_only", "fallback_allowed",
+        "max_prompt_chars", "timeout_seconds", "required_response_schema", "allowed_source_refs",
+        "allowed_evidence_refs", "forbidden_actions", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local advisor JSON contract missing field: {key}")
+    if payload["local_advisor_json_contract_version"] != LOCAL_ADVISOR_JSON_CONTRACT_VERSION:
+        raise ValueError("invalid local advisor JSON contract version")
+    if not str(payload["local_advisor_json_contract_id"]).startswith("local-advisor-json-contract-"):
+        raise ValueError("invalid local advisor JSON contract id")
+    if not str(payload["source_path"]).startswith("research/"):
+        raise ValueError("local advisor JSON contract source path must be under research")
+    if payload["provider_name"] != "llamacpp" or payload["endpoint_type"] != "local":
+        raise ValueError("local advisor JSON contract must use local llama.cpp provider")
+    if payload["strict_json_required"] is not True or payload["advisory_only"] is not True or payload["fallback_allowed"] is not False:
+        raise ValueError("local advisor JSON contract must be strict JSON, advisory-only, and no-fallback")
+    if not 500 <= int(payload["max_prompt_chars"]) <= 2500:
+        raise ValueError("local advisor JSON contract prompt budget must be tiny and bounded")
+    if not 10 <= int(payload["timeout_seconds"]) <= 90:
+        raise ValueError("local advisor JSON contract timeout must be bounded")
+    schema = payload["required_response_schema"]
+    for key in ("ok", "advisor_role", "source_path", "source_bound", "critique", "missing_evidence", "risk_notes", "source_refs", "evidence_refs", "insufficient_evidence"):
+        if key not in schema:
+            raise ValueError(f"local advisor JSON contract schema missing key: {key}")
+    if not payload["allowed_source_refs"] or not payload["allowed_evidence_refs"]:
+        raise ValueError("local advisor JSON contract must include allowed source/evidence refs")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local advisor JSON contract must remain read-only")
+
+
+def stable_local_advisor_json_contract_json(payload: dict[str, Any]) -> str:
+    validate_local_advisor_json_contract(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_advisor_json_contract_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_advisor_json_contract(payload)
+    return payload
+
+
+def render_minimal_local_json_contract_prompt(contract: dict[str, Any]) -> str:
+    validate_local_advisor_json_contract(contract)
+    body = {
+        "instruction": "Return strict JSON object only. No markdown. No prose outside JSON.",
+        "role": "local_source_bound_json_check",
+        "source_path": contract["source_path"],
+        "source_name": contract["source_name"],
+        "selected_upgrade_candidate_id": contract["selected_upgrade_candidate_id"],
+        "allowed_source_refs": contract["allowed_source_refs"],
+        "allowed_evidence_refs": contract["allowed_evidence_refs"],
+        "rules": [
+            "source_bound must be true",
+            "source_path must exactly match the supplied source_path",
+            "use only listed source_refs and evidence_refs",
+            "set insufficient_evidence=true if unsure",
+            "advisory only; no execution, approval, patching, mutation, network, scraping, package install, or fallback",
+        ],
+        "required_response_schema": contract["required_response_schema"],
+    }
+    prompt = _stable_ruflo_json(body, indent=2)
+    validate_minimal_local_json_contract_prompt(prompt, contract)
+    return prompt
+
+
+def validate_minimal_local_json_contract_prompt(prompt: str, contract: dict[str, Any]) -> None:
+    validate_local_advisor_json_contract(contract)
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("minimal local JSON contract prompt must be non-empty")
+    lower = prompt.lower()
+    for phrase in ("strict json", "source_bound", "advisory only", "fallback", "source_refs", "evidence_refs"):
+        if phrase not in lower:
+            raise ValueError(f"minimal local JSON contract prompt missing phrase: {phrase}")
+    for key in contract["required_response_schema"]:
+        if key not in prompt:
+            raise ValueError(f"minimal local JSON contract prompt missing schema key: {key}")
+    if contract["source_path"] not in prompt:
+        raise ValueError("minimal local JSON contract prompt must include source path")
+    if len(prompt) > int(contract["max_prompt_chars"]):
+        raise ValueError("minimal local JSON contract prompt exceeds contract budget")
+    if "prompt_package" in prompt or "research_target_evidence_bundle" in prompt:
+        raise ValueError("minimal local JSON contract prompt must not include giant nested payloads")
+
+
+def _extract_llamacpp_assistant_content(response_json: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    shape = {
+        "top_level_keys": sorted([str(key) for key in response_json.keys() if not str(key).startswith("_")])[:20],
+        "choices_count": 0,
+        "message_present": False,
+        "content_present": False,
+        "content_chars": 0,
+        "finish_reason": "",
+        "usage_present": bool(response_json.get("usage")),
+        "http_status": response_json.get("_http_status", 0),
+    }
+    choices = response_json.get("choices")
+    if isinstance(choices, list):
+        shape["choices_count"] = len(choices)
+        if choices:
+            first = choices[0] if isinstance(choices[0], dict) else {}
+            shape["finish_reason"] = str(first.get("finish_reason") or "")
+            message = first.get("message") if isinstance(first, dict) else None
+            if isinstance(message, dict):
+                shape["message_present"] = True
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    shape["content_present"] = True
+                    shape["content_chars"] = len(content)
+                    return content, shape
+    return "", shape
+
+
+def _validate_json_contract_model_payload(model_json: dict[str, Any], contract: dict[str, Any]) -> tuple[bool, str]:
+    validate_local_advisor_json_contract(contract)
+    for key in contract["required_response_schema"]:
+        if key not in model_json:
+            return False, f"schema missing key: {key}"
+    if model_json.get("ok") is not True:
+        return False, "ok must be true"
+    if model_json.get("advisor_role") != "local_source_bound_json_check":
+        return False, "advisor_role mismatch"
+    if model_json.get("source_path") != contract["source_path"]:
+        return False, "source_path mismatch"
+    if model_json.get("source_bound") is not True:
+        return False, "source_bound must be true"
+    if _research_advisor_forbidden_text(model_json):
+        return False, "forbidden action recommendation detected"
+    source_refs = model_json.get("source_refs")
+    evidence_refs = model_json.get("evidence_refs")
+    if not isinstance(source_refs, list) or not isinstance(evidence_refs, list):
+        return False, "source_refs and evidence_refs must be lists"
+    unknown_source = [ref for ref in source_refs if ref not in contract["allowed_source_refs"]]
+    unknown_evidence = [ref for ref in evidence_refs if ref not in contract["allowed_evidence_refs"]]
+    if unknown_source:
+        return False, "unknown source_refs cited"
+    if unknown_evidence:
+        return False, "unknown evidence_refs cited"
+    for list_key in ("missing_evidence", "risk_notes"):
+        if not isinstance(model_json.get(list_key), list):
+            return False, f"{list_key} must be a list"
+    if not isinstance(model_json.get("critique"), str) or not model_json.get("critique", "").strip():
+        return False, "critique must be non-empty string"
+    return True, ""
+
+
+def collect_local_advisor_json_contract_result(
+    local_advisor_json_contract: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    use_local_model: bool = False,
+    model_response_json: dict[str, Any] | None = None,
+    raw_response: str | None = None,
+    latency_ms: int = 0,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    import json as _json
+
+    contract = local_advisor_json_contract or collect_local_advisor_json_contract(source_path=source_path)
+    validate_local_advisor_json_contract(contract)
+    prompt = render_minimal_local_json_contract_prompt(contract)
+    response_hash = ""
+    raw_preview = ""
+    http_status = 0
+    assistant_content = ""
+    assistant_present = False
+    assistant_chars = 0
+    valid_json = False
+    schema_valid = False
+    source_bound_valid = False
+    model_used = False
+    fail_closed = False
+    fail_reason = ""
+    response_shape: dict[str, Any] = {}
+    parsed: dict[str, Any] = {}
+    if model_response_json is not None:
+        model_used = True
+        parsed = dict(model_response_json)
+        assistant_content = _stable_ruflo_json(parsed)
+        assistant_present = True
+        assistant_chars = len(assistant_content)
+        response_hash = _research_target_hash_text(raw_response or assistant_content)
+        raw_preview = _sanitize_local_advisor_preview(raw_response or assistant_content)
+        valid_json = True
+        schema_valid, fail_reason = _validate_json_contract_model_payload(parsed, contract)
+        source_bound_valid = parsed.get("source_path") == contract["source_path"] and parsed.get("source_bound") is True
+    elif use_local_model:
+        model_used = True
+        try:
+            response_json, raw, latency_ms = _call_canonical_llamacpp_chat_raw(
+                prompt=prompt,
+                system_prompt="Return strict JSON only. You are a local-only source-bound advisor check. Advisory only; no execution, writes, approvals, network, fallback, or patching.",
+                timeout=int(contract["timeout_seconds"]),
+                model_name=contract["model_name"],
+                max_tokens=160,
+            )
+            http_status = int(response_json.get("_http_status", 0) or 0)
+            response_shape = {key: value for key, value in _extract_llamacpp_assistant_content(response_json)[1].items()}
+            assistant_content, response_shape = _extract_llamacpp_assistant_content(response_json)
+            assistant_present = bool(assistant_content.strip())
+            assistant_chars = len(assistant_content)
+            response_hash = _research_target_hash_text(raw)
+            raw_preview = _sanitize_local_advisor_preview(assistant_content or raw)
+            if not assistant_present:
+                fail_reason = "empty assistant content"
+            else:
+                parsed = _json.loads(assistant_content)
+                valid_json = isinstance(parsed, dict)
+                if not valid_json:
+                    fail_reason = "assistant content was not a JSON object"
+                else:
+                    schema_valid, fail_reason = _validate_json_contract_model_payload(parsed, contract)
+                    source_bound_valid = parsed.get("source_path") == contract["source_path"] and parsed.get("source_bound") is True
+        except Exception as exc:
+            fail_reason = str(exc)[:220]
+            response_hash = _research_target_hash_text(fail_reason)
+            raw_preview = _sanitize_local_advisor_preview(fail_reason)
+    else:
+        fail_reason = "preview_only; rerun with --local-model to perform local JSON contract check"
+    smoke_ok = bool(model_used and valid_json and schema_valid and source_bound_valid and not fail_reason)
+    fail_closed = not smoke_ok
+    payload = {
+        "local_advisor_json_contract_result_version": LOCAL_ADVISOR_JSON_CONTRACT_RESULT_VERSION,
+        "local_advisor_json_contract_result_id": "local-advisor-json-contract-result-" + _local_advisor_safe_hash({
+            "contract": contract["local_advisor_json_contract_id"],
+            "model_used": model_used,
+            "response_hash": response_hash,
+            "smoke_ok": smoke_ok,
+            "version": LOCAL_ADVISOR_JSON_CONTRACT_RESULT_VERSION,
+        }),
+        "local_advisor_json_contract_id": contract["local_advisor_json_contract_id"],
+        "source_path": contract["source_path"],
+        "provider_name": "llamacpp",
+        "model_used": bool(model_used),
+        "endpoint_type": "local",
+        "prompt_hash": _research_target_hash_text(prompt),
+        "response_hash": response_hash,
+        "prompt_chars": len(prompt),
+        "timeout_seconds": contract["timeout_seconds"],
+        "latency_ms": int(latency_ms or 0),
+        "http_status": int(http_status or 0),
+        "raw_response_preview_sanitized": raw_preview,
+        "assistant_content_present": bool(assistant_present),
+        "assistant_content_chars": int(assistant_chars),
+        "valid_json": bool(valid_json),
+        "schema_valid": bool(schema_valid),
+        "source_bound_valid": bool(source_bound_valid),
+        "smoke_ok": bool(smoke_ok),
+        "fail_closed": bool(fail_closed),
+        "fail_closed_reason": "" if smoke_ok else (fail_reason or "local JSON contract check failed closed"),
+        "response_shape": response_shape,
+        "recommended_next_action": "Stage 1 passed; run two-stage advisor gate if richer advisory review is needed." if smoke_ok else "Do not run richer advisor review; inspect local-json-diagnostic or adjust local model/server strict JSON behavior.",
+        "human_review_required": True,
+        "fallback_allowed": False,
+        "advisory_only": True,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_advisor_json_contract_result(payload, contract)
+    return payload
+
+
+def validate_local_advisor_json_contract_result(payload: dict[str, Any], contract: dict[str, Any] | None = None) -> None:
+    required = (
+        "local_advisor_json_contract_result_version", "local_advisor_json_contract_result_id",
+        "local_advisor_json_contract_id", "source_path", "provider_name", "model_used",
+        "endpoint_type", "prompt_hash", "response_hash", "prompt_chars", "timeout_seconds",
+        "latency_ms", "http_status", "raw_response_preview_sanitized", "assistant_content_present",
+        "assistant_content_chars", "valid_json", "schema_valid", "source_bound_valid", "smoke_ok",
+        "fail_closed", "fail_closed_reason", "recommended_next_action", "human_review_required",
+        "fallback_allowed", "advisory_only", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local advisor JSON contract result missing field: {key}")
+    if payload["local_advisor_json_contract_result_version"] != LOCAL_ADVISOR_JSON_CONTRACT_RESULT_VERSION:
+        raise ValueError("invalid local advisor JSON contract result version")
+    if payload["provider_name"] != "llamacpp" or payload["endpoint_type"] != "local":
+        raise ValueError("local advisor JSON contract result must use local llama.cpp")
+    if not payload["prompt_hash"] or not isinstance(payload["prompt_chars"], int) or payload["prompt_chars"] <= 0:
+        raise ValueError("local advisor JSON contract result requires prompt hash and char count")
+    if not 10 <= int(payload["timeout_seconds"]) <= 90:
+        raise ValueError("local advisor JSON contract result timeout must be bounded")
+    if len(str(payload["raw_response_preview_sanitized"])) > 260:
+        raise ValueError("local advisor JSON contract result raw preview must be bounded")
+    if payload["smoke_ok"] is True:
+        if payload["fail_closed"] is not False or not payload["model_used"] or not payload["valid_json"] or not payload["schema_valid"] or not payload["source_bound_valid"]:
+            raise ValueError("successful local JSON contract result must be model-used, valid JSON, schema-valid, source-bound, and not fail-closed")
+    else:
+        if payload["fail_closed"] is not True or not payload["fail_closed_reason"]:
+            raise ValueError("failed local JSON contract result must fail closed with reason")
+    if contract is not None and payload["source_path"] != contract["source_path"]:
+        raise ValueError("local advisor JSON contract result source mismatch")
+    text = _stable_ruflo_json(payload).lower()
+    if "sk-" in text or "bearer " in text:
+        raise ValueError("local advisor JSON contract result must not expose secrets")
+    if payload["human_review_required"] is not True or payload["fallback_allowed"] is not False or payload["advisory_only"] is not True:
+        raise ValueError("local advisor JSON contract result must be human-reviewed, advisory-only, and no-fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local advisor JSON contract result must remain read-only")
+
+
+def stable_local_advisor_json_contract_result_json(payload: dict[str, Any]) -> str:
+    validate_local_advisor_json_contract_result(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_advisor_json_contract_result_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_advisor_json_contract_result(payload)
+    return payload
+
+
+def collect_two_stage_local_advisor_gate(
+    *,
+    source_path: str,
+    use_local_model: bool = False,
+    stage1_result: dict[str, Any] | None = None,
+    stage2_review: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    package = collect_research_advisor_prompt_package(source_path=source_path)
+    contract = collect_local_advisor_json_contract(package)
+    result = stage1_result or collect_local_advisor_json_contract_result(contract, use_local_model=use_local_model)
+    validate_local_advisor_json_contract_result(result, contract)
+    stage1_passed = bool(result["smoke_ok"])
+    stage2_attempted = False
+    review = stage2_review
+    if stage1_passed:
+        stage2_attempted = True
+        review = review or collect_local_model_research_advisor_review(
+            package,
+            use_local_model=use_local_model,
+            requested_provider="llamacpp",
+            explicit_provider_flag=True,
+        )
+        validate_local_model_research_advisor_review(review, package)
+    stage2_passed = bool(review and review.get("advisor_status") in {"model_reviewed", "model_fixture_validated"} and review.get("fail_closed") is False)
+    payload = {
+        "two_stage_local_advisor_gate_version": TWO_STAGE_LOCAL_ADVISOR_GATE_VERSION,
+        "two_stage_local_advisor_gate_id": "two-stage-local-advisor-gate-" + _local_advisor_safe_hash({
+            "source_path": source_path,
+            "stage1": result["local_advisor_json_contract_result_id"],
+            "stage2": review.get("local_model_research_advisor_review_id") if isinstance(review, dict) else "",
+            "version": TWO_STAGE_LOCAL_ADVISOR_GATE_VERSION,
+        }),
+        "source_path": source_path,
+        "stage1_contract_id": contract["local_advisor_json_contract_id"],
+        "stage1_result_id": result["local_advisor_json_contract_result_id"],
+        "stage1_passed": stage1_passed,
+        "stage2_attempted": stage2_attempted,
+        "stage2_advisor_review_id": review.get("local_model_research_advisor_review_id", "") if isinstance(review, dict) else "",
+        "stage2_passed": stage2_passed,
+        "stage1_fail_closed_reason": "" if stage1_passed else result["fail_closed_reason"],
+        "stage2_fail_closed_reason": "" if stage2_passed or not isinstance(review, dict) else review.get("fail_closed_reason", ""),
+        "selected_provider": "llamacpp",
+        "fallback_allowed": False,
+        "advisory_only": True,
+        "human_review_required": True,
+        "recommended_next_action": "Stage 1 passed and Stage 2 produced a model review; human-review advisory output before any planning change." if stage2_passed else ("Stage 1 failed; do not run richer advisor review until local JSON contract passes." if not stage1_passed else "Stage 2 failed closed; keep deterministic Link output authoritative."),
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_two_stage_local_advisor_gate(payload)
+    return payload
+
+
+def validate_two_stage_local_advisor_gate(payload: dict[str, Any]) -> None:
+    required = (
+        "two_stage_local_advisor_gate_version", "two_stage_local_advisor_gate_id", "source_path",
+        "stage1_contract_id", "stage1_result_id", "stage1_passed", "stage2_attempted",
+        "stage2_advisor_review_id", "stage2_passed", "selected_provider", "fallback_allowed",
+        "advisory_only", "human_review_required", "recommended_next_action", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"two-stage local advisor gate missing field: {key}")
+    if payload["two_stage_local_advisor_gate_version"] != TWO_STAGE_LOCAL_ADVISOR_GATE_VERSION:
+        raise ValueError("invalid two-stage local advisor gate version")
+    if payload["selected_provider"] != "llamacpp":
+        raise ValueError("two-stage local advisor gate must use llama.cpp")
+    if payload["stage1_passed"] is False and payload["stage2_attempted"] is True:
+        raise ValueError("two-stage local advisor gate must not run stage2 after stage1 failure")
+    if payload["stage2_passed"] is True and not payload["stage2_attempted"]:
+        raise ValueError("two-stage local advisor gate cannot pass stage2 without attempting it")
+    if payload["fallback_allowed"] is not False or payload["advisory_only"] is not True or payload["human_review_required"] is not True:
+        raise ValueError("two-stage local advisor gate must be advisory-only, human-reviewed, and no-fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("two-stage local advisor gate must remain read-only")
+
+
+def stable_two_stage_local_advisor_gate_json(payload: dict[str, Any]) -> str:
+    validate_two_stage_local_advisor_gate(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_two_stage_local_advisor_gate_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_two_stage_local_advisor_gate(payload)
+    return payload
+
+
+def _diagnostic_variant_payload(name: str, prompt: str, *, status: str = "planned", result: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = {
+        "variant_name": name,
+        "prompt_hash": _research_target_hash_text(prompt),
+        "status": status,
+        "top_level_keys": [],
+        "choices_count": 0,
+        "message_present": False,
+        "content_present": False,
+        "content_chars": 0,
+        "finish_reason": "",
+        "usage_present": False,
+        "response_hash": "",
+        "raw_preview_sanitized": "",
+        "valid_json": False,
+    }
+    if result:
+        payload.update(result)
+    return payload
+
+
+def collect_local_llamacpp_json_diagnostic(
+    *,
+    source_path: str,
+    use_local_model: bool = False,
+    fixture_variants: list[dict[str, Any]] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    contract = collect_local_advisor_json_contract(source_path=source_path)
+    validate_local_advisor_json_contract(contract)
+    prompts = [
+        ("minimal_ok", 'Return JSON only: {"ok":true}'),
+        ("source_bound", f'Return JSON only: {{"ok":true,"source_bound":true,"source_path":"{contract["source_path"]}"}}'),
+    ]
+    variants: list[dict[str, Any]] = []
+    if fixture_variants is not None:
+        variants = fixture_variants
+    elif use_local_model:
+        import json as _json
+        for name, prompt in prompts:
+            result: dict[str, Any] = {}
+            status = "fail_closed"
+            try:
+                response_json, raw, _latency = _call_canonical_llamacpp_chat_raw(
+                    prompt=prompt,
+                    system_prompt="Return strict JSON only. No markdown.",
+                    timeout=25,
+                    model_name=contract["model_name"],
+                    max_tokens=64,
+                )
+                content, shape = _extract_llamacpp_assistant_content(response_json)
+                result.update(shape)
+                result["response_hash"] = _research_target_hash_text(raw)
+                result["raw_preview_sanitized"] = _sanitize_local_advisor_preview(content or raw)
+                if content:
+                    try:
+                        parsed = _json.loads(content)
+                        result["valid_json"] = isinstance(parsed, dict)
+                        status = "valid_json" if result["valid_json"] else "invalid_json"
+                    except Exception:
+                        result["valid_json"] = False
+                        status = "invalid_json"
+                else:
+                    status = "empty_assistant_content"
+            except Exception as exc:
+                result["raw_preview_sanitized"] = _sanitize_local_advisor_preview(str(exc))
+                result["response_hash"] = _research_target_hash_text(str(exc))
+                status = "timeout_or_request_error" if "timed out" in str(exc).lower() else "request_error"
+            variants.append(_diagnostic_variant_payload(name, prompt, status=status, result=result))
+    else:
+        variants = [_diagnostic_variant_payload(name, prompt) for name, prompt in prompts]
+    statuses = [item.get("status", "planned") for item in variants]
+    if not use_local_model:
+        diagnostic_status = "plan_only"
+        likely = "not_run"
+    elif any(status == "valid_json" for status in statuses):
+        diagnostic_status = "partial_or_full_json_ok"
+        likely = "local_model_can_return_minimal_json"
+    elif any(status == "empty_assistant_content" for status in statuses):
+        diagnostic_status = "failed_closed"
+        likely = "empty_assistant_content"
+    elif any(status == "invalid_json" for status in statuses):
+        diagnostic_status = "failed_closed"
+        likely = "invalid_json"
+    elif any("timeout" in status for status in statuses):
+        diagnostic_status = "failed_closed"
+        likely = "timeout_or_cpu_latency"
+    else:
+        diagnostic_status = "failed_closed"
+        likely = "request_error_or_unknown"
+    payload = {
+        "local_llamacpp_json_diagnostic_version": LOCAL_LLAMACPP_JSON_DIAGNOSTIC_VERSION,
+        "local_llamacpp_json_diagnostic_id": "local-llamacpp-json-diagnostic-" + _local_advisor_safe_hash({
+            "source_path": source_path,
+            "statuses": statuses,
+            "version": LOCAL_LLAMACPP_JSON_DIAGNOSTIC_VERSION,
+        }),
+        "source_path": source_path,
+        "provider_name": "llamacpp",
+        "endpoint_type": "local",
+        "diagnostic_status": diagnostic_status,
+        "variants": variants,
+        "likely_failure_mode": likely,
+        "diagnostic_plan": [
+            "Variant A asks for {ok:true} only.",
+            "Variant B asks for ok/source_bound/source_path only.",
+            "No OpenRouter or external fallback is used.",
+        ],
+        "recommended_next_action": "Run --local-model diagnostic to identify JSON behavior." if not use_local_model else "Use json-check/two-stage only if minimal JSON variant succeeds; otherwise adjust local model/server strict JSON behavior.",
+        "fallback_allowed": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_local_llamacpp_json_diagnostic(payload)
+    return payload
+
+
+def validate_local_llamacpp_json_diagnostic(payload: dict[str, Any]) -> None:
+    required = (
+        "local_llamacpp_json_diagnostic_version", "local_llamacpp_json_diagnostic_id", "source_path",
+        "provider_name", "endpoint_type", "diagnostic_status", "variants", "likely_failure_mode",
+        "recommended_next_action", "fallback_allowed", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"local llama.cpp JSON diagnostic missing field: {key}")
+    if payload["local_llamacpp_json_diagnostic_version"] != LOCAL_LLAMACPP_JSON_DIAGNOSTIC_VERSION:
+        raise ValueError("invalid local llama.cpp JSON diagnostic version")
+    if payload["provider_name"] != "llamacpp" or payload["endpoint_type"] != "local":
+        raise ValueError("local llama.cpp JSON diagnostic must use local llama.cpp")
+    if payload["fallback_allowed"] is not False:
+        raise ValueError("local llama.cpp JSON diagnostic must disable fallback")
+    if not isinstance(payload["variants"], list) or not payload["variants"]:
+        raise ValueError("local llama.cpp JSON diagnostic requires variants")
+    for item in payload["variants"]:
+        for key in ("variant_name", "prompt_hash", "status"):
+            if key not in item:
+                raise ValueError(f"local llama.cpp JSON diagnostic variant missing field: {key}")
+        if len(str(item.get("raw_preview_sanitized", ""))) > 260:
+            raise ValueError("local llama.cpp JSON diagnostic raw preview must be bounded")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("local llama.cpp JSON diagnostic must remain read-only")
+
+
+def stable_local_llamacpp_json_diagnostic_json(payload: dict[str, Any]) -> str:
+    validate_local_llamacpp_json_diagnostic(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_local_llamacpp_json_diagnostic_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_local_llamacpp_json_diagnostic(payload)
+    return payload
+
+
 def collect_local_advisor_smoke_receipt(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     local = collect_local_advisor_availability_card()
     payload = {
@@ -16015,10 +16715,13 @@ def collect_source_aware_advisor_provider_card(
     recommended_mode = _source_aware_advisor_recommended_mode(local["provider_status"], local_available, openrouter_enabled)
     source_arg = _source_aware_advisor_safe_command_source(report["source_path"])
     deterministic_command = f"python3 link.py research advisor-review --source {source_arg} --json"
+    json_check_command = f"python3 link.py advisor json-check --source {source_arg} --local-model --json"
+    two_stage_command = f"python3 link.py research advisor-two-stage --source {source_arg} --local-model --json"
+    diagnostic_command = f"python3 link.py advisor local-json-diagnostic --source {source_arg} --local-model --json"
     local_command = f"python3 link.py research advisor-review --source {source_arg} --provider llamacpp --local-model --json"
     openrouter_command = f"python3 link.py research advisor-review --source {source_arg} --provider openrouter --openrouter --json"
     if local_available:
-        recommended_command = local_command
+        recommended_command = two_stage_command
     else:
         recommended_command = deterministic_command
     blocked = _normalize_implementation_branch_refs(list(local["blocked_reasons"]) + list(openrouter["blocked_reasons"]))
@@ -16064,6 +16767,10 @@ def collect_source_aware_advisor_provider_card(
         "recommended_advisor_command": recommended_command,
         "deterministic_preview_command": deterministic_command,
         "local_advisor_command": local_command,
+        "recommended_json_check_command": json_check_command,
+        "recommended_two_stage_local_command": two_stage_command,
+        "recommended_diagnostic_command": diagnostic_command,
+        "richer_advisor_command": local_command,
         "openrouter_advisor_command": openrouter_command,
         "advisor_provider_registry_id": registry["advisor_provider_registry_id"],
         "local_advisor_availability_card_id": local["local_advisor_availability_card_id"],
@@ -16072,7 +16779,7 @@ def collect_source_aware_advisor_provider_card(
         "advisor_provider_operator_guidance_id": guidance["advisor_provider_operator_guidance_id"],
         "blocked_reasons": blocked or ["local advisor endpoint was not probed; use deterministic advisor preview until local smoke passes"],
         "warnings": warnings,
-        "recommended_next_action": "Use deterministic advisor preview now; start local llama.cpp and run advisor local-smoke before any local advisor review.",
+        "recommended_next_action": "Use deterministic advisor preview now; run local JSON check before richer advisor review.",
         "safety_metadata": _read_only_safety_metadata(),
         "dry_run": True,
         "write_allowed": False,
@@ -16159,7 +16866,16 @@ def collect_source_aware_advisor_command_preview(
         "advisor_provider_card_id": card["source_aware_advisor_provider_card_id"],
         "deterministic_preview_command": card["deterministic_preview_command"],
         "local_advisor_command": card["local_advisor_command"],
+        "recommended_json_check_command": card["recommended_json_check_command"],
+        "recommended_two_stage_local_command": card["recommended_two_stage_local_command"],
+        "recommended_diagnostic_command": card["recommended_diagnostic_command"],
+        "richer_advisor_command": card["richer_advisor_command"],
         "openrouter_advisor_command": card["openrouter_advisor_command"],
+        "recommended_sequence": [
+            card["recommended_json_check_command"],
+            card["recommended_two_stage_local_command"],
+            card["richer_advisor_command"],
+        ],
         "recommended_command": card["recommended_advisor_command"],
         "command_requires_local_model": card["recommended_advisor_command"] == card["local_advisor_command"],
         "command_requires_openrouter_opt_in": card["recommended_advisor_command"] == card["openrouter_advisor_command"],
@@ -16187,7 +16903,8 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         "source_aware_advisor_command_preview_version", "source_aware_advisor_command_preview_id",
         "source_bound", "source_path", "research_target_intake_id", "selected_upgrade_candidate_id",
         "advisor_provider_card_id", "deterministic_preview_command", "local_advisor_command",
-        "openrouter_advisor_command", "recommended_command", "command_requires_local_model",
+        "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_diagnostic_command",
+        "richer_advisor_command", "openrouter_advisor_command", "recommended_sequence", "recommended_command", "command_requires_local_model",
         "command_requires_openrouter_opt_in", "command_requires_paid_provider", "fallback_allowed",
         "blocked_commands", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed",
         "automation_allowed", "writes",
@@ -16199,9 +16916,13 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("invalid source-aware advisor command preview version")
     if not payload["source_aware_advisor_command_preview_id"].startswith("source-aware-advisor-command-preview-"):
         raise ValueError("invalid source-aware advisor command preview id")
-    for field in ("deterministic_preview_command", "local_advisor_command", "openrouter_advisor_command", "recommended_command"):
+    for field in ("deterministic_preview_command", "local_advisor_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_diagnostic_command", "richer_advisor_command", "openrouter_advisor_command", "recommended_command"):
         if payload["source_path"] not in payload[field]:
             raise ValueError(f"advisor command preview {field} must reference selected source")
+    if "json-check" not in payload["recommended_json_check_command"] or "advisor-two-stage" not in payload["recommended_two_stage_local_command"]:
+        raise ValueError("advisor command preview must recommend JSON check and two-stage gate")
+    if not isinstance(payload["recommended_sequence"], list) or len(payload["recommended_sequence"]) < 2:
+        raise ValueError("advisor command preview must include recommended sequence")
     if "--openrouter" not in payload["openrouter_advisor_command"] or "--provider openrouter" not in payload["openrouter_advisor_command"]:
         raise ValueError("OpenRouter advisor command must be explicit")
     if payload["fallback_allowed"] is not False:
@@ -17716,6 +18437,106 @@ def advisor_openrouter_config_main(argv: list[str] | None = None) -> int:
 
 
 
+
+def advisor_json_contract_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor json-contract: minimal source-bound local JSON contract")
+        print("  python3 link.py advisor json-contract --source <path> --json")
+        print("Read-only. No model call. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor json-contract is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "json-contract")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_local_advisor_json_contract(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_advisor_json_contract_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor JSON contract", payload, [
+            ("id", payload["local_advisor_json_contract_id"]),
+            ("source", payload["source_path"]),
+            ("provider", payload["provider_name"]),
+            ("max_prompt_chars", payload["max_prompt_chars"]),
+            ("fallback_allowed", payload["fallback_allowed"]),
+        ])
+    return 0
+
+
+def advisor_json_check_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor json-check: run minimal local JSON contract check")
+        print("  python3 link.py advisor json-check --source <path> --local-model --json")
+        print("Read-only. Local llama.cpp only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor json-check is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "json-check")
+    if rc is not None:
+        return rc
+    use_local_model = "--local-model" in args
+    try:
+        payload = collect_local_advisor_json_contract_result(source_path=source or "", use_local_model=use_local_model)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_advisor_json_contract_result_json(payload), end="")
+    else:
+        _research_target_print_summary("Advisor JSON check", payload, [
+            ("id", payload["local_advisor_json_contract_result_id"]),
+            ("source", payload["source_path"]),
+            ("smoke_ok", payload["smoke_ok"]),
+            ("fail_closed", payload["fail_closed"]),
+            ("reason", payload["fail_closed_reason"]),
+            ("fallback_allowed", payload["fallback_allowed"]),
+            ("next", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def advisor_local_json_diagnostic_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor local-json-diagnostic: diagnose local llama.cpp JSON behavior")
+        print("  python3 link.py advisor local-json-diagnostic --source <path> --json")
+        print("  python3 link.py advisor local-json-diagnostic --source <path> --local-model --json")
+        print("Read-only. Local only. --write is not supported.")
+        return 0
+    if "--write" in args:
+        print("error: advisor local-json-diagnostic is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "local-json-diagnostic")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_local_llamacpp_json_diagnostic(source_path=source or "", use_local_model="--local-model" in args)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_local_llamacpp_json_diagnostic_json(payload), end="")
+    else:
+        print("Local llama.cpp JSON diagnostic")
+        print(f"source: {payload['source_path']}")
+        print(f"status: {payload['diagnostic_status']}")
+        print(f"likely_failure_mode: {payload['likely_failure_mode']}")
+        print("variants:")
+        for item in payload["variants"][:2]:
+            print(f"  - {item['variant_name']}: {item['status']}")
+        print(f"fallback_allowed: {payload['fallback_allowed']}")
+        print(f"next_action: {payload['recommended_next_action']}")
+    return 0
+
+
 def advisor_prompt_budget_main(argv: list[str] | None = None) -> int:
     args = _research_target_normalize_args(argv)
     if any(arg in {"-h", "--help", "help"} for arg in args):
@@ -18108,6 +18929,48 @@ def advisor_local_config_main(argv: list[str] | None = None) -> int:
             ("usable", payload["usable_for_local_advisor"]),
             ("recommended_next_action", payload["recommended_next_action"]),
         ])
+    return 0
+
+
+
+def _research_advisor_print_two_stage(payload: dict[str, Any]) -> None:
+    print("Two-stage local advisor gate")
+    print(f"source: {payload['source_path']}")
+    print(f"stage1_passed: {payload['stage1_passed']}")
+    print(f"stage2_attempted: {payload['stage2_attempted']}")
+    print(f"stage2_passed: {payload['stage2_passed']}")
+    if not payload["stage1_passed"]:
+        print(f"stage1_fail_closed_reason: {payload.get('stage1_fail_closed_reason', '')}")
+    if payload["stage2_attempted"] and not payload["stage2_passed"]:
+        print(f"stage2_fail_closed_reason: {payload.get('stage2_fail_closed_reason', '')}")
+    print(f"fallback_allowed: {payload['fallback_allowed']}")
+    print(f"next_action: {payload['recommended_next_action']}")
+    print("Read-only advisor gate: no execution, no approvals, no writes.")
+
+
+def research_advisor_two_stage_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research advisor-two-stage: stage1 JSON check then compact local advisor-review")
+        print("  python3 link.py research advisor-two-stage --source <path> --local-model --json")
+        print("Read-only. Local llama.cpp only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "advisor-two-stage")
+    if rc is not None:
+        return rc
+    use_local_model = "--local-model" in args
+    if "--openrouter" in args or "--provider" in args:
+        print("error: advisor-two-stage uses local llama.cpp only; provider/OpenRouter flags are not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_two_stage_local_advisor_gate(source_path=source or "", use_local_model=use_local_model)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_two_stage_local_advisor_gate_json(payload), end="")
+    else:
+        _research_advisor_print_two_stage(payload)
     return 0
 
 

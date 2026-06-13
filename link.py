@@ -163,6 +163,10 @@ def _cmd_research(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import research_advisor_comparison_main as _research_advisor_comparison_main
 
         return _research_advisor_comparison_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "advisor-two-stage":
+        from link_modes.growth.link_growth_console import research_advisor_two_stage_main as _research_advisor_two_stage_main
+
+        return _research_advisor_two_stage_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "source-binding":
         from link_modes.growth.link_growth_console import research_source_binding_main as _research_source_binding_main
 
@@ -223,6 +227,7 @@ def _cmd_research(argv: list[str]) -> int:
         print("Link research commands:")
         print("  advisor-review       Preview or run local-only research advisor review")
         print("  advisor-comparison   Compare deterministic output with advisor review")
+        print("  advisor-two-stage    Gate richer local advisor review behind JSON check")
         print("  source-binding        Build a downstream source binding context")
         print("  source-operator-flow  Preview source-bound downstream operator flow")
         print("  target-operator-report Preview compact source-aware operator report")
@@ -278,6 +283,18 @@ def _cmd_advisor(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import advisor_target_command_main as _advisor_target_command_main
 
         return _advisor_target_command_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "json-contract":
+        from link_modes.growth.link_growth_console import advisor_json_contract_main as _advisor_json_contract_main
+
+        return _advisor_json_contract_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "json-check":
+        from link_modes.growth.link_growth_console import advisor_json_check_main as _advisor_json_check_main
+
+        return _advisor_json_check_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "local-json-diagnostic":
+        from link_modes.growth.link_growth_console import advisor_local_json_diagnostic_main as _advisor_local_json_diagnostic_main
+
+        return _advisor_local_json_diagnostic_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "prompt-budget":
         from link_modes.growth.link_growth_console import advisor_prompt_budget_main as _advisor_prompt_budget_main
 
@@ -312,6 +329,9 @@ def _cmd_advisor(argv: list[str]) -> int:
         print("  status            Show compact advisor provider status")
         print("  guidance          Show advisor provider operator guidance")
         print("  target-command    Preview safe advisor commands for a selected source")
+        print("  json-contract     Preview minimal source-bound local JSON contract")
+        print("  json-check        Run minimal local JSON contract check")
+        print("  local-json-diagnostic Diagnose local llama.cpp JSON behavior")
         print("  prompt-budget     Preview compact local advisor prompt budget")
         print("  compact-context   Preview compact source-aware advisor context")
         print("  smoke-receipt     Preview latest local advisor smoke receipt status")
