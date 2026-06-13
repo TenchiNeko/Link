@@ -195,6 +195,22 @@ def _cmd_research(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import research_target_patterns_main as _research_target_patterns_main
 
         return _research_target_patterns_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "archive-concepts":
+        from link_modes.growth.link_growth_console import research_archive_concepts_main as _research_archive_concepts_main
+
+        return _research_archive_concepts_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "compression-profile":
+        from link_modes.growth.link_growth_console import research_compression_profile_main as _research_compression_profile_main
+
+        return _research_compression_profile_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "compression-upgrade-score":
+        from link_modes.growth.link_growth_console import research_compression_upgrade_score_main as _research_compression_upgrade_score_main
+
+        return _research_compression_upgrade_score_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "upgrade-genericity":
+        from link_modes.growth.link_growth_console import research_upgrade_genericity_main as _research_upgrade_genericity_main
+
+        return _research_upgrade_genericity_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "target-upgrade-rationale":
         from link_modes.growth.link_growth_console import research_target_upgrade_rationale_main as _research_target_upgrade_rationale_main
 
@@ -235,6 +251,10 @@ def _cmd_research(argv: list[str]) -> int:
         print("  target-sandbox-flow   Preview source target to sandbox boundary flow")
         print("  target-provenance     Preview compact source provenance table")
         print("  target-patterns       Preview source-specific pattern summary")
+        print("  archive-concepts      Extract deterministic archive concepts")
+        print("  compression-profile   Profile compression/context repos")
+        print("  compression-upgrade-score Score compression-specific upgrades")
+        print("  upgrade-genericity  Assess generic vs concept-supported upgrades")
         print("  target-upgrade-rationale Explain why the selected upgrade fits the target")
         print("  target-specificity    Score whether the recommendation is target-specific")
         print("  target-intake         Inspect a local research target without extraction")

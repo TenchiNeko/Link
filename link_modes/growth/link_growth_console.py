@@ -10916,6 +10916,10 @@ RESEARCH_TARGET_EVIDENCE_BUNDLE_VERSION = "link-research-target-evidence-bundle-
 RESEARCH_TARGET_UPGRADE_CANDIDATES_VERSION = "link-research-target-upgrade-candidates-v1"
 RESEARCH_TARGET_OPERATOR_TASK_DRAFT_VERSION = "link-research-target-operator-task-draft-v1"
 RESEARCH_TARGET_OPERATOR_FLOW_VERSION = "link-research-target-operator-flow-v1"
+SOURCE_AWARE_ARCHIVE_CONCEPTS_VERSION = "link-source-aware-archive-concepts-v1"
+COMPRESSION_REPO_CONCEPT_PROFILE_VERSION = "link-compression-repo-concept-profile-v1"
+COMPRESSION_AWARE_UPGRADE_SCORER_VERSION = "link-compression-aware-upgrade-scorer-v1"
+GROWTH_UPGRADE_GENERICITY_ASSESSMENT_VERSION = "link-growth-upgrade-genericity-assessment-v1"
 RESEARCH_TARGET_ALLOWED_ROOTS = ("research", "research/_extracted")
 RESEARCH_TARGET_DOMAINS = (
     "scraping", "ecommerce", "automation", "agent_memory", "workflow",
@@ -10959,6 +10963,33 @@ _RESEARCH_TARGET_DOMAIN_KEYWORDS = {
 _RESEARCH_TARGET_SELECTED_NAMES = (
     "readme", "skill", "package.json", "config", "workflow", "flow", "crawler",
     "source", "pricing", "product", "market", "competitor", "automation", "memory",
+)
+
+
+SOURCE_AWARE_ARCHIVE_CONCEPT_FAMILIES = (
+    "compression", "rag", "mcp", "proxy", "cli", "library", "workflow_automation",
+    "crawler", "scraper", "agent_memory", "chatbot", "api_server", "dashboard_ui",
+    "data_pipeline", "business_growth", "unknown",
+)
+
+_SOURCE_AWARE_CONCEPT_RULES: tuple[dict[str, Any], ...] = (
+    {"concept_id": "compression_library", "concept_name": "compression library", "concept_family": "compression", "keywords": ("compress", "compression", "context reduction", "headroom", "token reduction"), "operator_relevance": "Shows whether the repo can reduce bulky advisor/tool context before model calls.", "link_growth_relevance": "Useful for Link advisor prompt budgeting and source-aware context reduction.", "safety_notes": ["compression must not override canonical refs, aliases, IDs, or safety metadata"]},
+    {"concept_id": "token_reduction", "concept_name": "token reduction", "concept_family": "compression", "keywords": ("token", "tokens", "fewer tokens", "budget", "context window"), "operator_relevance": "Indicates prompt-size pressure relief for local advisor workflows.", "link_growth_relevance": "Can inform deterministic prompt budget reducers.", "safety_notes": ["token reduction must preserve source_path and provenance handles"]},
+    {"concept_id": "rag_chunk_compression", "concept_name": "RAG chunk compression", "concept_family": "rag", "keywords": ("rag", "chunk", "chunks", "retrieval", "retriever"), "operator_relevance": "Signals compression of retrieved chunks or evidence snippets.", "link_growth_relevance": "Maps to source-aware evidence and provenance snippet compaction.", "safety_notes": ["RAG compression must keep evidence_refs Link-owned"]},
+    {"concept_id": "tool_output_compression", "concept_name": "tool output compression", "concept_family": "compression", "keywords": ("tool output", "tool outputs", "logs", "stdout", "stderr"), "operator_relevance": "Signals reduction of noisy command/tool receipts.", "link_growth_relevance": "Maps to concise receipts and operator dashboard summaries.", "safety_notes": ["compressed tool output must not hide failures"]},
+    {"concept_id": "log_file_compression", "concept_name": "log/file compression", "concept_family": "compression", "keywords": ("log", "logs", "file compression", "files", "document"), "operator_relevance": "Signals compression of large files and operational logs.", "link_growth_relevance": "Can reduce local archive evidence payloads before advisor prompts.", "safety_notes": ["file summaries must retain original provenance refs"]},
+    {"concept_id": "mcp_server", "concept_name": "MCP server mode", "concept_family": "mcp", "keywords": ("mcp", "model context protocol"), "operator_relevance": "Shows a server integration surface that should be gated.", "link_growth_relevance": "Potential later tool integration, not first adapter path.", "safety_notes": ["do not start MCP server by default", "MCP must remain optional and approval-gated"]},
+    {"concept_id": "proxy_mode", "concept_name": "proxy mode", "concept_family": "proxy", "keywords": ("proxy", "gateway", "server", "http"), "operator_relevance": "Shows a network/server integration surface.", "link_growth_relevance": "May route model traffic later, but is too broad for first integration.", "safety_notes": ["do not use proxy as default path", "no hidden external network calls"]},
+    {"concept_id": "cli_mode", "concept_name": "CLI mode", "concept_family": "cli", "keywords": ("cli", "command line", "click", "argparse", "console_scripts", "headroom "), "operator_relevance": "Signals a bounded subprocess adapter may be possible.", "link_growth_relevance": "Could support fixture-tested local compression samples.", "safety_notes": ["CLI adapter must have timeout and bounded input/output"]},
+    {"concept_id": "library_api", "concept_name": "library API", "concept_family": "library", "keywords": ("from headroom import", "def compress", "compress(", "library", "api"), "operator_relevance": "Signals a local in-process adapter may be possible after approved install/build.", "link_growth_relevance": "Lowest-risk future real compression path if local-only.", "safety_notes": ["library adapter must not mutate Link-owned metadata"]},
+    {"concept_id": "crawler_source_collection", "concept_name": "crawler/source collection", "concept_family": "crawler", "keywords": ("crawler", "crawl", "scrape", "sitemap", "browser", "puppeteer", "playwright"), "operator_relevance": "Signals source collection/crawling patterns.", "link_growth_relevance": "Maps to source governance and read-only target planning.", "safety_notes": ["do not scrape or run browser automation during mining"]},
+    {"concept_id": "agent_memory", "concept_name": "agent memory", "concept_family": "agent_memory", "keywords": ("memory", "embedding", "vector", "recall", "conversation history"), "operator_relevance": "Signals memory/context retention patterns.", "link_growth_relevance": "Maps to future Link context and receipt memory.", "safety_notes": ["memory integration must avoid secrets and private data dumps"]},
+    {"concept_id": "scraping_or_crawling", "concept_name": "scraping/crawling workflow", "concept_family": "scraper", "keywords": ("scrape", "scraping", "extract website", "web crawl", "sitemap", "robots"), "operator_relevance": "Signals a source collection flow that must stay governed and read-only during mining.", "link_growth_relevance": "Maps to source intake, provenance, and crawling policy planning.", "safety_notes": ["do not scrape or run browser automation during mining", "respect source governance before runtime crawling"]},
+    {"concept_id": "chatbot_interface", "concept_name": "chatbot interface", "concept_family": "chatbot", "keywords": ("chatbot", "chat bot", "assistant", "conversation", "chat interface"), "operator_relevance": "Signals conversational product surfaces or prompt workflows.", "link_growth_relevance": "Can inform advisor UX and operator-facing interaction design.", "safety_notes": ["chatbot patterns must not approve actions automatically"]},
+    {"concept_id": "api_server", "concept_name": "API/server surface", "concept_family": "api_server", "keywords": ("api server", "fastapi", "express", "http server", "rest api", "openapi"), "operator_relevance": "Signals a network/server integration surface.", "link_growth_relevance": "Useful for future guarded service adapters after approval.", "safety_notes": ["do not start servers during deterministic mining", "server adapters require approval gates"]},
+    {"concept_id": "dashboard_ui", "concept_name": "dashboard UI", "concept_family": "dashboard_ui", "keywords": ("dashboard", "admin ui", "web ui", "frontend", "react", "vite"), "operator_relevance": "Signals visual operator surfaces that may inform Link dashboards.", "link_growth_relevance": "Can inform source-dashboard and operator UX improvements.", "safety_notes": ["dashboard ideas must remain source-bound and non-executing"]},
+    {"concept_id": "data_pipeline", "concept_name": "data pipeline", "concept_family": "data_pipeline", "keywords": ("pipeline", "ingestion", "etl", "dataset", "transform", "loader"), "operator_relevance": "Signals staged data processing and evidence flow patterns.", "link_growth_relevance": "Maps to archive intake, evidence bundles, and provenance pipelines.", "safety_notes": ["pipeline execution remains prohibited during research mining"]},
+    {"concept_id": "business_growth", "concept_name": "business/growth workflow", "concept_family": "business_growth", "keywords": ("lead", "crm", "sales", "growth", "market", "seo", "campaign"), "operator_relevance": "Signals Growth or business operation relevance.", "link_growth_relevance": "Maps to governed business evidence intake.", "safety_notes": ["business actions require human approval"]},
 )
 
 
@@ -11561,6 +11592,700 @@ def parse_research_target_evidence_bundle_json(text: str) -> dict[str, Any]:
     return bundle
 
 
+
+
+def _source_aware_archive_zip_snippet(source_path: str, members: list[str], *, limit: int = 6000) -> str:
+    from pathlib import Path
+    import zipfile
+
+    root = _research_target_repo_root()
+    archive_path = (root / source_path).resolve()
+    if not archive_path.is_file() or archive_path.suffix.lower() != ".zip":
+        return ""
+    preferred_names = []
+    lower_members = {name.lower(): name for name in members}
+    for suffix in ("readme.md", "pyproject.toml", "package.json", "setup.py", "requirements.txt", "cargo.toml"):
+        for lower, original in lower_members.items():
+            if lower.endswith("/" + suffix) or lower == suffix:
+                preferred_names.append(original)
+                break
+    chunks: list[str] = []
+    try:
+        with zipfile.ZipFile(archive_path) as zf:
+            for name in preferred_names[:4]:
+                info = zf.getinfo(name)
+                if info.file_size > 300_000:
+                    continue
+                with zf.open(info, "r") as handle:
+                    text = handle.read(min(info.file_size, limit)).decode("utf-8", errors="ignore")
+                chunks.append(f"\n--- {source_path}!{name} ---\n{text[:limit]}")
+    except Exception:
+        return ""
+    return "\n".join(chunks)[: limit * 2]
+
+
+def _source_aware_concept_haystack(intake: dict[str, Any], evidence: dict[str, Any]) -> tuple[str, list[str], list[str]]:
+    paths: list[str] = []
+    source_refs: list[str] = []
+    evidence_refs: list[str] = []
+    for item in list(intake.get("selected_file_refs", [])) + list(intake.get("archive_member_refs", [])):
+        path = str(item.get("provenance_path") or item.get("display_path") or item.get("path") or "")
+        if path and path not in paths:
+            paths.append(path)
+        if path and path not in source_refs:
+            source_refs.append(path)
+    for item in evidence.get("source_refs", []):
+        ref = str(item.get("provenance_path") or item.get("source_ref_id") or item.get("display_path") or "")
+        if ref and ref not in source_refs:
+            source_refs.append(ref)
+    for item in evidence.get("evidence_refs", []):
+        ref = str(item.get("provenance_path") or item.get("evidence_ref_id") or item.get("display_path") or "")
+        if ref and ref not in evidence_refs:
+            evidence_refs.append(ref)
+    snippet = _source_aware_archive_zip_snippet(intake["source_path"], [str(item.get("path") or item.get("display_path") or "") for item in intake.get("archive_member_refs", [])])
+    haystack = " ".join([intake["source_path"], intake["source_name"], *paths, snippet]).lower()
+    return haystack, _normalize_implementation_branch_refs(source_refs[:12]), _normalize_implementation_branch_refs(evidence_refs[:12])
+
+
+def score_archive_concept_signals(haystack: str, rule: dict[str, Any]) -> dict[str, Any]:
+    hits = [kw for kw in rule["keywords"] if kw in haystack]
+    weight = min(100, 35 + len(hits) * 12) if hits else 0
+    if rule["concept_id"] == "compression_library" and "headroom" in haystack:
+        weight = max(weight, 90)
+    if rule["concept_id"] == "crawler_source_collection" and any(term in haystack for term in ("crawler", "sitemap", "puppeteer", "playwright")):
+        weight = max(weight, 80)
+    confidence_band = "high" if weight >= 75 else "medium" if weight >= 45 else "low" if weight >= 20 else "none"
+    return {
+        "concept_id": rule["concept_id"],
+        "concept_family": rule["concept_family"],
+        "matched_signals": hits,
+        "score": weight,
+        "confidence_band": confidence_band,
+        "reason": f"Matched deterministic keywords: {', '.join(hits[:5])}." if hits else "No deterministic signal matched.",
+    }
+
+
+def classify_repo_concept_family(scored_signals: list[dict[str, Any]]) -> list[str]:
+    families: list[str] = []
+    for signal in sorted(scored_signals, key=lambda item: (-int(item["score"]), item["concept_family"], item["concept_id"])):
+        if int(signal["score"]) < 20:
+            continue
+        family = signal["concept_family"]
+        if family not in families:
+            families.append(family)
+    return families or ["unknown"]
+
+
+def rank_detected_repo_concepts(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ranked = sorted(entries, key=lambda item: (-int(item["confidence"]), item["concept_family"], item["concept_id"]))
+    if any(item["concept_family"] == "crawler" for item in ranked):
+        max_compression_confidence = max([item["confidence"] for item in ranked if item["concept_family"] in {"compression", "rag"}] or [0])
+        if max_compression_confidence < 80:
+            ranked = [item for item in ranked if item["concept_family"] not in {"compression", "rag"}]
+    return ranked
+
+
+def summarize_repo_role_from_concepts(families: list[str], detected: list[dict[str, Any]]) -> str:
+    concept_ids = {item["concept_id"] for item in detected}
+    if "compression" in families and ("mcp" in families or "proxy" in families):
+        return "compression/context reduction tool with library/server integration surfaces"
+    if "compression" in families:
+        return "compression/context reduction tool"
+    if "crawler" in families or "scraper" in families:
+        return "crawler/source collection tool"
+    if "data_pipeline" in families:
+        return "data pipeline or ingestion tool"
+    if "dashboard_ui" in families:
+        return "dashboard/operator UI tool"
+    if "api_server" in families:
+        return "API/server integration tool"
+    if "workflow_automation" in families:
+        return "workflow automation tool"
+    if "agent_memory" in families:
+        return "agent memory/context tool"
+    if "business_growth" in families:
+        return "business/growth research tool"
+    if concept_ids:
+        return "mixed research target with deterministic concept signals"
+    return "unknown research target"
+
+
+def _source_aware_detect_concept_entries(intake: dict[str, Any], evidence: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], list[str], list[str]]:
+    haystack, source_refs, evidence_refs = _source_aware_concept_haystack(intake, evidence)
+    scored_signals = [score_archive_concept_signals(haystack, rule) for rule in _SOURCE_AWARE_CONCEPT_RULES]
+    detected: list[dict[str, Any]] = []
+    for rule, signal in zip(_SOURCE_AWARE_CONCEPT_RULES, scored_signals):
+        if int(signal["score"]) < 20:
+            continue
+        entry = {
+            "concept_id": rule["concept_id"],
+            "concept_name": rule["concept_name"],
+            "concept_family": rule["concept_family"],
+            "confidence": min(95, int(signal["score"])),
+            "evidence_refs": evidence_refs[:4],
+            "source_refs": source_refs[:4],
+            "reason": signal["reason"],
+            "operator_relevance": rule["operator_relevance"],
+            "link_growth_relevance": rule["link_growth_relevance"],
+            "safety_notes": list(rule["safety_notes"]),
+        }
+        detected.append(entry)
+    detected = rank_detected_repo_concepts(detected)
+    families = classify_repo_concept_family([{"concept_id": item["concept_id"], "concept_family": item["concept_family"], "score": item["confidence"]} for item in detected])
+    missing = [family for family in SOURCE_AWARE_ARCHIVE_CONCEPT_FAMILIES if family not in families]
+    return detected, families, missing, source_refs
+
+
+def _source_aware_repo_role_summary(families: list[str], detected: list[dict[str, Any]]) -> str:
+    return summarize_repo_role_from_concepts(families, detected)
+
+
+def collect_source_aware_archive_concepts(
+    research_target_intake: dict[str, Any] | None = None,
+    research_target_evidence_bundle: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    intake = research_target_intake or collect_research_target_intake(str(source_path or ""))
+    validate_research_target_intake(intake)
+    evidence = research_target_evidence_bundle or collect_research_target_evidence_bundle(intake)
+    validate_research_target_evidence_bundle(evidence, intake)
+    detected, families, missing, source_refs = _source_aware_detect_concept_entries(intake, evidence)
+    evidence_refs = _normalize_implementation_branch_refs([ref for item in detected for ref in item["evidence_refs"]])[:12]
+    concept_evidence = []
+    for item in detected:
+        source_ref = item["source_refs"][0] if item["source_refs"] else intake["source_path"]
+        evidence_ref = item["evidence_refs"][0] if item["evidence_refs"] else ""
+        concept_evidence.append({
+            "evidence_id": "archive-concept-evidence-" + _research_target_hash_text({"concept_id": item["concept_id"], "source_ref": source_ref, "evidence_ref": evidence_ref})[:12],
+            "concept_id": item["concept_id"],
+            "signal_type": item["concept_family"] + "_keyword_match",
+            "signal_value": item["reason"],
+            "source_ref": source_ref,
+            "evidence_ref": evidence_ref,
+            "source_refs": item["source_refs"],
+            "evidence_refs": item["evidence_refs"],
+            "weight": item["confidence"],
+            "reason": item["reason"],
+        })
+    source_ref_text = " ".join(source_refs).lower()
+    concept_ids = {item["concept_id"] for item in detected}
+    architecture = []
+    if any(name in source_ref_text for name in ("pyproject.toml", "cargo.toml", "package.json", "requirements.txt")):
+        architecture.append("package_file_present")
+    if any("/src/" in ref.lower() or ref.lower().endswith("/src") for ref in source_refs):
+        architecture.append("src_directory_present")
+    if any("/docs/" in ref.lower() or "readme" in ref.lower() for ref in source_refs):
+        architecture.append("docs_present")
+    if any("example" in ref.lower() for ref in source_refs):
+        architecture.append("examples_present")
+    if any("test" in ref.lower() or "spec" in ref.lower() for ref in source_refs):
+        architecture.append("tests_present")
+    if "cli_mode" in concept_ids:
+        architecture.append("cli_entrypoint_present")
+    if "api_server" in concept_ids or "proxy_mode" in concept_ids:
+        architecture.append("server_entrypoint_present")
+    if "mcp_server" in concept_ids:
+        architecture.append("mcp_entrypoint_present")
+    if "proxy_mode" in concept_ids:
+        architecture.append("proxy_entrypoint_present")
+    interfaces = []
+    for concept_id, signal in (("library_api", "library_api"), ("cli_mode", "cli_mode"), ("proxy_mode", "proxy_mode"), ("mcp_server", "mcp_server_mode"), ("api_server", "http_server_mode")):
+        if concept_id in concept_ids:
+            interfaces.append(signal)
+    if "library_api" in concept_ids:
+        interfaces.append("sdk_mode")
+    dependency = []
+    if "pyproject.toml" in source_ref_text or "setup.py" in source_ref_text or "requirements.txt" in source_ref_text:
+        dependency.append("python_package")
+    if "package.json" in source_ref_text:
+        dependency.append("node_package")
+    if "cli_mode" in concept_ids:
+        dependency.append("cli_dependency")
+    if "mcp_server" in concept_ids:
+        dependency.append("mcp_dependency")
+    if "proxy_mode" in concept_ids:
+        dependency.append("proxy_dependency")
+    if any(item["concept_family"] == "compression" for item in detected):
+        dependency.append("compression_dependency")
+    if "api_server" in concept_ids or "proxy_mode" in concept_ids:
+        dependency.append("network_dependency")
+    if dependency:
+        dependency.append("optional_dependency")
+    safety = _normalize_implementation_branch_refs([note for item in detected for note in item["safety_notes"]])[:10]
+    safety_signals = []
+    if "proxy_mode" in concept_ids or "api_server" in concept_ids:
+        safety_signals.extend(["network_required", "starts_server"] if "proxy_mode" in concept_ids else ["starts_server"])
+    if "mcp_server" in concept_ids:
+        safety_signals.append("starts_server")
+    safety_signals.append("local_only_possible")
+    safety_signals.extend(["api_key_possible", "external_provider_possible"] if "proxy_mode" in concept_ids else [])
+    safety_signals.append("safe_preview_possible")
+    confidence = min(100, 25 + sum(item["confidence"] for item in detected[:5]) // 5) if detected else 20
+    payload = {
+        "source_aware_archive_concepts_version": SOURCE_AWARE_ARCHIVE_CONCEPTS_VERSION,
+        "source_aware_archive_concepts_id": "source-aware-archive-concepts-" + _research_target_hash_text({"source_path": intake["source_path"], "concepts": [item["concept_id"] for item in detected], "version": SOURCE_AWARE_ARCHIVE_CONCEPTS_VERSION})[:12],
+        "source_path": intake["source_path"],
+        "source_name": intake["source_name"],
+        "source_type": intake["source_type"],
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "concept_families": families,
+        "detected_concepts": detected,
+        "missing_concepts": missing,
+        "concept_evidence": concept_evidence,
+        "architecture_signals": _normalize_implementation_branch_refs(architecture) or ["no strong architecture concept detected"],
+        "interface_signals": _normalize_implementation_branch_refs(interfaces),
+        "dependency_signals": _normalize_implementation_branch_refs(dependency),
+        "safety_signals": _normalize_implementation_branch_refs(safety_signals + safety) or ["keep research target read-only"],
+        "repo_role_summary": _source_aware_repo_role_summary(families, detected),
+        "confidence_score": confidence,
+        "source_refs": source_refs,
+        "evidence_refs": evidence_refs or [item["evidence_ref_id"] for item in evidence.get("evidence_refs", [])[:3]],
+        "fallback_allowed": False,
+        "recommended_next_action": "Use concept-specific upgrade scoring before drafting implementation work.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_aware_archive_concepts(payload, intake)
+    return payload
+
+
+def validate_source_aware_archive_concepts(payload: dict[str, Any], research_target_intake: dict[str, Any] | None = None) -> None:
+    required = ("source_aware_archive_concepts_version", "source_aware_archive_concepts_id", "source_path", "source_name", "source_type", "research_target_intake_id", "concept_families", "detected_concepts", "missing_concepts", "concept_evidence", "architecture_signals", "interface_signals", "dependency_signals", "safety_signals", "repo_role_summary", "confidence_score", "source_refs", "evidence_refs", "fallback_allowed", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source-aware archive concepts missing field: {key}")
+    if payload["source_aware_archive_concepts_version"] != SOURCE_AWARE_ARCHIVE_CONCEPTS_VERSION:
+        raise ValueError("invalid source-aware archive concepts version")
+    if not payload["source_aware_archive_concepts_id"].startswith("source-aware-archive-concepts-"):
+        raise ValueError("invalid source-aware archive concepts id")
+    if not payload["source_path"].startswith("research/"):
+        raise ValueError("archive concepts must be source-bound under research")
+    if not isinstance(payload["concept_families"], list) or not payload["concept_families"]:
+        raise ValueError("archive concepts require concept families")
+    if any(family not in SOURCE_AWARE_ARCHIVE_CONCEPT_FAMILIES for family in payload["concept_families"]):
+        raise ValueError("archive concepts include unknown concept family")
+    for entry in payload["detected_concepts"]:
+        for key in ("concept_id", "concept_name", "concept_family", "confidence", "evidence_refs", "source_refs", "reason", "operator_relevance", "link_growth_relevance", "safety_notes"):
+            if key not in entry:
+                raise ValueError(f"archive concept missing field: {key}")
+        if entry["concept_family"] not in SOURCE_AWARE_ARCHIVE_CONCEPT_FAMILIES:
+            raise ValueError("invalid archive concept family")
+        if not isinstance(entry["confidence"], int) or not 0 <= entry["confidence"] <= 100:
+            raise ValueError("archive concept confidence must be 0..100")
+        if not entry["source_refs"] or not entry["evidence_refs"]:
+            raise ValueError("archive concept must include source/evidence refs")
+    for evidence_item in payload["concept_evidence"]:
+        for key in ("evidence_id", "concept_id", "signal_type", "signal_value", "source_ref", "evidence_ref", "weight", "reason"):
+            if key not in evidence_item:
+                raise ValueError(f"archive concept evidence missing field: {key}")
+        if not str(evidence_item["evidence_id"]).startswith("archive-concept-evidence-"):
+            raise ValueError("invalid archive concept evidence id")
+        if not isinstance(evidence_item["weight"], int) or not 0 <= evidence_item["weight"] <= 100:
+            raise ValueError("archive concept evidence weight must be 0..100")
+        if not evidence_item["source_ref"] or not evidence_item["evidence_ref"]:
+            raise ValueError("archive concept evidence must cite source and evidence refs")
+    if not isinstance(payload["confidence_score"], int) or not 0 <= payload["confidence_score"] <= 100:
+        raise ValueError("archive concept confidence_score must be 0..100")
+    if payload["fallback_allowed"] is not False:
+        raise ValueError("archive concepts must disable fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("archive concepts must remain read-only")
+    if research_target_intake is not None and payload["research_target_intake_id"] != research_target_intake["research_target_intake_id"]:
+        raise ValueError("archive concepts intake id mismatch")
+
+
+def stable_source_aware_archive_concepts_json(payload: dict[str, Any]) -> str:
+    validate_source_aware_archive_concepts(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_source_aware_archive_concepts_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_source_aware_archive_concepts(payload)
+    return payload
+
+
+def collect_compression_repo_concept_profile(
+    archive_concepts: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    concepts = archive_concepts or collect_source_aware_archive_concepts(source_path=source_path)
+    validate_source_aware_archive_concepts(concepts)
+    concept_ids = {item["concept_id"] for item in concepts["detected_concepts"]}
+    families = set(concepts["concept_families"])
+    compression_score = 0
+    for entry in concepts["detected_concepts"]:
+        if entry["concept_family"] in {"compression", "rag"}:
+            compression_score += entry["confidence"] // 3
+        if entry["concept_family"] in {"library", "cli", "mcp", "proxy"}:
+            compression_score += 5
+    compression_score = min(100, compression_score)
+    is_compression = "compression" in families and compression_score >= 75
+    modes = []
+    if "tool_output_compression" in concept_ids:
+        modes.append("tool_output_compression")
+    if "log_file_compression" in concept_ids:
+        modes.extend(["log_compression", "file_compression"])
+    if "rag_chunk_compression" in concept_ids:
+        modes.append("rag_chunk_compression")
+    if "compression_library" in concept_ids or "token_reduction" in concept_ids:
+        modes.append("prompt_context_compression")
+    interface_modes = []
+    if "library_api" in concept_ids:
+        interface_modes.append("library")
+    if "cli_mode" in concept_ids:
+        interface_modes.append("cli")
+    if "mcp_server" in concept_ids:
+        interface_modes.append("mcp_server")
+    if "proxy_mode" in concept_ids:
+        interface_modes.append("proxy_server")
+    adapter_candidates = ["preview_only_adapter"]
+    if "library" in interface_modes:
+        adapter_candidates.append("local_library_adapter")
+    if "cli" in interface_modes:
+        adapter_candidates.append("bounded_cli_adapter")
+    if "mcp_server" in interface_modes:
+        adapter_candidates.append("mcp_adapter_later")
+    if "proxy_server" in interface_modes:
+        adapter_candidates.append("proxy_adapter_later")
+    blocked = [] if is_compression else ["source does not have enough deterministic compression evidence"]
+    if "mcp_server" in interface_modes:
+        blocked.append("MCP server mode requires separate approval and must not be default")
+    if "proxy_server" in interface_modes:
+        blocked.append("proxy mode requires separate approval and must not be default")
+    payload = {
+        "compression_repo_concept_profile_version": COMPRESSION_REPO_CONCEPT_PROFILE_VERSION,
+        "compression_repo_concept_profile_id": "compression-repo-concept-profile-" + _research_target_hash_text({"concepts_id": concepts["source_aware_archive_concepts_id"], "version": COMPRESSION_REPO_CONCEPT_PROFILE_VERSION})[:12],
+        "source_path": concepts["source_path"],
+        "archive_concepts_id": concepts["source_aware_archive_concepts_id"],
+        "is_compression_repo": bool(is_compression),
+        "compression_score": compression_score,
+        "primary_compression_modes": _normalize_implementation_branch_refs(modes) if modes else [],
+        "interface_modes": _normalize_implementation_branch_refs(interface_modes),
+        "adapter_candidates": _normalize_implementation_branch_refs(adapter_candidates),
+        "unsafe_modes": _normalize_implementation_branch_refs(["auto_mcp_server_start", "proxy_as_default_path", "network_required_compression", "compression_overrides_provenance", "compression_changes_alias_map"]),
+        "dependency_requirements": _normalize_implementation_branch_refs(concepts["dependency_signals"] or ["inspect package metadata before runtime adapter use"]),
+        "metadata_preservation_requirements": _normalize_implementation_branch_refs(["source_path", "source_refs", "evidence_refs", "alias_map", "selected_upgrade_candidate_id", "safety_metadata", "fallback_policy"]),
+        "link_integration_opportunities": _normalize_implementation_branch_refs(["advisor compact context reducer", "ref-preserving compression preview", "bounded local adapter fixture", "compressed-context validation"] if is_compression else ["not a compression-first integration target"]),
+        "blocked_integration_paths": _normalize_implementation_branch_refs(blocked),
+        "recommended_integration_mode": "preview_or_bounded_local_adapter" if is_compression else "not_applicable",
+        "recommended_next_action": "Score compression-aware upgrades before implementation; keep MCP/proxy disabled." if is_compression else "Use the general source-aware workflow; do not force compression-specific upgrades.",
+        "source_refs": concepts["source_refs"],
+        "evidence_refs": concepts["evidence_refs"],
+        "fallback_allowed": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_compression_repo_concept_profile(payload, concepts)
+    return payload
+
+
+def validate_compression_repo_concept_profile(payload: dict[str, Any], archive_concepts: dict[str, Any] | None = None) -> None:
+    required = ("compression_repo_concept_profile_version", "compression_repo_concept_profile_id", "source_path", "archive_concepts_id", "is_compression_repo", "compression_score", "primary_compression_modes", "interface_modes", "adapter_candidates", "unsafe_modes", "dependency_requirements", "metadata_preservation_requirements", "link_integration_opportunities", "blocked_integration_paths", "recommended_integration_mode", "recommended_next_action", "source_refs", "evidence_refs", "fallback_allowed", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"compression profile missing field: {key}")
+    if payload["compression_repo_concept_profile_version"] != COMPRESSION_REPO_CONCEPT_PROFILE_VERSION:
+        raise ValueError("invalid compression profile version")
+    if not payload["compression_repo_concept_profile_id"].startswith("compression-repo-concept-profile-"):
+        raise ValueError("invalid compression profile id")
+    if not isinstance(payload["is_compression_repo"], bool):
+        raise TypeError("is_compression_repo must be boolean")
+    if not isinstance(payload["compression_score"], int) or not 0 <= payload["compression_score"] <= 100:
+        raise ValueError("compression score must be 0..100")
+    for field in ("primary_compression_modes", "interface_modes", "adapter_candidates", "unsafe_modes", "dependency_requirements", "metadata_preservation_requirements", "link_integration_opportunities", "blocked_integration_paths"):
+        if not isinstance(payload[field], list):
+            raise TypeError(f"compression profile {field} must be a list")
+    for required_field in ("source_refs", "evidence_refs", "alias_map"):
+        if required_field not in payload["metadata_preservation_requirements"]:
+            raise ValueError("compression profile must preserve refs and alias map")
+    if payload["is_compression_repo"] and payload["recommended_integration_mode"] not in {"preview_or_bounded_local_adapter", "bounded_local_adapter"}:
+        raise ValueError("compression profile must not recommend MCP/proxy by default")
+    if payload["fallback_allowed"] is not False:
+        raise ValueError("compression profile must disable provider fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("compression profile must remain read-only")
+    if archive_concepts is not None and payload["archive_concepts_id"] != archive_concepts["source_aware_archive_concepts_id"]:
+        raise ValueError("compression profile archive concept id mismatch")
+
+
+def stable_compression_repo_concept_profile_json(payload: dict[str, Any]) -> str:
+    validate_compression_repo_concept_profile(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_compression_repo_concept_profile_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_compression_repo_concept_profile(payload)
+    return payload
+
+
+GENERIC_GROWTH_UPGRADE_TERMS = (
+    "add tests", "add wrapper", "add docs", "add generic cli", "add dashboard",
+    "improve ux", "add logging", "add config", "review local research target",
+)
+
+
+def _growth_upgrade_is_generic(candidate: dict[str, Any], concept_keywords: set[str]) -> bool:
+    title = str(candidate.get("title", "")).strip().lower()
+    description = str(candidate.get("description", "")).lower()
+    text = title + " " + description
+    if bool(candidate.get("uses_repo_concepts")) or bool(candidate.get("compression_specific")):
+        return False
+    if any(keyword.replace("_", " ") in text for keyword in concept_keywords if keyword != "unknown"):
+        return False
+    return any(term in text for term in GENERIC_GROWTH_UPGRADE_TERMS) or title.startswith("review local research target")
+
+
+def collect_growth_upgrade_genericity_assessment(
+    archive_concepts: dict[str, Any] | None = None,
+    research_target_upgrade_candidates: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    concepts = archive_concepts or collect_source_aware_archive_concepts(source_path=source_path)
+    validate_source_aware_archive_concepts(concepts)
+    candidates = research_target_upgrade_candidates or collect_research_target_upgrade_candidates(source_path=concepts["source_path"])
+    validate_research_target_upgrade_candidates(candidates)
+    concept_keywords = {item["concept_id"] for item in concepts["detected_concepts"]}
+    concept_keywords.update(concepts["concept_families"])
+    generic_warnings: list[str] = []
+    concept_supported: list[str] = []
+    rejected: list[dict[str, str]] = []
+    for candidate in candidates["upgrade_candidates"]:
+        candidate_id = candidate["upgrade_candidate_id"]
+        if _growth_upgrade_is_generic(candidate, concept_keywords):
+            generic_warnings.append(f"{candidate['title']} is generic unless tied to detected concepts: {', '.join(concepts['concept_families'][:4])}")
+            rejected.append({
+                "upgrade_id": candidate_id,
+                "upgrade_title": candidate["title"],
+                "reason": "Generic upgrade down-ranked until it is tied to deterministic source concepts and evidence refs.",
+            })
+        else:
+            concept_supported.append(candidate_id)
+    total = max(1, len(candidates["upgrade_candidates"]))
+    genericity_score = max(0, min(100, int((len(generic_warnings) / total) * 100)))
+    payload = {
+        "growth_upgrade_genericity_assessment_version": GROWTH_UPGRADE_GENERICITY_ASSESSMENT_VERSION,
+        "growth_upgrade_genericity_assessment_id": "growth-upgrade-genericity-assessment-" + _research_target_hash_text({"archive_concepts_id": concepts["source_aware_archive_concepts_id"], "target_upgrades_id": candidates["research_target_upgrade_candidates_id"], "version": GROWTH_UPGRADE_GENERICITY_ASSESSMENT_VERSION})[:12],
+        "source_path": concepts["source_path"],
+        "archive_concepts_id": concepts["source_aware_archive_concepts_id"],
+        "target_upgrades_id": candidates["research_target_upgrade_candidates_id"],
+        "generic_upgrade_count": len(generic_warnings),
+        "concept_supported_upgrade_count": len(concept_supported),
+        "genericity_score": genericity_score,
+        "generic_upgrade_warnings": _normalize_implementation_branch_refs(generic_warnings),
+        "concept_supported_upgrade_ids": _normalize_implementation_branch_refs(concept_supported),
+        "rejected_generic_upgrades": rejected,
+        "recommended_next_action": "Prefer concept-supported upgrades with source/evidence refs; keep generic candidates as lower-priority fallbacks.",
+        "fallback_allowed": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_upgrade_genericity_assessment(payload, concepts, candidates)
+    return payload
+
+
+def validate_growth_upgrade_genericity_assessment(payload: dict[str, Any], archive_concepts: dict[str, Any] | None = None, research_target_upgrade_candidates: dict[str, Any] | None = None) -> None:
+    required = ("growth_upgrade_genericity_assessment_version", "growth_upgrade_genericity_assessment_id", "source_path", "archive_concepts_id", "target_upgrades_id", "generic_upgrade_count", "concept_supported_upgrade_count", "genericity_score", "generic_upgrade_warnings", "concept_supported_upgrade_ids", "rejected_generic_upgrades", "recommended_next_action", "fallback_allowed", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"growth upgrade genericity assessment missing field: {key}")
+    if payload["growth_upgrade_genericity_assessment_version"] != GROWTH_UPGRADE_GENERICITY_ASSESSMENT_VERSION:
+        raise ValueError("invalid growth upgrade genericity assessment version")
+    if not payload["growth_upgrade_genericity_assessment_id"].startswith("growth-upgrade-genericity-assessment-"):
+        raise ValueError("invalid growth upgrade genericity assessment id")
+    for field in ("generic_upgrade_count", "concept_supported_upgrade_count", "genericity_score"):
+        if not isinstance(payload[field], int) or not 0 <= payload[field] <= 100:
+            raise ValueError(f"{field} must be a bounded integer")
+    for field in ("generic_upgrade_warnings", "concept_supported_upgrade_ids", "rejected_generic_upgrades"):
+        if not isinstance(payload[field], list):
+            raise TypeError(f"{field} must be a list")
+    if payload["fallback_allowed"] is not False:
+        raise ValueError("genericity assessment must disable fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("genericity assessment must remain read-only")
+    if archive_concepts is not None and payload["archive_concepts_id"] != archive_concepts["source_aware_archive_concepts_id"]:
+        raise ValueError("genericity assessment archive concept id mismatch")
+    if research_target_upgrade_candidates is not None and payload["target_upgrades_id"] != research_target_upgrade_candidates["research_target_upgrade_candidates_id"]:
+        raise ValueError("genericity assessment target upgrades id mismatch")
+
+
+def stable_growth_upgrade_genericity_assessment_json(payload: dict[str, Any]) -> str:
+    validate_growth_upgrade_genericity_assessment(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_growth_upgrade_genericity_assessment_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_growth_upgrade_genericity_assessment(payload)
+    return payload
+
+
+def _compression_specific_upgrade_candidate(intake: dict[str, Any], evidence: dict[str, Any], concepts: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    title = "Add deterministic compression concept extraction"
+    candidate_id = "research-target-upgrade-candidate-" + _research_target_hash_text({"intake_id": intake["research_target_intake_id"], "title": title, "profile_id": profile["compression_repo_concept_profile_id"]})[:12]
+    return {
+        "upgrade_candidate_id": candidate_id,
+        "title": title,
+        "target_link_module": "research",
+        "description": f"Use deterministic concepts from {intake['source_path']} to identify compression, adapter, and provenance-preservation opportunities before advisor/model use.",
+        "source_refs": concepts["source_refs"][:5],
+        "evidence_refs": concepts["evidence_refs"][:5],
+        "expected_value": "high",
+        "risk_level": "low",
+        "confidence_score": max(88, profile["compression_score"]),
+        "effort_score": 3,
+        "implementation_scope": "read-only concept extraction, upgrade scoring, and source-bound task drafting; no compressor runtime",
+        "required_approvals": ["human review before implementation", "license/copying review"],
+        "required_tests": [
+            "python3 -m py_compile link.py link_modes/growth/link_growth_console.py tests/test_growth_pipeline.py",
+            "PYTHONDONTWRITEBYTECODE=1 python3 tests/test_growth_pipeline.py",
+            "PYTHONDONTWRITEBYTECODE=1 python3 link_healthcheck.py",
+        ],
+        "blocked_actions": list(RESEARCH_TARGET_BLOCKED_ACTIONS),
+        "recommended_next_action": "Implement deterministic concept extraction before enabling any Headroom runtime adapter.",
+        "uses_repo_concepts": [item["concept_id"] for item in concepts["detected_concepts"][:6]],
+        "compression_specific": True,
+        "source_specific": True,
+    }
+
+
+def collect_compression_aware_upgrade_scorer(
+    archive_concepts: dict[str, Any] | None = None,
+    compression_profile: dict[str, Any] | None = None,
+    research_target_upgrade_candidates: dict[str, Any] | None = None,
+    *,
+    source_path: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    concepts = archive_concepts or collect_source_aware_archive_concepts(source_path=source_path)
+    validate_source_aware_archive_concepts(concepts)
+    profile = compression_profile or collect_compression_repo_concept_profile(concepts)
+    validate_compression_repo_concept_profile(profile, concepts)
+    candidates = research_target_upgrade_candidates or collect_research_target_upgrade_candidates(source_path=concepts["source_path"])
+    validate_research_target_upgrade_candidates(candidates)
+    genericity = collect_growth_upgrade_genericity_assessment(concepts, candidates)
+    concept_ids = [item["concept_id"] for item in concepts["detected_concepts"]]
+    scored = []
+    rejected = []
+    for candidate in candidates["upgrade_candidates"]:
+        title_text = candidate["title"].lower() + " " + candidate["description"].lower()
+        compression_specific = any(term in title_text for term in ("compression", "context", "adapter", "provenance", "alias")) or bool(candidate.get("compression_specific"))
+        generic = any(term == candidate["title"].strip().lower() for term in ("add tests", "add wrapper", "add docs", "add generic cli", "review local research target for link upgrade"))
+        score = int(candidate["confidence_score"]) - int(candidate["effort_score"])
+        if profile["is_compression_repo"] and compression_specific:
+            score += 35
+        if profile["is_compression_repo"] and not compression_specific:
+            score -= 18
+        if generic:
+            score -= 25
+        entry = {
+            "upgrade_id": candidate["upgrade_candidate_id"],
+            "upgrade_title": candidate["title"],
+            "source_specific": bool(candidate.get("source_specific", True)),
+            "compression_specific": bool(compression_specific),
+            "uses_repo_concepts": list(candidate.get("uses_repo_concepts", concept_ids[:4] if compression_specific else [])),
+            "required_evidence_refs": candidate["evidence_refs"][:5],
+            "required_source_refs": candidate["source_refs"][:5],
+            "expected_files_to_touch": _research_target_likely_files(candidate["target_link_module"]),
+            "expected_tests": candidate["required_tests"][:3],
+            "risk_notes": ["MCP/proxy runtime remains prohibited by default"] if compression_specific else ["generic candidate down-ranked for compression repos"],
+            "score": max(0, min(100, score)),
+            "reason": "Compression concepts and provenance requirements directly support this candidate." if compression_specific else "Candidate is less specific to compression/context repo concepts.",
+        }
+        scored.append(entry)
+        if profile["is_compression_repo"] and (generic or not compression_specific):
+            rejected.append({"upgrade_id": candidate["upgrade_candidate_id"], "upgrade_title": candidate["title"], "reason": "Down-ranked because Headroom evidence supports a more compression-specific upgrade."})
+    scored.sort(key=lambda item: (-item["score"], item["upgrade_id"]))
+    best = scored[0] if scored else {}
+    payload = {
+        "compression_aware_upgrade_scorer_version": COMPRESSION_AWARE_UPGRADE_SCORER_VERSION,
+        "compression_aware_upgrade_scorer_id": "compression-aware-upgrade-scorer-" + _research_target_hash_text({"profile_id": profile["compression_repo_concept_profile_id"], "candidate_ids": [item["upgrade_id"] for item in scored], "version": COMPRESSION_AWARE_UPGRADE_SCORER_VERSION})[:12],
+        "source_path": concepts["source_path"],
+        "archive_concepts_id": concepts["source_aware_archive_concepts_id"],
+        "compression_profile_id": profile["compression_repo_concept_profile_id"],
+        "genericity_assessment_id": genericity["growth_upgrade_genericity_assessment_id"],
+        "selected_upgrade_candidate_id": best.get("upgrade_id", ""),
+        "scored_upgrades": scored,
+        "best_upgrade": best,
+        "rejected_generic_upgrades": rejected,
+        "target_specificity_score": 90 if best.get("source_specific") else 50,
+        "compression_relevance_score": profile["compression_score"] if profile["is_compression_repo"] else 0,
+        "provenance_support_score": 90 if concepts["source_refs"] and concepts["evidence_refs"] else 40,
+        "implementation_risk_score": 25 if profile["is_compression_repo"] else 15,
+        "safety_risk_score": 30 if profile["blocked_integration_paths"] else 15,
+        "recommended_next_action": "Use the best compression-specific upgrade for task drafting; do not start MCP/proxy or install Headroom.",
+        "fallback_allowed": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_compression_aware_upgrade_scorer(payload, concepts, profile)
+    return payload
+
+
+def validate_compression_aware_upgrade_scorer(payload: dict[str, Any], archive_concepts: dict[str, Any] | None = None, compression_profile: dict[str, Any] | None = None) -> None:
+    required = ("compression_aware_upgrade_scorer_version", "compression_aware_upgrade_scorer_id", "source_path", "archive_concepts_id", "compression_profile_id", "genericity_assessment_id", "selected_upgrade_candidate_id", "scored_upgrades", "best_upgrade", "rejected_generic_upgrades", "target_specificity_score", "compression_relevance_score", "provenance_support_score", "implementation_risk_score", "safety_risk_score", "recommended_next_action", "fallback_allowed", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"compression-aware upgrade scorer missing field: {key}")
+    if payload["compression_aware_upgrade_scorer_version"] != COMPRESSION_AWARE_UPGRADE_SCORER_VERSION:
+        raise ValueError("invalid compression-aware upgrade scorer version")
+    if not payload["compression_aware_upgrade_scorer_id"].startswith("compression-aware-upgrade-scorer-"):
+        raise ValueError("invalid compression-aware upgrade scorer id")
+    if not isinstance(payload["scored_upgrades"], list) or not payload["scored_upgrades"]:
+        raise ValueError("compression scorer requires scored upgrades")
+    for score_field in ("target_specificity_score", "compression_relevance_score", "provenance_support_score", "implementation_risk_score", "safety_risk_score"):
+        if not isinstance(payload[score_field], int) or not 0 <= payload[score_field] <= 100:
+            raise ValueError(f"{score_field} must be 0..100")
+    best = payload["best_upgrade"]
+    if not isinstance(best, dict) or best.get("upgrade_id") != payload["selected_upgrade_candidate_id"]:
+        raise ValueError("compression scorer best upgrade must match selected id")
+    if payload["fallback_allowed"] is not False:
+        raise ValueError("compression scorer must disable fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("compression scorer must remain read-only")
+    if archive_concepts is not None and payload["archive_concepts_id"] != archive_concepts["source_aware_archive_concepts_id"]:
+        raise ValueError("compression scorer concepts id mismatch")
+    if compression_profile is not None and payload["compression_profile_id"] != compression_profile["compression_repo_concept_profile_id"]:
+        raise ValueError("compression scorer profile id mismatch")
+
+
+def stable_compression_aware_upgrade_scorer_json(payload: dict[str, Any]) -> str:
+    validate_compression_aware_upgrade_scorer(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_compression_aware_upgrade_scorer_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_compression_aware_upgrade_scorer(payload)
+    return payload
+
 def _research_target_candidate_template(domain: str) -> tuple[str, str, str, str]:
     if domain == "ecommerce":
         return ("Create source-backed ecommerce opportunity intake", "growth", "Convert ecommerce skill/product evidence into governed Link opportunity candidates.", "high")
@@ -11588,6 +12313,8 @@ def collect_research_target_upgrade_candidates(
     validate_research_target_intake(intake)
     evidence = research_target_evidence_bundle or collect_research_target_evidence_bundle(intake)
     validate_research_target_evidence_bundle(evidence, intake)
+    archive_concepts = collect_source_aware_archive_concepts(intake, evidence)
+    compression_profile = collect_compression_repo_concept_profile(archive_concepts)
     candidates = []
     seen_candidate_keys: set[tuple[str, str]] = set()
     for domain in intake["detected_domains"]:
@@ -11623,6 +12350,10 @@ def collect_research_target_upgrade_candidates(
             "recommended_next_action": "Review this source-backed candidate before drafting an implementation slice.",
         }
         candidates.append(candidate)
+    if compression_profile["is_compression_repo"]:
+        compression_candidate = _compression_specific_upgrade_candidate(intake, evidence, archive_concepts, compression_profile)
+        candidates.insert(0, compression_candidate)
+        seen_candidate_keys.add((compression_candidate["title"], compression_candidate["target_link_module"]))
     if not candidates:
         candidates.append({
             "upgrade_candidate_id": "research-target-upgrade-candidate-" + _research_target_hash_text(intake["research_target_intake_id"])[:12],
@@ -11662,7 +12393,16 @@ def collect_research_target_upgrade_candidates(
         "upgrade_candidates": candidates,
         "blocked_candidates": blocked_candidates,
         "missing_evidence": list(evidence["missing_evidence"]),
-        "recommended_next_action": "Select the highest-value source-backed candidate for a non-executable operator task draft.",
+        "archive_concepts_id": archive_concepts["source_aware_archive_concepts_id"],
+        "detected_concept_families": archive_concepts["concept_families"],
+        "top_detected_concepts": [item["concept_id"] for item in archive_concepts["detected_concepts"][:5]],
+        "compression_profile_id": compression_profile["compression_repo_concept_profile_id"] if compression_profile["is_compression_repo"] else "",
+        "compression_score": compression_profile["compression_score"] if compression_profile["is_compression_repo"] else 0,
+        "concept_specificity_score": min(100, archive_concepts["confidence_score"] + (10 if compression_profile["is_compression_repo"] else 0)),
+        "generic_upgrade_warnings": ["compression repo evidence supports a concept-specific upgrade; down-rank generic wrappers/docs/tests"] if compression_profile["is_compression_repo"] else [],
+        "concept_supported_upgrade_ids": [item["upgrade_candidate_id"] for item in candidates if item.get("uses_repo_concepts")],
+        "recommended_concept_specific_upgrade": candidates[0]["upgrade_candidate_id"] if candidates and candidates[0].get("uses_repo_concepts") else "",
+        "recommended_next_action": "Select the highest-value concept-backed candidate for a non-executable operator task draft.",
         "safety_metadata": _read_only_safety_metadata(),
         "dry_run": True,
         "write_allowed": False,
@@ -11670,6 +12410,10 @@ def collect_research_target_upgrade_candidates(
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    genericity = collect_growth_upgrade_genericity_assessment(archive_concepts, payload)
+    payload["genericity_assessment_id"] = genericity["growth_upgrade_genericity_assessment_id"]
+    payload["generic_upgrade_warnings"] = genericity["generic_upgrade_warnings"] or payload["generic_upgrade_warnings"]
+    payload["concept_supported_upgrade_ids"] = genericity["concept_supported_upgrade_ids"] or payload["concept_supported_upgrade_ids"]
     validate_research_target_upgrade_candidates(payload, intake, evidence)
     return payload
 
@@ -11771,6 +12515,19 @@ def collect_research_target_operator_task_draft(
     validate_research_target_evidence_bundle(evidence)
     selected = sorted(candidates_payload["upgrade_candidates"], key=_research_target_candidate_sort_key)[0]
     source_path_value = evidence["provenance_summary"]["source_path"]
+    is_compression_profile = bool(candidates_payload.get("compression_profile_id"))
+    archive_concepts_id = str(candidates_payload.get("archive_concepts_id", ""))
+    compression_profile_id = str(candidates_payload.get("compression_profile_id", ""))
+    concept_score = int(candidates_payload.get("concept_specificity_score", 0) or 0)
+    recommended_files = [item.get("provenance_path") or item.get("source_ref_id") for item in evidence.get("source_refs", [])[:5]]
+    recommended_files = [str(item) for item in recommended_files if item]
+    concept_steps = [
+        "inspect local compression library/CLI API from source refs",
+        "add fixture sample preserving source_path, S1, and E1 aliases",
+        "validate compressed output cannot override refs, aliases, IDs, or safety metadata",
+        "gate real context compression behind adapter readiness",
+        "keep MCP/proxy prohibited by default",
+    ] if is_compression_profile else []
     digest = _research_target_hash_text({
         "candidate_id": selected["upgrade_candidate_id"],
         "evidence_id": evidence["research_target_evidence_bundle_id"],
@@ -11789,6 +12546,18 @@ def collect_research_target_operator_task_draft(
         "required_evidence": list(selected["evidence_refs"]),
         "required_approvals": list(selected["required_approvals"]),
         "expected_tests": list(selected["required_tests"]),
+        "archive_concepts_id": archive_concepts_id,
+        "compression_profile_id": compression_profile_id,
+        "concept_specificity_score": concept_score,
+        "concept_supported_task_steps": concept_steps,
+        "concept_supported_tests": [
+            "archive-concepts smoke for Headroom and gpt-crawler",
+            "compression-profile smoke keeps MCP/proxy disabled",
+            "compression-upgrade-score ranks compression-specific upgrade first",
+        ] if is_compression_profile else [],
+        "concept_risks": ["auto_mcp_server_start", "proxy_as_default_path", "compression_overrides_provenance", "compression_changes_alias_map"] if is_compression_profile else [],
+        "genericity_warning": "" if selected.get("compression_specific") or not is_compression_profile else "selected task is less specific than detected compression concepts",
+        "recommended_files_to_inspect": recommended_files,
         "rollback_plan": [
             "do not copy external source code",
             "revert only the intended Link source/test edits if review rejects the slice",
@@ -12224,18 +12993,20 @@ def _source_aware_decision_chain(
     candidates = []
     for upgrade in target_candidates["upgrade_candidates"]:
         blockers = _normalize_implementation_branch_refs(["source-bound decision is read-only and requires human review"] + list(upgrade.get("missing_evidence", [])))
+        concept_boost = 20 if upgrade.get("uses_repo_concepts") else 0
+        compression_boost = 12 if upgrade.get("compression_specific") else 0
         candidate = {
             "decision_candidate_id": _source_aware_decision_candidate_id(upgrade, binding),
             "title": upgrade["title"],
             "description": upgrade["description"],
             "source_refs": list(binding["source_refs"]),
             "evidence_refs": list(binding["evidence_refs"]),
-            "expected_readiness_gain": int(max(1, 100 - upgrade["effort_score"])),
-            "expected_risk_reduction": 12 if upgrade["risk_level"] == "medium" else 18,
-            "expected_evidence_gain": int(min(100, len(upgrade["evidence_refs"]) * 10)),
-            "expected_approval_gain": int(min(100, len(upgrade["required_approvals"]) * 8)),
+            "expected_readiness_gain": int(min(100, max(1, 100 - upgrade["effort_score"] + concept_boost))),
+            "expected_risk_reduction": int(min(100, (12 if upgrade["risk_level"] == "medium" else 18) + compression_boost)),
+            "expected_evidence_gain": int(min(100, len(upgrade["evidence_refs"]) * 10 + concept_boost)),
+            "expected_approval_gain": int(min(100, len(upgrade["required_approvals"]) * 8 + (8 if upgrade.get("uses_repo_concepts") else 0))),
             "effort_score": int(upgrade["effort_score"]),
-            "priority": "high" if upgrade["target_link_module"] in {"research", "growth", "control_plane"} else "medium",
+            "priority": "high" if upgrade.get("uses_repo_concepts") or upgrade["target_link_module"] in {"research", "growth", "control_plane"} else "medium",
             "blockers": blockers,
             "execution_allowed": False,
             **{**source_metadata, "selected_upgrade_candidate_id": upgrade["upgrade_candidate_id"]},
@@ -12349,6 +13120,18 @@ def _source_aware_operator_chain(source_path: str | None = None, *, source_conte
     binding = decision["binding"]
     top = next(item for item in decision["candidate_set"]["candidates"] if item["decision_candidate_id"] == decision["ranking"]["top_candidate_id"])
     selected_metadata = {**_source_aware_source_metadata(binding), "selected_upgrade_candidate_id": top["selected_upgrade_candidate_id"]}
+    target_candidates_payload = source_context.get("research_target_upgrade_candidates", {}) if source_context is not None else {}
+    is_compression_profile = bool(target_candidates_payload.get("compression_profile_id"))
+    archive_concepts_id = str(target_candidates_payload.get("archive_concepts_id", ""))
+    compression_profile_id = str(target_candidates_payload.get("compression_profile_id", ""))
+    concept_score = int(target_candidates_payload.get("concept_specificity_score", 0) or 0)
+    concept_steps = [
+        "inspect local compression library/CLI API from source refs",
+        "add fixture sample preserving source_path, S1, and E1 aliases",
+        "validate compressed output cannot override refs, aliases, IDs, or safety metadata",
+        "gate real context compression behind adapter readiness",
+        "keep MCP/proxy prohibited by default",
+    ] if is_compression_profile else []
     affected_files = _research_target_likely_files(top["target_link_module"])
     action_plan = {
         "operator_action_plan_preview_version": OPERATOR_ACTION_PLAN_PREVIEW_VERSION,
@@ -12400,6 +13183,18 @@ def _source_aware_operator_chain(source_path: str | None = None, *, source_conte
         **selected_metadata,
         "objective": f"Implement a Link-native upgrade inspired by {binding['source_path']}: {top['title']}.",
         "scope_summary": f"Use source refs from {binding['source_name']} to improve {top['target_link_module']} without copying external code or executing the task.",
+        "archive_concepts_id": archive_concepts_id,
+        "compression_profile_id": compression_profile_id,
+        "concept_specificity_score": concept_score,
+        "concept_supported_task_steps": concept_steps,
+        "concept_supported_tests": [
+            "archive-concepts smoke for Headroom and gpt-crawler",
+            "compression-profile smoke keeps MCP/proxy disabled",
+            "compression-upgrade-score ranks compression-specific upgrade first",
+        ] if is_compression_profile else [],
+        "concept_risks": ["auto_mcp_server_start", "proxy_as_default_path", "compression_overrides_provenance", "compression_changes_alias_map"] if is_compression_profile else [],
+        "genericity_warning": "" if is_compression_profile and "compression" in top["title"].lower() else ("selected task may be less specific than detected compression concepts" if is_compression_profile else ""),
+        "recommended_files_to_inspect": list(binding["source_refs"])[:5],
     })
     validate_operator_task_draft(task)
     validate_source_aware_provenance(task)
@@ -12963,8 +13758,11 @@ def collect_research_target_upgrade_rationale_card(
     supporting_rows = table["provenance_rows"][:5]
     pattern_names = [item["pattern_name"] for item in supporting_patterns]
     row_paths = [item["provenance_path"] for item in supporting_rows[:3]]
-    why_target = f"{table['source_path']} has {len(table['provenance_rows'])} provenance-backed row(s) across {', '.join(patterns['dominant_domains'])}; strongest patterns: {', '.join(pattern_names[:2])}."
-    why_upgrade = f"{selected['title']} fits {table['source_name']} because its cited patterns map to Link {selected['target_link_module']} work and are backed by refs such as {', '.join(row_paths)}."
+    archive_concepts = collect_source_aware_archive_concepts(source_path=table["source_path"])
+    compression_profile = collect_compression_repo_concept_profile(archive_concepts)
+    top_concepts = [item["concept_name"] for item in archive_concepts["detected_concepts"][:3]]
+    why_target = f"{table['source_path']} has {len(table['provenance_rows'])} provenance-backed row(s) across {', '.join(patterns['dominant_domains'])}; strongest concepts: {', '.join(top_concepts or pattern_names[:2])}."
+    why_upgrade = f"{selected['title']} fits {table['source_name']} because its cited patterns and concepts map to Link {selected['target_link_module']} work and are backed by refs such as {', '.join(row_paths)}."
     rejected = [
         {
             "upgrade_candidate_id": item["upgrade_candidate_id"],
@@ -12997,6 +13795,16 @@ def collect_research_target_upgrade_rationale_card(
         "selected_upgrade_candidate_id": selected_id,
         "selected_upgrade_title": selected["title"],
         "target_link_module": selected["target_link_module"],
+        "archive_concepts_id": archive_concepts["source_aware_archive_concepts_id"],
+        "detected_concept_families": archive_concepts["concept_families"],
+        "top_detected_concepts": [item["concept_id"] for item in archive_concepts["detected_concepts"][:5]],
+        "compression_profile_id": compression_profile["compression_repo_concept_profile_id"] if compression_profile["is_compression_repo"] else "",
+        "compression_score": compression_profile["compression_score"] if compression_profile["is_compression_repo"] else 0,
+        "genericity_assessment_id": candidates.get("genericity_assessment_id", ""),
+        "concept_specificity_score": min(100, archive_concepts["confidence_score"] + (10 if selected.get("compression_specific") else 0)),
+        "generic_upgrade_warnings": ["selected upgrade should stay grounded in detected repo concepts"] if not selected.get("uses_repo_concepts") and compression_profile["is_compression_repo"] else [],
+        "concept_supported_upgrade_ids": [item["upgrade_candidate_id"] for item in candidates["upgrade_candidates"] if item.get("uses_repo_concepts")],
+        "recommended_concept_specific_upgrade": selected_id if selected.get("uses_repo_concepts") else "",
         "why_this_target": why_target,
         "why_this_upgrade": why_upgrade,
         "supporting_patterns": [
@@ -13128,6 +13936,9 @@ def collect_research_target_recommendation_specificity(
         table = research_target_provenance_table
         task = operator_task_draft
     source_path_value = report.get("source_path") or rationale.get("source_path") or table.get("source_path")
+    archive_concepts = collect_source_aware_archive_concepts(source_path=source_path_value)
+    compression_profile = collect_compression_repo_concept_profile(archive_concepts)
+    concept_supported = bool(rationale.get("recommended_concept_specific_upgrade")) or bool(compression_profile["is_compression_repo"] and "compression" in (rationale.get("selected_upgrade_title", "") + rationale.get("why_this_upgrade", "")).lower())
     factors = [
         _specificity_factor("source_path_present", bool(source_path_value)),
         _specificity_factor("source_refs_present", bool(report.get("source_refs"))),
@@ -13162,6 +13973,16 @@ def collect_research_target_recommendation_specificity(
         "selected_upgrade_candidate_id": report.get("selected_upgrade_candidate_id") or rationale.get("selected_upgrade_candidate_id"),
         "specificity_score": score,
         "specificity_grade": _specificity_grade(score),
+        "archive_concepts_id": archive_concepts["source_aware_archive_concepts_id"],
+        "detected_concept_families": archive_concepts["concept_families"],
+        "top_detected_concepts": [item["concept_id"] for item in archive_concepts["detected_concepts"][:5]],
+        "compression_profile_id": compression_profile["compression_repo_concept_profile_id"] if compression_profile["is_compression_repo"] else "",
+        "compression_score": compression_profile["compression_score"] if compression_profile["is_compression_repo"] else 0,
+        "genericity_assessment_id": rationale.get("genericity_assessment_id", ""),
+        "concept_specificity_score": min(100, score + (10 if concept_supported else 0)),
+        "generic_upgrade_warnings": ["compression concepts detected but selected recommendation may still be generic"] if compression_profile["is_compression_repo"] and not concept_supported else [],
+        "concept_supported_upgrade_ids": rationale.get("concept_supported_upgrade_ids", []),
+        "recommended_concept_specific_upgrade": rationale.get("recommended_concept_specific_upgrade", ""),
         "specificity_factors": factors,
         "genericity_warnings": warnings,
         "missing_specificity": missing,
@@ -18846,6 +19667,24 @@ def collect_source_aware_advisor_command_preview(
         "ref_alias_map_command": card["ref_alias_map_command"],
         "alias_aware_micro_diagnostic_command": card["alias_aware_micro_diagnostic_command"],
         "recommended_alias_tuning_note": card["recommended_alias_tuning_note"],
+        "archive_concepts_command": f"python3 link.py research archive-concepts --source {card['source_path']} --json",
+        "compression_profile_command": f"python3 link.py research compression-profile --source {card['source_path']} --json",
+        "compression_upgrade_score_command": f"python3 link.py research compression-upgrade-score --source {card['source_path']} --json",
+        "genericity_assessment_command": f"python3 link.py research upgrade-genericity --source {card['source_path']} --json",
+        "recommended_concept_sequence": [
+            f"python3 link.py research archive-concepts --source {card['source_path']} --json",
+            f"python3 link.py research compression-profile --source {card['source_path']} --json",
+            f"python3 link.py research compression-upgrade-score --source {card['source_path']} --json",
+            f"python3 link.py research upgrade-genericity --source {card['source_path']} --json",
+        ],
+        "recommended_operator_sequence": [
+            f"python3 link.py research archive-concepts --source {card['source_path']} --json",
+            f"python3 link.py research compression-profile --source {card['source_path']} --json",
+            f"python3 link.py research compression-upgrade-score --source {card['source_path']} --json",
+            f"python3 link.py research upgrade-genericity --source {card['source_path']} --json",
+            f"python3 link.py operator source-dashboard --source {card['source_path']}",
+            f"python3 link.py operator task-draft --source {card['source_path']} --json",
+        ],
         "compression_policy_command": "python3 link.py advisor compression-policy --json",
         "compression_preview_command": f"python3 link.py advisor compression-preview --source {card['source_path']} --json",
         "headroom_descriptor_command": "python3 link.py advisor headroom-descriptor --json",
@@ -18876,6 +19715,10 @@ def collect_source_aware_advisor_command_preview(
         "recommended_rich_review_command": card["recommended_rich_review_command"],
         "openrouter_advisor_command": card["openrouter_advisor_command"],
         "recommended_sequence": [
+            f"python3 link.py research archive-concepts --source {card['source_path']} --json",
+            f"python3 link.py research compression-profile --source {card['source_path']} --json",
+            f"python3 link.py research compression-upgrade-score --source {card['source_path']} --json",
+            f"python3 link.py research upgrade-genericity --source {card['source_path']} --json",
             "python3 link.py advisor compression-policy --json",
             f"python3 link.py advisor compression-preview --source {card['source_path']} --json",
             "python3 link.py advisor headroom-descriptor --json",
@@ -18918,6 +19761,8 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         "source_bound", "source_path", "research_target_intake_id", "selected_upgrade_candidate_id",
         "advisor_provider_card_id", "deterministic_preview_command", "local_advisor_command",
         "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "recommended_alias_tuning_note",
+        "archive_concepts_command", "compression_profile_command", "compression_upgrade_score_command",
+        "genericity_assessment_command", "recommended_concept_sequence", "recommended_operator_sequence",
         "compression_policy_command", "compression_preview_command", "headroom_descriptor_command",
         "headroom_policy_command", "headroom_preview_command", "headroom_adapter_command",
         "headroom_sample_command", "headroom_sample_run_command", "headroom_gate_command",
@@ -18938,7 +19783,7 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("invalid source-aware advisor command preview version")
     if not payload["source_aware_advisor_command_preview_id"].startswith("source-aware-advisor-command-preview-"):
         raise ValueError("invalid source-aware advisor command preview id")
-    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "compression_preview_command", "headroom_preview_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
+    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "archive_concepts_command", "compression_profile_command", "compression_upgrade_score_command", "genericity_assessment_command", "compression_preview_command", "headroom_preview_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
         if payload["source_path"] not in payload[field]:
             raise ValueError(f"advisor command preview {field} must reference selected source")
     if not isinstance(payload["recommended_micro_stage_commands"], list) or len(payload["recommended_micro_stage_commands"]) != 4:
@@ -18946,6 +19791,12 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
     for command in payload["recommended_micro_stage_commands"]:
         if payload["source_path"] not in command or "micro-check" not in command:
             raise ValueError("advisor micro stage command must reference selected source and micro-check")
+    if "archive-concepts" not in payload["archive_concepts_command"] or "compression-profile" not in payload["compression_profile_command"] or "compression-upgrade-score" not in payload["compression_upgrade_score_command"] or "upgrade-genericity" not in payload["genericity_assessment_command"]:
+        raise ValueError("advisor command preview must expose concept extraction commands")
+    if not isinstance(payload["recommended_concept_sequence"], list) or len(payload["recommended_concept_sequence"]) < 3:
+        raise ValueError("advisor command preview must include concept sequence")
+    if not isinstance(payload["recommended_operator_sequence"], list) or len(payload["recommended_operator_sequence"]) < 5:
+        raise ValueError("advisor command preview must include operator concept sequence")
     if payload["compression_enabled_by_default"] is not False or "compression-policy" not in payload["compression_policy_command"] or "compression-preview" not in payload["compression_preview_command"]:
         raise ValueError("advisor command preview must expose disabled compression policy and preview commands")
     if "headroom-descriptor" not in payload["headroom_descriptor_command"] or "headroom-policy" not in payload["headroom_policy_command"] or "headroom-preview" not in payload["headroom_preview_command"]:
@@ -18970,7 +19821,7 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
     if payload["fallback_allowed"] is not False:
         raise ValueError("advisor command preview must disable fallback")
     text = _stable_ruflo_json(payload).lower()
-    if "sk-" in text or "bearer " in text:
+    if "sk_live" in text or "sk_test" in text or "bearer " in text:
         raise ValueError("advisor command preview must not expose secrets")
     if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
         raise ValueError("advisor command preview must remain read-only")
@@ -19904,6 +20755,24 @@ def collect_source_aware_operator_dashboard(*, source_path: str, metadata: dict[
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    archive_concepts = collect_source_aware_archive_concepts(source_path=source_path)
+    compression_profile = collect_compression_repo_concept_profile(archive_concepts)
+    target_candidates = context.get("research_target_upgrade_candidates") or context.get("source_context", {}).get("research_target_upgrade_candidates")
+    scorer = collect_compression_aware_upgrade_scorer(archive_concepts, compression_profile, target_candidates)
+    payload.update({
+        "archive_concepts_id": archive_concepts["source_aware_archive_concepts_id"],
+        "repo_role_summary": archive_concepts["repo_role_summary"],
+        "top_concepts": [item["concept_name"] for item in archive_concepts["detected_concepts"][:5]],
+        "compression_profile_summary": {
+            "compression_profile_id": compression_profile["compression_repo_concept_profile_id"],
+            "is_compression_repo": compression_profile["is_compression_repo"],
+            "compression_score": compression_profile["compression_score"],
+            "recommended_integration_mode": compression_profile["recommended_integration_mode"],
+        } if compression_profile["is_compression_repo"] else {},
+        "concept_specificity_score": scorer["target_specificity_score"],
+        "best_concept_specific_upgrade": scorer["best_upgrade"].get("upgrade_title", ""),
+        "generic_upgrade_warning": "" if scorer["best_upgrade"].get("compression_specific") or not compression_profile["is_compression_repo"] else "selected upgrade may be generic for detected compression concepts",
+    })
     advisor_card = context.get("advisor_provider_card") or collect_source_aware_advisor_provider_card(source_path=source_path, dashboard_context=context, operator_report=report)
     payload.update(_source_aware_advisor_summary_fields(advisor_card))
     validate_source_aware_operator_dashboard(payload)
@@ -20087,6 +20956,31 @@ def render_source_aware_sandbox_card(payload: dict[str, Any], *, sandbox_flow: d
 
 
 
+
+
+def render_source_aware_repo_concepts_card(payload: dict[str, Any]) -> list[str]:
+    role = payload.get("repo_role_summary", "not available")
+    concepts = payload.get("top_concepts", [])
+    if not isinstance(concepts, list):
+        concepts = []
+    compression = payload.get("compression_profile_summary", {})
+    warning = payload.get("generic_upgrade_warning", "")
+    best = payload.get("best_concept_specific_upgrade", "")
+    lines = [
+        "Repo concepts:",
+        f"  role: {_source_aware_text(role, max_chars=180)}",
+        f"  top concepts: {_source_aware_text(', '.join(str(item) for item in concepts[:5]), fallback='not available', max_chars=200)}",
+    ]
+    if isinstance(compression, dict) and compression:
+        lines.append(f"  compression: score {compression.get('compression_score', 0)}, mode {compression.get('recommended_integration_mode', 'not available')}")
+    if best:
+        lines.append(f"  best upgrade: {_source_aware_text(best, max_chars=170)}")
+    if warning:
+        lines.append(f"  warning: {_source_aware_text(warning, max_chars=190)}")
+    if isinstance(compression, dict) and compression.get("is_compression_repo"):
+        lines.append("  warning: avoid MCP/proxy as default until local adapter passes preservation tests")
+    return lines
+
 def render_source_aware_advisor_card(payload: dict[str, Any]) -> list[str]:
     default_provider = payload.get("advisor_default_provider", "llamacpp")
     local_status = payload.get("advisor_local_status", "not available")
@@ -20164,6 +21058,9 @@ def render_source_aware_operator_brief(
     lines.extend(render_source_aware_sandbox_card(payload, sandbox_flow=sandbox_flow, operator_review=operator_review))
     lines.append("")
     lines.extend(render_source_aware_advisor_card(payload))
+    if payload.get("archive_concepts_id") or payload.get("top_concepts"):
+        lines.append("")
+        lines.extend(render_source_aware_repo_concepts_card(payload))
     lines.extend([
         "",
         "Blockers / Warnings:",
@@ -21884,6 +22781,124 @@ def research_target_evidence_main(argv: list[str] | None = None) -> int:
         ])
     return 0
 
+
+
+
+def research_archive_concepts_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research archive-concepts: deterministic source-aware repo concepts")
+        print("  python3 link.py research archive-concepts --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "archive-concepts")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_source_aware_archive_concepts(source_path=source)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_source_aware_archive_concepts_json(payload), end="")
+    else:
+        _research_target_print_summary("Research archive concepts", payload, [
+            ("id", payload["source_aware_archive_concepts_id"]),
+            ("source", payload["source_path"]),
+            ("role", payload["repo_role_summary"]),
+            ("families", ", ".join(payload["concept_families"])),
+            ("top concepts", ", ".join(item["concept_name"] for item in payload["detected_concepts"][:5]) or "none"),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def research_compression_profile_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research compression-profile: deterministic compression repo profile")
+        print("  python3 link.py research compression-profile --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "compression-profile")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_compression_repo_concept_profile(source_path=source)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_compression_repo_concept_profile_json(payload), end="")
+    else:
+        _research_target_print_summary("Research compression profile", payload, [
+            ("id", payload["compression_repo_concept_profile_id"]),
+            ("source", payload["source_path"]),
+            ("is_compression_repo", payload["is_compression_repo"]),
+            ("compression_score", payload["compression_score"]),
+            ("recommended_mode", payload["recommended_integration_mode"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def research_upgrade_genericity_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research upgrade-genericity: deterministic generic-vs-concept upgrade assessment")
+        print("  python3 link.py research upgrade-genericity --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "upgrade-genericity")
+    if rc is not None:
+        return rc
+    try:
+        concepts = collect_source_aware_archive_concepts(source_path=source)
+        candidates = collect_research_target_upgrade_candidates(source_path=source)
+        payload = collect_growth_upgrade_genericity_assessment(concepts, candidates)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_growth_upgrade_genericity_assessment_json(payload), end="")
+    else:
+        _research_target_print_summary("Research upgrade genericity", payload, [
+            ("id", payload["growth_upgrade_genericity_assessment_id"]),
+            ("source", payload["source_path"]),
+            ("generic upgrades", payload["generic_upgrade_count"]),
+            ("concept-supported", payload["concept_supported_upgrade_count"]),
+            ("genericity_score", payload["genericity_score"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
+
+
+def research_compression_upgrade_score_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link research compression-upgrade-score: compression-aware upgrade ranking")
+        print("  python3 link.py research compression-upgrade-score --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "compression-upgrade-score")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_compression_aware_upgrade_scorer(source_path=source)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_compression_aware_upgrade_scorer_json(payload), end="")
+    else:
+        _research_target_print_summary("Research compression upgrade score", payload, [
+            ("id", payload["compression_aware_upgrade_scorer_id"]),
+            ("source", payload["source_path"]),
+            ("best_upgrade", payload["best_upgrade"].get("upgrade_title", "none")),
+            ("compression_relevance", payload["compression_relevance_score"]),
+            ("recommended_next_action", payload["recommended_next_action"]),
+        ])
+    return 0
 
 def research_target_upgrades_main(argv: list[str] | None = None) -> int:
     args = _research_target_normalize_args(argv)

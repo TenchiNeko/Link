@@ -18679,6 +18679,153 @@ def check_source_aware_control_plane_dashboard_helpers() -> None:
     print("source-aware control-plane dashboard helpers OK")
 
 
+def check_source_aware_archive_concept_extractor_helpers() -> None:
+    from link import _cmd_research
+    from link_modes.growth.link_growth_console import (
+        classify_repo_concept_family,
+        collect_compression_aware_upgrade_scorer,
+        collect_compression_repo_concept_profile,
+        collect_growth_upgrade_genericity_assessment,
+        collect_research_target_operator_task_draft,
+        collect_research_target_recommendation_specificity,
+        collect_research_target_upgrade_candidates,
+        collect_research_target_upgrade_rationale_card,
+        collect_source_aware_archive_concepts,
+        parse_compression_aware_upgrade_scorer_json,
+        parse_compression_repo_concept_profile_json,
+        parse_growth_upgrade_genericity_assessment_json,
+        parse_source_aware_archive_concepts_json,
+        rank_detected_repo_concepts,
+        score_archive_concept_signals,
+        stable_compression_aware_upgrade_scorer_json,
+        stable_compression_repo_concept_profile_json,
+        stable_growth_upgrade_genericity_assessment_json,
+        stable_research_target_upgrade_candidates_json,
+        stable_source_aware_archive_concepts_json,
+        summarize_repo_role_from_concepts,
+        validate_compression_aware_upgrade_scorer,
+        validate_compression_repo_concept_profile,
+        validate_growth_upgrade_genericity_assessment,
+        validate_source_aware_archive_concepts,
+    )
+
+    headroom_source = "research/headroom-main.zip"
+    crawler_source = "research/gpt-crawler-main.zip"
+
+    scored_signal = score_archive_concept_signals("headroom compression token reduction rag chunks", {
+        "concept_id": "compression_library",
+        "concept_family": "compression",
+        "keywords": ("compression", "token reduction", "headroom"),
+    })
+    _require(scored_signal["score"] >= 75, "concept signal scoring must rank strong compression evidence high")
+    _require(classify_repo_concept_family([scored_signal]) == ["compression"],
+             "concept family classifier must be deterministic")
+
+    headroom_concepts = collect_source_aware_archive_concepts(source_path=headroom_source)
+    _require("compression" in headroom_concepts["concept_families"],
+             "Headroom archive concepts must detect compression family")
+    _require(any(item["concept_id"] in {"mcp_server", "proxy_mode", "library_api", "cli_mode"} for item in headroom_concepts["detected_concepts"]),
+             "Headroom archive concepts must detect at least one interface mode")
+    _require(headroom_concepts["fallback_allowed"] is False and headroom_concepts["source_refs"] and headroom_concepts["evidence_refs"],
+             "archive concepts must preserve refs and disable fallback")
+    _require(all({"evidence_id", "signal_type", "signal_value", "source_ref", "evidence_ref", "weight"}.issubset(item) for item in headroom_concepts["concept_evidence"]),
+             "archive concept evidence must include structured signal provenance")
+    _require(summarize_repo_role_from_concepts(headroom_concepts["concept_families"], headroom_concepts["detected_concepts"]).startswith("compression"),
+             "repo role summary must be derived from concepts")
+    _require(rank_detected_repo_concepts(headroom_concepts["detected_concepts"])[0]["confidence"] >= headroom_concepts["detected_concepts"][-1]["confidence"],
+             "concept ranking must be deterministic by confidence")
+    validate_source_aware_archive_concepts(headroom_concepts)
+    _require(parse_source_aware_archive_concepts_json(stable_source_aware_archive_concepts_json(headroom_concepts)) == headroom_concepts,
+             "archive concepts JSON must round trip")
+
+    profile = collect_compression_repo_concept_profile(headroom_concepts)
+    _require(profile["is_compression_repo"] is True and profile["compression_score"] >= 45,
+             "Headroom compression profile must identify compression repo")
+    _require(profile["recommended_integration_mode"] == "preview_or_bounded_local_adapter",
+             "Headroom profile must recommend preview/bounded local adapter")
+    _require("mcp_server" in profile["interface_modes"] and "auto_mcp_server_start" in profile["unsafe_modes"],
+             "Headroom profile must detect MCP but keep it unsafe by default")
+    _require("source_refs" in profile["metadata_preservation_requirements"] and "alias_map" in profile["metadata_preservation_requirements"],
+             "Headroom profile must preserve refs and alias map")
+    validate_compression_repo_concept_profile(profile)
+    _require(parse_compression_repo_concept_profile_json(stable_compression_repo_concept_profile_json(profile)) == profile,
+             "compression profile JSON must round trip")
+
+    upgrades = collect_research_target_upgrade_candidates(source_path=headroom_source)
+    _require("compression" in upgrades["detected_concept_families"] and upgrades["recommended_concept_specific_upgrade"],
+             "target-upgrades must include compression concept summary for Headroom")
+    _require(upgrades["upgrade_candidates"][0]["compression_specific"] is True,
+             "Headroom top upgrade candidate must be compression-specific")
+
+    genericity = collect_growth_upgrade_genericity_assessment(headroom_concepts, upgrades)
+    _require(genericity["concept_supported_upgrade_count"] >= 1 and genericity["fallback_allowed"] is False,
+             "genericity assessment must identify concept-supported upgrades without fallback")
+    synthetic_generic_upgrades = json.loads(stable_research_target_upgrade_candidates_json(upgrades))
+    generic_candidate = dict(synthetic_generic_upgrades["upgrade_candidates"][0])
+    generic_candidate["upgrade_candidate_id"] = "research-target-upgrade-candidate-generic0001"
+    generic_candidate["title"] = "Add tests"
+    generic_candidate["description"] = "Add tests for this target."
+    generic_candidate.pop("uses_repo_concepts", None)
+    generic_candidate.pop("compression_specific", None)
+    synthetic_generic_upgrades["upgrade_candidates"] = [generic_candidate]
+    generic_fixture = collect_growth_upgrade_genericity_assessment(headroom_concepts, synthetic_generic_upgrades)
+    _require(generic_fixture["generic_upgrade_count"] == 1 and generic_fixture["rejected_generic_upgrades"],
+             "genericity assessment must flag unsupported add-tests candidates")
+    validate_growth_upgrade_genericity_assessment(genericity)
+    _require(parse_growth_upgrade_genericity_assessment_json(stable_growth_upgrade_genericity_assessment_json(genericity)) == genericity,
+             "genericity assessment JSON must round trip")
+
+    scorer = collect_compression_aware_upgrade_scorer(headroom_concepts, profile, upgrades)
+    _require(scorer["genericity_assessment_id"] == genericity["growth_upgrade_genericity_assessment_id"],
+             "compression scorer must link to genericity assessment")
+    _require(scorer["best_upgrade"]["compression_specific"] is True,
+             "Headroom best scored upgrade must be compression-specific")
+    _require("compression" in scorer["best_upgrade"]["upgrade_title"].lower(),
+             "Headroom best scored upgrade title must be compression-specific")
+    _require(scorer["rejected_generic_upgrades"],
+             "Headroom scorer should down-rank generic upgrades")
+    validate_compression_aware_upgrade_scorer(scorer)
+    _require(parse_compression_aware_upgrade_scorer_json(stable_compression_aware_upgrade_scorer_json(scorer)) == scorer,
+             "compression-aware scorer JSON must round trip")
+
+    rationale = collect_research_target_upgrade_rationale_card(source_path=headroom_source)
+    _require(rationale["recommended_concept_specific_upgrade"] == scorer["selected_upgrade_candidate_id"],
+             "target-upgrade-rationale must mention concept-supported upgrade")
+    specificity = collect_research_target_recommendation_specificity(source_path=headroom_source)
+    _require(specificity["concept_specificity_score"] >= specificity["specificity_score"],
+             "target-specificity must expose concept specificity score")
+    draft = collect_research_target_operator_task_draft(source_path=headroom_source)
+    _require(draft["concept_supported_task_steps"] and "compression" in " ".join(draft["concept_supported_task_steps"]).lower(),
+             "Headroom task draft must include compression-specific task steps")
+
+    crawler_concepts = collect_source_aware_archive_concepts(source_path=crawler_source)
+    crawler_profile = collect_compression_repo_concept_profile(crawler_concepts)
+    crawler_scorer = collect_compression_aware_upgrade_scorer(crawler_concepts, crawler_profile)
+    _require(crawler_profile["is_compression_repo"] is False or crawler_profile["compression_score"] < profile["compression_score"],
+             "gpt-crawler must not score like Headroom as a compression repo")
+    _require(crawler_scorer["compression_relevance_score"] < scorer["compression_relevance_score"],
+             "gpt-crawler compression relevance must stay below Headroom")
+
+    for command, parser in (
+        ("archive-concepts", parse_source_aware_archive_concepts_json),
+        ("compression-profile", parse_compression_repo_concept_profile_json),
+        ("compression-upgrade-score", parse_compression_aware_upgrade_scorer_json),
+        ("upgrade-genericity", parse_growth_upgrade_genericity_assessment_json),
+    ):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = _cmd_research([command, "--source", headroom_source, "--json"])
+        _require(rc == 0, f"research {command} --source --json must return 0")
+        payload = parser(out.getvalue())
+        _require(payload["source_path"] == headroom_source, f"research {command} must preserve source path")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            write_rc = _cmd_research([command, "--source", headroom_source, "--write"])
+        _require(write_rc != 0 and "read-only" in err.getvalue(), f"research {command} --write must be rejected")
+
+    print("source-aware archive concept extractor helpers OK")
+
+
 def check_source_aware_control_plane_dashboard_clis() -> None:
     from link import _cmd_advisor, _cmd_control_plane, _cmd_decision, _cmd_operator
     from link_modes.growth.link_growth_console import (
@@ -20392,6 +20539,7 @@ def main() -> None:
     check_source_aware_operator_report_and_sandbox_helpers()
     check_source_aware_operator_report_and_sandbox_clis()
     check_source_aware_control_plane_dashboard_helpers()
+    check_source_aware_archive_concept_extractor_helpers()
     check_source_aware_control_plane_dashboard_clis()
     check_source_aware_human_summary_clis()
     check_source_aware_provenance_specificity_helpers()
