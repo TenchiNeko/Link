@@ -13252,6 +13252,10 @@ ADVISOR_CONTEXT_COMPRESSION_PREVIEW_VERSION = "link-advisor-context-compression-
 HEADROOM_COMPRESSION_REPO_DESCRIPTOR_VERSION = "link-headroom-compression-repo-descriptor-v1"
 HEADROOM_ADVISOR_COMPRESSION_POLICY_VERSION = "link-headroom-advisor-compression-policy-v1"
 HEADROOM_ADVISOR_COMPRESSION_PREVIEW_VERSION = "link-headroom-advisor-compression-preview-v1"
+HEADROOM_LOCAL_ADAPTER_CONTRACT_VERSION = "link-headroom-local-adapter-contract-v1"
+HEADROOM_ADAPTER_SAMPLE_VERSION = "link-headroom-adapter-sample-v1"
+HEADROOM_LOCAL_ADAPTER_RESULT_VERSION = "link-headroom-local-adapter-result-v1"
+HEADROOM_ADAPTER_INTEGRATION_GATE_VERSION = "link-headroom-adapter-integration-gate-v1"
 LOCAL_ADVISOR_SMOKE_RECEIPT_VERSION = "link-local-advisor-smoke-receipt-v1"
 LOCAL_ADVISOR_JSON_CONTRACT_VERSION = "link-local-advisor-json-contract-v1"
 LOCAL_ADVISOR_JSON_CONTRACT_RESULT_VERSION = "link-local-advisor-json-contract-result-v1"
@@ -15711,6 +15715,7 @@ def collect_headroom_advisor_compression_preview(
     policy: dict[str, Any] | None = None,
     compact_context: dict[str, Any] | None = None,
     alias_map: dict[str, Any] | None = None,
+    run_local_sample: bool = False,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     desc = descriptor or collect_headroom_compression_repo_descriptor()
@@ -15734,12 +15739,17 @@ def collect_headroom_advisor_compression_preview(
         },
     })
     input_chars = len(context_text)
-    compression_attempted = False
-    compression_available = bool(desc["library_api_found"] and not desc["install_required"])
+    adapter_contract = collect_headroom_local_adapter_contract(descriptor=desc, policy=pol)
+    adapter_sample = collect_headroom_adapter_sample()
+    adapter_result = run_headroom_local_adapter_sample(contract=adapter_contract, sample=adapter_sample) if run_local_sample else None
+    compression_attempted = bool(adapter_result["compression_attempted"]) if adapter_result else False
+    compression_available = bool(adapter_contract["adapter_available"])
     output_chars = input_chars
     blocked = list(desc.get("blocked_reasons", []))
     if desc["library_api_found"]:
         blocked.append("Headroom library API exists but is not runnable without install/build in this batch")
+    if run_local_sample and adapter_result and adapter_result["validation_passed"] is not True:
+        blocked.append(adapter_result["fail_open_reason"])
     warnings = [
         "Headroom proxy and MCP surfaces were detected but intentionally not used.",
         "Link keeps canonical refs and aliases outside compressor output.",
@@ -15759,6 +15769,15 @@ def collect_headroom_advisor_compression_preview(
         "policy_id": pol["headroom_advisor_compression_policy_id"],
         "compact_context_id": context["compact_source_aware_advisor_context_id"],
         "ref_alias_map_id": aliases["local_advisor_ref_alias_map_id"],
+        "adapter_contract_id": adapter_contract["headroom_local_adapter_contract_id"],
+        "adapter_sample_id": adapter_sample["headroom_adapter_sample_id"],
+        "adapter_result_id": adapter_result["headroom_local_adapter_result_id"] if adapter_result else "",
+        "adapter_available": adapter_contract["adapter_available"],
+        "adapter_safe_to_run": adapter_contract["adapter_safe_to_run"],
+        "sample_compression_ratio": adapter_result["compression_ratio"] if adapter_result else 0,
+        "sample_validation_passed": adapter_result["validation_passed"] if adapter_result else False,
+        "can_use_for_advisor_context": False,
+        "compression_enabled_by_default": False,
         "compression_attempted": compression_attempted,
         "compression_available": compression_available,
         "integration_mode_used": "preview_only_adapter_boundary",
@@ -15790,6 +15809,9 @@ def validate_headroom_advisor_compression_preview(payload: dict[str, Any]) -> No
     required = (
         "headroom_advisor_compression_preview_version", "headroom_advisor_compression_preview_id",
         "source_path", "descriptor_id", "policy_id", "compact_context_id", "ref_alias_map_id",
+        "adapter_contract_id", "adapter_sample_id", "adapter_result_id", "adapter_available",
+        "adapter_safe_to_run", "sample_compression_ratio", "sample_validation_passed",
+        "can_use_for_advisor_context", "compression_enabled_by_default",
         "compression_attempted", "compression_available", "integration_mode_used", "input_chars", "output_chars",
         "estimated_reduction_percent", "preserved_source_refs_count", "preserved_evidence_refs_count",
         "preserved_aliases_count", "source_refs_preserved", "evidence_refs_preserved", "alias_map_preserved",
@@ -15804,7 +15826,9 @@ def validate_headroom_advisor_compression_preview(payload: dict[str, Any]) -> No
     if not str(payload["source_path"]).startswith("research/"):
         raise ValueError("Headroom preview must be source-bound under research")
     if payload["compression_attempted"] is not False:
-        raise ValueError("Headroom preview must not execute compression in this batch")
+        raise ValueError("Headroom preview must not execute real compression in this batch")
+    if payload["compression_enabled_by_default"] is not False or payload["can_use_for_advisor_context"] is not False:
+        raise ValueError("Headroom preview must keep compression disabled and unavailable for real context")
     if payload["integration_mode_used"] != "preview_only_adapter_boundary":
         raise ValueError("Headroom preview integration mode must be preview-only")
     if payload["source_refs_preserved"] is not True or payload["evidence_refs_preserved"] is not True or payload["alias_map_preserved"] is not True:
@@ -15824,6 +15848,446 @@ def parse_headroom_advisor_compression_preview_json(text: str) -> dict[str, Any]
     import json as _json
     payload = _json.loads(text)
     validate_headroom_advisor_compression_preview(payload)
+    return payload
+
+
+
+
+def _headroom_sanitize_text_preview(text: str, *, limit: int = 300) -> str:
+    preview = str(text or "")[:limit]
+    for marker in ("api_key", "authorization", "bearer", "secret", "token", "password"):
+        preview = preview.replace(marker, "<redacted>")
+        preview = preview.replace(marker.upper(), "<REDACTED>")
+    return preview.replace("\n", "\\n")
+
+
+def collect_headroom_local_adapter_contract(*, descriptor: dict[str, Any] | None = None, policy: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    desc = descriptor or collect_headroom_compression_repo_descriptor()
+    validate_headroom_compression_repo_descriptor(desc)
+    pol = policy or collect_headroom_advisor_compression_policy(descriptor=desc)
+    validate_headroom_advisor_compression_policy(pol)
+    blocked: list[str] = []
+    if desc["install_required"]:
+        blocked.append("Headroom compression pipeline requires install/build before a real local adapter can run")
+    if desc["proxy_found"]:
+        blocked.append("Headroom proxy surface exists but is prohibited for this adapter batch")
+    if desc["mcp_found"]:
+        blocked.append("Headroom MCP surface exists but is prohibited for this adapter batch")
+    adapter_safe = False
+    payload = {
+        "headroom_local_adapter_contract_version": HEADROOM_LOCAL_ADAPTER_CONTRACT_VERSION,
+        "headroom_local_adapter_contract_id": "headroom-local-adapter-contract-" + _local_advisor_safe_hash({
+            "descriptor_id": desc["headroom_compression_repo_descriptor_id"],
+            "policy_id": pol["headroom_advisor_compression_policy_id"],
+            "version": HEADROOM_LOCAL_ADAPTER_CONTRACT_VERSION,
+        }),
+        "descriptor_id": desc["headroom_compression_repo_descriptor_id"],
+        "policy_id": pol["headroom_advisor_compression_policy_id"],
+        "adapter_mode": "fixture_only_no_runnable_adapter",
+        "adapter_available": False,
+        "adapter_safe_to_run": bool(adapter_safe),
+        "adapter_requires_install": bool(desc["install_required"]),
+        "adapter_requires_network": False,
+        "adapter_requires_server": False,
+        "adapter_requires_mcp": False,
+        "adapter_requires_proxy": False,
+        "adapter_input_contract": {
+            "payload_type": "tiny_text_sample",
+            "format": "plain_text",
+            "required_fields": ["source_path", "aliases"],
+            "max_input_chars": 1200,
+        },
+        "adapter_output_contract": {
+            "allowed_shapes": ["text", "messages", "structured_compression_result"],
+            "must_preserve": ["source_path", "S1", "E1"],
+            "max_output_chars": 1200,
+        },
+        "must_preserve_fields": [
+            "source_path", "source_refs", "evidence_refs", "source_ref_aliases", "evidence_ref_aliases",
+            "research_target_intake_id", "selected_upgrade_candidate_id", "safety_metadata",
+        ],
+        "prohibited_overrides": [
+            "source_path", "source_refs", "evidence_refs", "source_ref_aliases", "evidence_ref_aliases",
+            "selected_upgrade_candidate_id", "provider_selection", "fallback_allowed", "advisory_only",
+            "approval_state", "execution_state", "safety_metadata",
+        ],
+        "timeout_seconds": 8,
+        "max_input_chars": 1200,
+        "max_output_chars": 1200,
+        "fallback_to_uncompressed_allowed": True,
+        "compression_enabled_by_default": False,
+        "blocked_reasons": blocked,
+        "recommended_next_action": "Use fixture-only validation; do not run Headroom on real advisor context until dependencies/build are explicitly approved and sample preservation passes.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_headroom_local_adapter_contract(payload)
+    return payload
+
+
+def validate_headroom_local_adapter_contract(payload: dict[str, Any]) -> None:
+    required = (
+        "headroom_local_adapter_contract_version", "headroom_local_adapter_contract_id", "descriptor_id", "policy_id",
+        "adapter_mode", "adapter_available", "adapter_safe_to_run", "adapter_requires_install",
+        "adapter_requires_network", "adapter_requires_server", "adapter_requires_mcp", "adapter_requires_proxy",
+        "adapter_input_contract", "adapter_output_contract", "must_preserve_fields", "prohibited_overrides",
+        "timeout_seconds", "max_input_chars", "max_output_chars", "fallback_to_uncompressed_allowed",
+        "compression_enabled_by_default", "blocked_reasons", "recommended_next_action", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"headroom adapter contract missing field: {key}")
+    if payload["headroom_local_adapter_contract_version"] != HEADROOM_LOCAL_ADAPTER_CONTRACT_VERSION:
+        raise ValueError("invalid headroom adapter contract version")
+    if not str(payload["headroom_local_adapter_contract_id"]).startswith("headroom-local-adapter-contract-"):
+        raise ValueError("invalid headroom adapter contract id")
+    if payload["compression_enabled_by_default"] is not False:
+        raise ValueError("Headroom adapter must be disabled by default")
+    if payload["adapter_requires_network"] is not False or payload["adapter_requires_server"] is not False or payload["adapter_requires_mcp"] is not False or payload["adapter_requires_proxy"] is not False:
+        raise ValueError("Headroom adapter contract must reject network/server/MCP/proxy requirements")
+    if payload["fallback_to_uncompressed_allowed"] is not True:
+        raise ValueError("Headroom adapter must fail open to deterministic uncompressed context")
+    for field in ("source_path", "source_refs", "evidence_refs", "source_ref_aliases", "evidence_ref_aliases", "safety_metadata"):
+        if field not in payload["must_preserve_fields"]:
+            raise ValueError("Headroom adapter contract must preserve refs, aliases, and safety metadata")
+    if "provider_selection" not in payload["prohibited_overrides"] or "fallback_allowed" not in payload["prohibited_overrides"]:
+        raise ValueError("Headroom adapter contract must prohibit provider/fallback overrides")
+    if int(payload["timeout_seconds"]) <= 0 or int(payload["timeout_seconds"]) > 15:
+        raise ValueError("Headroom adapter timeout must be bounded")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("Headroom adapter contract must remain read-only")
+
+
+def stable_headroom_local_adapter_contract_json(payload: dict[str, Any]) -> str:
+    validate_headroom_local_adapter_contract(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_headroom_local_adapter_contract_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_headroom_local_adapter_contract(payload)
+    return payload
+
+
+def collect_headroom_adapter_sample(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    source_path = "research/gpt-crawler-main.zip"
+    input_text = "\n".join([
+        "source_path: research/gpt-crawler-main.zip",
+        "aliases: S1 README, E1 package metadata",
+        "task: compress this context while preserving source_path, S1, and E1",
+    ])
+    payload = {
+        "headroom_adapter_sample_version": HEADROOM_ADAPTER_SAMPLE_VERSION,
+        "headroom_adapter_sample_id": "headroom-adapter-sample-" + _local_advisor_safe_hash({
+            "source_path": source_path,
+            "input_text": input_text,
+            "version": HEADROOM_ADAPTER_SAMPLE_VERSION,
+        }),
+        "source_path": source_path,
+        "input_text": input_text,
+        "required_aliases": ["S1", "E1"],
+        "required_source_path": source_path,
+        "expected_preserved_fields": ["source_path", "S1", "E1"],
+        "expected_output_shape": "text_or_structured_compression_result_preserving_required_markers",
+        "fallback_allowed": True,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_headroom_adapter_sample(payload)
+    return payload
+
+
+def validate_headroom_adapter_sample(payload: dict[str, Any]) -> None:
+    required = (
+        "headroom_adapter_sample_version", "headroom_adapter_sample_id", "source_path", "input_text",
+        "required_aliases", "required_source_path", "expected_preserved_fields", "expected_output_shape",
+        "fallback_allowed", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"headroom adapter sample missing field: {key}")
+    if payload["headroom_adapter_sample_version"] != HEADROOM_ADAPTER_SAMPLE_VERSION:
+        raise ValueError("invalid headroom adapter sample version")
+    if not str(payload["headroom_adapter_sample_id"]).startswith("headroom-adapter-sample-"):
+        raise ValueError("invalid headroom adapter sample id")
+    if payload["source_path"] != "research/gpt-crawler-main.zip" or payload["required_source_path"] != payload["source_path"]:
+        raise ValueError("Headroom adapter sample must use the canonical fixture source path")
+    if payload["required_aliases"] != ["S1", "E1"]:
+        raise ValueError("Headroom adapter sample must require S1/E1 aliases")
+    if not all(marker in payload["input_text"] for marker in (payload["source_path"], "S1", "E1")):
+        raise ValueError("Headroom adapter sample input must include source_path and aliases")
+    if payload["fallback_allowed"] is not True:
+        raise ValueError("Headroom adapter sample must allow uncompressed fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("Headroom adapter sample must remain read-only")
+
+
+def stable_headroom_adapter_sample_json(payload: dict[str, Any]) -> str:
+    validate_headroom_adapter_sample(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_headroom_adapter_sample_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_headroom_adapter_sample(payload)
+    return payload
+
+
+def _collect_headroom_local_adapter_result_from_text(
+    *,
+    contract: dict[str, Any],
+    sample: dict[str, Any],
+    output_text: str,
+    compression_attempted: bool,
+    compression_succeeded: bool,
+    adapter_available: bool,
+    adapter_mode: str,
+    fail_open_reason: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    validate_headroom_local_adapter_contract(contract)
+    validate_headroom_adapter_sample(sample)
+    source_path_preserved = sample["required_source_path"] in output_text
+    aliases_preserved = all(alias in output_text for alias in sample["required_aliases"])
+    prohibited_overrides_detected = any(marker in output_text.lower() for marker in ("openrouter", "approve proposal", "execute task", "fallback provider"))
+    validation_passed = bool(source_path_preserved and aliases_preserved and not prohibited_overrides_detected and compression_succeeded)
+    input_chars = len(sample["input_text"])
+    output_chars = len(output_text)
+    ratio = round((1 - (output_chars / input_chars)) * 100, 2) if input_chars and output_chars <= input_chars else 0.0
+    payload = {
+        "headroom_local_adapter_result_version": HEADROOM_LOCAL_ADAPTER_RESULT_VERSION,
+        "headroom_local_adapter_result_id": "headroom-local-adapter-result-" + _local_advisor_safe_hash({
+            "contract_id": contract["headroom_local_adapter_contract_id"],
+            "sample_id": sample["headroom_adapter_sample_id"],
+            "attempted": compression_attempted,
+            "output_hash": _local_advisor_safe_hash(output_text),
+            "version": HEADROOM_LOCAL_ADAPTER_RESULT_VERSION,
+        }),
+        "adapter_contract_id": contract["headroom_local_adapter_contract_id"],
+        "sample_id": sample["headroom_adapter_sample_id"],
+        "adapter_available": bool(adapter_available),
+        "compression_attempted": bool(compression_attempted),
+        "compression_succeeded": bool(compression_succeeded),
+        "adapter_mode": adapter_mode,
+        "input_chars": input_chars,
+        "output_chars": output_chars,
+        "compression_ratio": ratio,
+        "compressed_text_hash": _local_advisor_safe_hash(output_text) if output_text else "",
+        "compressed_text_preview_sanitized": _headroom_sanitize_text_preview(output_text, limit=300) if output_text else "",
+        "source_path_preserved": bool(source_path_preserved),
+        "aliases_preserved": bool(aliases_preserved),
+        "prohibited_overrides_detected": bool(prohibited_overrides_detected),
+        "validation_passed": bool(validation_passed),
+        "fallback_to_uncompressed": not validation_passed,
+        "fail_open_reason": fail_open_reason if not validation_passed else "",
+        "recommended_next_action": "Keep Headroom disabled; use uncompressed advisor context until a runnable local adapter passes preservation checks." if not validation_passed else "Adapter sample passed; keep compression disabled until real context fixture tests are added.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_headroom_local_adapter_result(payload)
+    return payload
+
+
+def run_headroom_local_adapter_sample(*, contract: dict[str, Any] | None = None, sample: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    adapter_contract = contract or collect_headroom_local_adapter_contract()
+    validate_headroom_local_adapter_contract(adapter_contract)
+    adapter_sample = sample or collect_headroom_adapter_sample()
+    validate_headroom_adapter_sample(adapter_sample)
+    if adapter_contract["adapter_safe_to_run"] is not True:
+        return _collect_headroom_local_adapter_result_from_text(
+            contract=adapter_contract,
+            sample=adapter_sample,
+            output_text=adapter_sample["input_text"],
+            compression_attempted=False,
+            compression_succeeded=False,
+            adapter_available=False,
+            adapter_mode=adapter_contract["adapter_mode"],
+            fail_open_reason="no safe no-install Headroom adapter is available; compression sample was not run",
+            metadata=metadata,
+        )
+    return _collect_headroom_local_adapter_result_from_text(
+        contract=adapter_contract,
+        sample=adapter_sample,
+        output_text=adapter_sample["input_text"],
+        compression_attempted=False,
+        compression_succeeded=False,
+        adapter_available=False,
+        adapter_mode="not_implemented_for_safety",
+        fail_open_reason="runnable adapter execution is intentionally disabled in this batch",
+        metadata=metadata,
+    )
+
+
+def validate_headroom_local_adapter_result(payload: dict[str, Any]) -> None:
+    required = (
+        "headroom_local_adapter_result_version", "headroom_local_adapter_result_id", "adapter_contract_id", "sample_id",
+        "adapter_available", "compression_attempted", "compression_succeeded", "adapter_mode", "input_chars",
+        "output_chars", "compression_ratio", "compressed_text_hash", "compressed_text_preview_sanitized",
+        "source_path_preserved", "aliases_preserved", "prohibited_overrides_detected", "validation_passed",
+        "fallback_to_uncompressed", "fail_open_reason", "recommended_next_action", "safety_metadata", "dry_run",
+        "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"headroom adapter result missing field: {key}")
+    if payload["headroom_local_adapter_result_version"] != HEADROOM_LOCAL_ADAPTER_RESULT_VERSION:
+        raise ValueError("invalid headroom adapter result version")
+    if not str(payload["headroom_local_adapter_result_id"]).startswith("headroom-local-adapter-result-"):
+        raise ValueError("invalid headroom adapter result id")
+    if payload["compression_attempted"] is True and payload["adapter_available"] is not True:
+        raise ValueError("Headroom adapter cannot attempt compression when unavailable")
+    if payload["validation_passed"] is True:
+        if payload["source_path_preserved"] is not True or payload["aliases_preserved"] is not True or payload["prohibited_overrides_detected"] is not False:
+            raise ValueError("valid Headroom adapter result must preserve source_path/aliases and avoid overrides")
+        if payload["compression_succeeded"] is not True:
+            raise ValueError("valid Headroom adapter result must have succeeded compression")
+    else:
+        if payload["fallback_to_uncompressed"] is not True or not payload["fail_open_reason"]:
+            raise ValueError("invalid Headroom adapter result must fail open with reason")
+    if payload["prohibited_overrides_detected"] is True and payload["validation_passed"] is True:
+        raise ValueError("Headroom adapter result cannot pass with prohibited overrides")
+    if int(payload["input_chars"]) <= 0 or int(payload["output_chars"]) < 0:
+        raise ValueError("Headroom adapter result must report bounded sizes")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("Headroom adapter result must remain read-only")
+
+
+def stable_headroom_local_adapter_result_json(payload: dict[str, Any]) -> str:
+    validate_headroom_local_adapter_result(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_headroom_local_adapter_result_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_headroom_local_adapter_result(payload)
+    return payload
+
+
+def collect_headroom_adapter_integration_gate(*, contract: dict[str, Any] | None = None, sample_result: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    adapter_contract = contract or collect_headroom_local_adapter_contract()
+    validate_headroom_local_adapter_contract(adapter_contract)
+    result = sample_result or run_headroom_local_adapter_sample(contract=adapter_contract)
+    validate_headroom_local_adapter_result(result)
+    required_conditions = [
+        "local_only", "no_install_required_or_explicitly_approved", "no_mcp_proxy_required", "no_network_required",
+        "sample_preserves_source_path", "sample_preserves_aliases", "no_link_owned_metadata_override",
+        "compression_output_bounded", "tests_pass",
+    ]
+    passed: list[str] = []
+    failed: list[str] = []
+    if adapter_contract["adapter_requires_network"] is False:
+        passed.append("no_network_required")
+    else:
+        failed.append("no_network_required")
+    if adapter_contract["adapter_requires_mcp"] is False and adapter_contract["adapter_requires_proxy"] is False and adapter_contract["adapter_requires_server"] is False:
+        passed.append("no_mcp_proxy_required")
+    else:
+        failed.append("no_mcp_proxy_required")
+    if adapter_contract["adapter_requires_install"] is False:
+        passed.append("no_install_required_or_explicitly_approved")
+    else:
+        failed.append("no_install_required_or_explicitly_approved")
+    if result["source_path_preserved"] is True:
+        passed.append("sample_preserves_source_path")
+    else:
+        failed.append("sample_preserves_source_path")
+    if result["aliases_preserved"] is True:
+        passed.append("sample_preserves_aliases")
+    else:
+        failed.append("sample_preserves_aliases")
+    if result["prohibited_overrides_detected"] is False:
+        passed.append("no_link_owned_metadata_override")
+    else:
+        failed.append("no_link_owned_metadata_override")
+    if int(result["output_chars"]) <= int(adapter_contract["max_output_chars"]):
+        passed.append("compression_output_bounded")
+    else:
+        failed.append("compression_output_bounded")
+    if result["validation_passed"] is True and adapter_contract["adapter_safe_to_run"] is True:
+        passed.extend(["local_only", "tests_pass"])
+    else:
+        failed.extend(["local_only", "tests_pass"])
+    blocked = [condition for condition in required_conditions if condition not in passed]
+    ready = not blocked
+    payload = {
+        "headroom_adapter_integration_gate_version": HEADROOM_ADAPTER_INTEGRATION_GATE_VERSION,
+        "headroom_adapter_integration_gate_id": "headroom-adapter-integration-gate-" + _local_advisor_safe_hash({
+            "contract_id": adapter_contract["headroom_local_adapter_contract_id"],
+            "result_id": result["headroom_local_adapter_result_id"],
+            "version": HEADROOM_ADAPTER_INTEGRATION_GATE_VERSION,
+        }),
+        "adapter_contract_id": adapter_contract["headroom_local_adapter_contract_id"],
+        "last_sample_result_id": result["headroom_local_adapter_result_id"],
+        "adapter_ready_for_real_context": bool(ready),
+        "required_conditions": required_conditions,
+        "passed_conditions": passed,
+        "failed_conditions": blocked,
+        "blocked_reasons": blocked,
+        "recommended_next_action": "Do not enable Headroom for real advisor context until the adapter gate passes all preservation and local-only checks." if not ready else "Adapter gate passed; keep disabled by default and add explicit opt-in real-context tests next.",
+        "compression_enabled_by_default": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_headroom_adapter_integration_gate(payload)
+    return payload
+
+
+def validate_headroom_adapter_integration_gate(payload: dict[str, Any]) -> None:
+    required = (
+        "headroom_adapter_integration_gate_version", "headroom_adapter_integration_gate_id", "adapter_contract_id",
+        "last_sample_result_id", "adapter_ready_for_real_context", "required_conditions", "passed_conditions",
+        "failed_conditions", "blocked_reasons", "recommended_next_action", "compression_enabled_by_default",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"headroom adapter gate missing field: {key}")
+    if payload["headroom_adapter_integration_gate_version"] != HEADROOM_ADAPTER_INTEGRATION_GATE_VERSION:
+        raise ValueError("invalid headroom adapter gate version")
+    if not str(payload["headroom_adapter_integration_gate_id"]).startswith("headroom-adapter-integration-gate-"):
+        raise ValueError("invalid headroom adapter gate id")
+    if payload["compression_enabled_by_default"] is not False:
+        raise ValueError("Headroom adapter gate must keep compression disabled by default")
+    if payload["adapter_ready_for_real_context"] is True and payload["blocked_reasons"]:
+        raise ValueError("Headroom adapter gate cannot be ready with blockers")
+    if payload["adapter_ready_for_real_context"] is False and not payload["blocked_reasons"]:
+        raise ValueError("blocked Headroom adapter gate must explain blockers")
+    for condition in ("no_mcp_proxy_required", "no_network_required", "sample_preserves_source_path", "sample_preserves_aliases"):
+        if condition not in payload["required_conditions"]:
+            raise ValueError("Headroom adapter gate missing required safety condition")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("Headroom adapter gate must remain read-only")
+
+
+def stable_headroom_adapter_integration_gate_json(payload: dict[str, Any]) -> str:
+    validate_headroom_adapter_integration_gate(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_headroom_adapter_integration_gate_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_headroom_adapter_integration_gate(payload)
     return payload
 
 
@@ -18387,7 +18851,19 @@ def collect_source_aware_advisor_command_preview(
         "headroom_descriptor_command": "python3 link.py advisor headroom-descriptor --json",
         "headroom_policy_command": "python3 link.py advisor headroom-policy --json",
         "headroom_preview_command": f"python3 link.py advisor headroom-preview --source {card['source_path']} --json",
-        "recommended_compression_mode": "headroom_preview_only_disabled",
+        "headroom_adapter_command": "python3 link.py advisor headroom-adapter --json",
+        "headroom_sample_command": "python3 link.py advisor headroom-sample --json",
+        "headroom_sample_run_command": "python3 link.py advisor headroom-sample --run-local --json",
+        "headroom_gate_command": "python3 link.py advisor headroom-gate --json",
+        "recommended_headroom_sequence": [
+            "python3 link.py advisor headroom-descriptor --json",
+            "python3 link.py advisor headroom-adapter --json",
+            "python3 link.py advisor headroom-sample --json",
+            "python3 link.py advisor headroom-sample --run-local --json",
+            "python3 link.py advisor headroom-gate --json",
+            f"python3 link.py advisor headroom-preview --source {card['source_path']} --run-local-sample --json",
+        ],
+        "recommended_compression_mode": "headroom_fixture_adapter_disabled",
         "compression_enabled_by_default": False,
         "compression_next_action": "Inspect headroom-preview before enabling any local compressor adapter; refs and aliases remain Link-owned.",
         "recommended_micro_diagnostic_command": card["recommended_micro_diagnostic_command"],
@@ -18404,6 +18880,9 @@ def collect_source_aware_advisor_command_preview(
             f"python3 link.py advisor compression-preview --source {card['source_path']} --json",
             "python3 link.py advisor headroom-descriptor --json",
             "python3 link.py advisor headroom-policy --json",
+            "python3 link.py advisor headroom-adapter --json",
+            "python3 link.py advisor headroom-sample --json",
+            "python3 link.py advisor headroom-gate --json",
             f"python3 link.py advisor headroom-preview --source {card['source_path']} --json",
             card["ref_alias_map_command"],
             card["recommended_micro_diagnostic_command"],
@@ -18440,7 +18919,9 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         "advisor_provider_card_id", "deterministic_preview_command", "local_advisor_command",
         "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "recommended_alias_tuning_note",
         "compression_policy_command", "compression_preview_command", "headroom_descriptor_command",
-        "headroom_policy_command", "headroom_preview_command", "recommended_compression_mode",
+        "headroom_policy_command", "headroom_preview_command", "headroom_adapter_command",
+        "headroom_sample_command", "headroom_sample_run_command", "headroom_gate_command",
+        "recommended_headroom_sequence", "recommended_compression_mode",
         "compression_enabled_by_default", "compression_next_action",
         "recommended_micro_diagnostic_command", "recommended_micro_stage_commands",
         "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command",
@@ -18469,6 +18950,11 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("advisor command preview must expose disabled compression policy and preview commands")
     if "headroom-descriptor" not in payload["headroom_descriptor_command"] or "headroom-policy" not in payload["headroom_policy_command"] or "headroom-preview" not in payload["headroom_preview_command"]:
         raise ValueError("advisor command preview must expose Headroom descriptor/policy/preview commands")
+    for field, command_name in (("headroom_adapter_command", "headroom-adapter"), ("headroom_sample_command", "headroom-sample"), ("headroom_sample_run_command", "headroom-sample"), ("headroom_gate_command", "headroom-gate")):
+        if command_name not in payload[field]:
+            raise ValueError("advisor command preview must expose Headroom adapter/sample/gate commands")
+    if not isinstance(payload["recommended_headroom_sequence"], list) or len(payload["recommended_headroom_sequence"]) < 5:
+        raise ValueError("advisor command preview must include a Headroom adapter sequence")
     if any("mcp" in str(item).lower() and "headroom" in str(item).lower() for item in payload["recommended_sequence"]):
         raise ValueError("advisor command preview must not recommend Headroom MCP")
     if any("proxy" in str(item).lower() and "headroom" in str(item).lower() for item in payload["recommended_sequence"]):
@@ -20082,7 +20568,8 @@ def advisor_headroom_preview_main(argv: list[str] | None = None) -> int:
     if any(arg in {"-h", "--help", "help"} for arg in args):
         print("Advisor headroom-preview: selected target Headroom compression preview")
         print("  python3 link.py advisor headroom-preview --source <path> --json")
-        print("Read-only. No Headroom execution, MCP, proxy, model, OpenRouter, or network call is made.")
+        print("  python3 link.py advisor headroom-preview --source <path> --run-local-sample --json")
+        print("Read-only. Optional --run-local-sample uses only the tiny adapter fixture and may fail open.")
         return 0
     if "--write" in args:
         print("error: advisor headroom-preview is read-only; --write is not supported", file=sys.stderr)
@@ -20091,7 +20578,7 @@ def advisor_headroom_preview_main(argv: list[str] | None = None) -> int:
     if rc is not None:
         return rc
     try:
-        payload = collect_headroom_advisor_compression_preview(source_path=source or "")
+        payload = collect_headroom_advisor_compression_preview(source_path=source or "", run_local_sample="--run-local-sample" in args)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -20103,6 +20590,8 @@ def advisor_headroom_preview_main(argv: list[str] | None = None) -> int:
         print(f"integration_mode: {payload['integration_mode_used']}")
         print(f"compression_available: {payload['compression_available']}")
         print(f"compression_attempted: {payload['compression_attempted']}")
+        print(f"adapter_available: {payload['adapter_available']}")
+        print(f"sample_validation_passed: {payload['sample_validation_passed']}")
         print(f"input_chars: {payload['input_chars']}")
         print(f"output_chars: {payload['output_chars']}")
         print(f"estimated_reduction_percent: {payload['estimated_reduction_percent']}")
@@ -20114,6 +20603,107 @@ def advisor_headroom_preview_main(argv: list[str] | None = None) -> int:
             print("blocked_reasons:")
             for reason in payload["blocked_reasons"][:5]:
                 print(f"  - {reason}")
+        print(f"next_action: {payload['recommended_next_action']}")
+    return 0
+
+
+
+def advisor_headroom_adapter_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor headroom-adapter: fixture-tested local adapter contract")
+        print("  python3 link.py advisor headroom-adapter --json")
+        print("Read-only. No install, MCP/proxy, network, model, or OpenRouter call is made.")
+        return 0
+    if "--write" in args:
+        print("error: advisor headroom-adapter is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_headroom_local_adapter_contract()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_headroom_local_adapter_contract_json(payload), end="")
+    else:
+        print("Headroom local adapter contract")
+        print(f"adapter_mode: {payload['adapter_mode']}")
+        print(f"adapter_available: {payload['adapter_available']}")
+        print(f"adapter_safe_to_run: {payload['adapter_safe_to_run']}")
+        print(f"requires_install: {payload['adapter_requires_install']}")
+        print(f"requires_mcp: {payload['adapter_requires_mcp']}")
+        print(f"requires_proxy: {payload['adapter_requires_proxy']}")
+        print(f"enabled_by_default: {payload['compression_enabled_by_default']}")
+        print(f"next_action: {payload['recommended_next_action']}")
+    return 0
+
+
+def advisor_headroom_sample_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor headroom-sample: tiny adapter fixture sample")
+        print("  python3 link.py advisor headroom-sample --json")
+        print("  python3 link.py advisor headroom-sample --run-local --json")
+        print("Read-only. --run-local may only run the tiny fixture path and fails open if unavailable.")
+        return 0
+    if "--write" in args:
+        print("error: advisor headroom-sample is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        if "--run-local" in args:
+            payload = run_headroom_local_adapter_sample()
+            if "--json" in args:
+                print(stable_headroom_local_adapter_result_json(payload), end="")
+            else:
+                print("Headroom local adapter sample result")
+                print(f"adapter_available: {payload['adapter_available']}")
+                print(f"compression_attempted: {payload['compression_attempted']}")
+                print(f"compression_succeeded: {payload['compression_succeeded']}")
+                print(f"source_path_preserved: {payload['source_path_preserved']}")
+                print(f"aliases_preserved: {payload['aliases_preserved']}")
+                print(f"compression_ratio: {payload['compression_ratio']}")
+                print(f"validation_passed: {payload['validation_passed']}")
+                print(f"fail_open_reason: {payload['fail_open_reason']}")
+                print(f"next_action: {payload['recommended_next_action']}")
+            return 0
+        payload = collect_headroom_adapter_sample()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_headroom_adapter_sample_json(payload), end="")
+    else:
+        print("Headroom adapter sample")
+        print(f"source_path: {payload['source_path']}")
+        print(f"required_aliases: {', '.join(payload['required_aliases'])}")
+        print(f"fallback_allowed: {payload['fallback_allowed']}")
+        print(f"expected_shape: {payload['expected_output_shape']}")
+    return 0
+
+
+def advisor_headroom_gate_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Advisor headroom-gate: future real-context compression readiness gate")
+        print("  python3 link.py advisor headroom-gate --json")
+        print("Read-only. No Headroom execution, MCP/proxy, network, model, or OpenRouter call is made.")
+        return 0
+    if "--write" in args:
+        print("error: advisor headroom-gate is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_headroom_adapter_integration_gate()
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_headroom_adapter_integration_gate_json(payload), end="")
+    else:
+        print("Headroom adapter integration gate")
+        print(f"ready_for_real_context: {payload['adapter_ready_for_real_context']}")
+        print(f"enabled_by_default: {payload['compression_enabled_by_default']}")
+        print(f"passed_conditions: {len(payload['passed_conditions'])}")
+        print(f"failed_conditions: {', '.join(payload['failed_conditions'])}")
         print(f"next_action: {payload['recommended_next_action']}")
     return 0
 

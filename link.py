@@ -299,6 +299,18 @@ def _cmd_advisor(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import advisor_headroom_preview_main as _advisor_headroom_preview_main
 
         return _advisor_headroom_preview_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "headroom-adapter":
+        from link_modes.growth.link_growth_console import advisor_headroom_adapter_main as _advisor_headroom_adapter_main
+
+        return _advisor_headroom_adapter_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "headroom-sample":
+        from link_modes.growth.link_growth_console import advisor_headroom_sample_main as _advisor_headroom_sample_main
+
+        return _advisor_headroom_sample_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "headroom-gate":
+        from link_modes.growth.link_growth_console import advisor_headroom_gate_main as _advisor_headroom_gate_main
+
+        return _advisor_headroom_gate_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "compression-policy":
         from link_modes.growth.link_growth_console import advisor_compression_policy_main as _advisor_compression_policy_main
 
@@ -369,6 +381,9 @@ def _cmd_advisor(argv: list[str]) -> int:
         print("  headroom-descriptor Preview Headroom compression repo descriptor")
         print("  headroom-policy Preview Headroom advisor compression policy")
         print("  headroom-preview Preview selected-source Headroom compression readiness")
+        print("  headroom-adapter Preview Headroom local adapter contract")
+        print("  headroom-sample Preview/run tiny Headroom adapter fixture")
+        print("  headroom-gate Preview Headroom adapter integration gate")
         print("  compression-policy Preview optional advisor context compression boundary")
         print("  compression-preview Preview selected-source compression readiness")
         print("  micro-contract    Preview staged tiny local JSON contract")

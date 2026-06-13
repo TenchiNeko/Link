@@ -19066,6 +19066,10 @@ def check_local_model_advisor_foundation_helpers() -> None:
         collect_headroom_compression_repo_descriptor,
         collect_headroom_advisor_compression_policy,
         collect_headroom_advisor_compression_preview,
+        collect_headroom_local_adapter_contract,
+        collect_headroom_adapter_sample,
+        run_headroom_local_adapter_sample,
+        collect_headroom_adapter_integration_gate,
         collect_compact_source_aware_advisor_context,
         collect_local_advisor_json_contract,
         collect_local_advisor_json_contract_result,
@@ -19099,6 +19103,10 @@ def check_local_model_advisor_foundation_helpers() -> None:
         parse_headroom_compression_repo_descriptor_json,
         parse_headroom_advisor_compression_policy_json,
         parse_headroom_advisor_compression_preview_json,
+        parse_headroom_local_adapter_contract_json,
+        parse_headroom_adapter_sample_json,
+        parse_headroom_local_adapter_result_json,
+        parse_headroom_adapter_integration_gate_json,
         parse_headroom_compression_repo_descriptor_json,
         parse_headroom_advisor_compression_policy_json,
         parse_headroom_advisor_compression_preview_json,
@@ -19109,6 +19117,10 @@ def check_local_model_advisor_foundation_helpers() -> None:
         parse_headroom_compression_repo_descriptor_json,
         parse_headroom_advisor_compression_policy_json,
         parse_headroom_advisor_compression_preview_json,
+        parse_headroom_local_adapter_contract_json,
+        parse_headroom_adapter_sample_json,
+        parse_headroom_local_adapter_result_json,
+        parse_headroom_adapter_integration_gate_json,
         parse_compact_source_aware_advisor_context_json,
         parse_local_advisor_json_contract_json,
         parse_local_advisor_json_contract_result_json,
@@ -19142,6 +19154,10 @@ def check_local_model_advisor_foundation_helpers() -> None:
         stable_headroom_compression_repo_descriptor_json,
         stable_headroom_advisor_compression_policy_json,
         stable_headroom_advisor_compression_preview_json,
+        stable_headroom_local_adapter_contract_json,
+        stable_headroom_adapter_sample_json,
+        stable_headroom_local_adapter_result_json,
+        stable_headroom_adapter_integration_gate_json,
         stable_compact_source_aware_advisor_context_json,
         stable_local_advisor_json_contract_json,
         stable_local_advisor_json_contract_result_json,
@@ -19175,6 +19191,10 @@ def check_local_model_advisor_foundation_helpers() -> None:
         validate_headroom_compression_repo_descriptor,
         validate_headroom_advisor_compression_policy,
         validate_headroom_advisor_compression_preview,
+        validate_headroom_local_adapter_contract,
+        validate_headroom_adapter_sample,
+        validate_headroom_local_adapter_result,
+        validate_headroom_adapter_integration_gate,
         validate_compact_local_advisor_prompt,
         validate_compact_source_aware_advisor_context,
         validate_local_advisor_json_contract,
@@ -19507,11 +19527,72 @@ def check_local_model_advisor_foundation_helpers() -> None:
              "Headroom preview must preserve source and avoid execution")
     _require(headroom_preview["source_refs_preserved"] is True and headroom_preview["evidence_refs_preserved"] is True and headroom_preview["alias_map_preserved"] is True,
              "Headroom preview must preserve refs and aliases")
-    _require(headroom_preview["integration_mode_used"] == "preview_only_adapter_boundary",
-             "Headroom preview must be preview-only")
+    _require(headroom_preview["integration_mode_used"] == "preview_only_adapter_boundary" and headroom_preview["adapter_available"] is False,
+             "Headroom preview must be preview-only with unavailable adapter")
     validate_headroom_advisor_compression_preview(headroom_preview)
     _require(parse_headroom_advisor_compression_preview_json(stable_headroom_advisor_compression_preview_json(headroom_preview)) == headroom_preview,
              "Headroom preview JSON must round trip")
+
+    headroom_adapter = collect_headroom_local_adapter_contract(descriptor=headroom_descriptor, policy=headroom_policy)
+    _require(headroom_adapter["compression_enabled_by_default"] is False and headroom_adapter["adapter_safe_to_run"] is False,
+             "Headroom adapter contract must stay disabled and unavailable by default")
+    _require(headroom_adapter["adapter_requires_network"] is False and headroom_adapter["adapter_requires_mcp"] is False and headroom_adapter["adapter_requires_proxy"] is False,
+             "Headroom adapter contract must reject network/MCP/proxy requirements")
+    _require("source_path" in headroom_adapter["must_preserve_fields"] and "source_ref_aliases" in headroom_adapter["must_preserve_fields"],
+             "Headroom adapter contract must preserve refs and aliases")
+    validate_headroom_local_adapter_contract(headroom_adapter)
+    _require(parse_headroom_local_adapter_contract_json(stable_headroom_local_adapter_contract_json(headroom_adapter)) == headroom_adapter,
+             "Headroom adapter contract JSON must round trip")
+
+    headroom_sample = collect_headroom_adapter_sample()
+    _require(headroom_sample["source_path"] == zip_source and headroom_sample["required_aliases"] == ["S1", "E1"],
+             "Headroom adapter sample must include source path and S1/E1 aliases")
+    validate_headroom_adapter_sample(headroom_sample)
+    _require(parse_headroom_adapter_sample_json(stable_headroom_adapter_sample_json(headroom_sample)) == headroom_sample,
+             "Headroom adapter sample JSON must round trip")
+
+    headroom_result = run_headroom_local_adapter_sample(contract=headroom_adapter, sample=headroom_sample)
+    _require(headroom_result["adapter_available"] is False and headroom_result["compression_attempted"] is False and headroom_result["fallback_to_uncompressed"] is True,
+             "Headroom adapter run must fail open when no safe adapter exists")
+    _require(headroom_result["source_path_preserved"] is True and headroom_result["aliases_preserved"] is True,
+             "Headroom adapter sample result must preserve source path and aliases even when unavailable")
+    validate_headroom_local_adapter_result(headroom_result)
+    _require(parse_headroom_local_adapter_result_json(stable_headroom_local_adapter_result_json(headroom_result)) == headroom_result,
+             "Headroom adapter result JSON must round trip")
+
+    bad_alias_result = dict(headroom_result)
+    bad_alias_result["aliases_preserved"] = False
+    bad_alias_result["validation_passed"] = True
+    try:
+        validate_headroom_local_adapter_result(bad_alias_result)
+        raise AssertionError("missing alias must fail Headroom adapter result validation")
+    except ValueError:
+        pass
+    bad_source_result = dict(headroom_result)
+    bad_source_result["source_path_preserved"] = False
+    bad_source_result["validation_passed"] = True
+    try:
+        validate_headroom_local_adapter_result(bad_source_result)
+        raise AssertionError("missing source_path must fail Headroom adapter result validation")
+    except ValueError:
+        pass
+    bad_override_result = dict(headroom_result)
+    bad_override_result["prohibited_overrides_detected"] = True
+    bad_override_result["validation_passed"] = True
+    try:
+        validate_headroom_local_adapter_result(bad_override_result)
+        raise AssertionError("prohibited override must fail Headroom adapter result validation")
+    except ValueError:
+        pass
+
+    headroom_gate = collect_headroom_adapter_integration_gate(contract=headroom_adapter, sample_result=headroom_result)
+    _require(headroom_gate["adapter_ready_for_real_context"] is False and headroom_gate["compression_enabled_by_default"] is False,
+             "Headroom adapter gate must stay blocked and disabled by default")
+    _require("no_install_required_or_explicitly_approved" in headroom_gate["blocked_reasons"],
+             "Headroom adapter gate must block when install/build is still required")
+    validate_headroom_adapter_integration_gate(headroom_gate)
+    _require(parse_headroom_adapter_integration_gate_json(stable_headroom_adapter_integration_gate_json(headroom_gate)) == headroom_gate,
+             "Headroom adapter gate JSON must round trip")
 
     micro_contracts = [collect_local_advisor_micro_contract(package, stage_number=stage) for stage in range(4)]
     for stage, micro_contract in enumerate(micro_contracts):
@@ -19845,6 +19926,10 @@ def check_local_model_advisor_clis() -> None:
         parse_headroom_compression_repo_descriptor_json,
         parse_headroom_advisor_compression_policy_json,
         parse_headroom_advisor_compression_preview_json,
+        parse_headroom_local_adapter_contract_json,
+        parse_headroom_adapter_sample_json,
+        parse_headroom_local_adapter_result_json,
+        parse_headroom_adapter_integration_gate_json,
         parse_compact_source_aware_advisor_context_json,
         parse_local_advisor_json_contract_json,
         parse_local_advisor_json_contract_result_json,
@@ -20006,8 +20091,48 @@ def check_local_model_advisor_clis() -> None:
     headroom_preview = parse_headroom_advisor_compression_preview_json(headroom_preview_out.getvalue())
     _require(headroom_preview["source_path"] == zip_source and headroom_preview["compression_attempted"] is False,
              "advisor headroom-preview must preserve source and avoid execution")
-    _require(headroom_preview["alias_map_preserved"] is True and headroom_preview["source_refs_preserved"] is True,
-             "advisor headroom-preview must preserve aliases and refs")
+    _require(headroom_preview["alias_map_preserved"] is True and headroom_preview["source_refs_preserved"] is True and headroom_preview["adapter_available"] is False,
+             "advisor headroom-preview must preserve aliases/refs and keep adapter unavailable")
+
+    headroom_adapter_out = io.StringIO()
+    with contextlib.redirect_stdout(headroom_adapter_out):
+        headroom_adapter_rc = _cmd_advisor(["headroom-adapter", "--json"])
+    _require(headroom_adapter_rc == 0, "advisor headroom-adapter --json must return 0")
+    headroom_adapter = parse_headroom_local_adapter_contract_json(headroom_adapter_out.getvalue())
+    _require(headroom_adapter["adapter_safe_to_run"] is False and headroom_adapter["compression_enabled_by_default"] is False,
+             "advisor headroom-adapter must stay disabled/unavailable by default")
+
+    headroom_sample_out = io.StringIO()
+    with contextlib.redirect_stdout(headroom_sample_out):
+        headroom_sample_rc = _cmd_advisor(["headroom-sample", "--json"])
+    _require(headroom_sample_rc == 0, "advisor headroom-sample --json must return 0")
+    headroom_sample = parse_headroom_adapter_sample_json(headroom_sample_out.getvalue())
+    _require(headroom_sample["source_path"] == zip_source and headroom_sample["required_aliases"] == ["S1", "E1"],
+             "advisor headroom-sample must include source path and aliases")
+
+    headroom_sample_run_out = io.StringIO()
+    with contextlib.redirect_stdout(headroom_sample_run_out):
+        headroom_sample_run_rc = _cmd_advisor(["headroom-sample", "--run-local", "--json"])
+    _require(headroom_sample_run_rc == 0, "advisor headroom-sample --run-local --json must return 0")
+    headroom_sample_run = parse_headroom_local_adapter_result_json(headroom_sample_run_out.getvalue())
+    _require(headroom_sample_run["compression_attempted"] is False and headroom_sample_run["fallback_to_uncompressed"] is True,
+             "advisor headroom-sample --run-local must fail open without a safe adapter")
+
+    headroom_gate_out = io.StringIO()
+    with contextlib.redirect_stdout(headroom_gate_out):
+        headroom_gate_rc = _cmd_advisor(["headroom-gate", "--json"])
+    _require(headroom_gate_rc == 0, "advisor headroom-gate --json must return 0")
+    headroom_gate = parse_headroom_adapter_integration_gate_json(headroom_gate_out.getvalue())
+    _require(headroom_gate["adapter_ready_for_real_context"] is False and headroom_gate["compression_enabled_by_default"] is False,
+             "advisor headroom-gate must keep real context compression blocked")
+
+    headroom_preview_sample_out = io.StringIO()
+    with contextlib.redirect_stdout(headroom_preview_sample_out):
+        headroom_preview_sample_rc = _cmd_advisor(["headroom-preview", "--source", zip_source, "--run-local-sample", "--json"])
+    _require(headroom_preview_sample_rc == 0, "advisor headroom-preview --run-local-sample --json must return 0")
+    headroom_preview_sample = parse_headroom_advisor_compression_preview_json(headroom_preview_sample_out.getvalue())
+    _require(headroom_preview_sample["adapter_result_id"] and headroom_preview_sample["sample_validation_passed"] is False,
+             "advisor headroom-preview --run-local-sample must include fail-open sample result")
 
     human_compression_out = io.StringIO()
     with contextlib.redirect_stdout(human_compression_out):
@@ -20093,7 +20218,7 @@ def check_local_model_advisor_clis() -> None:
     _require(diagnostic_payload["diagnostic_status"] == "plan_only" and diagnostic_payload["fallback_allowed"] is False,
              "advisor local-json-diagnostic preview must be plan-only with no fallback")
 
-    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "compression-policy", "compression-preview", "headroom-descriptor", "headroom-policy", "headroom-preview", "smoke-receipt", "ref-alias-map", "micro-contract", "micro-check", "micro-diagnostic", "json-contract", "json-check", "local-json-diagnostic"):
+    for command in ("providers", "provider-boundary", "openrouter-config", "local-status", "openrouter-status", "status", "guidance", "smoke", "local-smoke", "local-config", "prompt-budget", "compact-context", "compression-policy", "compression-preview", "headroom-descriptor", "headroom-policy", "headroom-preview", "headroom-adapter", "headroom-sample", "headroom-gate", "smoke-receipt", "ref-alias-map", "micro-contract", "micro-check", "micro-diagnostic", "json-contract", "json-check", "local-json-diagnostic"):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_advisor([command, "--write"])
