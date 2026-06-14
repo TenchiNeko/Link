@@ -18826,6 +18826,127 @@ def check_source_aware_archive_concept_extractor_helpers() -> None:
     print("source-aware archive concept extractor helpers OK")
 
 
+def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
+    from link import _cmd_growth, _cmd_operator
+    from link_modes.growth.link_growth_console import (
+        collect_growth_e2e_performance_hotspots,
+        collect_growth_opportunity_decision_score,
+        collect_source_aware_growth_context_cache,
+        collect_source_aware_growth_e2e_summary,
+        parse_growth_e2e_performance_hotspots_json,
+        parse_growth_opportunity_decision_score_json,
+        parse_source_aware_growth_context_cache_json,
+        parse_source_aware_growth_e2e_summary_json,
+        parse_source_aware_operator_dashboard_json,
+        stable_growth_e2e_performance_hotspots_json,
+        stable_growth_opportunity_decision_score_json,
+        stable_source_aware_growth_context_cache_json,
+        stable_source_aware_growth_e2e_summary_json,
+        validate_growth_e2e_performance_hotspots,
+        validate_growth_opportunity_decision_score,
+        validate_source_aware_growth_context_cache,
+        validate_source_aware_growth_e2e_summary,
+    )
+
+    headroom_source = "research/headroom-main.zip"
+    crawler_source = "research/gpt-crawler-main.zip"
+
+    cache = collect_source_aware_growth_context_cache(source_path=headroom_source)
+    _require(cache["source_path"] == headroom_source, "growth e2e cache must preserve source path")
+    _require(cache["cache_scope"] == "request" and cache["cache_entries"], "growth e2e cache must be request-scoped with entries")
+    _require("archive_concepts" in cache["computed_artifact_ids"], "growth e2e cache must include archive concepts")
+    _require("compression_profile" in cache["computed_artifact_ids"], "growth e2e cache must include compression profile")
+    _require(cache["model_used"] is False and cache["external_network_used"] is False and cache["fallback_allowed"] is False,
+             "growth e2e cache must remain deterministic/no-network/no-fallback")
+    _require(any(item["artifact_name"] == "target_operator_report" and item["status"] == "skipped" for item in cache["cache_entries"]),
+             "growth e2e cache must skip heavy report rebuild in compact path")
+    _require(cache["cache_hit_count"] >= 1 and cache["cache_miss_count"] >= 1,
+             "growth e2e cache must expose hit/miss metadata")
+    validate_source_aware_growth_context_cache(cache)
+    _require(parse_source_aware_growth_context_cache_json(stable_source_aware_growth_context_cache_json(cache)) == cache,
+             "growth e2e cache JSON must round trip")
+
+    summary = collect_source_aware_growth_e2e_summary(source_path=headroom_source)
+    _require(summary["repo_role_summary"].startswith("compression"), "Headroom e2e summary must identify compression/context repo")
+    _require("compression" in summary["best_growth_opportunity"]["title"].lower(),
+             "Headroom e2e best opportunity must be compression-specific")
+    _require(summary["operator_decision"]["decision"] != "too_generic",
+             "Headroom e2e decision must not be generic")
+    _require(summary["model_used"] is False and summary["model_status_summary"]["openrouter"] == "avoided",
+             "growth e2e summary must avoid model/OpenRouter")
+    _require(summary["performance_summary"]["cache_hit_count"] >= 1,
+             "growth e2e summary must include performance/cache metadata")
+    validate_source_aware_growth_e2e_summary(summary)
+    _require(parse_source_aware_growth_e2e_summary_json(stable_source_aware_growth_e2e_summary_json(summary)) == summary,
+             "growth e2e summary JSON must round trip")
+
+    score = collect_growth_opportunity_decision_score(source_path=headroom_source, summary=summary)
+    _require(score["decision"] == "accept", "Headroom compression-specific opportunity should score as accepted")
+    _require(score["source_specificity_score"] >= 7 and score["link_growth_value_score"] >= 7,
+             "growth opportunity score must expose strong source specificity and Link value")
+    validate_growth_opportunity_decision_score(score)
+    _require(parse_growth_opportunity_decision_score_json(stable_growth_opportunity_decision_score_json(score)) == score,
+             "growth opportunity score JSON must round trip")
+
+    performance = collect_growth_e2e_performance_hotspots(source_path=headroom_source, cache=cache)
+    _require(performance["artifact_runtime_breakdown"] and performance["cache_reuse_recommendations"],
+             "growth e2e performance must expose breakdown and cache recommendations")
+    validate_growth_e2e_performance_hotspots(performance)
+    _require(parse_growth_e2e_performance_hotspots_json(stable_growth_e2e_performance_hotspots_json(performance)) == performance,
+             "growth e2e performance JSON must round trip")
+
+    crawler_summary = collect_source_aware_growth_e2e_summary(source_path=crawler_source)
+    _require("crawler" in crawler_summary["repo_role_summary"].lower() or "source collection" in crawler_summary["repo_role_summary"].lower(),
+             "gpt-crawler e2e summary must identify crawler/source collection role")
+    _require("compression" not in crawler_summary["best_growth_opportunity"]["title"].lower(),
+             "gpt-crawler best opportunity must not be compression-specific")
+
+    for command, parser, id_key in (
+        ("e2e-cache", parse_source_aware_growth_context_cache_json, "source_aware_growth_context_cache_id"),
+        ("e2e-summary", parse_source_aware_growth_e2e_summary_json, "source_aware_growth_e2e_summary_id"),
+        ("opportunity-score", parse_growth_opportunity_decision_score_json, "growth_opportunity_decision_score_id"),
+        ("e2e-performance", parse_growth_e2e_performance_hotspots_json, "growth_e2e_performance_hotspots_id"),
+    ):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = _cmd_growth([command, "--source", headroom_source, "--json"])
+        _require(rc == 0, f"growth {command} --source --json must return 0")
+        payload = parser(out.getvalue())
+        _require(payload["source_path"] == headroom_source and id_key in payload,
+                 f"growth {command} must preserve source path and output own payload")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            write_rc = _cmd_growth([command, "--source", headroom_source, "--write"])
+        _require(write_rc != 0 and "read-only" in err.getvalue(), f"growth {command} --write must be rejected")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        rc = _cmd_growth(["e2e-summary", "--source", headroom_source])
+    human = human_out.getvalue()
+    _require(rc == 0 and "Growth E2E Summary" in human and "Best opportunity:" in human,
+             "growth e2e-summary human output must be compact and decision-ready")
+    _require("Performance:" in human and "cache hits/misses:" in human,
+             "growth e2e-summary human output must show performance/cache")
+    _require(not human.lstrip().startswith("{"), "growth e2e-summary human output must not be raw JSON")
+
+    dashboard_out = io.StringIO()
+    with contextlib.redirect_stdout(dashboard_out):
+        rc = _cmd_operator(["source-dashboard", "--source", headroom_source, "--json"])
+    _require(rc == 0, "source-dashboard with e2e summary fields must return 0")
+    dashboard = parse_source_aware_operator_dashboard_json(dashboard_out.getvalue())
+    _require(dashboard.get("growth_e2e_summary_id") and dashboard.get("best_growth_opportunity_title"),
+             "source-dashboard JSON must include compact Growth E2E summary fields")
+
+    dashboard_human_out = io.StringIO()
+    with contextlib.redirect_stdout(dashboard_human_out):
+        rc = _cmd_operator(["source-dashboard", "--source", headroom_source])
+    dashboard_human = dashboard_human_out.getvalue()
+    _require(rc == 0 and "Growth E2E:" in dashboard_human and "best opportunity:" in dashboard_human,
+             "source-dashboard human output must include Growth E2E section")
+
+    print("source-aware growth e2e summary cache helpers OK")
+
+
 def check_source_aware_control_plane_dashboard_clis() -> None:
     from link import _cmd_advisor, _cmd_control_plane, _cmd_decision, _cmd_operator
     from link_modes.growth.link_growth_console import (
@@ -20540,6 +20661,7 @@ def main() -> None:
     check_source_aware_operator_report_and_sandbox_clis()
     check_source_aware_control_plane_dashboard_helpers()
     check_source_aware_archive_concept_extractor_helpers()
+    check_source_aware_growth_e2e_summary_cache_helpers()
     check_source_aware_control_plane_dashboard_clis()
     check_source_aware_human_summary_clis()
     check_source_aware_provenance_specificity_helpers()

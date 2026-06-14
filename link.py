@@ -1121,6 +1121,7 @@ def _cmd_growth(argv: list[str]) -> int:
       propose    Mine research into proposals (dry-run by default).
       approve    Accept a pending proposal.
       reject     Reject a pending proposal.
+      e2e-summary Build a compact deterministic source-aware Growth decision.
     """
     subcommand = argv[0] if argv else ""
     if subcommand in ("status", "--json", ""):
@@ -1163,6 +1164,22 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import finalize_main as _growth_finalize_main
 
         return _growth_finalize_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "e2e-cache":
+        from link_modes.growth.link_growth_console import growth_e2e_cache_main as _growth_e2e_cache_main
+
+        return _growth_e2e_cache_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "e2e-summary":
+        from link_modes.growth.link_growth_console import growth_e2e_summary_main as _growth_e2e_summary_main
+
+        return _growth_e2e_summary_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "opportunity-score":
+        from link_modes.growth.link_growth_console import growth_opportunity_score_main as _growth_opportunity_score_main
+
+        return _growth_opportunity_score_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "e2e-performance":
+        from link_modes.growth.link_growth_console import growth_e2e_performance_main as _growth_e2e_performance_main
+
+        return _growth_e2e_performance_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "archive-inventory":
         from link_modes.growth.link_growth_console import archive_inventory_main as _growth_archive_inventory_main
 
