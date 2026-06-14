@@ -18831,6 +18831,10 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     from link_modes.growth.link_growth_console import (
         collect_growth_e2e_performance_hotspots,
         collect_growth_opportunity_decision_score,
+        collect_growth_source_queue,
+        collect_growth_source_queue_cache_status,
+        collect_growth_source_queue_e2e_summary,
+        collect_growth_source_queue_warmup_plan,
         collect_persistent_source_cache_performance_report,
         collect_persistent_source_inventory_cache_manifest,
         collect_persistent_source_inventory_cache_policy,
@@ -18839,11 +18843,16 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         collect_source_archive_intake_cache,
         collect_source_archive_intake_cache_key,
         collect_source_cache_clear,
+        collect_source_cache_observability_card,
         collect_source_cache_status,
         collect_source_aware_growth_context_cache,
         collect_source_aware_growth_e2e_summary,
         parse_growth_e2e_performance_hotspots_json,
         parse_growth_opportunity_decision_score_json,
+        parse_growth_source_queue_cache_status_json,
+        parse_growth_source_queue_e2e_summary_json,
+        parse_growth_source_queue_json,
+        parse_growth_source_queue_warmup_plan_json,
         parse_persistent_source_cache_performance_report_json,
         parse_persistent_source_inventory_cache_manifest_json,
         parse_persistent_source_inventory_cache_policy_json,
@@ -18852,6 +18861,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         parse_source_archive_intake_cache_json,
         parse_source_archive_intake_cache_key_json,
         parse_source_cache_clear_json,
+        parse_source_cache_observability_card_json,
         parse_source_cache_status_json,
         parse_source_aware_advisor_command_preview_json,
         parse_source_aware_growth_context_cache_json,
@@ -18859,6 +18869,10 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         parse_source_aware_operator_dashboard_json,
         stable_growth_e2e_performance_hotspots_json,
         stable_growth_opportunity_decision_score_json,
+        stable_growth_source_queue_cache_status_json,
+        stable_growth_source_queue_e2e_summary_json,
+        stable_growth_source_queue_json,
+        stable_growth_source_queue_warmup_plan_json,
         stable_persistent_source_cache_performance_report_json,
         stable_persistent_source_inventory_cache_manifest_json,
         stable_persistent_source_inventory_cache_policy_json,
@@ -18867,11 +18881,16 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         stable_source_archive_intake_cache_json,
         stable_source_archive_intake_cache_key_json,
         stable_source_cache_clear_json,
+        stable_source_cache_observability_card_json,
         stable_source_cache_status_json,
         stable_source_aware_growth_context_cache_json,
         stable_source_aware_growth_e2e_summary_json,
         validate_growth_e2e_performance_hotspots,
         validate_growth_opportunity_decision_score,
+        validate_growth_source_queue,
+        validate_growth_source_queue_cache_status,
+        validate_growth_source_queue_e2e_summary,
+        validate_growth_source_queue_warmup_plan,
         validate_persistent_source_cache_performance_report,
         validate_persistent_source_inventory_cache_manifest,
         validate_persistent_source_inventory_cache_policy,
@@ -18880,6 +18899,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         validate_source_archive_intake_cache,
         validate_source_archive_intake_cache_key,
         validate_source_cache_clear,
+        validate_source_cache_observability_card,
         validate_source_cache_status,
         validate_source_aware_growth_context_cache,
         validate_source_aware_growth_e2e_summary,
@@ -18946,10 +18966,42 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         _require(parse_persistent_source_inventory_cache_manifest_json(stable_persistent_source_inventory_cache_manifest_json(manifest)) == manifest,
                  "persistent cache manifest JSON must round trip")
 
+        missing_observe = collect_source_cache_observability_card(source_path=headroom_source)
+        _require(missing_observe["cache_status"] == "miss" and missing_observe["cache_hit"] is False,
+                 "missing source cache observability must report a miss")
+        validate_source_cache_observability_card(missing_observe)
+        _require(parse_source_cache_observability_card_json(stable_source_cache_observability_card_json(missing_observe)) == missing_observe,
+                 "source cache observability JSON must round trip")
+
         missing_record = collect_persistent_source_inventory_cache_record(source_path=headroom_source)
         _require(missing_record["cache_hit"] is False and missing_record["fallback_to_request_cache"] is True,
                  "missing persistent cache read must fail open to request cache")
         validate_persistent_source_inventory_cache_record(missing_record)
+
+        explicit_queue = collect_growth_source_queue(sources=[headroom_source, crawler_source, "research/missing-source-fixture.zip"])
+        _require(explicit_queue["source_count"] == 2 and explicit_queue["missing_sources"],
+                 "explicit source queue must select existing sources and report missing sources")
+        validate_growth_source_queue(explicit_queue)
+        _require(parse_growth_source_queue_json(stable_growth_source_queue_json(explicit_queue)) == explicit_queue,
+                 "growth source queue JSON must round trip")
+
+        default_queue = collect_growth_source_queue()
+        _require({item["source_path"] for item in default_queue["selected_sources"]}.issuperset({headroom_source, crawler_source, "research/Agent-Reach-main.zip"}),
+                 "default growth source queue must include existing required sources")
+
+        queue_status_missing = collect_growth_source_queue_cache_status(sources=[headroom_source, crawler_source])
+        _require(queue_status_missing["cache_miss_count"] == 2 and queue_status_missing["cache_hit_count"] == 0,
+                 "queue cache status must count misses before warming")
+        validate_growth_source_queue_cache_status(queue_status_missing)
+        _require(parse_growth_source_queue_cache_status_json(stable_growth_source_queue_cache_status_json(queue_status_missing)) == queue_status_missing,
+                 "growth source queue cache status JSON must round trip")
+
+        warm_preview = collect_growth_source_queue_warmup_plan(sources=[headroom_source, crawler_source])
+        _require(warm_preview["write_cache_requested"] is False and warm_preview["writes"] == [] and warm_preview["estimated_work_count"] == 2,
+                 "queue warmup must preview missing cache writes without writing by default")
+        validate_growth_source_queue_warmup_plan(warm_preview)
+        _require(parse_growth_source_queue_warmup_plan_json(stable_growth_source_queue_warmup_plan_json(warm_preview)) == warm_preview,
+                 "growth source queue warmup preview JSON must round trip")
 
         written_record = collect_persistent_source_inventory_cache_record(source_path=headroom_source, write_cache=True)
         _require(written_record["cache_hit"] is True and written_record["cache_write_performed"] is True,
@@ -18958,6 +19010,47 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
                  "persistent cache file must be bounded")
         _require(parse_persistent_source_inventory_cache_record_json(stable_persistent_source_inventory_cache_record_json(written_record)) == written_record,
                  "persistent source cache record JSON must round trip")
+
+        written_observe = collect_source_cache_observability_card(source_path=headroom_source)
+        _require(written_observe["cache_status"] == "hit" and written_observe["cached_entry_count"] > 0 and written_observe["cache_age_label"],
+                 "written source cache observability must report warm cache details")
+        validate_source_cache_observability_card(written_observe)
+
+        corrupt_path = Path(manifest["cache_file_path"])
+        corrupt_path.write_text("{not valid json", encoding="utf-8")
+        corrupt_observe = collect_source_cache_observability_card(source_path=headroom_source)
+        _require(corrupt_observe["cache_status"] == "invalid" and corrupt_observe["invalidation_reasons"],
+                 "corrupt source cache observability must report invalidation reasons")
+        validate_source_cache_observability_card(corrupt_observe)
+
+        refresh_record = collect_persistent_source_inventory_cache_record(source_path=headroom_source, write_cache=True)
+        _require(refresh_record["cache_hit"] is True and refresh_record["cache_write_performed"] is True,
+                 "write-cache must refresh corrupt persistent source cache")
+
+        queue_warm_write = collect_growth_source_queue_warmup_plan(sources=[headroom_source, crawler_source, "research/missing-source-fixture.zip"], write_cache=True)
+        _require(queue_warm_write["write_cache_requested"] is True and queue_warm_write["warmed_count"] >= 1 and queue_warm_write["failed_count"] == 0,
+                 "queue warmup write must warm missing sources and continue past missing queue entries")
+        _require(all(Path(item["cache_file_path"]).resolve().parent == Path(cache_root).resolve() for item in queue_warm_write["warmed_sources"]),
+                 "queue warmup writes must stay under LINK_SOURCE_CACHE_ROOT")
+        _require(queue_warm_write["sources_skipped"], "queue warmup must record missing explicit source as skipped")
+        validate_growth_source_queue_warmup_plan(queue_warm_write)
+        _require(parse_growth_source_queue_warmup_plan_json(stable_growth_source_queue_warmup_plan_json(queue_warm_write)) == queue_warm_write,
+                 "growth source queue warmup write JSON must round trip")
+
+        queue_status_warm = collect_growth_source_queue_cache_status(sources=[headroom_source, crawler_source])
+        _require(queue_status_warm["cache_hit_count"] == 2 and queue_status_warm["queue_ready_for_e2e"] is True,
+                 "queue cache status must report ready after queue warmup")
+
+        queue_e2e = collect_growth_source_queue_e2e_summary(sources=[headroom_source, crawler_source])
+        _require(queue_e2e["best_overall_opportunity"] and queue_e2e["cache_summary"]["cache_hit_count"] == 2,
+                 "queue e2e must include best opportunity and cache summary")
+        _require(any("compression" in item["repo_role_summary"].lower() for item in queue_e2e["source_summaries"]),
+                 "queue e2e must preserve Headroom compression differentiation")
+        _require(any("crawler" in item["repo_role_summary"].lower() or "source collection" in item["repo_role_summary"].lower() for item in queue_e2e["source_summaries"]),
+                 "queue e2e must preserve gpt-crawler differentiation")
+        validate_growth_source_queue_e2e_summary(queue_e2e)
+        _require(parse_growth_source_queue_e2e_summary_json(stable_growth_source_queue_e2e_summary_json(queue_e2e)) == queue_e2e,
+                 "growth source queue e2e JSON must round trip")
 
         growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
         hit_summary = collect_source_aware_growth_e2e_summary(source_path=headroom_source)
@@ -19099,6 +19192,26 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
             write_rc = _cmd_growth([command, "--source", headroom_source, "--write"])
         _require(write_rc != 0 and "read-only" in err.getvalue(), f"growth {command} --write must be rejected")
 
+    for command, parser, id_key in (
+        ("source-cache-observe", parse_source_cache_observability_card_json, "source_cache_observability_card_id"),
+        ("source-queue", parse_growth_source_queue_json, "growth_source_queue_id"),
+        ("source-queue-status", parse_growth_source_queue_cache_status_json, "growth_source_queue_cache_status_id"),
+        ("source-queue-warm", parse_growth_source_queue_warmup_plan_json, "growth_source_queue_warmup_plan_id"),
+        ("source-queue-e2e", parse_growth_source_queue_e2e_summary_json, "growth_source_queue_e2e_summary_id"),
+    ):
+        out = io.StringIO()
+        argv = [command, "--source", headroom_source, "--source", crawler_source, "--json"]
+        with contextlib.redirect_stdout(out):
+            rc = _cmd_growth(argv)
+        _require(rc == 0, f"growth {command} --json must return 0")
+        payload = parser(out.getvalue())
+        _require(id_key in payload, f"growth {command} must output own payload")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            write_rc = _cmd_growth([command, "--source", headroom_source, "--write"])
+        _require(write_rc != 0 and ("read-only" in err.getvalue() or "--write-cache" in err.getvalue()),
+                 f"growth {command} --write must be rejected")
+
     human_out = io.StringIO()
     with contextlib.redirect_stdout(human_out):
         rc = _cmd_growth(["e2e-summary", "--source", headroom_source])
@@ -19108,6 +19221,25 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     _require("Performance:" in human and "cache hits/misses:" in human,
              "growth e2e-summary human output must show performance/cache")
     _require(not human.lstrip().startswith("{"), "growth e2e-summary human output must not be raw JSON")
+
+    for command, marker in (
+        ("source-cache-observe", "Source Cache"),
+        ("source-queue", "Source Queue"),
+        ("source-queue-status", "Growth Source Queue Cache Status"),
+        ("source-queue-warm", "Queue Warmup"),
+        ("source-queue-e2e", "Queue E2E"),
+    ):
+        human_out = io.StringIO()
+        with contextlib.redirect_stdout(human_out):
+            rc = _cmd_growth([command, "--source", headroom_source, "--source", crawler_source])
+        human = human_out.getvalue()
+        _require(rc == 0 and marker in human and not human.lstrip().startswith("{"),
+                 f"growth {command} human output must be compact and not raw JSON")
+    queue_e2e_human = io.StringIO()
+    with contextlib.redirect_stdout(queue_e2e_human):
+        rc = _cmd_growth(["source-queue-e2e", "--source", headroom_source, "--source", crawler_source])
+    _require(rc == 0 and "best opportunity:" in queue_e2e_human.getvalue(),
+             "non-JSON queue e2e must include best opportunity")
 
     dashboard_out = io.StringIO()
     with contextlib.redirect_stdout(dashboard_out):
@@ -19138,6 +19270,10 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
              "advisor target-command must include source archive intake cache id")
     _require("source-cache" in command_payload["source_cache_command"] and command_payload["recommended_fast_operator_sequence"],
              "advisor target-command must include source-cache fast operator sequence")
+    _require("source-queue-status" in command_payload["source_queue_status_command"] and "source-queue-warm" in command_payload["source_queue_warm_write_command"],
+             "advisor target-command must include source queue status/warm commands")
+    _require(command_payload["recommended_cache_observability_sequence"] and "source-queue-e2e" in " ".join(command_payload["recommended_cache_observability_sequence"]),
+             "advisor target-command must include cache observability sequence")
     _require(command_payload["fallback_allowed"] is False and not command_payload["command_requires_openrouter_opt_in"],
              "advisor target-command must avoid OpenRouter fallback by default")
 

@@ -10932,12 +10932,28 @@ PERSISTENT_SOURCE_INVENTORY_CACHE_RECORD_VERSION = "link-persistent-source-inven
 PERSISTENT_SOURCE_CACHE_STATUS_VERSION = "link-persistent-source-cache-status-v1"
 PERSISTENT_SOURCE_CACHE_CLEAR_VERSION = "link-persistent-source-cache-clear-v1"
 PERSISTENT_SOURCE_CACHE_PERFORMANCE_REPORT_VERSION = "link-persistent-source-cache-performance-report-v1"
+SOURCE_CACHE_OBSERVABILITY_CARD_VERSION = "link-source-cache-observability-card-v1"
+GROWTH_SOURCE_QUEUE_VERSION = "link-growth-source-queue-v1"
+GROWTH_SOURCE_QUEUE_CACHE_STATUS_VERSION = "link-growth-source-queue-cache-status-v1"
+GROWTH_SOURCE_QUEUE_WARMUP_PLAN_VERSION = "link-growth-source-queue-warmup-plan-v1"
+GROWTH_SOURCE_QUEUE_E2E_SUMMARY_VERSION = "link-growth-source-queue-e2e-summary-v1"
 PERSISTENT_SOURCE_INVENTORY_COLLECTOR_VERSION = "link-source-inventory-collector-v1"
 PERSISTENT_SOURCE_INVENTORY_PROVENANCE_SCHEMA_VERSION = "link-source-provenance-schema-v1"
 PERSISTENT_SOURCE_INVENTORY_CACHE_SCHEMA_VERSION = "link-source-inventory-cache-schema-v1"
 PERSISTENT_SOURCE_INVENTORY_MAX_ENTRY_BYTES = 1500000
 PERSISTENT_SOURCE_INVENTORY_MAX_SNIPPET_CHARS = 1200
 _SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+_GROWTH_SOURCE_QUEUE_REQUIRED = (
+    "research/headroom-main.zip",
+    "research/gpt-crawler-main.zip",
+    "research/Agent-Reach-main.zip",
+)
+_GROWTH_SOURCE_QUEUE_OPTIONAL = (
+    "research/activepieces-main.zip",
+    "research/Flowise-main.zip",
+    "research/agentmemory-main.zip",
+    "research/AiToEarn-main.zip",
+)
 GROWTH_UPGRADE_GENERICITY_ASSESSMENT_VERSION = "link-growth-upgrade-genericity-assessment-v1"
 RESEARCH_TARGET_ALLOWED_ROOTS = ("research", "research/_extracted")
 RESEARCH_TARGET_DOMAINS = (
@@ -14688,6 +14704,681 @@ def parse_persistent_source_cache_performance_report_json(text: str) -> dict[str
     payload=_json.loads(text)
     validate_persistent_source_cache_performance_report(payload)
     return payload
+
+
+def _growth_extract_source_args(args: list[str]) -> list[str]:
+    sources: list[str] = []
+    for index, arg in enumerate(args):
+        if arg == "--source" and index + 1 < len(args):
+            sources.append(args[index + 1])
+        elif arg.startswith("--source="):
+            sources.append(arg.split("=", 1)[1])
+    return sources
+
+
+def _growth_cache_format_bytes(size: int) -> str:
+    value = max(0, int(size))
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            if unit == "B":
+                return f"{value} {unit}"
+            return f"{value:.1f} {unit}"
+        value = value / 1024
+    return f"{value} B"
+
+
+def _growth_cache_age_seconds(created_at: str) -> int | None:
+    if not created_at:
+        return None
+    import datetime as _dt
+
+    try:
+        if created_at.endswith("Z"):
+            created = _dt.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        else:
+            created = _dt.datetime.fromisoformat(created_at)
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=_dt.timezone.utc)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        return max(0, int((now - created).total_seconds()))
+    except Exception:
+        return None
+
+
+def _growth_cache_age_label(age_seconds: int | None) -> str:
+    if age_seconds is None:
+        return "not available"
+    if age_seconds < 60:
+        return f"{age_seconds}s"
+    if age_seconds < 3600:
+        return f"{age_seconds // 60}m"
+    if age_seconds < 86400:
+        return f"{age_seconds // 3600}h"
+    return f"{age_seconds // 86400}d"
+
+
+def _growth_cache_status_from_manifest(manifest: dict[str, Any]) -> str:
+    status = manifest.get("cache_status", "")
+    if status == "valid":
+        return "hit"
+    if status == "missing":
+        return "miss"
+    if status == "stale":
+        return "stale"
+    if status == "corrupt":
+        return "invalid"
+    return "invalid"
+
+
+def _growth_source_type(path_text: str) -> str:
+    from pathlib import Path as _Path
+
+    path = _Path(path_text)
+    if path.is_dir():
+        return "folder"
+    if path.suffix.lower() == ".zip":
+        return "zip_archive"
+    return "file"
+
+
+def _growth_guess_concept_family(source_path: str) -> str:
+    name = source_path.lower()
+    if "headroom" in name:
+        return "compression"
+    if "crawler" in name or "scrap" in name:
+        return "source_collection"
+    if "reach" in name:
+        return "outreach"
+    if "flowise" in name or "activepieces" in name:
+        return "workflow_automation"
+    if "memory" in name:
+        return "agent_memory"
+    return "unknown"
+
+
+def _growth_queue_source_entry(source_path: str, *, priority: int, reason_selected: str) -> dict[str, Any]:
+    from pathlib import Path as _Path
+
+    path = _Path(source_path)
+    exists = path.exists()
+    warnings: list[str] = []
+    if not source_path.startswith("research/"):
+        warnings.append("source is outside research/")
+    if not exists:
+        warnings.append("source is missing")
+    return {
+        "source_path": source_path,
+        "source_exists": exists,
+        "source_name": path.name,
+        "source_type": _growth_source_type(source_path) if exists else "missing",
+        "source_size_bytes": int(path.stat().st_size) if exists else 0,
+        "source_mtime_ns": int(path.stat().st_mtime_ns) if exists else 0,
+        "guessed_concept_family": _growth_guess_concept_family(source_path),
+        "priority": int(priority),
+        "reason_selected": reason_selected,
+        "warnings": _normalize_implementation_branch_refs(warnings),
+    }
+
+
+def collect_source_cache_observability_card(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    from pathlib import Path as _Path
+
+    manifest = collect_persistent_source_inventory_cache_manifest(source_path=source_path)
+    read_result = read_persistent_source_inventory_cache(manifest["cache_file_path"])
+    created_at = ""
+    cached_entry_count = 0
+    if read_result.get("ok"):
+        cached_payload = read_result["payload"]
+        created_at = str(cached_payload.get("created_at", ""))
+        cached_entry_count = len(cached_payload.get("source_cache", {}).get("entries", []))
+    cache_file = _Path(manifest["cache_file_path"])
+    cached_size = int(cache_file.stat().st_size) if cache_file.exists() else 0
+    age_seconds = _growth_cache_age_seconds(created_at)
+    cache_status = _growth_cache_status_from_manifest(manifest)
+    invalidation = list(manifest["invalidation_reasons"])
+    if not read_result.get("ok") and manifest["cache_file_exists"]:
+        reason = str(read_result.get("error", "cache read failed"))
+        if reason not in invalidation:
+            invalidation.append(reason)
+    stale_reasons = invalidation if cache_status in {"stale", "invalid"} else []
+    payload = {
+        "source_cache_observability_card_version": SOURCE_CACHE_OBSERVABILITY_CARD_VERSION,
+        "source_cache_observability_card_id": "source-cache-observability-card-" + _research_target_hash_text({"manifest_id": manifest["persistent_source_inventory_cache_manifest_id"], "status": cache_status, "version": SOURCE_CACHE_OBSERVABILITY_CARD_VERSION})[:12],
+        "source_path": manifest["source_path"],
+        "source_name": manifest["source_name"],
+        "source_type": manifest["source_type"],
+        "policy_id": manifest["policy_id"],
+        "manifest_id": manifest["persistent_source_inventory_cache_manifest_id"],
+        "persistent_cache_status_id": "source-cache-status-" + _research_target_hash_text({"manifest_id": manifest["persistent_source_inventory_cache_manifest_id"], "status": manifest["cache_status"], "version": PERSISTENT_SOURCE_CACHE_STATUS_VERSION})[:12],
+        "cache_key": manifest["cache_key"],
+        "cache_root": str(_Path(manifest["cache_file_path"]).parent),
+        "cache_file_path": manifest["cache_file_path"],
+        "cache_file_exists": bool(manifest["cache_file_exists"]),
+        "cache_status": cache_status,
+        "cache_valid": bool(manifest["cache_valid"]),
+        "cache_hit": bool(manifest["cache_valid"]),
+        "cache_age_seconds": age_seconds,
+        "cache_age_label": _growth_cache_age_label(age_seconds),
+        "cached_size_bytes": cached_size,
+        "cached_size_label": _growth_cache_format_bytes(cached_size),
+        "cached_entry_count": cached_entry_count,
+        "created_at": created_at,
+        "source_size_bytes": manifest["source_size_bytes"],
+        "source_mtime_ns": manifest["source_mtime_ns"],
+        "invalidation_reasons": _normalize_implementation_branch_refs(invalidation),
+        "stale_reasons": _normalize_implementation_branch_refs(stale_reasons),
+        "clear_command": f"python3 link.py growth source-cache-clear --source {manifest['source_path']} --json",
+        "refresh_command": f"python3 link.py growth source-cache-persistent --source {manifest['source_path']} --write-cache --json",
+        "warm_command": f"python3 link.py growth source-queue-warm --source {manifest['source_path']} --write-cache --json",
+        "e2e_summary_command": f"python3 link.py growth e2e-summary --source {manifest['source_path']}",
+        "recommended_next_action": "Cache is warm; run Growth E2E summary." if manifest["cache_valid"] else "Warm this source cache before repeated Growth E2E runs.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_cache_observability_card(payload)
+    return payload
+
+
+def validate_source_cache_observability_card(payload: dict[str, Any]) -> None:
+    required = ("source_cache_observability_card_version", "source_cache_observability_card_id", "source_path", "source_name", "source_type", "policy_id", "manifest_id", "persistent_cache_status_id", "cache_key", "cache_root", "cache_file_path", "cache_file_exists", "cache_status", "cache_valid", "cache_hit", "cache_age_seconds", "cache_age_label", "cached_size_bytes", "cached_size_label", "cached_entry_count", "created_at", "source_size_bytes", "source_mtime_ns", "invalidation_reasons", "stale_reasons", "clear_command", "refresh_command", "warm_command", "e2e_summary_command", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source cache observability card missing field: {key}")
+    if payload["source_cache_observability_card_version"] != SOURCE_CACHE_OBSERVABILITY_CARD_VERSION:
+        raise ValueError("invalid source cache observability card version")
+    if payload["cache_status"] not in {"hit", "miss", "stale", "invalid"}:
+        raise ValueError("invalid source cache observability status")
+    if payload["cache_hit"] != (payload["cache_status"] == "hit") or payload["cache_valid"] != payload["cache_hit"]:
+        raise ValueError("source cache observability hit/valid mismatch")
+    if not payload["source_path"].startswith("research/"):
+        raise ValueError("source cache observability must be source-bound")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("source cache observability must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("source cache observability must remain read-only")
+
+
+def stable_source_cache_observability_card_json(payload: dict[str, Any]) -> str:
+    validate_source_cache_observability_card(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_source_cache_observability_card_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_source_cache_observability_card(payload)
+    return payload
+
+
+def collect_growth_source_queue(*, sources: list[str] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    explicit = [str(item).strip() for item in (sources or []) if str(item).strip()]
+    requested = explicit if explicit else list(_GROWTH_SOURCE_QUEUE_REQUIRED) + list(_GROWTH_SOURCE_QUEUE_OPTIONAL)
+    selected: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, source_path in enumerate(requested, 1):
+        if source_path in seen:
+            skipped.append({"source_path": source_path, "reason": "duplicate source"})
+            continue
+        seen.add(source_path)
+        entry = _growth_queue_source_entry(source_path, priority=index, reason_selected="explicit source" if explicit else "default queue candidate")
+        if entry["source_exists"] and source_path.startswith("research/"):
+            selected.append(entry)
+        elif explicit or source_path in _GROWTH_SOURCE_QUEUE_REQUIRED:
+            missing.append(entry)
+        else:
+            skipped.append({"source_path": source_path, "reason": "optional source not present"})
+    discovered = [item for item in selected]
+    payload = {
+        "growth_source_queue_version": GROWTH_SOURCE_QUEUE_VERSION,
+        "growth_source_queue_id": "growth-source-queue-" + _research_target_hash_text({"sources": [item["source_path"] for item in selected], "missing": [item["source_path"] for item in missing], "version": GROWTH_SOURCE_QUEUE_VERSION})[:12],
+        "queue_name": "growth-source-cache-warmup",
+        "queue_version": "v1",
+        "requested_sources": requested,
+        "discovered_sources": discovered,
+        "selected_sources": selected,
+        "missing_sources": missing,
+        "skipped_sources": skipped,
+        "source_count": len(selected),
+        "queue_policy": {
+            "default_required_sources": list(_GROWTH_SOURCE_QUEUE_REQUIRED),
+            "default_optional_sources": list(_GROWTH_SOURCE_QUEUE_OPTIONAL),
+            "archive_extraction_allowed": False,
+            "model_allowed": False,
+            "external_network_allowed": False,
+            "source_mutation_allowed": False,
+        },
+        "recommended_next_action": "Run growth source-queue-status, then source-queue-warm --write-cache before queue E2E.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_source_queue(payload)
+    return payload
+
+
+def validate_growth_source_queue(payload: dict[str, Any]) -> None:
+    required = ("growth_source_queue_version", "growth_source_queue_id", "queue_name", "queue_version", "requested_sources", "discovered_sources", "selected_sources", "missing_sources", "skipped_sources", "source_count", "queue_policy", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"growth source queue missing field: {key}")
+    if payload["growth_source_queue_version"] != GROWTH_SOURCE_QUEUE_VERSION:
+        raise ValueError("invalid growth source queue version")
+    if payload["source_count"] != len(payload["selected_sources"]):
+        raise ValueError("growth source queue source_count mismatch")
+    for entry in payload["selected_sources"]:
+        for key in ("source_path", "source_exists", "source_name", "source_type", "source_size_bytes", "source_mtime_ns", "guessed_concept_family", "priority", "reason_selected", "warnings"):
+            if key not in entry:
+                raise ValueError(f"growth source queue selected entry missing {key}")
+        if not entry["source_exists"] or not entry["source_path"].startswith("research/"):
+            raise ValueError("growth source queue selected sources must be existing research sources")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("growth source queue must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("growth source queue must remain read-only")
+
+
+def stable_growth_source_queue_json(payload: dict[str, Any]) -> str:
+    validate_growth_source_queue(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_growth_source_queue_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_growth_source_queue(payload)
+    return payload
+
+
+def collect_growth_source_queue_cache_status(*, sources: list[str] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    queue = collect_growth_source_queue(sources=sources)
+    policy = collect_persistent_source_inventory_cache_policy()
+    source_statuses: list[dict[str, Any]] = []
+    ages: list[int] = []
+    total_cached = 0
+    for entry in queue["selected_sources"]:
+        card = collect_source_cache_observability_card(source_path=entry["source_path"])
+        if isinstance(card["cache_age_seconds"], int):
+            ages.append(card["cache_age_seconds"])
+        total_cached += int(card["cached_size_bytes"])
+        status = card["cache_status"]
+        source_statuses.append({
+            "source_path": card["source_path"],
+            "cache_observability_card_id": card["source_cache_observability_card_id"],
+            "cache_status": status,
+            "cache_hit": card["cache_hit"],
+            "cache_valid": card["cache_valid"],
+            "cache_age_seconds": card["cache_age_seconds"],
+            "cached_size_bytes": card["cached_size_bytes"],
+            "invalidation_reasons": card["invalidation_reasons"],
+            "recommended_action": card["recommended_next_action"],
+        })
+    hit_count = sum(1 for item in source_statuses if item["cache_status"] == "hit")
+    miss_count = sum(1 for item in source_statuses if item["cache_status"] == "miss")
+    stale_count = sum(1 for item in source_statuses if item["cache_status"] == "stale")
+    invalid_count = sum(1 for item in source_statuses if item["cache_status"] == "invalid")
+    missing_count = len(queue["missing_sources"])
+    ready = bool(source_statuses) and hit_count == len(source_statuses) and missing_count == 0
+    payload = {
+        "growth_source_queue_cache_status_version": GROWTH_SOURCE_QUEUE_CACHE_STATUS_VERSION,
+        "growth_source_queue_cache_status_id": "growth-source-queue-cache-status-" + _research_target_hash_text({"queue_id": queue["growth_source_queue_id"], "statuses": source_statuses, "version": GROWTH_SOURCE_QUEUE_CACHE_STATUS_VERSION})[:12],
+        "source_queue_id": queue["growth_source_queue_id"],
+        "cache_policy_id": policy["persistent_source_inventory_cache_policy_id"],
+        "cache_root": policy["cache_root"],
+        "source_statuses": source_statuses,
+        "source_count": len(source_statuses),
+        "cache_hit_count": hit_count,
+        "cache_miss_count": miss_count,
+        "stale_count": stale_count,
+        "invalid_count": invalid_count,
+        "missing_count": missing_count,
+        "total_cached_size_bytes": total_cached,
+        "oldest_cache_age_seconds": max(ages) if ages else None,
+        "newest_cache_age_seconds": min(ages) if ages else None,
+        "queue_ready_for_e2e": ready,
+        "recommended_next_action": "Queue caches are warm; run growth source-queue-e2e." if ready else "Run growth source-queue-warm --write-cache to warm missing/stale/invalid source caches.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_source_queue_cache_status(payload)
+    return payload
+
+
+def validate_growth_source_queue_cache_status(payload: dict[str, Any]) -> None:
+    required = ("growth_source_queue_cache_status_version", "growth_source_queue_cache_status_id", "source_queue_id", "cache_policy_id", "cache_root", "source_statuses", "source_count", "cache_hit_count", "cache_miss_count", "stale_count", "invalid_count", "missing_count", "total_cached_size_bytes", "oldest_cache_age_seconds", "newest_cache_age_seconds", "queue_ready_for_e2e", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"growth source queue cache status missing field: {key}")
+    if payload["growth_source_queue_cache_status_version"] != GROWTH_SOURCE_QUEUE_CACHE_STATUS_VERSION:
+        raise ValueError("invalid growth source queue cache status version")
+    if payload["source_count"] != len(payload["source_statuses"]):
+        raise ValueError("growth source queue cache status count mismatch")
+    for item in payload["source_statuses"]:
+        if item.get("cache_status") not in {"hit", "miss", "stale", "invalid"}:
+            raise ValueError("invalid queue source cache status")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("growth source queue cache status must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("growth source queue cache status must remain read-only")
+
+
+def stable_growth_source_queue_cache_status_json(payload: dict[str, Any]) -> str:
+    validate_growth_source_queue_cache_status(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_growth_source_queue_cache_status_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_growth_source_queue_cache_status(payload)
+    return payload
+
+
+def collect_growth_source_queue_warmup_plan(*, sources: list[str] | None = None, write_cache: bool = False, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    import time as _time
+
+    started = _time.perf_counter()
+    status = collect_growth_source_queue_cache_status(sources=sources)
+    sources_to_warm: list[dict[str, Any]] = []
+    already_warm: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for item in status["source_statuses"]:
+        if item["cache_status"] == "hit":
+            already_warm.append({"source_path": item["source_path"], "reason": "valid persistent cache already exists", "current_status": item["cache_status"]})
+        else:
+            try:
+                manifest = collect_persistent_source_inventory_cache_manifest(source_path=item["source_path"])
+                manifest_id = manifest["persistent_source_inventory_cache_manifest_id"]
+            except Exception:
+                manifest_id = ""
+            sources_to_warm.append({
+                "source_path": item["source_path"],
+                "reason": item["cache_status"],
+                "manifest_id": manifest_id,
+                "current_status": item["cache_status"],
+                "planned_write_command": f"python3 link.py growth source-cache-persistent --source {item['source_path']} --write-cache --json",
+            })
+    for missing in collect_growth_source_queue(sources=sources)["missing_sources"]:
+        skipped.append({"source_path": missing["source_path"], "reason": "source missing or invalid"})
+    warmed_sources: list[dict[str, Any]] = []
+    failed_sources: list[dict[str, Any]] = []
+    write_performed = False
+    if write_cache:
+        for item in sources_to_warm:
+            t0 = _time.perf_counter()
+            try:
+                record = collect_persistent_source_inventory_cache_record(source_path=item["source_path"], write_cache=True)
+                runtime_ms = int((_time.perf_counter() - t0) * 1000)
+                write_performed = write_performed or bool(record["cache_write_performed"])
+                warmed_sources.append({
+                    "source_path": record["source_path"],
+                    "cache_record_id": record["persistent_source_inventory_cache_record_id"],
+                    "cache_file_path": record["cache_file_path"],
+                    "cache_write_performed": record["cache_write_performed"],
+                    "runtime_ms": runtime_ms,
+                    "cached_size_bytes": record["cached_size_bytes"],
+                })
+            except Exception as exc:
+                failed_sources.append({
+                    "source_path": item["source_path"],
+                    "error": _source_aware_text(str(exc), max_chars=220),
+                    "runtime_ms": int((_time.perf_counter() - t0) * 1000),
+                })
+    runtime_ms = int((_time.perf_counter() - started) * 1000)
+    slowest = sorted(warmed_sources + failed_sources, key=lambda item: item.get("runtime_ms", 0), reverse=True)[:5]
+    writes = [item["cache_file_path"] for item in warmed_sources if item.get("cache_write_performed")]
+    payload = {
+        "growth_source_queue_warmup_plan_version": GROWTH_SOURCE_QUEUE_WARMUP_PLAN_VERSION,
+        "growth_source_queue_warmup_plan_id": "growth-source-queue-warmup-plan-" + _research_target_hash_text({"status_id": status["growth_source_queue_cache_status_id"], "write": write_cache, "warmed": warmed_sources, "version": GROWTH_SOURCE_QUEUE_WARMUP_PLAN_VERSION})[:12],
+        "source_queue_cache_status_id": status["growth_source_queue_cache_status_id"],
+        "cache_policy_id": status["cache_policy_id"],
+        "warmup_requested": True,
+        "write_cache_requested": bool(write_cache),
+        "sources_to_warm": sources_to_warm,
+        "sources_already_warm": already_warm,
+        "sources_skipped": skipped,
+        "estimated_work_count": len(sources_to_warm),
+        "planned_commands": [item["planned_write_command"] for item in sources_to_warm],
+        "write_cache_performed": write_performed,
+        "warmed_sources": warmed_sources,
+        "failed_sources": failed_sources,
+        "skipped_sources": skipped + already_warm,
+        "warmed_count": len(warmed_sources),
+        "failed_count": len(failed_sources),
+        "skipped_count": len(skipped) + len(already_warm),
+        "total_runtime_ms": runtime_ms,
+        "slowest_sources": slowest,
+        "recommended_next_action": "Run growth source-queue-status, then growth source-queue-e2e." if write_cache and not failed_sources else "Review this plan, then rerun with --write-cache to warm the queue.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": bool(write_cache),
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": writes,
+    }
+    validate_growth_source_queue_warmup_plan(payload)
+    return payload
+
+
+def validate_growth_source_queue_warmup_plan(payload: dict[str, Any]) -> None:
+    required = ("growth_source_queue_warmup_plan_version", "growth_source_queue_warmup_plan_id", "source_queue_cache_status_id", "cache_policy_id", "warmup_requested", "write_cache_requested", "sources_to_warm", "sources_already_warm", "sources_skipped", "estimated_work_count", "planned_commands", "write_cache_performed", "warmed_sources", "failed_sources", "skipped_sources", "warmed_count", "failed_count", "skipped_count", "total_runtime_ms", "slowest_sources", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"growth source queue warmup plan missing field: {key}")
+    if payload["growth_source_queue_warmup_plan_version"] != GROWTH_SOURCE_QUEUE_WARMUP_PLAN_VERSION:
+        raise ValueError("invalid growth source queue warmup plan version")
+    if payload["estimated_work_count"] != len(payload["sources_to_warm"]):
+        raise ValueError("growth source queue warmup estimated work mismatch")
+    if payload["write_cache_requested"] is False and payload["writes"]:
+        raise ValueError("growth source queue warmup preview must not write")
+    if payload["warmed_count"] != len(payload["warmed_sources"]) or payload["failed_count"] != len(payload["failed_sources"]):
+        raise ValueError("growth source queue warmup count mismatch")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("growth source queue warmup must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["automation_allowed"] is not False:
+        raise ValueError("growth source queue warmup must remain deterministic")
+    if payload["write_allowed"] != payload["write_cache_requested"]:
+        raise ValueError("growth source queue warmup write flag mismatch")
+
+
+def stable_growth_source_queue_warmup_plan_json(payload: dict[str, Any]) -> str:
+    validate_growth_source_queue_warmup_plan(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_growth_source_queue_warmup_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_growth_source_queue_warmup_plan(payload)
+    return payload
+
+
+def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    import time as _time
+
+    queue = collect_growth_source_queue(sources=sources)
+    status = collect_growth_source_queue_cache_status(sources=sources)
+    source_summaries: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    slowest: list[dict[str, Any]] = []
+    total_runtime = 0
+    for entry in queue["selected_sources"]:
+        t0 = _time.perf_counter()
+        source_status = next((item for item in status["source_statuses"] if item["source_path"] == entry["source_path"]), {})
+        try:
+            summary = collect_source_aware_growth_e2e_summary(source_path=entry["source_path"])
+            score = collect_growth_opportunity_decision_score(source_path=entry["source_path"], summary=summary)
+            runtime_ms = int((_time.perf_counter() - t0) * 1000)
+            total_runtime += runtime_ms
+            best = summary["best_growth_opportunity"]
+            item = {
+                "source_path": entry["source_path"],
+                "e2e_summary_id": summary["source_aware_growth_e2e_summary_id"],
+                "opportunity_score_id": score["growth_opportunity_decision_score_id"],
+                "repo_role_summary": summary["repo_role_summary"],
+                "top_concept_families": summary["top_concept_families"],
+                "best_growth_opportunity_title": best["title"],
+                "operator_decision": score["decision"],
+                "operator_confidence_score": score["operator_confidence_score"],
+                "genericity_warning": score["decision"] == "too_generic",
+                "cache_status": source_status.get("cache_status", "miss"),
+                "runtime_ms": runtime_ms,
+                "recommended_next_action": summary["recommended_next_action"],
+            }
+            source_summaries.append(item)
+            opportunity = {
+                "source_path": entry["source_path"],
+                "title": best["title"],
+                "why_good": best["why_good"],
+                "evidence_support_score": score["evidence_support_score"],
+                "source_specificity_score": score["source_specificity_score"],
+                "link_growth_value_score": score["link_growth_value_score"],
+                "safety_risk_score": score["safety_risk_score"],
+                "operator_confidence_score": score["operator_confidence_score"],
+                "recommended_next_slice": best["recommended_next_slice"],
+            }
+            if score["decision"] == "accept":
+                candidates.append(opportunity)
+            else:
+                rejected.append(opportunity)
+            slowest.append({"source_path": entry["source_path"], "runtime_ms": runtime_ms})
+        except Exception as exc:
+            runtime_ms = int((_time.perf_counter() - t0) * 1000)
+            total_runtime += runtime_ms
+            reason = _source_aware_text(str(exc), max_chars=220)
+            source_summaries.append({
+                "source_path": entry["source_path"],
+                "e2e_summary_id": "",
+                "opportunity_score_id": "",
+                "repo_role_summary": "deterministic source analysis failed",
+                "top_concept_families": [],
+                "best_growth_opportunity_title": "unavailable",
+                "operator_decision": "blocked",
+                "operator_confidence_score": 0,
+                "genericity_warning": False,
+                "cache_status": source_status.get("cache_status", "miss"),
+                "runtime_ms": runtime_ms,
+                "recommended_next_action": f"Inspect source-specific deterministic analysis failure: {reason}",
+            })
+            rejected.append({
+                "source_path": entry["source_path"],
+                "title": "unavailable",
+                "why_good": f"Source skipped because deterministic analysis failed: {reason}",
+                "evidence_support_score": 0,
+                "source_specificity_score": 0,
+                "link_growth_value_score": 0,
+                "safety_risk_score": 10,
+                "operator_confidence_score": 0,
+                "recommended_next_slice": "Inspect the source path and deterministic intake constraints before rerunning queue E2E.",
+            })
+            slowest.append({"source_path": entry["source_path"], "runtime_ms": runtime_ms})
+    ranked = sorted(candidates or rejected, key=lambda item: (item["operator_confidence_score"], item["source_specificity_score"], item["evidence_support_score"], item["link_growth_value_score"], -item["safety_risk_score"]), reverse=True)
+    best_overall = ranked[0] if ranked else {}
+    runner_up = ranked[1:4]
+    cache_summary = {
+        "cache_root": status["cache_root"],
+        "source_count": status["source_count"],
+        "cache_hit_count": status["cache_hit_count"],
+        "cache_miss_count": status["cache_miss_count"],
+        "stale_count": status["stale_count"],
+        "invalid_count": status["invalid_count"],
+        "queue_ready_for_e2e": status["queue_ready_for_e2e"],
+    }
+    payload = {
+        "growth_source_queue_e2e_summary_version": GROWTH_SOURCE_QUEUE_E2E_SUMMARY_VERSION,
+        "growth_source_queue_e2e_summary_id": "growth-source-queue-e2e-summary-" + _research_target_hash_text({"queue_id": queue["growth_source_queue_id"], "sources": source_summaries, "version": GROWTH_SOURCE_QUEUE_E2E_SUMMARY_VERSION})[:12],
+        "source_queue_id": queue["growth_source_queue_id"],
+        "queue_cache_status_id": status["growth_source_queue_cache_status_id"],
+        "source_summaries": source_summaries,
+        "best_overall_opportunity": best_overall,
+        "runner_up_opportunities": runner_up,
+        "rejected_or_generic_opportunities": rejected,
+        "cache_summary": cache_summary,
+        "performance_summary": {
+            "total_runtime_ms": total_runtime,
+            "source_count": len(source_summaries),
+            "slowest_sources": sorted(slowest, key=lambda item: item["runtime_ms"], reverse=True)[:5],
+        },
+        "operator_decision_summary": {
+            "accepted_count": sum(1 for item in source_summaries if item["operator_decision"] == "accept"),
+            "needs_more_evidence_count": sum(1 for item in source_summaries if item["operator_decision"] == "needs_more_evidence"),
+            "too_generic_count": sum(1 for item in source_summaries if item["operator_decision"] == "too_generic"),
+            "blocked_count": sum(1 for item in source_summaries if item["operator_decision"] == "blocked"),
+        },
+        "recommended_next_action": best_overall.get("recommended_next_slice", "Warm caches and rerun queue E2E."),
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_source_queue_e2e_summary(payload)
+    return payload
+
+
+def validate_growth_source_queue_e2e_summary(payload: dict[str, Any]) -> None:
+    required = ("growth_source_queue_e2e_summary_version", "growth_source_queue_e2e_summary_id", "source_queue_id", "queue_cache_status_id", "source_summaries", "best_overall_opportunity", "runner_up_opportunities", "rejected_or_generic_opportunities", "cache_summary", "performance_summary", "operator_decision_summary", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"growth source queue e2e summary missing field: {key}")
+    if payload["growth_source_queue_e2e_summary_version"] != GROWTH_SOURCE_QUEUE_E2E_SUMMARY_VERSION:
+        raise ValueError("invalid growth source queue e2e summary version")
+    if not payload["source_summaries"]:
+        raise ValueError("growth source queue e2e summary requires at least one source")
+    for item in payload["source_summaries"]:
+        for key in ("source_path", "e2e_summary_id", "opportunity_score_id", "repo_role_summary", "top_concept_families", "best_growth_opportunity_title", "operator_decision", "operator_confidence_score", "genericity_warning", "cache_status", "runtime_ms", "recommended_next_action"):
+            if key not in item:
+                raise ValueError(f"growth source queue e2e source summary missing {key}")
+    best = payload["best_overall_opportunity"]
+    for key in ("source_path", "title", "why_good", "evidence_support_score", "source_specificity_score", "link_growth_value_score", "safety_risk_score", "operator_confidence_score", "recommended_next_slice"):
+        if key not in best:
+            raise ValueError(f"growth source queue e2e best opportunity missing {key}")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("growth source queue e2e must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("growth source queue e2e must remain read-only")
+
+
+def stable_growth_source_queue_e2e_summary_json(payload: dict[str, Any]) -> str:
+    validate_growth_source_queue_e2e_summary(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_growth_source_queue_e2e_summary_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_growth_source_queue_e2e_summary(payload)
+    return payload
+
 
 def collect_source_archive_intake_cache_key(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     from pathlib import Path as _Path
@@ -21286,10 +21977,23 @@ def _advisor_command_preview_payload_from_cache(source_path: str, metadata: dict
         "genericity_assessment_command": f"python3 link.py research upgrade-genericity --source {source_path} --json",
         "source_cache_key_command": f"python3 link.py growth source-cache-key --source {source_path} --json",
         "source_cache_command": f"python3 link.py growth source-cache --source {source_path} --json",
+        "source_cache_observe_command": f"python3 link.py growth source-cache-observe --source {source_path} --json",
+        "source_queue_command": f"python3 link.py growth source-queue --source {source_path} --json",
+        "source_queue_status_command": "python3 link.py growth source-queue-status --json",
+        "source_queue_warm_plan_command": "python3 link.py growth source-queue-warm --json",
+        "source_queue_warm_write_command": "python3 link.py growth source-queue-warm --write-cache --json",
+        "source_queue_e2e_command": "python3 link.py growth source-queue-e2e --json",
         "growth_e2e_cache_command": f"python3 link.py growth e2e-cache --source {source_path} --json",
         "growth_e2e_summary_command": f"python3 link.py growth e2e-summary --source {source_path}",
         "growth_opportunity_score_command": f"python3 link.py growth opportunity-score --source {source_path} --json",
         "growth_e2e_performance_command": f"python3 link.py growth e2e-performance --source {source_path} --json",
+        "recommended_cache_observability_sequence": [
+            "python3 link.py growth source-queue-status --json",
+            "python3 link.py growth source-queue-warm --json",
+            "python3 link.py growth source-queue-warm --write-cache --json",
+            "python3 link.py growth source-queue-e2e --json",
+            f"python3 link.py growth e2e-summary --source {source_path}",
+        ],
         "recommended_fast_operator_sequence": [
             f"python3 link.py growth source-cache --source {source_path} --json",
             f"python3 link.py growth e2e-summary --source {source_path}",
@@ -21427,10 +22131,23 @@ def collect_source_aware_advisor_command_preview(
         "genericity_assessment_command": f"python3 link.py research upgrade-genericity --source {card['source_path']} --json",
         "source_cache_key_command": f"python3 link.py growth source-cache-key --source {card['source_path']} --json",
         "source_cache_command": f"python3 link.py growth source-cache --source {card['source_path']} --json",
+        "source_cache_observe_command": f"python3 link.py growth source-cache-observe --source {card['source_path']} --json",
+        "source_queue_command": f"python3 link.py growth source-queue --source {card['source_path']} --json",
+        "source_queue_status_command": "python3 link.py growth source-queue-status --json",
+        "source_queue_warm_plan_command": "python3 link.py growth source-queue-warm --json",
+        "source_queue_warm_write_command": "python3 link.py growth source-queue-warm --write-cache --json",
+        "source_queue_e2e_command": "python3 link.py growth source-queue-e2e --json",
         "growth_e2e_cache_command": f"python3 link.py growth e2e-cache --source {card['source_path']} --json",
         "growth_e2e_summary_command": f"python3 link.py growth e2e-summary --source {card['source_path']}",
         "growth_opportunity_score_command": f"python3 link.py growth opportunity-score --source {card['source_path']} --json",
         "growth_e2e_performance_command": f"python3 link.py growth e2e-performance --source {card['source_path']} --json",
+        "recommended_cache_observability_sequence": [
+            "python3 link.py growth source-queue-status --json",
+            "python3 link.py growth source-queue-warm --json",
+            "python3 link.py growth source-queue-warm --write-cache --json",
+            "python3 link.py growth source-queue-e2e --json",
+            f"python3 link.py growth e2e-summary --source {card['source_path']}",
+        ],
         "recommended_fast_operator_sequence": [
             f"python3 link.py growth source-cache --source {card['source_path']} --json",
             f"python3 link.py growth e2e-summary --source {card['source_path']}",
@@ -21541,9 +22258,11 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "recommended_alias_tuning_note",
         "archive_concepts_command", "compression_profile_command", "compression_upgrade_score_command",
         "genericity_assessment_command", "source_archive_intake_cache_id", "cache_key_id", "source_cache_key_command",
-        "source_cache_command", "growth_e2e_cache_command", "growth_e2e_summary_command",
+        "source_cache_command", "source_cache_observe_command", "source_queue_command",
+        "source_queue_status_command", "source_queue_warm_plan_command", "source_queue_warm_write_command",
+        "source_queue_e2e_command", "growth_e2e_cache_command", "growth_e2e_summary_command",
         "growth_opportunity_score_command", "growth_e2e_performance_command", "recommended_fast_operator_sequence", "recommended_operator_decision_sequence",
-        "recommended_concept_sequence", "recommended_operator_sequence",
+        "recommended_cache_observability_sequence", "recommended_concept_sequence", "recommended_operator_sequence",
         "compression_policy_command", "compression_preview_command", "headroom_descriptor_command",
         "headroom_policy_command", "headroom_preview_command", "headroom_adapter_command",
         "headroom_sample_command", "headroom_sample_run_command", "headroom_gate_command",
@@ -21564,7 +22283,7 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("invalid source-aware advisor command preview version")
     if not payload["source_aware_advisor_command_preview_id"].startswith("source-aware-advisor-command-preview-"):
         raise ValueError("invalid source-aware advisor command preview id")
-    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "archive_concepts_command", "compression_profile_command", "compression_upgrade_score_command", "genericity_assessment_command", "source_cache_key_command", "source_cache_command", "growth_e2e_cache_command", "growth_e2e_summary_command", "growth_opportunity_score_command", "growth_e2e_performance_command", "compression_preview_command", "headroom_preview_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
+    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "archive_concepts_command", "compression_profile_command", "compression_upgrade_score_command", "genericity_assessment_command", "source_cache_key_command", "source_cache_command", "source_cache_observe_command", "source_queue_command", "growth_e2e_cache_command", "growth_e2e_summary_command", "growth_opportunity_score_command", "growth_e2e_performance_command", "compression_preview_command", "headroom_preview_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
         if payload["source_path"] not in payload[field]:
             raise ValueError(f"advisor command preview {field} must reference selected source")
     if not isinstance(payload["recommended_micro_stage_commands"], list) or len(payload["recommended_micro_stage_commands"]) != 4:
@@ -21576,8 +22295,22 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("advisor command preview must expose concept extraction commands")
     if "source-cache" not in payload["source_cache_command"] or "source-cache-key" not in payload["source_cache_key_command"]:
         raise ValueError("advisor command preview must expose source cache commands")
+    for field, command_name in (
+        ("source_cache_observe_command", "source-cache-observe"),
+        ("source_queue_command", "source-queue"),
+        ("source_queue_status_command", "source-queue-status"),
+        ("source_queue_warm_plan_command", "source-queue-warm"),
+        ("source_queue_warm_write_command", "source-queue-warm"),
+        ("source_queue_e2e_command", "source-queue-e2e"),
+    ):
+        if command_name not in payload[field]:
+            raise ValueError("advisor command preview must expose source queue cache observability commands")
+    if "--write-cache" not in payload["source_queue_warm_write_command"]:
+        raise ValueError("advisor command preview must expose source queue write-cache command")
     if "e2e-summary" not in payload["growth_e2e_summary_command"] or "opportunity-score" not in payload["growth_opportunity_score_command"] or "e2e-performance" not in payload["growth_e2e_performance_command"]:
         raise ValueError("advisor command preview must expose Growth E2E operator summary commands")
+    if not isinstance(payload["recommended_cache_observability_sequence"], list) or len(payload["recommended_cache_observability_sequence"]) < 5:
+        raise ValueError("advisor command preview must include cache observability sequence")
     if not isinstance(payload["recommended_fast_operator_sequence"], list) or len(payload["recommended_fast_operator_sequence"]) < 4:
         raise ValueError("advisor command preview must include fast operator sequence")
     if not isinstance(payload["recommended_operator_decision_sequence"], list) or len(payload["recommended_operator_decision_sequence"]) < 4:
@@ -22956,6 +23689,182 @@ def _growth_source_cache_print_performance(payload: dict[str, Any]) -> None:
     for item in payload["remaining_rebuild_hotspots"][:4]:
         print(f"  - {item}")
     print(f"next: {payload['recommended_next_action']}")
+
+
+def _growth_print_source_cache_observability(payload: dict[str, Any]) -> None:
+    print("Source Cache")
+    print(f"  source: {payload['source_path']}")
+    print(f"  status: {payload['cache_status']}")
+    print(f"  age: {payload['cache_age_label']}")
+    print(f"  size: {payload['cached_size_label']}")
+    print(f"  entries: {payload['cached_entry_count']}")
+    print("  invalidation: " + ("; ".join(payload["invalidation_reasons"][:3]) if payload["invalidation_reasons"] else "none"))
+    print(f"  refresh: {payload['refresh_command']}")
+    print(f"  clear: {payload['clear_command']}")
+    print(f"  next: {payload['recommended_next_action']}")
+
+
+def _growth_print_source_queue(payload: dict[str, Any]) -> None:
+    print("Source Queue")
+    print("  sources:")
+    for item in payload["selected_sources"]:
+        print(f"    - {item['source_name']} ({item['guessed_concept_family']})")
+    if payload["missing_sources"]:
+        print("  missing:")
+        for item in payload["missing_sources"][:5]:
+            print(f"    - {item['source_path']}")
+    print(f"  next: {payload['recommended_next_action']}")
+
+
+def _growth_print_source_queue_status(payload: dict[str, Any]) -> None:
+    print("Growth Source Queue Cache Status")
+    print(f"  cache root: {payload['cache_root']}")
+    print(f"  ready: {payload['queue_ready_for_e2e']}")
+    print(f"  hits/misses/stale: {payload['cache_hit_count']}/{payload['cache_miss_count']}/{payload['stale_count']}")
+    print("  sources:")
+    for item in payload["source_statuses"]:
+        age = _growth_cache_age_label(item["cache_age_seconds"])
+        name = item["source_path"].split("/")[-1]
+        print(f"    - {name}: {item['cache_status']}, {age}, {item['recommended_action']}")
+    print(f"  next: {payload['recommended_next_action']}")
+
+
+def _growth_print_source_queue_warmup(payload: dict[str, Any]) -> None:
+    print("Queue Warmup")
+    print(f"  write-cache: {payload['write_cache_requested']}")
+    print("  missing/stale/invalid:")
+    for item in payload["sources_to_warm"][:8] or [{"source_path": "none", "reason": "none"}]:
+        print(f"    - {item['source_path']}: {item['reason']}")
+    print("  already warm:")
+    for item in payload["sources_already_warm"][:8] or [{"source_path": "none"}]:
+        print(f"    - {item['source_path']}")
+    if payload["write_cache_requested"]:
+        print(f"  warmed: {payload['warmed_count']}  failed: {payload['failed_count']}  skipped: {payload['skipped_count']}")
+    print(f"  next: {payload['recommended_next_action']}")
+
+
+def _growth_print_source_queue_e2e(payload: dict[str, Any]) -> None:
+    best = payload["best_overall_opportunity"]
+    cache = payload["cache_summary"]
+    print("Queue E2E")
+    print(f"  best opportunity: {best['title']} ({best['source_path']})")
+    if payload["runner_up_opportunities"]:
+        runner = payload["runner_up_opportunities"][0]
+        print(f"  runner-up: {runner['title']} ({runner['source_path']})")
+    else:
+        print("  runner-up: none")
+    print(f"  cache: hits {cache['cache_hit_count']} / misses {cache['cache_miss_count']} / stale {cache['stale_count']}")
+    print(f"  runtime_ms: {payload['performance_summary']['total_runtime_ms']}")
+    print(f"  next: {payload['recommended_next_action']}")
+
+
+def growth_source_cache_observe_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth source-cache-observe: per-source persistent cache observability")
+        print("  python3 link.py growth source-cache-observe --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args or "--write-cache" in args:
+        print("error: source-cache-observe is read-only", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "source-cache-observe")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_source_cache_observability_card(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_source_cache_observability_card_json(payload), end="")
+    else:
+        _growth_print_source_cache_observability(payload)
+    return 0
+
+
+def growth_source_queue_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth source-queue: deterministic local research source queue")
+        print("  python3 link.py growth source-queue [--source <path> ...] --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args or "--write-cache" in args:
+        print("error: source-queue is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    payload = collect_growth_source_queue(sources=_growth_extract_source_args(args))
+    if "--json" in args:
+        print(stable_growth_source_queue_json(payload), end="")
+    else:
+        _growth_print_source_queue(payload)
+    return 0
+
+
+def growth_source_queue_status_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth source-queue-status: persistent cache status for queued sources")
+        print("  python3 link.py growth source-queue-status [--source <path> ...] --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args or "--write-cache" in args:
+        print("error: source-queue-status is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_growth_source_queue_cache_status(sources=_growth_extract_source_args(args))
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_growth_source_queue_cache_status_json(payload), end="")
+    else:
+        _growth_print_source_queue_status(payload)
+    return 0
+
+
+def growth_source_queue_warm_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth source-queue-warm: preview or warm persistent source caches")
+        print("  python3 link.py growth source-queue-warm [--source <path> ...] --json")
+        print("  python3 link.py growth source-queue-warm [--source <path> ...] --write-cache --json")
+        return 0
+    if "--write" in args:
+        print("error: source-queue-warm uses --write-cache; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_growth_source_queue_warmup_plan(sources=_growth_extract_source_args(args), write_cache="--write-cache" in args)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_growth_source_queue_warmup_plan_json(payload), end="")
+    else:
+        _growth_print_source_queue_warmup(payload)
+    return 0
+
+
+def growth_source_queue_e2e_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth source-queue-e2e: deterministic E2E summaries for queued sources")
+        print("  python3 link.py growth source-queue-e2e [--source <path> ...] --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args or "--write-cache" in args:
+        print("error: source-queue-e2e is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_growth_source_queue_e2e_summary(sources=_growth_extract_source_args(args))
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_growth_source_queue_e2e_summary_json(payload), end="")
+    else:
+        _growth_print_source_queue_e2e(payload)
+    return 0
 
 
 def growth_source_cache_key_main(argv: list[str] | None = None) -> int:

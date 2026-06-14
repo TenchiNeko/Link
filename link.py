@@ -1184,10 +1184,30 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import growth_source_cache_status_main as _growth_source_cache_status_main
 
         return _growth_source_cache_status_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-cache-observe":
+        from link_modes.growth.link_growth_console import growth_source_cache_observe_main as _growth_source_cache_observe_main
+
+        return _growth_source_cache_observe_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "source-cache-clear":
         from link_modes.growth.link_growth_console import growth_source_cache_clear_main as _growth_source_cache_clear_main
 
         return _growth_source_cache_clear_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-queue":
+        from link_modes.growth.link_growth_console import growth_source_queue_main as _growth_source_queue_main
+
+        return _growth_source_queue_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-queue-status":
+        from link_modes.growth.link_growth_console import growth_source_queue_status_main as _growth_source_queue_status_main
+
+        return _growth_source_queue_status_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-queue-warm":
+        from link_modes.growth.link_growth_console import growth_source_queue_warm_main as _growth_source_queue_warm_main
+
+        return _growth_source_queue_warm_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-queue-e2e":
+        from link_modes.growth.link_growth_console import growth_source_queue_e2e_main as _growth_source_queue_e2e_main
+
+        return _growth_source_queue_e2e_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "source-cache":
         from link_modes.growth.link_growth_console import growth_source_cache_main as _growth_source_cache_main
 
