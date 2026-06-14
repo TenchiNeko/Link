@@ -10933,6 +10933,9 @@ PERSISTENT_SOURCE_CACHE_STATUS_VERSION = "link-persistent-source-cache-status-v1
 PERSISTENT_SOURCE_CACHE_CLEAR_VERSION = "link-persistent-source-cache-clear-v1"
 PERSISTENT_SOURCE_CACHE_PERFORMANCE_REPORT_VERSION = "link-persistent-source-cache-performance-report-v1"
 SOURCE_CACHE_OBSERVABILITY_CARD_VERSION = "link-source-cache-observability-card-v1"
+SOURCE_ARCHIVE_SUITABILITY_ASSESSMENT_VERSION = "link-source-archive-suitability-assessment-v1"
+SOURCE_QUEUE_QUARANTINE_RECORD_VERSION = "link-source-queue-quarantine-record-v1"
+GROWTH_SOURCE_QUEUE_POLICY_VERSION = "link-growth-source-queue-policy-v1"
 GROWTH_SOURCE_QUEUE_VERSION = "link-growth-source-queue-v1"
 GROWTH_SOURCE_QUEUE_CACHE_STATUS_VERSION = "link-growth-source-queue-cache-status-v1"
 GROWTH_SOURCE_QUEUE_WARMUP_PLAN_VERSION = "link-growth-source-queue-warmup-plan-v1"
@@ -14917,12 +14920,348 @@ def parse_source_cache_observability_card_json(text: str) -> dict[str, Any]:
     return payload
 
 
+def classify_source_archive_failure(
+    *,
+    source_path: str,
+    error_text: str = "",
+    source_exists: bool | None = None,
+    source_size_bytes: int | None = None,
+) -> dict[str, Any]:
+    text = str(error_text or "").lower()
+    path_text = str(source_path or "")
+    category = "unknown"
+    likely_cause = "The source failed a deterministic suitability check."
+    recommended_fix = "Inspect the source-specific deterministic intake failure before retrying queue warmup."
+    safe_to_retry: bool | str = "unknown"
+    include_default = False
+    if source_exists is False:
+        category = "source_missing"
+        likely_cause = "The requested source path does not exist under the local research directory."
+        recommended_fix = "Verify the source path or remove it from the queue."
+        safe_to_retry = False
+    elif source_size_bytes is not None and int(source_size_bytes) > PERSISTENT_SOURCE_INVENTORY_MAX_ENTRY_BYTES * 100:
+        category = "oversized_archive"
+        likely_cause = "The archive is large enough to be expensive for source inventory warmup."
+        recommended_fix = "Add a focused inventory adapter or smaller fixture before enabling it in the default queue."
+        safe_to_retry = False
+    elif "forbidden path segment" in text or "activepieces-main.zip" in path_text:
+        category = "source_ref_generation_error"
+        likely_cause = "Deterministic source-ref generation currently emits or encounters a forbidden path segment for this archive shape."
+        recommended_fix = "Add a source-ref sanitizer or archive-shape adapter, then rerun suitability before default queue inclusion."
+        safe_to_retry = False
+    elif "provenance" in text and ("schema" in text or "ref" in text):
+        category = "provenance_ref_schema_error"
+        likely_cause = "Source provenance refs did not satisfy Link's deterministic provenance schema."
+        recommended_fix = "Normalize provenance refs before persistent cache payload validation."
+        safe_to_retry = False
+    elif "timeout" in text:
+        category = "archive_inventory_timeout"
+        likely_cause = "Archive inventory exceeded the bounded deterministic runtime expectation."
+        recommended_fix = "Add a cheaper manifest-only adapter or exclude the source from default queue warming."
+        safe_to_retry = "unknown"
+    elif "payload" in text and "validation" in text:
+        category = "cache_payload_validation_failed"
+        likely_cause = "The compact persistent cache payload failed validation."
+        recommended_fix = "Inspect the validation failure and normalize the compact payload before retrying."
+        safe_to_retry = False
+    elif "nested" in text or "vendor" in text:
+        category = "nested_archive_or_vendor_tree"
+        likely_cause = "The archive appears to contain nested or vendor-heavy content unsuitable for default warmup."
+        recommended_fix = "Add targeted source selection rules before queue inclusion."
+        safe_to_retry = False
+    operator_summary = {
+        "source_missing": "source path is missing",
+        "oversized_archive": "archive is too large for default queue warmup",
+        "source_ref_generation_error": "source-ref generation fails deterministic safety checks",
+        "provenance_ref_schema_error": "provenance refs fail deterministic schema checks",
+        "archive_inventory_timeout": "archive inventory appears too slow for default queue warmup",
+        "cache_payload_validation_failed": "persistent cache payload validation failed",
+        "nested_archive_or_vendor_tree": "archive shape needs a targeted adapter",
+        "unknown": "deterministic source failure is not classified yet",
+    }[category]
+    return {
+        "category": category,
+        "operator_summary": operator_summary,
+        "likely_cause": likely_cause,
+        "recommended_fix": recommended_fix,
+        "safe_to_retry": safe_to_retry,
+        "include_in_default_queue": include_default if category != "unknown" else False,
+    }
+
+
+def summarize_source_archive_failure_for_operator(classification: dict[str, Any]) -> str:
+    return _source_aware_text(
+        f"{classification.get('operator_summary', 'source failure')}: {classification.get('likely_cause', '')}",
+        max_chars=220,
+    )
+
+
+def collect_growth_source_queue_policy(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = {
+        "growth_source_queue_policy_version": GROWTH_SOURCE_QUEUE_POLICY_VERSION,
+        "growth_source_queue_policy_id": "growth-source-queue-policy-" + _research_target_hash_text({"required": _GROWTH_SOURCE_QUEUE_REQUIRED, "optional": _GROWTH_SOURCE_QUEUE_OPTIONAL, "version": GROWTH_SOURCE_QUEUE_POLICY_VERSION})[:12],
+        "required_sources": list(_GROWTH_SOURCE_QUEUE_REQUIRED),
+        "optional_sources": list(_GROWTH_SOURCE_QUEUE_OPTIONAL),
+        "default_queue_requires_suitability": True,
+        "optional_source_failure_policy": "skip_with_reason",
+        "required_source_failure_policy": "fail_closed_with_reason",
+        "persistent_cache_required_for_queue_ready": False,
+        "quarantine_enabled": True,
+        "explicit_include_allowed": True,
+        "explicit_include_warning_required": True,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_source_queue_policy(payload)
+    return payload
+
+
+def validate_growth_source_queue_policy(payload: dict[str, Any]) -> None:
+    required = ("growth_source_queue_policy_version", "growth_source_queue_policy_id", "required_sources", "optional_sources", "default_queue_requires_suitability", "optional_source_failure_policy", "required_source_failure_policy", "persistent_cache_required_for_queue_ready", "quarantine_enabled", "explicit_include_allowed", "explicit_include_warning_required", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"growth source queue policy missing field: {key}")
+    if payload["growth_source_queue_policy_version"] != GROWTH_SOURCE_QUEUE_POLICY_VERSION:
+        raise ValueError("invalid growth source queue policy version")
+    if payload["optional_source_failure_policy"] != "skip_with_reason":
+        raise ValueError("optional source failure policy must be skip_with_reason")
+    if payload["required_source_failure_policy"] != "fail_closed_with_reason":
+        raise ValueError("required source failure policy must be fail_closed_with_reason")
+    if "research/activepieces-main.zip" not in payload["optional_sources"]:
+        raise ValueError("activepieces must be optional by default")
+    if payload["default_queue_requires_suitability"] is not True or payload["quarantine_enabled"] is not True:
+        raise ValueError("growth source queue policy must require suitability and quarantine")
+    if payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("growth source queue policy must avoid model/network")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("growth source queue policy must remain read-only")
+
+
+def stable_growth_source_queue_policy_json(payload: dict[str, Any]) -> str:
+    validate_growth_source_queue_policy(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_growth_source_queue_policy_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_growth_source_queue_policy(payload)
+    return payload
+
+
+def collect_source_archive_suitability_assessment(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    entry = _growth_queue_source_entry(str(source_path or ""), priority=1, reason_selected="suitability assessment")
+    cache_key_id = ""
+    manifest_id = ""
+    status = "failed"
+    queue_eligible = False
+    persistent_eligible = False
+    e2e_eligible = False
+    default_eligible = False
+    failure_category = ""
+    failure_summary = ""
+    blocked: list[str] = []
+    warnings: list[str] = []
+    safe_to_retry: bool | str = True
+    retry_cost = "low"
+    if not entry["source_exists"]:
+        classification = classify_source_archive_failure(source_path=entry["source_path"], source_exists=False)
+        failure_category = classification["category"]
+        failure_summary = summarize_source_archive_failure_for_operator(classification)
+        blocked.append(failure_summary)
+        safe_to_retry = classification["safe_to_retry"]
+        retry_cost = "unknown"
+    else:
+        known_failure = classify_source_archive_failure(
+            source_path=entry["source_path"],
+            source_exists=True,
+            source_size_bytes=entry["source_size_bytes"],
+        )
+        try:
+            key_payload = collect_source_archive_intake_cache_key(source_path=entry["source_path"])
+            manifest = collect_persistent_source_inventory_cache_manifest(source_path=entry["source_path"])
+            cache_key_id = key_payload["source_archive_intake_cache_key_id"]
+            manifest_id = manifest["persistent_source_inventory_cache_manifest_id"]
+            if known_failure["category"] != "unknown":
+                status = "unsupported"
+                failure_category = known_failure["category"]
+                failure_summary = summarize_source_archive_failure_for_operator(known_failure)
+                blocked.append(failure_summary)
+                safe_to_retry = known_failure["safe_to_retry"]
+                retry_cost = "high"
+            else:
+                status = "suitable"
+                queue_eligible = True
+                persistent_eligible = True
+                e2e_eligible = True
+                default_eligible = True
+                warnings = list(entry["warnings"])
+        except Exception as exc:
+            classification = classify_source_archive_failure(
+                source_path=entry["source_path"],
+                error_text=str(exc),
+                source_exists=entry["source_exists"],
+                source_size_bytes=entry["source_size_bytes"],
+            )
+            status = "failed"
+            failure_category = classification["category"]
+            failure_summary = summarize_source_archive_failure_for_operator(classification)
+            blocked.append(failure_summary)
+            safe_to_retry = classification["safe_to_retry"]
+            retry_cost = "unknown"
+    payload = {
+        "source_archive_suitability_assessment_version": SOURCE_ARCHIVE_SUITABILITY_ASSESSMENT_VERSION,
+        "source_archive_suitability_assessment_id": "source-archive-suitability-assessment-" + _research_target_hash_text({"source_path": entry["source_path"], "status": status, "failure_category": failure_category, "version": SOURCE_ARCHIVE_SUITABILITY_ASSESSMENT_VERSION})[:12],
+        "source_path": entry["source_path"],
+        "source_name": entry["source_name"],
+        "source_type": entry["source_type"],
+        "source_exists": entry["source_exists"],
+        "source_size_bytes": entry["source_size_bytes"],
+        "source_mtime_ns": entry["source_mtime_ns"],
+        "cache_key_id": cache_key_id,
+        "manifest_id": manifest_id,
+        "suitability_status": status,
+        "queue_eligible": queue_eligible,
+        "persistent_cache_eligible": persistent_eligible,
+        "growth_e2e_eligible": e2e_eligible,
+        "default_queue_eligible": default_eligible,
+        "failure_category": failure_category,
+        "failure_summary": failure_summary,
+        "blocked_reasons": _normalize_implementation_branch_refs(blocked),
+        "warnings": _normalize_implementation_branch_refs(warnings),
+        "recommended_next_action": "Source is suitable for queue warmup and Growth E2E." if queue_eligible else "Skip or quarantine this source until the deterministic source suitability issue is fixed.",
+        "safe_to_retry": safe_to_retry,
+        "retry_cost": retry_cost,
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_archive_suitability_assessment(payload)
+    return payload
+
+
+def validate_source_archive_suitability_assessment(payload: dict[str, Any]) -> None:
+    required = ("source_archive_suitability_assessment_version", "source_archive_suitability_assessment_id", "source_path", "source_name", "source_type", "source_exists", "source_size_bytes", "source_mtime_ns", "cache_key_id", "manifest_id", "suitability_status", "queue_eligible", "persistent_cache_eligible", "growth_e2e_eligible", "default_queue_eligible", "failure_category", "failure_summary", "blocked_reasons", "warnings", "recommended_next_action", "safe_to_retry", "retry_cost", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source archive suitability assessment missing field: {key}")
+    if payload["source_archive_suitability_assessment_version"] != SOURCE_ARCHIVE_SUITABILITY_ASSESSMENT_VERSION:
+        raise ValueError("invalid source archive suitability assessment version")
+    if payload["suitability_status"] not in {"suitable", "suitable_with_warnings", "unsuitable", "unsupported", "failed"}:
+        raise ValueError("invalid source suitability status")
+    if payload["retry_cost"] not in {"low", "medium", "high", "unknown"}:
+        raise ValueError("invalid source suitability retry cost")
+    if payload["queue_eligible"] and payload["blocked_reasons"]:
+        raise ValueError("queue eligible source must not have blockers")
+    if not payload["queue_eligible"] and not payload["failure_category"]:
+        raise ValueError("ineligible source must include failure category")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("source suitability must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("source suitability must remain read-only")
+
+
+def stable_source_archive_suitability_assessment_json(payload: dict[str, Any]) -> str:
+    validate_source_archive_suitability_assessment(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_source_archive_suitability_assessment_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_source_archive_suitability_assessment(payload)
+    return payload
+
+
+def collect_source_queue_quarantine_record(*, source_path: str, assessment: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    assess = assessment or collect_source_archive_suitability_assessment(source_path=source_path)
+    validate_source_archive_suitability_assessment(assess)
+    suitable = bool(assess["queue_eligible"])
+    status = "not_quarantined" if suitable else "quarantined"
+    reason = "" if suitable else assess["failure_summary"]
+    safe_explicit = bool(suitable)
+    payload = {
+        "source_queue_quarantine_record_version": SOURCE_QUEUE_QUARANTINE_RECORD_VERSION,
+        "source_queue_quarantine_record_id": "source-queue-quarantine-record-" + _research_target_hash_text({"assessment_id": assess["source_archive_suitability_assessment_id"], "status": status, "version": SOURCE_QUEUE_QUARANTINE_RECORD_VERSION})[:12],
+        "source_path": assess["source_path"],
+        "suitability_assessment_id": assess["source_archive_suitability_assessment_id"],
+        "quarantine_status": status,
+        "quarantine_reason": reason,
+        "failure_category": assess["failure_category"],
+        "excluded_from_default_queue": not suitable,
+        "excluded_from_warmup": not suitable,
+        "excluded_from_e2e": not suitable,
+        "safe_to_include_explicitly": safe_explicit,
+        "explicit_include_warning": "" if suitable else "Explicit source was not included because deterministic suitability failed closed.",
+        "recommended_fix": "No quarantine fix required." if suitable else classify_source_archive_failure(source_path=assess["source_path"], error_text=assess["failure_summary"], source_exists=assess["source_exists"], source_size_bytes=assess["source_size_bytes"])["recommended_fix"],
+        "recommended_next_action": "Use this source in queue warmup." if suitable else "Keep this source skipped/quarantined until the recommended fix is implemented.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_queue_quarantine_record(payload)
+    return payload
+
+
+def validate_source_queue_quarantine_record(payload: dict[str, Any]) -> None:
+    required = ("source_queue_quarantine_record_version", "source_queue_quarantine_record_id", "source_path", "suitability_assessment_id", "quarantine_status", "quarantine_reason", "failure_category", "excluded_from_default_queue", "excluded_from_warmup", "excluded_from_e2e", "safe_to_include_explicitly", "explicit_include_warning", "recommended_fix", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source queue quarantine record missing field: {key}")
+    if payload["source_queue_quarantine_record_version"] != SOURCE_QUEUE_QUARANTINE_RECORD_VERSION:
+        raise ValueError("invalid source queue quarantine record version")
+    if payload["quarantine_status"] not in {"not_quarantined", "quarantined", "skipped", "needs_review"}:
+        raise ValueError("invalid source queue quarantine status")
+    if payload["quarantine_status"] != "not_quarantined" and not payload["quarantine_reason"]:
+        raise ValueError("quarantined source must include reason")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("source queue quarantine must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("source queue quarantine must remain read-only")
+
+
+def stable_source_queue_quarantine_record_json(payload: dict[str, Any]) -> str:
+    validate_source_queue_quarantine_record(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_source_queue_quarantine_record_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_source_queue_quarantine_record(payload)
+    return payload
+
+
 def collect_growth_source_queue(*, sources: list[str] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     explicit = [str(item).strip() for item in (sources or []) if str(item).strip()]
     requested = explicit if explicit else list(_GROWTH_SOURCE_QUEUE_REQUIRED) + list(_GROWTH_SOURCE_QUEUE_OPTIONAL)
+    policy = collect_growth_source_queue_policy()
     selected: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    assessments: list[dict[str, Any]] = []
+    quarantine_records: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    explicit_include_sources: list[dict[str, Any]] = []
+    required_failures: list[str] = []
     seen: set[str] = set()
     for index, source_path in enumerate(requested, 1):
         if source_path in seen:
@@ -14930,18 +15269,53 @@ def collect_growth_source_queue(*, sources: list[str] | None = None, metadata: d
             continue
         seen.add(source_path)
         entry = _growth_queue_source_entry(source_path, priority=index, reason_selected="explicit source" if explicit else "default queue candidate")
-        if entry["source_exists"] and source_path.startswith("research/"):
+        assessment = collect_source_archive_suitability_assessment(source_path=source_path)
+        quarantine = collect_source_queue_quarantine_record(source_path=source_path, assessment=assessment)
+        assessments.append(assessment)
+        quarantine_records.append(quarantine)
+        is_required = source_path in policy["required_sources"]
+        is_optional = source_path in policy["optional_sources"]
+        source_note = {
+            "source_path": source_path,
+            "suitability_status": assessment["suitability_status"],
+            "queue_eligible": assessment["queue_eligible"],
+            "quarantine_status": quarantine["quarantine_status"],
+            "failure_category": assessment["failure_category"],
+            "skip_reason": quarantine["quarantine_reason"],
+            "explicit_include_warning": quarantine["explicit_include_warning"],
+        }
+        if explicit:
+            explicit_include_sources.append(source_note)
+        if entry["source_exists"] and source_path.startswith("research/") and assessment["queue_eligible"]:
+            entry.update(source_note)
             selected.append(entry)
-        elif explicit or source_path in _GROWTH_SOURCE_QUEUE_REQUIRED:
+        elif is_required:
+            missing.append(entry)
+            required_failures.append(source_path)
+            skipped.append({"source_path": source_path, "reason": quarantine["quarantine_reason"] or "required source is not queue eligible"})
+        elif explicit and not entry["source_exists"]:
+            missing.append(entry)
+            skipped.append({"source_path": source_path, "reason": quarantine["quarantine_reason"] or "explicit source is missing"})
+        elif explicit:
+            skipped.append({"source_path": source_path, "reason": quarantine["quarantine_reason"] or "explicit source is not queue eligible"})
+            excluded.append(source_note)
+        elif is_optional and assessment["source_exists"]:
+            skipped.append({"source_path": source_path, "reason": quarantine["quarantine_reason"] or "optional source is not queue eligible"})
+            excluded.append(source_note)
+        elif explicit:
             missing.append(entry)
         else:
             skipped.append({"source_path": source_path, "reason": "optional source not present"})
     discovered = [item for item in selected]
+    quarantined_count = sum(1 for item in quarantine_records if item["quarantine_status"] != "not_quarantined")
+    unsuitable_count = sum(1 for item in assessments if item["suitability_status"] in {"unsuitable", "unsupported", "failed"})
+    queue_ready = bool(selected) and not required_failures
     payload = {
         "growth_source_queue_version": GROWTH_SOURCE_QUEUE_VERSION,
-        "growth_source_queue_id": "growth-source-queue-" + _research_target_hash_text({"sources": [item["source_path"] for item in selected], "missing": [item["source_path"] for item in missing], "version": GROWTH_SOURCE_QUEUE_VERSION})[:12],
+        "growth_source_queue_id": "growth-source-queue-" + _research_target_hash_text({"sources": [item["source_path"] for item in selected], "missing": [item["source_path"] for item in missing], "excluded": [item["source_path"] for item in excluded], "version": GROWTH_SOURCE_QUEUE_VERSION})[:12],
         "queue_name": "growth-source-cache-warmup",
         "queue_version": "v1",
+        "source_queue_policy_id": policy["growth_source_queue_policy_id"],
         "requested_sources": requested,
         "discovered_sources": discovered,
         "selected_sources": selected,
@@ -14949,14 +15323,26 @@ def collect_growth_source_queue(*, sources: list[str] | None = None, metadata: d
         "skipped_sources": skipped,
         "source_count": len(selected),
         "queue_policy": {
-            "default_required_sources": list(_GROWTH_SOURCE_QUEUE_REQUIRED),
-            "default_optional_sources": list(_GROWTH_SOURCE_QUEUE_OPTIONAL),
+            "default_required_sources": policy["required_sources"],
+            "default_optional_sources": policy["optional_sources"],
             "archive_extraction_allowed": False,
             "model_allowed": False,
             "external_network_allowed": False,
             "source_mutation_allowed": False,
+            "optional_source_failure_policy": policy["optional_source_failure_policy"],
+            "required_source_failure_policy": policy["required_source_failure_policy"],
         },
-        "recommended_next_action": "Run growth source-queue-status, then source-queue-warm --write-cache before queue E2E.",
+        "suitability_assessments": assessments,
+        "quarantine_records": quarantine_records,
+        "suitable_source_count": sum(1 for item in assessments if item["queue_eligible"]),
+        "quarantined_source_count": quarantined_count,
+        "skipped_source_count": len(skipped),
+        "unsuitable_source_count": unsuitable_count,
+        "default_queue_excluded_sources": excluded,
+        "explicit_include_sources": explicit_include_sources,
+        "queue_ready_for_warmup": queue_ready,
+        "queue_ready_for_e2e": queue_ready,
+        "recommended_next_action": "Run growth source-queue-status, then source-queue-warm --write-cache before queue E2E." if queue_ready else "Review skipped/quarantined sources before warmup; required source failures fail closed.",
         "fallback_allowed": False,
         "model_used": False,
         "external_network_used": False,
@@ -14972,7 +15358,7 @@ def collect_growth_source_queue(*, sources: list[str] | None = None, metadata: d
 
 
 def validate_growth_source_queue(payload: dict[str, Any]) -> None:
-    required = ("growth_source_queue_version", "growth_source_queue_id", "queue_name", "queue_version", "requested_sources", "discovered_sources", "selected_sources", "missing_sources", "skipped_sources", "source_count", "queue_policy", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    required = ("growth_source_queue_version", "growth_source_queue_id", "queue_name", "queue_version", "source_queue_policy_id", "requested_sources", "discovered_sources", "selected_sources", "missing_sources", "skipped_sources", "source_count", "queue_policy", "suitability_assessments", "quarantine_records", "suitable_source_count", "quarantined_source_count", "skipped_source_count", "unsuitable_source_count", "default_queue_excluded_sources", "explicit_include_sources", "queue_ready_for_warmup", "queue_ready_for_e2e", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
     for key in required:
         if key not in payload:
             raise ValueError(f"growth source queue missing field: {key}")
@@ -14981,11 +15367,17 @@ def validate_growth_source_queue(payload: dict[str, Any]) -> None:
     if payload["source_count"] != len(payload["selected_sources"]):
         raise ValueError("growth source queue source_count mismatch")
     for entry in payload["selected_sources"]:
-        for key in ("source_path", "source_exists", "source_name", "source_type", "source_size_bytes", "source_mtime_ns", "guessed_concept_family", "priority", "reason_selected", "warnings"):
+        for key in ("source_path", "source_exists", "source_name", "source_type", "source_size_bytes", "source_mtime_ns", "guessed_concept_family", "priority", "reason_selected", "warnings", "suitability_status", "queue_eligible", "quarantine_status", "failure_category", "skip_reason", "explicit_include_warning"):
             if key not in entry:
                 raise ValueError(f"growth source queue selected entry missing {key}")
         if not entry["source_exists"] or not entry["source_path"].startswith("research/"):
             raise ValueError("growth source queue selected sources must be existing research sources")
+        if entry["queue_eligible"] is not True or entry["quarantine_status"] != "not_quarantined":
+            raise ValueError("growth source queue selected sources must be eligible and not quarantined")
+    if payload["suitable_source_count"] != sum(1 for item in payload["suitability_assessments"] if item.get("queue_eligible")):
+        raise ValueError("growth source queue suitable count mismatch")
+    if payload["quarantined_source_count"] != sum(1 for item in payload["quarantine_records"] if item.get("quarantine_status") != "not_quarantined"):
+        raise ValueError("growth source queue quarantine count mismatch")
     if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
         raise ValueError("growth source queue must avoid model/network/fallback")
     if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
@@ -15026,6 +15418,12 @@ def collect_growth_source_queue_cache_status(*, sources: list[str] | None = None
             "cached_size_bytes": card["cached_size_bytes"],
             "invalidation_reasons": card["invalidation_reasons"],
             "recommended_action": card["recommended_next_action"],
+            "suitability_status": entry["suitability_status"],
+            "queue_eligible": entry["queue_eligible"],
+            "quarantine_status": entry["quarantine_status"],
+            "failure_category": entry["failure_category"],
+            "skip_reason": entry["skip_reason"],
+            "explicit_include_warning": entry["explicit_include_warning"],
         })
     hit_count = sum(1 for item in source_statuses if item["cache_status"] == "hit")
     miss_count = sum(1 for item in source_statuses if item["cache_status"] == "miss")
@@ -15037,6 +15435,7 @@ def collect_growth_source_queue_cache_status(*, sources: list[str] | None = None
         "growth_source_queue_cache_status_version": GROWTH_SOURCE_QUEUE_CACHE_STATUS_VERSION,
         "growth_source_queue_cache_status_id": "growth-source-queue-cache-status-" + _research_target_hash_text({"queue_id": queue["growth_source_queue_id"], "statuses": source_statuses, "version": GROWTH_SOURCE_QUEUE_CACHE_STATUS_VERSION})[:12],
         "source_queue_id": queue["growth_source_queue_id"],
+        "source_queue_policy_id": queue["source_queue_policy_id"],
         "cache_policy_id": policy["persistent_source_inventory_cache_policy_id"],
         "cache_root": policy["cache_root"],
         "source_statuses": source_statuses,
@@ -15049,7 +15448,16 @@ def collect_growth_source_queue_cache_status(*, sources: list[str] | None = None
         "total_cached_size_bytes": total_cached,
         "oldest_cache_age_seconds": max(ages) if ages else None,
         "newest_cache_age_seconds": min(ages) if ages else None,
-        "queue_ready_for_e2e": ready,
+        "suitability_assessments": queue["suitability_assessments"],
+        "quarantine_records": queue["quarantine_records"],
+        "suitable_source_count": queue["suitable_source_count"],
+        "quarantined_source_count": queue["quarantined_source_count"],
+        "skipped_source_count": queue["skipped_source_count"],
+        "unsuitable_source_count": queue["unsuitable_source_count"],
+        "default_queue_excluded_sources": queue["default_queue_excluded_sources"],
+        "explicit_include_sources": queue["explicit_include_sources"],
+        "queue_ready_for_warmup": queue["queue_ready_for_warmup"],
+        "queue_ready_for_e2e": ready and queue["queue_ready_for_e2e"],
         "recommended_next_action": "Queue caches are warm; run growth source-queue-e2e." if ready else "Run growth source-queue-warm --write-cache to warm missing/stale/invalid source caches.",
         "fallback_allowed": False,
         "model_used": False,
@@ -15066,7 +15474,7 @@ def collect_growth_source_queue_cache_status(*, sources: list[str] | None = None
 
 
 def validate_growth_source_queue_cache_status(payload: dict[str, Any]) -> None:
-    required = ("growth_source_queue_cache_status_version", "growth_source_queue_cache_status_id", "source_queue_id", "cache_policy_id", "cache_root", "source_statuses", "source_count", "cache_hit_count", "cache_miss_count", "stale_count", "invalid_count", "missing_count", "total_cached_size_bytes", "oldest_cache_age_seconds", "newest_cache_age_seconds", "queue_ready_for_e2e", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    required = ("growth_source_queue_cache_status_version", "growth_source_queue_cache_status_id", "source_queue_id", "source_queue_policy_id", "cache_policy_id", "cache_root", "source_statuses", "source_count", "cache_hit_count", "cache_miss_count", "stale_count", "invalid_count", "missing_count", "total_cached_size_bytes", "oldest_cache_age_seconds", "newest_cache_age_seconds", "suitability_assessments", "quarantine_records", "suitable_source_count", "quarantined_source_count", "skipped_source_count", "unsuitable_source_count", "default_queue_excluded_sources", "explicit_include_sources", "queue_ready_for_warmup", "queue_ready_for_e2e", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
     for key in required:
         if key not in payload:
             raise ValueError(f"growth source queue cache status missing field: {key}")
@@ -15077,6 +15485,9 @@ def validate_growth_source_queue_cache_status(payload: dict[str, Any]) -> None:
     for item in payload["source_statuses"]:
         if item.get("cache_status") not in {"hit", "miss", "stale", "invalid"}:
             raise ValueError("invalid queue source cache status")
+        for key in ("suitability_status", "queue_eligible", "quarantine_status", "failure_category", "skip_reason", "explicit_include_warning"):
+            if key not in item:
+                raise ValueError(f"queue source cache status missing {key}")
     if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
         raise ValueError("growth source queue cache status must avoid model/network/fallback")
     if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
@@ -15099,6 +15510,7 @@ def collect_growth_source_queue_warmup_plan(*, sources: list[str] | None = None,
     import time as _time
 
     started = _time.perf_counter()
+    queue = collect_growth_source_queue(sources=sources)
     status = collect_growth_source_queue_cache_status(sources=sources)
     sources_to_warm: list[dict[str, Any]] = []
     already_warm: list[dict[str, Any]] = []
@@ -15119,8 +15531,11 @@ def collect_growth_source_queue_warmup_plan(*, sources: list[str] | None = None,
                 "current_status": item["cache_status"],
                 "planned_write_command": f"python3 link.py growth source-cache-persistent --source {item['source_path']} --write-cache --json",
             })
-    for missing in collect_growth_source_queue(sources=sources)["missing_sources"]:
+    for missing in queue["missing_sources"]:
         skipped.append({"source_path": missing["source_path"], "reason": "source missing or invalid"})
+    for quarantine in queue["quarantine_records"]:
+        if quarantine["quarantine_status"] != "not_quarantined":
+            skipped.append({"source_path": quarantine["source_path"], "reason": quarantine["quarantine_reason"]})
     warmed_sources: list[dict[str, Any]] = []
     failed_sources: list[dict[str, Any]] = []
     write_performed = False
@@ -15153,6 +15568,7 @@ def collect_growth_source_queue_warmup_plan(*, sources: list[str] | None = None,
         "growth_source_queue_warmup_plan_id": "growth-source-queue-warmup-plan-" + _research_target_hash_text({"status_id": status["growth_source_queue_cache_status_id"], "write": write_cache, "warmed": warmed_sources, "version": GROWTH_SOURCE_QUEUE_WARMUP_PLAN_VERSION})[:12],
         "source_queue_cache_status_id": status["growth_source_queue_cache_status_id"],
         "cache_policy_id": status["cache_policy_id"],
+        "source_queue_policy_id": queue["source_queue_policy_id"],
         "warmup_requested": True,
         "write_cache_requested": bool(write_cache),
         "sources_to_warm": sources_to_warm,
@@ -15169,6 +15585,16 @@ def collect_growth_source_queue_warmup_plan(*, sources: list[str] | None = None,
         "skipped_count": len(skipped) + len(already_warm),
         "total_runtime_ms": runtime_ms,
         "slowest_sources": slowest,
+        "suitability_assessments": queue["suitability_assessments"],
+        "quarantine_records": queue["quarantine_records"],
+        "suitable_source_count": queue["suitable_source_count"],
+        "quarantined_source_count": queue["quarantined_source_count"],
+        "skipped_source_count": queue["skipped_source_count"],
+        "unsuitable_source_count": queue["unsuitable_source_count"],
+        "default_queue_excluded_sources": queue["default_queue_excluded_sources"],
+        "explicit_include_sources": queue["explicit_include_sources"],
+        "queue_ready_for_warmup": queue["queue_ready_for_warmup"],
+        "queue_ready_for_e2e": status["queue_ready_for_e2e"],
         "recommended_next_action": "Run growth source-queue-status, then growth source-queue-e2e." if write_cache and not failed_sources else "Review this plan, then rerun with --write-cache to warm the queue.",
         "fallback_allowed": False,
         "model_used": False,
@@ -15185,7 +15611,7 @@ def collect_growth_source_queue_warmup_plan(*, sources: list[str] | None = None,
 
 
 def validate_growth_source_queue_warmup_plan(payload: dict[str, Any]) -> None:
-    required = ("growth_source_queue_warmup_plan_version", "growth_source_queue_warmup_plan_id", "source_queue_cache_status_id", "cache_policy_id", "warmup_requested", "write_cache_requested", "sources_to_warm", "sources_already_warm", "sources_skipped", "estimated_work_count", "planned_commands", "write_cache_performed", "warmed_sources", "failed_sources", "skipped_sources", "warmed_count", "failed_count", "skipped_count", "total_runtime_ms", "slowest_sources", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    required = ("growth_source_queue_warmup_plan_version", "growth_source_queue_warmup_plan_id", "source_queue_cache_status_id", "cache_policy_id", "source_queue_policy_id", "warmup_requested", "write_cache_requested", "sources_to_warm", "sources_already_warm", "sources_skipped", "estimated_work_count", "planned_commands", "write_cache_performed", "warmed_sources", "failed_sources", "skipped_sources", "warmed_count", "failed_count", "skipped_count", "total_runtime_ms", "slowest_sources", "suitability_assessments", "quarantine_records", "suitable_source_count", "quarantined_source_count", "skipped_source_count", "unsuitable_source_count", "default_queue_excluded_sources", "explicit_include_sources", "queue_ready_for_warmup", "queue_ready_for_e2e", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
     for key in required:
         if key not in payload:
             raise ValueError(f"growth source queue warmup plan missing field: {key}")
@@ -15297,6 +15723,36 @@ def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None,
                 "recommended_next_slice": "Inspect the source path and deterministic intake constraints before rerunning queue E2E.",
             })
             slowest.append({"source_path": entry["source_path"], "runtime_ms": runtime_ms})
+    summarized_paths = {item["source_path"] for item in source_summaries}
+    for quarantine in queue["quarantine_records"]:
+        if quarantine["quarantine_status"] == "not_quarantined" or quarantine["source_path"] in summarized_paths:
+            continue
+        reason = quarantine["quarantine_reason"] or "source is quarantined"
+        source_summaries.append({
+            "source_path": quarantine["source_path"],
+            "e2e_summary_id": "",
+            "opportunity_score_id": "",
+            "repo_role_summary": "skipped by source queue quarantine",
+            "top_concept_families": [],
+            "best_growth_opportunity_title": "unavailable",
+            "operator_decision": "blocked",
+            "operator_confidence_score": 0,
+            "genericity_warning": False,
+            "cache_status": "skipped",
+            "runtime_ms": 0,
+            "recommended_next_action": quarantine["recommended_next_action"],
+        })
+        rejected.append({
+            "source_path": quarantine["source_path"],
+            "title": "unavailable",
+            "why_good": f"Source skipped by queue quarantine: {reason}",
+            "evidence_support_score": 0,
+            "source_specificity_score": 0,
+            "link_growth_value_score": 0,
+            "safety_risk_score": 10,
+            "operator_confidence_score": 0,
+            "recommended_next_slice": quarantine["recommended_fix"],
+        })
     ranked = sorted(candidates or rejected, key=lambda item: (item["operator_confidence_score"], item["source_specificity_score"], item["evidence_support_score"], item["link_growth_value_score"], -item["safety_risk_score"]), reverse=True)
     best_overall = ranked[0] if ranked else {}
     runner_up = ranked[1:4]
@@ -15313,6 +15769,7 @@ def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None,
         "growth_source_queue_e2e_summary_version": GROWTH_SOURCE_QUEUE_E2E_SUMMARY_VERSION,
         "growth_source_queue_e2e_summary_id": "growth-source-queue-e2e-summary-" + _research_target_hash_text({"queue_id": queue["growth_source_queue_id"], "sources": source_summaries, "version": GROWTH_SOURCE_QUEUE_E2E_SUMMARY_VERSION})[:12],
         "source_queue_id": queue["growth_source_queue_id"],
+        "source_queue_policy_id": queue["source_queue_policy_id"],
         "queue_cache_status_id": status["growth_source_queue_cache_status_id"],
         "source_summaries": source_summaries,
         "best_overall_opportunity": best_overall,
@@ -15330,6 +15787,16 @@ def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None,
             "too_generic_count": sum(1 for item in source_summaries if item["operator_decision"] == "too_generic"),
             "blocked_count": sum(1 for item in source_summaries if item["operator_decision"] == "blocked"),
         },
+        "suitability_assessments": queue["suitability_assessments"],
+        "quarantine_records": queue["quarantine_records"],
+        "suitable_source_count": queue["suitable_source_count"],
+        "quarantined_source_count": queue["quarantined_source_count"],
+        "skipped_source_count": queue["skipped_source_count"],
+        "unsuitable_source_count": queue["unsuitable_source_count"],
+        "default_queue_excluded_sources": queue["default_queue_excluded_sources"],
+        "explicit_include_sources": queue["explicit_include_sources"],
+        "queue_ready_for_warmup": queue["queue_ready_for_warmup"],
+        "queue_ready_for_e2e": status["queue_ready_for_e2e"],
         "recommended_next_action": best_overall.get("recommended_next_slice", "Warm caches and rerun queue E2E."),
         "fallback_allowed": False,
         "model_used": False,
@@ -15346,7 +15813,7 @@ def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None,
 
 
 def validate_growth_source_queue_e2e_summary(payload: dict[str, Any]) -> None:
-    required = ("growth_source_queue_e2e_summary_version", "growth_source_queue_e2e_summary_id", "source_queue_id", "queue_cache_status_id", "source_summaries", "best_overall_opportunity", "runner_up_opportunities", "rejected_or_generic_opportunities", "cache_summary", "performance_summary", "operator_decision_summary", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    required = ("growth_source_queue_e2e_summary_version", "growth_source_queue_e2e_summary_id", "source_queue_id", "source_queue_policy_id", "queue_cache_status_id", "source_summaries", "best_overall_opportunity", "runner_up_opportunities", "rejected_or_generic_opportunities", "cache_summary", "performance_summary", "operator_decision_summary", "suitability_assessments", "quarantine_records", "suitable_source_count", "quarantined_source_count", "skipped_source_count", "unsuitable_source_count", "default_queue_excluded_sources", "explicit_include_sources", "queue_ready_for_warmup", "queue_ready_for_e2e", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
     for key in required:
         if key not in payload:
             raise ValueError(f"growth source queue e2e summary missing field: {key}")
@@ -21978,8 +22445,12 @@ def _advisor_command_preview_payload_from_cache(source_path: str, metadata: dict
         "source_cache_key_command": f"python3 link.py growth source-cache-key --source {source_path} --json",
         "source_cache_command": f"python3 link.py growth source-cache --source {source_path} --json",
         "source_cache_observe_command": f"python3 link.py growth source-cache-observe --source {source_path} --json",
+        "source_suitability_command": f"python3 link.py growth source-suitability --source {source_path} --json",
+        "source_quarantine_command": f"python3 link.py growth source-quarantine --source {source_path} --json",
         "source_queue_command": f"python3 link.py growth source-queue --source {source_path} --json",
+        "source_queue_policy_command": "python3 link.py growth source-queue-policy --json",
         "source_queue_status_command": "python3 link.py growth source-queue-status --json",
+        "source_queue_warm_command": "python3 link.py growth source-queue-warm --json",
         "source_queue_warm_plan_command": "python3 link.py growth source-queue-warm --json",
         "source_queue_warm_write_command": "python3 link.py growth source-queue-warm --write-cache --json",
         "source_queue_e2e_command": "python3 link.py growth source-queue-e2e --json",
@@ -21993,6 +22464,14 @@ def _advisor_command_preview_payload_from_cache(source_path: str, metadata: dict
             "python3 link.py growth source-queue-warm --write-cache --json",
             "python3 link.py growth source-queue-e2e --json",
             f"python3 link.py growth e2e-summary --source {source_path}",
+        ],
+        "recommended_queue_safety_sequence": [
+            "python3 link.py growth source-queue-policy --json",
+            "python3 link.py growth source-queue-status --json",
+            "python3 link.py growth source-suitability --source research/activepieces-main.zip --json",
+            "python3 link.py growth source-quarantine --source research/activepieces-main.zip --json",
+            "python3 link.py growth source-queue-warm --write-cache --json",
+            "python3 link.py growth source-queue-e2e --json",
         ],
         "recommended_fast_operator_sequence": [
             f"python3 link.py growth source-cache --source {source_path} --json",
@@ -22132,8 +22611,12 @@ def collect_source_aware_advisor_command_preview(
         "source_cache_key_command": f"python3 link.py growth source-cache-key --source {card['source_path']} --json",
         "source_cache_command": f"python3 link.py growth source-cache --source {card['source_path']} --json",
         "source_cache_observe_command": f"python3 link.py growth source-cache-observe --source {card['source_path']} --json",
+        "source_suitability_command": f"python3 link.py growth source-suitability --source {card['source_path']} --json",
+        "source_quarantine_command": f"python3 link.py growth source-quarantine --source {card['source_path']} --json",
         "source_queue_command": f"python3 link.py growth source-queue --source {card['source_path']} --json",
+        "source_queue_policy_command": "python3 link.py growth source-queue-policy --json",
         "source_queue_status_command": "python3 link.py growth source-queue-status --json",
+        "source_queue_warm_command": "python3 link.py growth source-queue-warm --json",
         "source_queue_warm_plan_command": "python3 link.py growth source-queue-warm --json",
         "source_queue_warm_write_command": "python3 link.py growth source-queue-warm --write-cache --json",
         "source_queue_e2e_command": "python3 link.py growth source-queue-e2e --json",
@@ -22147,6 +22630,14 @@ def collect_source_aware_advisor_command_preview(
             "python3 link.py growth source-queue-warm --write-cache --json",
             "python3 link.py growth source-queue-e2e --json",
             f"python3 link.py growth e2e-summary --source {card['source_path']}",
+        ],
+        "recommended_queue_safety_sequence": [
+            "python3 link.py growth source-queue-policy --json",
+            "python3 link.py growth source-queue-status --json",
+            "python3 link.py growth source-suitability --source research/activepieces-main.zip --json",
+            "python3 link.py growth source-quarantine --source research/activepieces-main.zip --json",
+            "python3 link.py growth source-queue-warm --write-cache --json",
+            "python3 link.py growth source-queue-e2e --json",
         ],
         "recommended_fast_operator_sequence": [
             f"python3 link.py growth source-cache --source {card['source_path']} --json",
@@ -22258,11 +22749,12 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "recommended_alias_tuning_note",
         "archive_concepts_command", "compression_profile_command", "compression_upgrade_score_command",
         "genericity_assessment_command", "source_archive_intake_cache_id", "cache_key_id", "source_cache_key_command",
-        "source_cache_command", "source_cache_observe_command", "source_queue_command",
-        "source_queue_status_command", "source_queue_warm_plan_command", "source_queue_warm_write_command",
+        "source_cache_command", "source_cache_observe_command", "source_suitability_command",
+        "source_quarantine_command", "source_queue_command", "source_queue_policy_command",
+        "source_queue_status_command", "source_queue_warm_command", "source_queue_warm_plan_command", "source_queue_warm_write_command",
         "source_queue_e2e_command", "growth_e2e_cache_command", "growth_e2e_summary_command",
         "growth_opportunity_score_command", "growth_e2e_performance_command", "recommended_fast_operator_sequence", "recommended_operator_decision_sequence",
-        "recommended_cache_observability_sequence", "recommended_concept_sequence", "recommended_operator_sequence",
+        "recommended_cache_observability_sequence", "recommended_queue_safety_sequence", "recommended_concept_sequence", "recommended_operator_sequence",
         "compression_policy_command", "compression_preview_command", "headroom_descriptor_command",
         "headroom_policy_command", "headroom_preview_command", "headroom_adapter_command",
         "headroom_sample_command", "headroom_sample_run_command", "headroom_gate_command",
@@ -22283,7 +22775,7 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("invalid source-aware advisor command preview version")
     if not payload["source_aware_advisor_command_preview_id"].startswith("source-aware-advisor-command-preview-"):
         raise ValueError("invalid source-aware advisor command preview id")
-    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "archive_concepts_command", "compression_profile_command", "compression_upgrade_score_command", "genericity_assessment_command", "source_cache_key_command", "source_cache_command", "source_cache_observe_command", "source_queue_command", "growth_e2e_cache_command", "growth_e2e_summary_command", "growth_opportunity_score_command", "growth_e2e_performance_command", "compression_preview_command", "headroom_preview_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
+    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "archive_concepts_command", "compression_profile_command", "compression_upgrade_score_command", "genericity_assessment_command", "source_cache_key_command", "source_cache_command", "source_cache_observe_command", "source_suitability_command", "source_quarantine_command", "source_queue_command", "growth_e2e_cache_command", "growth_e2e_summary_command", "growth_opportunity_score_command", "growth_e2e_performance_command", "compression_preview_command", "headroom_preview_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
         if payload["source_path"] not in payload[field]:
             raise ValueError(f"advisor command preview {field} must reference selected source")
     if not isinstance(payload["recommended_micro_stage_commands"], list) or len(payload["recommended_micro_stage_commands"]) != 4:
@@ -22297,8 +22789,12 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("advisor command preview must expose source cache commands")
     for field, command_name in (
         ("source_cache_observe_command", "source-cache-observe"),
+        ("source_suitability_command", "source-suitability"),
+        ("source_quarantine_command", "source-quarantine"),
         ("source_queue_command", "source-queue"),
+        ("source_queue_policy_command", "source-queue-policy"),
         ("source_queue_status_command", "source-queue-status"),
+        ("source_queue_warm_command", "source-queue-warm"),
         ("source_queue_warm_plan_command", "source-queue-warm"),
         ("source_queue_warm_write_command", "source-queue-warm"),
         ("source_queue_e2e_command", "source-queue-e2e"),
@@ -22311,6 +22807,8 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("advisor command preview must expose Growth E2E operator summary commands")
     if not isinstance(payload["recommended_cache_observability_sequence"], list) or len(payload["recommended_cache_observability_sequence"]) < 5:
         raise ValueError("advisor command preview must include cache observability sequence")
+    if not isinstance(payload["recommended_queue_safety_sequence"], list) or len(payload["recommended_queue_safety_sequence"]) < 6:
+        raise ValueError("advisor command preview must include queue safety sequence")
     if not isinstance(payload["recommended_fast_operator_sequence"], list) or len(payload["recommended_fast_operator_sequence"]) < 4:
         raise ValueError("advisor command preview must include fast operator sequence")
     if not isinstance(payload["recommended_operator_decision_sequence"], list) or len(payload["recommended_operator_decision_sequence"]) < 4:
@@ -23706,13 +24204,22 @@ def _growth_print_source_cache_observability(payload: dict[str, Any]) -> None:
 
 def _growth_print_source_queue(payload: dict[str, Any]) -> None:
     print("Source Queue")
+    print(f"  ready: {payload['queue_ready_for_warmup']}")
     print("  sources:")
     for item in payload["selected_sources"]:
         print(f"    - {item['source_name']} ({item['guessed_concept_family']})")
+    if payload["default_queue_excluded_sources"]:
+        print("  quarantined:")
+        for item in payload["default_queue_excluded_sources"][:6]:
+            print(f"    - {item['source_path']}: {item['failure_category']}")
     if payload["missing_sources"]:
         print("  missing:")
         for item in payload["missing_sources"][:5]:
             print(f"    - {item['source_path']}")
+    if payload["skipped_sources"]:
+        print("  skipped:")
+        for item in payload["skipped_sources"][:6]:
+            print(f"    - {item['source_path']}: {_source_aware_text(item['reason'], max_chars=120)}")
     print(f"  next: {payload['recommended_next_action']}")
 
 
@@ -23721,11 +24228,16 @@ def _growth_print_source_queue_status(payload: dict[str, Any]) -> None:
     print(f"  cache root: {payload['cache_root']}")
     print(f"  ready: {payload['queue_ready_for_e2e']}")
     print(f"  hits/misses/stale: {payload['cache_hit_count']}/{payload['cache_miss_count']}/{payload['stale_count']}")
+    print(f"  skipped/quarantined: {payload['skipped_source_count']}/{payload['quarantined_source_count']}")
     print("  sources:")
     for item in payload["source_statuses"]:
         age = _growth_cache_age_label(item["cache_age_seconds"])
         name = item["source_path"].split("/")[-1]
         print(f"    - {name}: {item['cache_status']}, {age}, {item['recommended_action']}")
+    if payload["default_queue_excluded_sources"]:
+        print("  quarantined:")
+        for item in payload["default_queue_excluded_sources"][:6]:
+            print(f"    - {item['source_path']}: {item['failure_category']}")
     print(f"  next: {payload['recommended_next_action']}")
 
 
@@ -23754,8 +24266,107 @@ def _growth_print_source_queue_e2e(payload: dict[str, Any]) -> None:
     else:
         print("  runner-up: none")
     print(f"  cache: hits {cache['cache_hit_count']} / misses {cache['cache_miss_count']} / stale {cache['stale_count']}")
+    print(f"  skipped/quarantined: {payload['skipped_source_count']}/{payload['quarantined_source_count']}")
     print(f"  runtime_ms: {payload['performance_summary']['total_runtime_ms']}")
     print(f"  next: {payload['recommended_next_action']}")
+
+
+def _growth_print_source_suitability(payload: dict[str, Any]) -> None:
+    print("Source Suitability")
+    print(f"  source: {payload['source_path']}")
+    print(f"  status: {payload['suitability_status']}")
+    print(f"  queue eligible: {payload['queue_eligible']}")
+    print(f"  persistent cache eligible: {payload['persistent_cache_eligible']}")
+    print(f"  failure: {payload['failure_category'] or 'none'}")
+    if payload["failure_summary"]:
+        print(f"  summary: {payload['failure_summary']}")
+    print(f"  next: {payload['recommended_next_action']}")
+
+
+def _growth_print_source_quarantine(payload: dict[str, Any]) -> None:
+    print("Source Quarantine")
+    print(f"  source: {payload['source_path']}")
+    print(f"  status: {payload['quarantine_status']}")
+    print(f"  failure: {payload['failure_category'] or 'none'}")
+    print(f"  default excluded: {payload['excluded_from_default_queue']}")
+    if payload["quarantine_reason"]:
+        print(f"  reason: {payload['quarantine_reason']}")
+    print(f"  next: {payload['recommended_next_action']}")
+
+
+def _growth_print_source_queue_policy(payload: dict[str, Any]) -> None:
+    print("Source Queue Policy")
+    print(f"  suitability required: {payload['default_queue_requires_suitability']}")
+    print(f"  optional failure policy: {payload['optional_source_failure_policy']}")
+    print(f"  required failure policy: {payload['required_source_failure_policy']}")
+    print("  required:")
+    for item in payload["required_sources"]:
+        print(f"    - {item}")
+    print("  optional:")
+    for item in payload["optional_sources"]:
+        print(f"    - {item}")
+
+
+def growth_source_suitability_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth source-suitability: assess queue/cache/E2E suitability")
+        print("  python3 link.py growth source-suitability --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args or "--write-cache" in args:
+        print("error: source-suitability is read-only", file=sys.stderr)
+        return 2
+    source = _research_target_extract_source_arg(args)
+    if not source:
+        print("error: growth source-suitability requires --source <path>", file=sys.stderr)
+        return 2
+    payload = collect_source_archive_suitability_assessment(source_path=source)
+    if "--json" in args:
+        print(stable_source_archive_suitability_assessment_json(payload), end="")
+    else:
+        _growth_print_source_suitability(payload)
+    return 0
+
+
+def growth_source_quarantine_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth source-quarantine: show queue quarantine record for a source")
+        print("  python3 link.py growth source-quarantine --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args or "--write-cache" in args:
+        print("error: source-quarantine is read-only", file=sys.stderr)
+        return 2
+    source = _research_target_extract_source_arg(args)
+    if not source:
+        print("error: growth source-quarantine requires --source <path>", file=sys.stderr)
+        return 2
+    payload = collect_source_queue_quarantine_record(source_path=source)
+    if "--json" in args:
+        print(stable_source_queue_quarantine_record_json(payload), end="")
+    else:
+        _growth_print_source_quarantine(payload)
+    return 0
+
+
+def growth_source_queue_policy_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth source-queue-policy: default source queue suitability policy")
+        print("  python3 link.py growth source-queue-policy --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    if "--write" in args or "--write-cache" in args:
+        print("error: source-queue-policy is read-only", file=sys.stderr)
+        return 2
+    payload = collect_growth_source_queue_policy()
+    if "--json" in args:
+        print(stable_growth_source_queue_policy_json(payload), end="")
+    else:
+        _growth_print_source_queue_policy(payload)
+    return 0
 
 
 def growth_source_cache_observe_main(argv: list[str] | None = None) -> int:

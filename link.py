@@ -1188,6 +1188,18 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import growth_source_cache_observe_main as _growth_source_cache_observe_main
 
         return _growth_source_cache_observe_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-suitability":
+        from link_modes.growth.link_growth_console import growth_source_suitability_main as _growth_source_suitability_main
+
+        return _growth_source_suitability_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-quarantine":
+        from link_modes.growth.link_growth_console import growth_source_quarantine_main as _growth_source_quarantine_main
+
+        return _growth_source_quarantine_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-queue-policy":
+        from link_modes.growth.link_growth_console import growth_source_queue_policy_main as _growth_source_queue_policy_main
+
+        return _growth_source_queue_policy_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "source-cache-clear":
         from link_modes.growth.link_growth_console import growth_source_cache_clear_main as _growth_source_cache_clear_main
 
