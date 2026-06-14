@@ -1164,6 +1164,18 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import finalize_main as _growth_finalize_main
 
         return _growth_finalize_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-cache-key":
+        from link_modes.growth.link_growth_console import growth_source_cache_key_main as _growth_source_cache_key_main
+
+        return _growth_source_cache_key_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-cache":
+        from link_modes.growth.link_growth_console import growth_source_cache_main as _growth_source_cache_main
+
+        return _growth_source_cache_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-cache-performance":
+        from link_modes.growth.link_growth_console import growth_source_cache_performance_main as _growth_source_cache_performance_main
+
+        return _growth_source_cache_performance_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "e2e-cache":
         from link_modes.growth.link_growth_console import growth_e2e_cache_main as _growth_e2e_cache_main
 

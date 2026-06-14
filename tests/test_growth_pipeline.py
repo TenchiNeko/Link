@@ -18831,19 +18831,32 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     from link_modes.growth.link_growth_console import (
         collect_growth_e2e_performance_hotspots,
         collect_growth_opportunity_decision_score,
+        collect_source_archive_cache_performance_report,
+        collect_source_archive_intake_cache,
+        collect_source_archive_intake_cache_key,
         collect_source_aware_growth_context_cache,
         collect_source_aware_growth_e2e_summary,
         parse_growth_e2e_performance_hotspots_json,
         parse_growth_opportunity_decision_score_json,
+        parse_source_archive_cache_performance_report_json,
+        parse_source_archive_intake_cache_json,
+        parse_source_archive_intake_cache_key_json,
+        parse_source_aware_advisor_command_preview_json,
         parse_source_aware_growth_context_cache_json,
         parse_source_aware_growth_e2e_summary_json,
         parse_source_aware_operator_dashboard_json,
         stable_growth_e2e_performance_hotspots_json,
         stable_growth_opportunity_decision_score_json,
+        stable_source_archive_cache_performance_report_json,
+        stable_source_archive_intake_cache_json,
+        stable_source_archive_intake_cache_key_json,
         stable_source_aware_growth_context_cache_json,
         stable_source_aware_growth_e2e_summary_json,
         validate_growth_e2e_performance_hotspots,
         validate_growth_opportunity_decision_score,
+        validate_source_archive_cache_performance_report,
+        validate_source_archive_intake_cache,
+        validate_source_archive_intake_cache_key,
         validate_source_aware_growth_context_cache,
         validate_source_aware_growth_e2e_summary,
     )
@@ -18851,9 +18864,48 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     headroom_source = "research/headroom-main.zip"
     crawler_source = "research/gpt-crawler-main.zip"
 
+    cache_key = collect_source_archive_intake_cache_key(source_path=headroom_source)
+    _require(cache_key["source_path"] == headroom_source and cache_key["source_exists"] is True,
+             "source archive cache key must preserve an existing source path")
+    _require(cache_key["cache_scope"] == "request" and cache_key["persistent_cache_allowed"] is False,
+             "source archive cache key must remain request-scoped by default")
+    _require(cache_key["model_used"] is False and cache_key["external_network_used"] is False and cache_key["fallback_allowed"] is False,
+             "source archive cache key must avoid model/network/fallback")
+    validate_source_archive_intake_cache_key(cache_key)
+    _require(parse_source_archive_intake_cache_key_json(stable_source_archive_intake_cache_key_json(cache_key)) == cache_key,
+             "source archive cache key JSON must round trip")
+
+    crawler_key = collect_source_archive_intake_cache_key(source_path=crawler_source)
+    _require(crawler_key["source_path"] == crawler_source and crawler_key["source_exists"] is True,
+             "crawler source archive cache key must validate")
+
+    source_cache = collect_source_archive_intake_cache(source_path=headroom_source)
+    _require(source_cache["source_path"] == headroom_source and source_cache["cache_key_id"] == cache_key["source_archive_intake_cache_key_id"],
+             "source archive cache must preserve source and key id")
+    _require("archive_concepts" in source_cache["artifact_ids"] and "target_upgrades" in source_cache["artifact_ids"],
+             "source archive cache must include compact concept and upgrade artifacts")
+    _require(source_cache["computed_count"] >= 1 and source_cache["reused_count"] >= 1 and source_cache["total_runtime_ms"] >= 0,
+             "source archive cache must expose computed/reused/runtime metadata")
+    _require(source_cache["model_used"] is False and source_cache["external_network_used"] is False and source_cache["fallback_allowed"] is False,
+             "source archive cache must remain deterministic/no-network/no-fallback")
+    validate_source_archive_intake_cache(source_cache)
+    _require(parse_source_archive_intake_cache_json(stable_source_archive_intake_cache_json(source_cache)) == source_cache,
+             "source archive cache JSON must round trip")
+
+    source_perf = collect_source_archive_cache_performance_report(source_path=headroom_source)
+    _require(source_perf["cache_id"] == source_cache["source_archive_intake_cache_id"] and source_perf["slowest_entries"],
+             "source cache performance report must link to cache and expose slow entries")
+    validate_source_archive_cache_performance_report(source_perf)
+    _require(parse_source_archive_cache_performance_report_json(stable_source_archive_cache_performance_report_json(source_perf)) == source_perf,
+             "source cache performance report JSON must round trip")
+
     cache = collect_source_aware_growth_context_cache(source_path=headroom_source)
     _require(cache["source_path"] == headroom_source, "growth e2e cache must preserve source path")
     _require(cache["cache_scope"] == "request" and cache["cache_entries"], "growth e2e cache must be request-scoped with entries")
+    _require(cache["source_archive_intake_cache_id"] == source_cache["source_archive_intake_cache_id"],
+             "growth e2e cache must reference the source archive intake cache")
+    _require(cache["cache_key_id"] == source_cache["cache_key_id"],
+             "growth e2e cache must preserve source cache key id")
     _require("archive_concepts" in cache["computed_artifact_ids"], "growth e2e cache must include archive concepts")
     _require("compression_profile" in cache["computed_artifact_ids"], "growth e2e cache must include compression profile")
     _require(cache["model_used"] is False and cache["external_network_used"] is False and cache["fallback_allowed"] is False,
@@ -18867,6 +18919,10 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
              "growth e2e cache JSON must round trip")
 
     summary = collect_source_aware_growth_e2e_summary(source_path=headroom_source)
+    _require(summary["source_archive_intake_cache_id"] == source_cache["source_archive_intake_cache_id"],
+             "e2e summary must reference the source archive intake cache")
+    _require(summary["cache_key_id"] == source_cache["cache_key_id"],
+             "e2e summary must preserve cache key id")
     _require(summary["repo_role_summary"].startswith("compression"), "Headroom e2e summary must identify compression/context repo")
     _require("compression" in summary["best_growth_opportunity"]["title"].lower(),
              "Headroom e2e best opportunity must be compression-specific")
@@ -18881,6 +18937,10 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
              "growth e2e summary JSON must round trip")
 
     score = collect_growth_opportunity_decision_score(source_path=headroom_source, summary=summary)
+    _require(score["source_archive_intake_cache_id"] == source_cache["source_archive_intake_cache_id"],
+             "opportunity score must reference the source archive intake cache")
+    _require(score["cache_key_id"] == source_cache["cache_key_id"],
+             "opportunity score must preserve cache key id")
     _require(score["decision"] == "accept", "Headroom compression-specific opportunity should score as accepted")
     _require(score["source_specificity_score"] >= 7 and score["link_growth_value_score"] >= 7,
              "growth opportunity score must expose strong source specificity and Link value")
@@ -18889,6 +18949,8 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
              "growth opportunity score JSON must round trip")
 
     performance = collect_growth_e2e_performance_hotspots(source_path=headroom_source, cache=cache)
+    _require(performance["source_archive_intake_cache_id"] == source_cache["source_archive_intake_cache_id"],
+             "growth e2e performance must reference the source archive intake cache")
     _require(performance["artifact_runtime_breakdown"] and performance["cache_reuse_recommendations"],
              "growth e2e performance must expose breakdown and cache recommendations")
     validate_growth_e2e_performance_hotspots(performance)
@@ -18902,6 +18964,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
              "gpt-crawler best opportunity must not be compression-specific")
 
     for command, parser, id_key in (
+        ("source-cache-key", parse_source_archive_intake_cache_key_json, "source_archive_intake_cache_key_id"),
+        ("source-cache", parse_source_archive_intake_cache_json, "source_archive_intake_cache_id"),
+        ("source-cache-performance", parse_source_archive_cache_performance_report_json, "source_archive_cache_performance_report_id"),
         ("e2e-cache", parse_source_aware_growth_context_cache_json, "source_aware_growth_context_cache_id"),
         ("e2e-summary", parse_source_aware_growth_e2e_summary_json, "source_aware_growth_e2e_summary_id"),
         ("opportunity-score", parse_growth_opportunity_decision_score_json, "growth_opportunity_decision_score_id"),
@@ -18934,8 +18999,12 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         rc = _cmd_operator(["source-dashboard", "--source", headroom_source, "--json"])
     _require(rc == 0, "source-dashboard with e2e summary fields must return 0")
     dashboard = parse_source_aware_operator_dashboard_json(dashboard_out.getvalue())
+    _require(dashboard.get("source_archive_intake_cache_id") == source_cache["source_archive_intake_cache_id"],
+             "source-dashboard JSON must include source archive intake cache id")
     _require(dashboard.get("growth_e2e_summary_id") and dashboard.get("best_growth_opportunity_title"),
              "source-dashboard JSON must include compact Growth E2E summary fields")
+    _require(dashboard.get("cache_hit_count") >= 1 and dashboard.get("cache_miss_count") >= 1,
+             "source-dashboard JSON must expose cache hit/miss metadata")
 
     dashboard_human_out = io.StringIO()
     with contextlib.redirect_stdout(dashboard_human_out):
@@ -18943,6 +19012,19 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     dashboard_human = dashboard_human_out.getvalue()
     _require(rc == 0 and "Growth E2E:" in dashboard_human and "best opportunity:" in dashboard_human,
              "source-dashboard human output must include Growth E2E section")
+
+    from link import _cmd_advisor
+    command_out = io.StringIO()
+    with contextlib.redirect_stdout(command_out):
+        rc = _cmd_advisor(["target-command", "--source", headroom_source, "--json"])
+    _require(rc == 0, "advisor target-command fast cache path must return 0")
+    command_payload = parse_source_aware_advisor_command_preview_json(command_out.getvalue())
+    _require(command_payload["source_archive_intake_cache_id"] == source_cache["source_archive_intake_cache_id"],
+             "advisor target-command must include source archive intake cache id")
+    _require("source-cache" in command_payload["source_cache_command"] and command_payload["recommended_fast_operator_sequence"],
+             "advisor target-command must include source-cache fast operator sequence")
+    _require(command_payload["fallback_allowed"] is False and not command_payload["command_requires_openrouter_opt_in"],
+             "advisor target-command must avoid OpenRouter fallback by default")
 
     print("source-aware growth e2e summary cache helpers OK")
 

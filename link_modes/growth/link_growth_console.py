@@ -10923,6 +10923,10 @@ SOURCE_AWARE_GROWTH_CONTEXT_CACHE_VERSION = "link-source-aware-growth-context-ca
 SOURCE_AWARE_GROWTH_E2E_SUMMARY_VERSION = "link-source-aware-growth-e2e-summary-v1"
 GROWTH_OPPORTUNITY_DECISION_SCORE_VERSION = "link-growth-opportunity-decision-score-v1"
 GROWTH_E2E_PERFORMANCE_HOTSPOTS_VERSION = "link-growth-e2e-performance-hotspots-v1"
+SOURCE_ARCHIVE_INTAKE_CACHE_KEY_VERSION = "link-source-archive-intake-cache-key-v1"
+SOURCE_ARCHIVE_INTAKE_CACHE_VERSION = "link-source-archive-intake-cache-v1"
+SOURCE_ARCHIVE_CACHE_PERFORMANCE_REPORT_VERSION = "link-source-archive-cache-performance-report-v1"
+_SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
 GROWTH_UPGRADE_GENERICITY_ASSESSMENT_VERSION = "link-growth-upgrade-genericity-assessment-v1"
 RESEARCH_TARGET_ALLOWED_ROOTS = ("research", "research/_extracted")
 RESEARCH_TARGET_DOMAINS = (
@@ -14052,6 +14056,345 @@ def parse_research_target_recommendation_specificity_json(text: str) -> dict[str
 
 
 
+
+def collect_source_archive_intake_cache_key(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    from pathlib import Path as _Path
+
+    source_text = str(source_path or "").strip()
+    if not source_text.startswith("research/"):
+        raise ValueError("source archive cache key requires --source under research/")
+    path = _Path(source_text)
+    exists = path.exists()
+    if not exists:
+        raise ValueError(f"source archive cache key source does not exist: {source_text}")
+    size = path.stat().st_size
+    mtime_ns = path.stat().st_mtime_ns
+    if path.is_dir():
+        source_type = "folder"
+    elif path.suffix.lower() == ".zip":
+        source_type = "zip_archive"
+    else:
+        source_type = "file"
+    source_name = path.name
+    fingerprint = _research_target_hash_text({
+        "source_path": source_text,
+        "source_name": source_name,
+        "source_type": source_type,
+        "source_size_bytes": size,
+        "source_mtime_ns": mtime_ns,
+        "version": SOURCE_ARCHIVE_INTAKE_CACHE_KEY_VERSION,
+    })[:16]
+    cache_key = f"source-archive-intake:{SOURCE_ARCHIVE_INTAKE_CACHE_VERSION}:{fingerprint}"
+    payload = {
+        "source_archive_intake_cache_key_version": SOURCE_ARCHIVE_INTAKE_CACHE_KEY_VERSION,
+        "source_archive_intake_cache_key_id": "source-archive-intake-cache-key-" + fingerprint[:12],
+        "source_path": source_text,
+        "source_name": source_name,
+        "source_type": source_type,
+        "source_exists": True,
+        "source_size_bytes": int(size),
+        "source_mtime_ns": int(mtime_ns),
+        "source_fingerprint": fingerprint,
+        "cache_namespace": "source_archive_intake",
+        "cache_version": SOURCE_ARCHIVE_INTAKE_CACHE_VERSION,
+        "cache_key": cache_key,
+        "cache_scope": "request",
+        "persistent_cache_allowed": False,
+        "invalidation_reasons": _normalize_implementation_branch_refs(["source path", "source size", "source mtime", "collector version"]),
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_archive_intake_cache_key(payload)
+    return payload
+
+def validate_source_archive_intake_cache_key(payload: dict[str, Any]) -> None:
+    required = (
+        "source_archive_intake_cache_key_version", "source_archive_intake_cache_key_id", "source_path",
+        "source_name", "source_type", "source_exists", "source_size_bytes", "source_mtime_ns",
+        "source_fingerprint", "cache_namespace", "cache_version", "cache_key", "cache_scope",
+        "persistent_cache_allowed", "invalidation_reasons", "fallback_allowed", "model_used",
+        "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source archive cache key missing field: {key}")
+    if payload["source_archive_intake_cache_key_version"] != SOURCE_ARCHIVE_INTAKE_CACHE_KEY_VERSION:
+        raise ValueError("invalid source archive cache key version")
+    if not payload["source_archive_intake_cache_key_id"].startswith("source-archive-intake-cache-key-"):
+        raise ValueError("invalid source archive cache key id")
+    if not payload["source_path"].startswith("research/") or payload["source_exists"] is not True:
+        raise ValueError("source archive cache key requires an existing research source")
+    if payload["cache_scope"] != "request" or payload["persistent_cache_allowed"] is not False:
+        raise ValueError("source archive cache key must be request-scoped only")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("source archive cache key must be deterministic with no fallback/model/network")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("source archive cache key must remain read-only")
+
+
+def stable_source_archive_intake_cache_key_json(payload: dict[str, Any]) -> str:
+    validate_source_archive_intake_cache_key(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_source_archive_intake_cache_key_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_source_archive_intake_cache_key(payload)
+    return payload
+
+
+def _source_archive_cache_entry(name: str, cache_key: str, payload: dict[str, Any] | None, *, status: str = "available", computed: bool = True, reused: bool = False, runtime_ms: int = 0, summary: str = "", blocked_reasons: list[str] | None = None, error_summary: str = "") -> dict[str, Any]:
+    return {
+        "entry_name": name,
+        "cache_key": f"{cache_key}:{name}",
+        "artifact_id": _source_aware_growth_artifact_id(name, payload),
+        "status": status,
+        "computed": bool(computed),
+        "reused": bool(reused),
+        "runtime_ms": max(0, int(runtime_ms)),
+        "summary": _source_aware_text(summary or "; ".join(_source_aware_growth_summary_fields(name, payload)), fallback="not available", max_chars=240),
+        "error_summary": _source_aware_text(error_summary, fallback="", max_chars=220),
+        "blocked_reasons": _normalize_implementation_branch_refs(blocked_reasons or []),
+    }
+
+
+def _source_archive_intake_cache_artifacts(source_path: str, metadata: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    import time as _time
+
+    key_payload = collect_source_archive_intake_cache_key(source_path=source_path)
+    request_key = key_payload["cache_key"]
+    if request_key in _SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE:
+        return _SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE[request_key]
+
+    start = _time.perf_counter()
+    entries: list[dict[str, Any]] = []
+    artifacts: dict[str, Any] = {"cache_key": key_payload}
+
+    def elapsed(t0: float) -> int:
+        return int((_time.perf_counter() - t0) * 1000)
+
+    def add(name: str, payload: dict[str, Any] | None, *, t0: float, reused: bool = False, summary: str = "") -> None:
+        artifacts[name] = payload
+        entries.append(_source_archive_cache_entry(name, request_key, payload, reused=reused, runtime_ms=elapsed(t0), summary=summary))
+
+    def skip(name: str, reason: str) -> None:
+        entries.append(_source_archive_cache_entry(name, request_key, None, status="skipped", computed=False, reused=False, runtime_ms=0, blocked_reasons=[reason], summary=reason))
+
+    t0 = _time.perf_counter()
+    intake = collect_research_target_intake(source_path)
+    add("target_intake", intake, t0=t0, summary=f"{intake['source_type']} {intake['source_name']} with {len(intake.get('selected_files', []))} selected file signal(s)")
+
+    t0 = _time.perf_counter()
+    evidence = collect_research_target_evidence_bundle(intake)
+    add("target_evidence", evidence, t0=t0, reused=True, summary=f"{evidence['evidence_strength']} evidence with {len(evidence.get('evidence_refs', []))} refs")
+
+    t0 = _time.perf_counter()
+    archive_concepts = collect_source_aware_archive_concepts(intake, evidence)
+    add("archive_concepts", archive_concepts, t0=t0, reused=True, summary=archive_concepts["repo_role_summary"])
+
+    t0 = _time.perf_counter()
+    compression_profile = collect_compression_repo_concept_profile(archive_concepts)
+    add("compression_profile", compression_profile, t0=t0, reused=True, summary=f"compression={compression_profile['is_compression_repo']} score={compression_profile['compression_score']}")
+
+    t0 = _time.perf_counter()
+    target_upgrades = collect_research_target_upgrade_candidates(intake, evidence)
+    add("target_upgrades", target_upgrades, t0=t0, reused=True, summary=target_upgrades["upgrade_candidates"][0]["title"])
+
+    t0 = _time.perf_counter()
+    task = collect_research_target_operator_task_draft(target_upgrades, evidence)
+    add("operator_task_draft", task, t0=t0, reused=True, summary=task["objective"])
+
+    t0 = _time.perf_counter()
+    binding = collect_research_source_binding_context(intake, evidence, target_upgrades, task)
+    artifacts["source_binding"] = binding
+
+    t0 = _time.perf_counter()
+    provenance = collect_research_target_provenance_table(intake, evidence, binding)
+    add("target_provenance", provenance, t0=t0, reused=True, summary=f"{len(provenance['provenance_rows'])} provenance row(s)")
+
+    t0 = _time.perf_counter()
+    patterns = collect_research_target_pattern_summary(intake, evidence, provenance)
+    add("target_patterns", patterns, t0=t0, reused=True, summary=f"{len(patterns['detected_patterns'])} pattern(s)")
+
+    t0 = _time.perf_counter()
+    genericity = collect_growth_upgrade_genericity_assessment(archive_concepts, target_upgrades)
+    add("genericity_assessment", genericity, t0=t0, reused=True, summary=f"generic={genericity['generic_upgrade_count']} concept_supported={genericity['concept_supported_upgrade_count']}")
+
+    t0 = _time.perf_counter()
+    scorer = collect_compression_aware_upgrade_scorer(archive_concepts, compression_profile, target_upgrades)
+    add("compression_upgrade_score", scorer, t0=t0, reused=True, summary=scorer["best_upgrade"].get("upgrade_title", "not available"))
+
+    skip("target_upgrade_rationale", "skipped in fast cache; full rationale remains available as research target-upgrade-rationale")
+    skip("target_specificity", "compact cache uses concept/opportunity scoring; full specificity remains available separately")
+    skip("target_operator_report", "skipped in fast cache; compact E2E summary replaces full operator report rebuild")
+    skip("target_implementation_preview", "skipped in fast cache; implementation preview remains available separately")
+    skip("target_sandbox_flow", "skipped in fast cache; sandbox flow remains preview-only and available separately")
+    skip("operator_source_dashboard", "fast dashboard is rendered from compact cache fields")
+    skip("advisor_target_command", "fast advisor target-command is rendered from compact cache commands")
+    skip("headroom_descriptor", "Headroom descriptor is an advisor surface and remains available separately")
+    skip("headroom_policy", "Headroom policy is an advisor surface and remains available separately")
+    skip("headroom_preview", "Headroom preview is an advisor surface and remains available separately")
+
+    artifact_ids = {entry["entry_name"]: entry["artifact_id"] for entry in entries if entry["artifact_id"]}
+    computed_count = sum(1 for entry in entries if entry["computed"])
+    reused_count = sum(1 for entry in entries if entry["reused"])
+    skipped_count = sum(1 for entry in entries if entry["status"] == "skipped")
+    error_count = sum(1 for entry in entries if entry["status"] == "error")
+    slowest = sorted(entries, key=lambda item: item["runtime_ms"], reverse=True)[:5]
+    payload = {
+        "source_archive_intake_cache_version": SOURCE_ARCHIVE_INTAKE_CACHE_VERSION,
+        "source_archive_intake_cache_id": "source-archive-intake-cache-" + _research_target_hash_text({"cache_key_id": key_payload["source_archive_intake_cache_key_id"], "artifact_ids": artifact_ids, "version": SOURCE_ARCHIVE_INTAKE_CACHE_VERSION})[:12],
+        "cache_key_id": key_payload["source_archive_intake_cache_key_id"],
+        "source_path": intake["source_path"],
+        "cache_scope": "request",
+        "cache_version": SOURCE_ARCHIVE_INTAKE_CACHE_VERSION,
+        "entries": entries,
+        "artifact_ids": artifact_ids,
+        "computed_count": computed_count,
+        "reused_count": reused_count,
+        "skipped_count": skipped_count,
+        "error_count": error_count,
+        "total_runtime_ms": elapsed(start),
+        "slowest_entries": [{"entry_name": item["entry_name"], "runtime_ms": item["runtime_ms"], "status": item["status"]} for item in slowest],
+        "context_rebuild_warnings": _normalize_implementation_branch_refs(["request-scoped cache avoids rebuilding derived artifacts inside one command", "persistent cache intentionally disabled until invalidation rules are explicit"]),
+        "recommended_next_action": "Use this source cache as the deterministic input for E2E summary, dashboard, and target-command surfaces.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    artifacts["source_cache"] = payload
+    validate_source_archive_intake_cache(payload)
+    _SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE[request_key] = (payload, artifacts)
+    return payload, artifacts
+
+
+def get_or_collect_source_archive_intake_cache_for_request(source_path: str, metadata: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    return _source_archive_intake_cache_artifacts(source_path, metadata)
+
+
+def collect_source_archive_intake_cache(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload, _ = get_or_collect_source_archive_intake_cache_for_request(source_path, metadata)
+    return payload
+
+
+def validate_source_archive_intake_cache(payload: dict[str, Any]) -> None:
+    required = (
+        "source_archive_intake_cache_version", "source_archive_intake_cache_id", "cache_key_id", "source_path",
+        "cache_scope", "cache_version", "entries", "artifact_ids", "computed_count", "reused_count",
+        "skipped_count", "error_count", "total_runtime_ms", "slowest_entries", "context_rebuild_warnings",
+        "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata",
+        "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source archive cache missing field: {key}")
+    if payload["source_archive_intake_cache_version"] != SOURCE_ARCHIVE_INTAKE_CACHE_VERSION:
+        raise ValueError("invalid source archive cache version")
+    if not payload["source_archive_intake_cache_id"].startswith("source-archive-intake-cache-"):
+        raise ValueError("invalid source archive cache id")
+    if payload["cache_scope"] != "request" or payload["cache_version"] != SOURCE_ARCHIVE_INTAKE_CACHE_VERSION:
+        raise ValueError("source archive cache must be request-scoped")
+    if not payload["source_path"].startswith("research/"):
+        raise ValueError("source archive cache must be source-bound")
+    if not isinstance(payload["entries"], list) or not payload["entries"]:
+        raise ValueError("source archive cache requires entries")
+    for entry in payload["entries"]:
+        for key in ("entry_name", "cache_key", "artifact_id", "status", "computed", "reused", "runtime_ms", "summary", "error_summary", "blocked_reasons"):
+            if key not in entry:
+                raise ValueError(f"source archive cache entry missing {key}")
+        if entry["status"] not in {"available", "skipped", "error"}:
+            raise ValueError("invalid source archive cache entry status")
+        if not isinstance(entry["runtime_ms"], int) or entry["runtime_ms"] < 0:
+            raise ValueError("source archive cache runtime must be non-negative")
+    for required_name in ("target_intake", "target_evidence", "target_upgrades", "archive_concepts"):
+        if required_name not in payload["artifact_ids"]:
+            raise ValueError(f"source archive cache missing artifact id for {required_name}")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("source archive cache must be deterministic with no fallback/model/network")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("source archive cache must remain read-only")
+
+
+def stable_source_archive_intake_cache_json(payload: dict[str, Any]) -> str:
+    validate_source_archive_intake_cache(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_source_archive_intake_cache_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_source_archive_intake_cache(payload)
+    return payload
+
+
+def collect_source_archive_cache_performance_report(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    cache, _ = get_or_collect_source_archive_intake_cache_for_request(source_path, metadata)
+    slowest = cache["slowest_entries"]
+    payload = {
+        "source_archive_cache_performance_report_version": SOURCE_ARCHIVE_CACHE_PERFORMANCE_REPORT_VERSION,
+        "source_archive_cache_performance_report_id": "source-archive-cache-performance-report-" + _research_target_hash_text({"cache_id": cache["source_archive_intake_cache_id"], "version": SOURCE_ARCHIVE_CACHE_PERFORMANCE_REPORT_VERSION})[:12],
+        "source_path": cache["source_path"],
+        "cache_id": cache["source_archive_intake_cache_id"],
+        "total_runtime_ms": cache["total_runtime_ms"],
+        "repeated_rebuilds_avoided": _normalize_implementation_branch_refs(["e2e summary reuses source archive cache artifacts", "opportunity score reuses e2e summary", "fast dashboard and target-command use compact cache fields"]),
+        "remaining_rebuild_hotspots": _normalize_implementation_branch_refs([f"{item['entry_name']} {item['runtime_ms']}ms" for item in slowest[:3]]),
+        "slowest_entries": slowest,
+        "recommended_next_action": "Add persistent source inventory caching only after safe invalidation metadata is reviewed.",
+        "fallback_allowed": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_archive_cache_performance_report(payload)
+    return payload
+
+
+def validate_source_archive_cache_performance_report(payload: dict[str, Any]) -> None:
+    required = ("source_archive_cache_performance_report_version", "source_archive_cache_performance_report_id", "source_path", "cache_id", "total_runtime_ms", "repeated_rebuilds_avoided", "remaining_rebuild_hotspots", "slowest_entries", "recommended_next_action", "fallback_allowed", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source archive cache performance report missing field: {key}")
+    if payload["source_archive_cache_performance_report_version"] != SOURCE_ARCHIVE_CACHE_PERFORMANCE_REPORT_VERSION:
+        raise ValueError("invalid source archive cache performance report version")
+    if not payload["source_archive_cache_performance_report_id"].startswith("source-archive-cache-performance-report-"):
+        raise ValueError("invalid source archive cache performance report id")
+    if not payload["remaining_rebuild_hotspots"] or not payload["slowest_entries"]:
+        raise ValueError("source archive cache performance report must include hotspots")
+    if payload["fallback_allowed"] is not False:
+        raise ValueError("source archive cache performance report must disable fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("source archive cache performance report must remain read-only")
+
+
+def stable_source_archive_cache_performance_report_json(payload: dict[str, Any]) -> str:
+    validate_source_archive_cache_performance_report(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_source_archive_cache_performance_report_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_source_archive_cache_performance_report(payload)
+    return payload
+
+
 def _source_aware_growth_cache_entry(
     artifact_name: str,
     artifact_id: str,
@@ -14127,95 +14470,35 @@ def _source_aware_growth_summary_fields(name: str, payload: dict[str, Any] | Non
 
 
 def _collect_source_aware_growth_context_cache_artifacts(source_path: str, metadata: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
-    import time as _time
-
-    start = _time.perf_counter()
+    source_cache, artifacts = get_or_collect_source_archive_intake_cache_for_request(source_path, metadata)
     entries: list[dict[str, Any]] = []
-    artifacts: dict[str, Any] = {}
     skipped: list[dict[str, Any]] = []
-
-    def elapsed_ms(t0: float) -> int:
-        return int((_time.perf_counter() - t0) * 1000)
-
-    def add(name: str, payload: dict[str, Any] | None, *, t0: float, cache_hit: bool = False) -> None:
-        artifacts[name] = payload
+    for source_entry in source_cache["entries"]:
+        name = source_entry["entry_name"]
+        artifact_id = source_entry["artifact_id"]
+        status = source_entry["status"]
+        if status == "skipped":
+            skipped.append({"artifact_name": name, "reason": "; ".join(source_entry.get("blocked_reasons", [])) or source_entry.get("summary", "skipped")})
         entries.append(_source_aware_growth_cache_entry(
             name,
-            _source_aware_growth_artifact_id(name, payload),
-            runtime_ms=elapsed_ms(t0),
-            cache_hit=cache_hit,
-            summary_fields=_source_aware_growth_summary_fields(name, payload),
+            artifact_id,
+            status=status,
+            computed=source_entry["computed"],
+            cache_hit=source_entry["reused"],
+            runtime_ms=source_entry["runtime_ms"],
+            summary_fields=[source_entry.get("summary", "")],
+            blocked_reasons=source_entry.get("blocked_reasons", []),
+            error_summary=source_entry.get("error_summary", ""),
         ))
-
-    def skip(name: str, reason: str) -> None:
-        skipped.append({"artifact_name": name, "reason": reason})
-        entries.append(_source_aware_growth_cache_entry(
-            name,
-            "",
-            status="skipped",
-            computed=False,
-            cache_hit=False,
-            runtime_ms=0,
-            blocked_reasons=[reason],
-        ))
-
-    t0 = _time.perf_counter()
-    intake = collect_research_target_intake(source_path)
-    add("target_intake", intake, t0=t0, cache_hit=False)
-
-    t0 = _time.perf_counter()
-    evidence = collect_research_target_evidence_bundle(intake)
-    add("target_evidence", evidence, t0=t0, cache_hit=True)
-
-    t0 = _time.perf_counter()
-    candidates = collect_research_target_upgrade_candidates(intake, evidence)
-    add("target_upgrades", candidates, t0=t0, cache_hit=True)
-
-    t0 = _time.perf_counter()
-    task = collect_research_target_operator_task_draft(candidates, evidence)
-    add("operator_task_draft", task, t0=t0, cache_hit=True)
-
-    t0 = _time.perf_counter()
-    binding = collect_research_source_binding_context(intake, evidence, candidates, task)
-
-    t0 = _time.perf_counter()
-    provenance = collect_research_target_provenance_table(intake, evidence, binding)
-    add("target_provenance", provenance, t0=t0, cache_hit=True)
-
-    t0 = _time.perf_counter()
-    patterns = collect_research_target_pattern_summary(intake, evidence, provenance)
-    add("target_patterns", patterns, t0=t0, cache_hit=True)
-
-    t0 = _time.perf_counter()
-    archive_concepts = collect_source_aware_archive_concepts(intake, evidence)
-    add("archive_concepts", archive_concepts, t0=t0, cache_hit=True)
-
-    t0 = _time.perf_counter()
-    compression_profile = collect_compression_repo_concept_profile(archive_concepts)
-    add("compression_profile", compression_profile, t0=t0, cache_hit=True)
-
-    t0 = _time.perf_counter()
-    genericity = collect_growth_upgrade_genericity_assessment(archive_concepts, candidates)
-    add("genericity_assessment", genericity, t0=t0, cache_hit=True)
-
-    t0 = _time.perf_counter()
-    compression_scorer = collect_compression_aware_upgrade_scorer(archive_concepts, compression_profile, candidates)
-    add("compression_upgrade_score", compression_scorer, t0=t0, cache_hit=True)
-
-    skip("target_upgrade_rationale", "compact E2E cache skips rationale card to avoid rebuilding decision chains; summary uses concepts and scored upgrades")
-    skip("target_specificity", "compact E2E cache uses concept support and decision score instead of full specificity rebuild")
-    skip("target_operator_report", "compact E2E cache summarizes operator decision without the heavier report chain")
-    skip("target_implementation_preview", "implementation preview remains available as a separate command; E2E summary includes expected files/tests")
-    skip("target_sandbox_flow", "sandbox flow is intentionally skipped in the compact request cache to avoid rebuilding sandbox chains")
-    skip("operator_source_dashboard", "dashboard is a caller surface; cache avoids recursive dashboard rebuilds")
-    skip("advisor_target_command", "advisor command preview is exposed as command text in the summary without model calls")
-
     computed_ids = {entry["artifact_name"]: entry["artifact_id"] for entry in entries if entry["artifact_id"]}
     cache_hit_count = sum(1 for entry in entries if entry["cache_hit"])
     cache_miss_count = sum(1 for entry in entries if entry["computed"] and not entry["cache_hit"])
+    intake = artifacts["target_intake"]
     payload = {
         "source_aware_growth_context_cache_version": SOURCE_AWARE_GROWTH_CONTEXT_CACHE_VERSION,
-        "source_aware_growth_context_cache_id": "source-aware-growth-context-cache-" + _research_target_hash_text({"source_path": intake["source_path"], "artifact_ids": computed_ids, "version": SOURCE_AWARE_GROWTH_CONTEXT_CACHE_VERSION})[:12],
+        "source_aware_growth_context_cache_id": "source-aware-growth-context-cache-" + _research_target_hash_text({"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "artifact_ids": computed_ids, "version": SOURCE_AWARE_GROWTH_CONTEXT_CACHE_VERSION})[:12],
+        "source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"],
+        "cache_key_id": source_cache["cache_key_id"],
         "source_path": intake["source_path"],
         "source_name": intake["source_name"],
         "source_type": intake["source_type"],
@@ -14227,7 +14510,7 @@ def _collect_source_aware_growth_context_cache_artifacts(source_path: str, metad
         "cache_miss_count": cache_miss_count,
         "computed_artifact_ids": computed_ids,
         "skipped_artifacts": skipped,
-        "total_runtime_ms": elapsed_ms(start),
+        "total_runtime_ms": source_cache["total_runtime_ms"],
         "fallback_allowed": False,
         "model_used": False,
         "external_network_used": False,
@@ -14238,21 +14521,8 @@ def _collect_source_aware_growth_context_cache_artifacts(source_path: str, metad
         "metadata": dict(metadata or {}),
         "writes": [],
     }
-    artifacts.update({
-        "target_provenance": provenance,
-        "target_patterns": patterns,
-        "archive_concepts": archive_concepts,
-        "compression_profile": compression_profile,
-        "genericity_assessment": genericity,
-        "compression_upgrade_score": compression_scorer,
-        "operator_task_draft": task,
-        "target_upgrades": candidates,
-        "target_evidence": evidence,
-        "target_intake": intake,
-    })
     validate_source_aware_growth_context_cache(payload)
     return payload, artifacts
-
 
 def collect_source_aware_growth_context_cache(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     payload, _ = _collect_source_aware_growth_context_cache_artifacts(source_path, metadata)
@@ -14262,7 +14532,7 @@ def collect_source_aware_growth_context_cache(*, source_path: str, metadata: dic
 def validate_source_aware_growth_context_cache(payload: dict[str, Any]) -> None:
     required = (
         "source_aware_growth_context_cache_version", "source_aware_growth_context_cache_id", "source_path",
-        "source_name", "source_type", "cache_scope", "cache_version", "cache_keys", "cache_entries",
+        "source_name", "source_type", "source_archive_intake_cache_id", "cache_key_id", "cache_scope", "cache_version", "cache_keys", "cache_entries",
         "cache_hit_count", "cache_miss_count", "computed_artifact_ids", "skipped_artifacts", "total_runtime_ms",
         "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed",
         "automation_allowed", "writes",
@@ -14390,6 +14660,8 @@ def collect_source_aware_growth_e2e_summary(*, source_path: str, metadata: dict[
         "source_path": cache["source_path"],
         "source_name": cache["source_name"],
         "cache_id": cache["source_aware_growth_context_cache_id"],
+        "source_archive_intake_cache_id": cache["source_archive_intake_cache_id"],
+        "cache_key_id": cache["cache_key_id"],
         "repo_role_summary": concepts["repo_role_summary"],
         "top_concept_families": concepts["concept_families"][:6],
         "top_concepts": [item["concept_name"] for item in concepts["detected_concepts"][:6]],
@@ -14455,7 +14727,7 @@ def collect_source_aware_growth_e2e_summary(*, source_path: str, metadata: dict[
 def validate_source_aware_growth_e2e_summary(payload: dict[str, Any]) -> None:
     required = (
         "source_aware_growth_e2e_summary_version", "source_aware_growth_e2e_summary_id", "source_path",
-        "source_name", "cache_id", "repo_role_summary", "top_concept_families", "top_concepts",
+        "source_name", "cache_id", "source_archive_intake_cache_id", "cache_key_id", "repo_role_summary", "top_concept_families", "top_concepts",
         "best_growth_opportunity", "runner_up_opportunities", "rejected_or_generic_opportunities",
         "evidence_support_summary", "provenance_summary", "task_draft_summary", "sandbox_boundary_summary",
         "advisor_status_summary", "model_status_summary", "performance_summary", "operator_decision",
@@ -14528,6 +14800,8 @@ def collect_growth_opportunity_decision_score(*, source_path: str, summary: dict
         "growth_opportunity_decision_score_id": "growth-opportunity-decision-score-" + _research_target_hash_text({"summary_id": e2e["source_aware_growth_e2e_summary_id"], "decision": decision, "version": GROWTH_OPPORTUNITY_DECISION_SCORE_VERSION})[:12],
         "source_path": e2e["source_path"],
         "e2e_summary_id": e2e["source_aware_growth_e2e_summary_id"],
+        "source_archive_intake_cache_id": e2e["source_archive_intake_cache_id"],
+        "cache_key_id": e2e["cache_key_id"],
         "best_opportunity_id": best["opportunity_id"],
         "source_specificity_score": source_specificity,
         "evidence_support_score": evidence_support,
@@ -14554,7 +14828,7 @@ def collect_growth_opportunity_decision_score(*, source_path: str, summary: dict
 def validate_growth_opportunity_decision_score(payload: dict[str, Any]) -> None:
     required = (
         "growth_opportunity_decision_score_version", "growth_opportunity_decision_score_id", "source_path",
-        "e2e_summary_id", "best_opportunity_id", "source_specificity_score", "evidence_support_score",
+        "e2e_summary_id", "source_archive_intake_cache_id", "cache_key_id", "best_opportunity_id", "source_specificity_score", "evidence_support_score",
         "implementation_feasibility_score", "link_growth_value_score", "safety_risk_score",
         "operator_confidence_score", "decision", "reason", "recommended_next_action", "fallback_allowed",
         "model_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
@@ -14606,6 +14880,8 @@ def collect_growth_e2e_performance_hotspots(*, source_path: str, cache: dict[str
         "growth_e2e_performance_hotspots_id": "growth-e2e-performance-hotspots-" + _research_target_hash_text({"cache_id": cache_payload["source_aware_growth_context_cache_id"], "version": GROWTH_E2E_PERFORMANCE_HOTSPOTS_VERSION})[:12],
         "source_path": cache_payload["source_path"],
         "cache_id": cache_payload["source_aware_growth_context_cache_id"],
+        "source_archive_intake_cache_id": cache_payload["source_archive_intake_cache_id"],
+        "cache_key_id": cache_payload["cache_key_id"],
         "total_runtime_ms": cache_payload["total_runtime_ms"],
         "artifact_runtime_breakdown": breakdown,
         "slowest_artifacts": slowest,
@@ -14631,7 +14907,7 @@ def collect_growth_e2e_performance_hotspots(*, source_path: str, cache: dict[str
 def validate_growth_e2e_performance_hotspots(payload: dict[str, Any]) -> None:
     required = (
         "growth_e2e_performance_hotspots_version", "growth_e2e_performance_hotspots_id", "source_path",
-        "cache_id", "total_runtime_ms", "artifact_runtime_breakdown", "slowest_artifacts",
+        "cache_id", "source_archive_intake_cache_id", "cache_key_id", "total_runtime_ms", "artifact_runtime_breakdown", "slowest_artifacts",
         "repeated_context_rebuild_warnings", "cache_reuse_recommendations", "recommended_next_action",
         "fallback_allowed", "model_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
     )
@@ -20257,6 +20533,132 @@ def parse_source_aware_advisor_provider_card_json(text: str) -> dict[str, Any]:
     return payload
 
 
+
+def _advisor_command_preview_payload_from_cache(source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    source_cache, artifacts = get_or_collect_source_archive_intake_cache_for_request(source_path)
+    intake = artifacts["target_intake"]
+    candidates = artifacts["target_upgrades"]
+    selected = sorted(candidates["upgrade_candidates"], key=_research_target_candidate_sort_key)[0]
+    selected_id = selected["upgrade_candidate_id"]
+    deterministic = f"python3 link.py research advisor-review --source {source_path} --json"
+    local = f"python3 link.py research advisor-review --source {source_path} --provider llamacpp --local-model --json"
+    openrouter = f"python3 link.py research advisor-review --source {source_path} --provider openrouter --openrouter --json"
+    payload = {
+        "source_aware_advisor_command_preview_version": SOURCE_AWARE_ADVISOR_COMMAND_PREVIEW_VERSION,
+        "source_aware_advisor_command_preview_id": _source_aware_hash_id("source-aware-advisor-command-preview", {"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "source_path": source_path, "selected_upgrade_candidate_id": selected_id, "version": SOURCE_AWARE_ADVISOR_COMMAND_PREVIEW_VERSION}),
+        "source_bound": True,
+        "source_path": source_path,
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "selected_upgrade_candidate_id": selected_id,
+        "advisor_provider_card_id": _source_aware_hash_id("source-aware-advisor-provider-card", {"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "version": SOURCE_AWARE_ADVISOR_PROVIDER_CARD_VERSION}),
+        "source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"],
+        "cache_key_id": source_cache["cache_key_id"],
+        "deterministic_preview_command": deterministic,
+        "local_advisor_command": local,
+        "ref_alias_map_command": f"python3 link.py advisor ref-alias-map --source {source_path} --json",
+        "alias_aware_micro_diagnostic_command": f"python3 link.py advisor micro-diagnostic --source {source_path} --local-model --json",
+        "recommended_alias_tuning_note": "Stages 2/3 use S#/E# aliases; Link expands aliases back to full refs deterministically.",
+        "archive_concepts_command": f"python3 link.py research archive-concepts --source {source_path} --json",
+        "compression_profile_command": f"python3 link.py research compression-profile --source {source_path} --json",
+        "compression_upgrade_score_command": f"python3 link.py research compression-upgrade-score --source {source_path} --json",
+        "genericity_assessment_command": f"python3 link.py research upgrade-genericity --source {source_path} --json",
+        "source_cache_key_command": f"python3 link.py growth source-cache-key --source {source_path} --json",
+        "source_cache_command": f"python3 link.py growth source-cache --source {source_path} --json",
+        "growth_e2e_cache_command": f"python3 link.py growth e2e-cache --source {source_path} --json",
+        "growth_e2e_summary_command": f"python3 link.py growth e2e-summary --source {source_path}",
+        "growth_opportunity_score_command": f"python3 link.py growth opportunity-score --source {source_path} --json",
+        "growth_e2e_performance_command": f"python3 link.py growth e2e-performance --source {source_path} --json",
+        "recommended_fast_operator_sequence": [
+            f"python3 link.py growth source-cache --source {source_path} --json",
+            f"python3 link.py growth e2e-summary --source {source_path}",
+            f"python3 link.py growth opportunity-score --source {source_path} --json",
+            f"python3 link.py operator source-dashboard --source {source_path}",
+        ],
+        "recommended_operator_decision_sequence": [
+            f"python3 link.py growth source-cache --source {source_path} --json",
+            f"python3 link.py growth e2e-summary --source {source_path}",
+            f"python3 link.py growth opportunity-score --source {source_path} --json",
+            f"python3 link.py growth e2e-performance --source {source_path} --json",
+            f"python3 link.py operator source-dashboard --source {source_path}",
+        ],
+        "recommended_concept_sequence": [
+            f"python3 link.py research archive-concepts --source {source_path} --json",
+            f"python3 link.py research compression-profile --source {source_path} --json",
+            f"python3 link.py research compression-upgrade-score --source {source_path} --json",
+            f"python3 link.py research upgrade-genericity --source {source_path} --json",
+        ],
+        "recommended_operator_sequence": [
+            f"python3 link.py research archive-concepts --source {source_path} --json",
+            f"python3 link.py research compression-profile --source {source_path} --json",
+            f"python3 link.py research compression-upgrade-score --source {source_path} --json",
+            f"python3 link.py growth e2e-summary --source {source_path}",
+            f"python3 link.py operator source-dashboard --source {source_path}",
+            f"python3 link.py operator task-draft --source {source_path} --json",
+        ],
+        "compression_policy_command": "python3 link.py advisor compression-policy --json",
+        "compression_preview_command": f"python3 link.py advisor compression-preview --source {source_path} --json",
+        "headroom_descriptor_command": "python3 link.py advisor headroom-descriptor --json",
+        "headroom_policy_command": "python3 link.py advisor headroom-policy --json",
+        "headroom_preview_command": f"python3 link.py advisor headroom-preview --source {source_path} --json",
+        "headroom_adapter_command": "python3 link.py advisor headroom-adapter --json",
+        "headroom_sample_command": "python3 link.py advisor headroom-sample --json",
+        "headroom_sample_run_command": "python3 link.py advisor headroom-sample --run-local --json",
+        "headroom_gate_command": "python3 link.py advisor headroom-gate --json",
+        "recommended_headroom_sequence": [
+            "python3 link.py advisor headroom-descriptor --json",
+            "python3 link.py advisor headroom-adapter --json",
+            "python3 link.py advisor headroom-sample --json",
+            "python3 link.py advisor headroom-sample --run-local --json",
+            "python3 link.py advisor headroom-gate --json",
+            f"python3 link.py advisor headroom-preview --source {source_path} --run-local-sample --json",
+        ],
+        "recommended_compression_mode": "headroom_fixture_adapter_disabled",
+        "compression_enabled_by_default": False,
+        "compression_next_action": "Inspect source-cache and e2e-summary before enabling any local compressor adapter; refs and aliases remain Link-owned.",
+        "recommended_micro_diagnostic_command": f"python3 link.py advisor micro-diagnostic --source {source_path} --local-model --json",
+        "recommended_micro_stage_commands": [
+            f"python3 link.py advisor micro-check --source {source_path} --stage 0 --local-model --json",
+            f"python3 link.py advisor micro-check --source {source_path} --stage 1 --local-model --json",
+            f"python3 link.py advisor micro-check --source {source_path} --stage 2 --local-model --json",
+            f"python3 link.py advisor micro-check --source {source_path} --stage 3 --local-model --json",
+        ],
+        "recommended_json_check_command": f"python3 link.py advisor json-check --source {source_path} --local-model --json",
+        "recommended_two_stage_local_command": f"python3 link.py research advisor-two-stage --source {source_path} --local-model --json",
+        "recommended_two_stage_command": f"python3 link.py research advisor-two-stage --source {source_path} --local-model --json",
+        "recommended_diagnostic_command": f"python3 link.py advisor local-json-diagnostic --source {source_path} --local-model --json",
+        "richer_advisor_command": local,
+        "recommended_rich_review_command": local,
+        "openrouter_advisor_command": openrouter,
+        "recommended_sequence": [
+            f"python3 link.py growth source-cache --source {source_path} --json",
+            f"python3 link.py growth e2e-summary --source {source_path}",
+            f"python3 link.py growth opportunity-score --source {source_path} --json",
+            f"python3 link.py growth e2e-performance --source {source_path} --json",
+            f"python3 link.py research archive-concepts --source {source_path} --json",
+            f"python3 link.py advisor ref-alias-map --source {source_path} --json",
+            f"python3 link.py advisor micro-diagnostic --source {source_path} --local-model --json",
+            f"python3 link.py advisor json-check --source {source_path} --local-model --json",
+            f"python3 link.py research advisor-two-stage --source {source_path} --local-model --json",
+            local,
+        ],
+        "recommended_command": deterministic,
+        "command_requires_local_model": False,
+        "command_requires_openrouter_opt_in": False,
+        "command_requires_paid_provider": False,
+        "fallback_allowed": False,
+        "blocked_commands": ["automatic OpenRouter fallback", "advisor command execution without explicit provider flag", "paid provider call without --openrouter and LINK_ALLOW_OPENROUTER_ADVISOR=1"],
+        "recommended_next_action": "Run growth e2e-summary first; only run local/OpenRouter advisor commands after explicit setup and approval.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_aware_advisor_command_preview(payload)
+    return payload
+
+
 def collect_source_aware_advisor_command_preview(
     *,
     source_path: str,
@@ -20264,8 +20666,11 @@ def collect_source_aware_advisor_command_preview(
     dashboard_context: dict[str, Any] | None = None,
     advisor_card: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if dashboard_context is None and advisor_card is None:
+        return _advisor_command_preview_payload_from_cache(source_path, metadata)
     card = advisor_card or collect_source_aware_advisor_provider_card(source_path=source_path, dashboard_context=dashboard_context)
     validate_source_aware_advisor_provider_card(card)
+    source_cache, _source_cache_artifacts = get_or_collect_source_archive_intake_cache_for_request(source_path)
     payload = {
         "source_aware_advisor_command_preview_version": SOURCE_AWARE_ADVISOR_COMMAND_PREVIEW_VERSION,
         "source_aware_advisor_command_preview_id": _source_aware_hash_id("source-aware-advisor-command-preview", {
@@ -20279,6 +20684,8 @@ def collect_source_aware_advisor_command_preview(
         "research_target_intake_id": card["research_target_intake_id"],
         "selected_upgrade_candidate_id": card["selected_upgrade_candidate_id"],
         "advisor_provider_card_id": card["source_aware_advisor_provider_card_id"],
+        "source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"],
+        "cache_key_id": source_cache["cache_key_id"],
         "deterministic_preview_command": card["deterministic_preview_command"],
         "local_advisor_command": card["local_advisor_command"],
         "ref_alias_map_command": card["ref_alias_map_command"],
@@ -20288,11 +20695,20 @@ def collect_source_aware_advisor_command_preview(
         "compression_profile_command": f"python3 link.py research compression-profile --source {card['source_path']} --json",
         "compression_upgrade_score_command": f"python3 link.py research compression-upgrade-score --source {card['source_path']} --json",
         "genericity_assessment_command": f"python3 link.py research upgrade-genericity --source {card['source_path']} --json",
+        "source_cache_key_command": f"python3 link.py growth source-cache-key --source {card['source_path']} --json",
+        "source_cache_command": f"python3 link.py growth source-cache --source {card['source_path']} --json",
         "growth_e2e_cache_command": f"python3 link.py growth e2e-cache --source {card['source_path']} --json",
         "growth_e2e_summary_command": f"python3 link.py growth e2e-summary --source {card['source_path']}",
         "growth_opportunity_score_command": f"python3 link.py growth opportunity-score --source {card['source_path']} --json",
         "growth_e2e_performance_command": f"python3 link.py growth e2e-performance --source {card['source_path']} --json",
+        "recommended_fast_operator_sequence": [
+            f"python3 link.py growth source-cache --source {card['source_path']} --json",
+            f"python3 link.py growth e2e-summary --source {card['source_path']}",
+            f"python3 link.py growth opportunity-score --source {card['source_path']} --json",
+            f"python3 link.py operator source-dashboard --source {card['source_path']}",
+        ],
         "recommended_operator_decision_sequence": [
+            f"python3 link.py growth source-cache --source {card['source_path']} --json",
             f"python3 link.py growth e2e-cache --source {card['source_path']} --json",
             f"python3 link.py growth e2e-summary --source {card['source_path']}",
             f"python3 link.py growth opportunity-score --source {card['source_path']} --json",
@@ -20343,6 +20759,7 @@ def collect_source_aware_advisor_command_preview(
         "recommended_rich_review_command": card["recommended_rich_review_command"],
         "openrouter_advisor_command": card["openrouter_advisor_command"],
         "recommended_sequence": [
+            f"python3 link.py growth source-cache --source {card['source_path']} --json",
             f"python3 link.py growth e2e-summary --source {card['source_path']}",
             f"python3 link.py growth opportunity-score --source {card['source_path']} --json",
             f"python3 link.py growth e2e-performance --source {card['source_path']} --json",
@@ -20393,8 +20810,9 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         "advisor_provider_card_id", "deterministic_preview_command", "local_advisor_command",
         "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "recommended_alias_tuning_note",
         "archive_concepts_command", "compression_profile_command", "compression_upgrade_score_command",
-        "genericity_assessment_command", "growth_e2e_cache_command", "growth_e2e_summary_command",
-        "growth_opportunity_score_command", "growth_e2e_performance_command", "recommended_operator_decision_sequence",
+        "genericity_assessment_command", "source_archive_intake_cache_id", "cache_key_id", "source_cache_key_command",
+        "source_cache_command", "growth_e2e_cache_command", "growth_e2e_summary_command",
+        "growth_opportunity_score_command", "growth_e2e_performance_command", "recommended_fast_operator_sequence", "recommended_operator_decision_sequence",
         "recommended_concept_sequence", "recommended_operator_sequence",
         "compression_policy_command", "compression_preview_command", "headroom_descriptor_command",
         "headroom_policy_command", "headroom_preview_command", "headroom_adapter_command",
@@ -20416,7 +20834,7 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
         raise ValueError("invalid source-aware advisor command preview version")
     if not payload["source_aware_advisor_command_preview_id"].startswith("source-aware-advisor-command-preview-"):
         raise ValueError("invalid source-aware advisor command preview id")
-    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "archive_concepts_command", "compression_profile_command", "compression_upgrade_score_command", "genericity_assessment_command", "growth_e2e_cache_command", "growth_e2e_summary_command", "growth_opportunity_score_command", "growth_e2e_performance_command", "compression_preview_command", "headroom_preview_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
+    for field in ("deterministic_preview_command", "local_advisor_command", "ref_alias_map_command", "alias_aware_micro_diagnostic_command", "archive_concepts_command", "compression_profile_command", "compression_upgrade_score_command", "genericity_assessment_command", "source_cache_key_command", "source_cache_command", "growth_e2e_cache_command", "growth_e2e_summary_command", "growth_opportunity_score_command", "growth_e2e_performance_command", "compression_preview_command", "headroom_preview_command", "recommended_micro_diagnostic_command", "recommended_json_check_command", "recommended_two_stage_local_command", "recommended_two_stage_command", "recommended_diagnostic_command", "richer_advisor_command", "recommended_rich_review_command", "openrouter_advisor_command", "recommended_command"):
         if payload["source_path"] not in payload[field]:
             raise ValueError(f"advisor command preview {field} must reference selected source")
     if not isinstance(payload["recommended_micro_stage_commands"], list) or len(payload["recommended_micro_stage_commands"]) != 4:
@@ -20426,8 +20844,12 @@ def validate_source_aware_advisor_command_preview(payload: dict[str, Any]) -> No
             raise ValueError("advisor micro stage command must reference selected source and micro-check")
     if "archive-concepts" not in payload["archive_concepts_command"] or "compression-profile" not in payload["compression_profile_command"] or "compression-upgrade-score" not in payload["compression_upgrade_score_command"] or "upgrade-genericity" not in payload["genericity_assessment_command"]:
         raise ValueError("advisor command preview must expose concept extraction commands")
+    if "source-cache" not in payload["source_cache_command"] or "source-cache-key" not in payload["source_cache_key_command"]:
+        raise ValueError("advisor command preview must expose source cache commands")
     if "e2e-summary" not in payload["growth_e2e_summary_command"] or "opportunity-score" not in payload["growth_opportunity_score_command"] or "e2e-performance" not in payload["growth_e2e_performance_command"]:
         raise ValueError("advisor command preview must expose Growth E2E operator summary commands")
+    if not isinstance(payload["recommended_fast_operator_sequence"], list) or len(payload["recommended_fast_operator_sequence"]) < 4:
+        raise ValueError("advisor command preview must include fast operator sequence")
     if not isinstance(payload["recommended_operator_decision_sequence"], list) or len(payload["recommended_operator_decision_sequence"]) < 4:
         raise ValueError("advisor command preview must include operator decision sequence")
     if not isinstance(payload["recommended_concept_sequence"], list) or len(payload["recommended_concept_sequence"]) < 3:
@@ -21338,8 +21760,117 @@ def parse_source_aware_target_decision_card_json(text: str) -> dict[str, Any]:
     return payload
 
 
+
+def _collect_fast_source_aware_operator_dashboard(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    source_cache, artifacts = get_or_collect_source_archive_intake_cache_for_request(source_path)
+    e2e_summary = collect_source_aware_growth_e2e_summary(source_path=source_path)
+    opportunity_score = collect_growth_opportunity_decision_score(source_path=source_path, summary=e2e_summary)
+    intake = artifacts["target_intake"]
+    evidence = artifacts["target_evidence"]
+    binding = artifacts["source_binding"]
+    candidates = artifacts["target_upgrades"]
+    task = artifacts["operator_task_draft"]
+    concepts = artifacts["archive_concepts"]
+    profile = artifacts["compression_profile"]
+    best = e2e_summary["best_growth_opportunity"]
+    selected = next((item for item in candidates["upgrade_candidates"] if item["upgrade_candidate_id"] == best["opportunity_id"]), candidates["upgrade_candidates"][0])
+    source_refs_summary = _compact_source_ref_summaries(evidence)
+    evidence_refs_summary = _compact_evidence_ref_summaries(evidence)
+    status_card_id = _source_aware_hash_id("source-aware-target-status-card", {"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "version": SOURCE_AWARE_TARGET_STATUS_CARD_VERSION})
+    control_status_id = _source_aware_hash_id("control-plane-target-status", {"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "version": CONTROL_PLANE_TARGET_STATUS_VERSION})
+    operator_review_id = _source_aware_hash_id("operator-target-review", {"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "version": OPERATOR_TARGET_REVIEW_VERSION})
+    decision_card_id = _source_aware_hash_id("source-aware-target-decision-card", {"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "version": SOURCE_AWARE_TARGET_DECISION_CARD_VERSION})
+    sandbox_flow_id = _source_aware_hash_id("research-target-sandbox-flow", {"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "version": RESEARCH_TARGET_SANDBOX_FLOW_VERSION})
+    payload = {
+        "source_aware_operator_dashboard_version": SOURCE_AWARE_OPERATOR_DASHBOARD_VERSION,
+        "source_aware_operator_dashboard_id": _source_aware_hash_id("source-aware-operator-dashboard", {"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "summary_id": e2e_summary["source_aware_growth_e2e_summary_id"], "version": SOURCE_AWARE_OPERATOR_DASHBOARD_VERSION}),
+        "source_bound": True,
+        "source_path": intake["source_path"],
+        "source_name": intake["source_name"],
+        "source_type": intake["source_type"],
+        "research_target_intake_id": intake["research_target_intake_id"],
+        "research_target_evidence_bundle_id": evidence["research_target_evidence_bundle_id"],
+        "research_source_binding_context_id": binding["research_source_binding_context_id"],
+        "selected_upgrade_candidate_id": selected["upgrade_candidate_id"],
+        "selected_upgrade_title": selected["title"],
+        "target_link_module": selected["target_link_module"],
+        "source_aware_target_status_card_id": status_card_id,
+        "control_plane_target_status_id": control_status_id,
+        "operator_target_review_id": operator_review_id,
+        "source_aware_target_decision_card_id": decision_card_id,
+        "research_target_sandbox_flow_id": sandbox_flow_id,
+        "overall_status": "blocked",
+        "evidence_status": "review_required" if evidence["evidence_strength"] == "strong" else "blocked",
+        "decision_status": "ranked",
+        "task_status": "draft",
+        "sandbox_status": "blocked",
+        "blocker_count": len(RESEARCH_TARGET_BLOCKED_ACTIONS),
+        "warning_count": len(source_cache["context_rebuild_warnings"]),
+        "key_findings": _normalize_implementation_branch_refs([
+            f"selected target: {intake['source_path']}",
+            f"selected upgrade: {selected['title']}",
+            f"repo role: {concepts['repo_role_summary']}",
+            "sandbox candidate status: blocked",
+        ]),
+        "next_actions": _normalize_implementation_branch_refs([
+            "review Growth E2E summary",
+            "review task draft before any implementation slice",
+            "keep sandbox execution disabled",
+        ]),
+        "source_refs": list(binding["source_refs"]),
+        "evidence_refs": list(binding["evidence_refs"]),
+        "source_refs_summary": source_refs_summary,
+        "evidence_refs_summary": evidence_refs_summary,
+        "archive_concepts_id": concepts["source_aware_archive_concepts_id"],
+        "repo_role_summary": concepts["repo_role_summary"],
+        "top_concepts": [item["concept_name"] for item in concepts["detected_concepts"][:5]],
+        "compression_profile_summary": {
+            "compression_profile_id": profile["compression_repo_concept_profile_id"],
+            "is_compression_repo": profile["is_compression_repo"],
+            "compression_score": profile["compression_score"],
+            "recommended_integration_mode": profile["recommended_integration_mode"],
+        } if profile["is_compression_repo"] else {},
+        "concept_specificity_score": 90 if best["concept_supported"] else 50,
+        "best_concept_specific_upgrade": best["title"],
+        "generic_upgrade_warning": "" if best["concept_supported"] else "selected upgrade may be too generic",
+        "advisor_provider_card_id": _source_aware_hash_id("source-aware-advisor-provider-card", {"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "version": SOURCE_AWARE_ADVISOR_PROVIDER_CARD_VERSION}),
+        "advisor_default_provider": "llamacpp",
+        "advisor_local_status": "configured",
+        "advisor_openrouter_status": "disabled",
+        "advisor_fallback_allowed": False,
+        "advisor_local_endpoint_summary": "http://127.0.0.1:8084",
+        "advisor_review_available": False,
+        "recommended_advisor_mode": "deterministic_only",
+        "recommended_advisor_command": f"python3 link.py growth e2e-summary --source {source_path}",
+        "source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"],
+        "growth_e2e_summary_id": e2e_summary["source_aware_growth_e2e_summary_id"],
+        "growth_opportunity_decision_score_id": opportunity_score["growth_opportunity_decision_score_id"],
+        "cache_key_id": source_cache["cache_key_id"],
+        "best_growth_opportunity_title": best["title"],
+        "operator_decision": opportunity_score["decision"],
+        "operator_confidence_score": opportunity_score["operator_confidence_score"],
+        "e2e_total_runtime_ms": e2e_summary["performance_summary"]["total_runtime_ms"],
+        "cache_hit_count": e2e_summary["performance_summary"]["cache_hit_count"],
+        "cache_miss_count": e2e_summary["performance_summary"]["cache_miss_count"],
+        "slowest_artifacts": e2e_summary["performance_summary"]["slowest_artifacts"],
+        "context_rebuild_warnings": source_cache["context_rebuild_warnings"],
+        "growth_e2e_next_action": e2e_summary["recommended_next_action"],
+        "recommended_next_action": "Use Growth E2E summary as the fast operator starting point; full dashboard chains remain available separately.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_aware_operator_dashboard(payload)
+    return payload
+
+
 def collect_source_aware_operator_dashboard(*, source_path: str, metadata: dict[str, Any] | None = None, dashboard_context: dict[str, Any] | None = None) -> dict[str, Any]:
-    context = dashboard_context or build_source_aware_dashboard_context_for_cli(source_path)
+    if dashboard_context is None:
+        return _collect_fast_source_aware_operator_dashboard(source_path=source_path, metadata=metadata)
+    context = dashboard_context
     card = collect_source_aware_target_status_card(source_path=source_path, dashboard_context=context)
     control_status = collect_control_plane_target_status(source_path=source_path, dashboard_context=context, status_card=card)
     operator_review = collect_operator_target_review(source_path=source_path, dashboard_context=context, status_card=card)
@@ -21486,6 +22017,110 @@ def _research_target_print_summary(title: str, payload: dict[str, Any], lines: l
     for label, value in lines[1:]:
         print(f"{label}: {value}")
 
+
+
+
+def _growth_source_cache_print_key(payload: dict[str, Any]) -> None:
+    print("Source cache key")
+    print(f"source: {payload['source_path']}")
+    print(f"type: {payload['source_type']}")
+    print(f"size: {payload['source_size_bytes']}")
+    print(f"cache_key: {payload['cache_key']}")
+    print(f"scope: {payload['cache_scope']}  persistent: {payload['persistent_cache_allowed']}")
+    print("Read-only: no extraction, no model, no network, no mutation.")
+
+
+def _growth_source_cache_print(payload: dict[str, Any]) -> None:
+    print("Source cache")
+    print(f"source: {payload['source_path']}")
+    print(f"cache: {payload['source_archive_intake_cache_id']}")
+    print(f"entries: {len(payload['entries'])}  computed: {payload['computed_count']}  reused: {payload['reused_count']}  skipped: {payload['skipped_count']}")
+    print(f"runtime_ms: {payload['total_runtime_ms']}")
+    print("slowest:")
+    for item in payload["slowest_entries"][:5]:
+        print(f"  - {item['entry_name']}: {item['runtime_ms']}ms ({item['status']})")
+    print(f"next: {payload['recommended_next_action']}")
+    print("Read-only: no model, no OpenRouter, no execution, no source mutation.")
+
+
+def _growth_source_cache_print_performance(payload: dict[str, Any]) -> None:
+    print("Source cache performance")
+    print(f"source: {payload['source_path']}")
+    print(f"cache: {payload['cache_id']}")
+    print(f"runtime_ms: {payload['total_runtime_ms']}")
+    print("avoided:")
+    for item in payload["repeated_rebuilds_avoided"][:4]:
+        print(f"  - {item}")
+    print("remaining hotspots:")
+    for item in payload["remaining_rebuild_hotspots"][:4]:
+        print(f"  - {item}")
+    print(f"next: {payload['recommended_next_action']}")
+
+
+def growth_source_cache_key_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth source-cache-key: deterministic request cache key for source intake")
+        print("  python3 link.py growth source-cache-key --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "source-cache-key")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_source_archive_intake_cache_key(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_source_archive_intake_cache_key_json(payload), end="")
+    else:
+        _growth_source_cache_print_key(payload)
+    return 0
+
+
+def growth_source_cache_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth source-cache: request-scoped source archive intake cache")
+        print("  python3 link.py growth source-cache --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "source-cache")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_source_archive_intake_cache(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_source_archive_intake_cache_json(payload), end="")
+    else:
+        _growth_source_cache_print(payload)
+    return 0
+
+
+def growth_source_cache_performance_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth source-cache-performance: cache reuse and hotspot report")
+        print("  python3 link.py growth source-cache-performance --source <path> --json")
+        print("Read-only. --write is not supported.")
+        return 0
+    source, rc = _research_target_cli_source_or_error(args, "source-cache-performance")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_source_archive_cache_performance_report(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_source_archive_cache_performance_report_json(payload), end="")
+    else:
+        _growth_source_cache_print_performance(payload)
+    return 0
 
 
 def _growth_e2e_print_cache(payload: dict[str, Any]) -> None:
@@ -22039,10 +22674,7 @@ def operator_source_dashboard_main(argv: list[str] | None = None) -> int:
     if rc is not None:
         return rc
     try:
-        context = build_source_aware_dashboard_context_for_cli(source or "")
-        payload = collect_source_aware_operator_dashboard(source_path=source or "", dashboard_context=context)
-        decision_card = collect_source_aware_target_decision_card(source_path=source or "", dashboard_context=context)
-        operator_review = collect_operator_target_review(source_path=source or "", dashboard_context=context)
+        payload = collect_source_aware_operator_dashboard(source_path=source or "")
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -22052,11 +22684,6 @@ def operator_source_dashboard_main(argv: list[str] | None = None) -> int:
         print(render_source_aware_operator_brief(
             "Source-aware operator dashboard",
             payload,
-            operator_report=context["operator_report"],
-            implementation_preview=context["implementation_preview"],
-            decision_card=decision_card,
-            operator_review=operator_review,
-            sandbox_flow=context["sandbox_flow"],
         ))
     return 0
 
@@ -22142,8 +22769,7 @@ def advisor_target_command_main(argv: list[str] | None = None) -> int:
     if rc is not None:
         return rc
     try:
-        context = build_source_aware_dashboard_context_for_cli(source or "")
-        payload = context.get("advisor_command_preview") or collect_source_aware_advisor_command_preview(source_path=source or "", dashboard_context=context)
+        payload = collect_source_aware_advisor_command_preview(source_path=source or "")
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
