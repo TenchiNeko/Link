@@ -18831,35 +18831,62 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     from link_modes.growth.link_growth_console import (
         collect_growth_e2e_performance_hotspots,
         collect_growth_opportunity_decision_score,
+        collect_persistent_source_cache_performance_report,
+        collect_persistent_source_inventory_cache_manifest,
+        collect_persistent_source_inventory_cache_policy,
+        collect_persistent_source_inventory_cache_record,
         collect_source_archive_cache_performance_report,
         collect_source_archive_intake_cache,
         collect_source_archive_intake_cache_key,
+        collect_source_cache_clear,
+        collect_source_cache_status,
         collect_source_aware_growth_context_cache,
         collect_source_aware_growth_e2e_summary,
         parse_growth_e2e_performance_hotspots_json,
         parse_growth_opportunity_decision_score_json,
+        parse_persistent_source_cache_performance_report_json,
+        parse_persistent_source_inventory_cache_manifest_json,
+        parse_persistent_source_inventory_cache_policy_json,
+        parse_persistent_source_inventory_cache_record_json,
         parse_source_archive_cache_performance_report_json,
         parse_source_archive_intake_cache_json,
         parse_source_archive_intake_cache_key_json,
+        parse_source_cache_clear_json,
+        parse_source_cache_status_json,
         parse_source_aware_advisor_command_preview_json,
         parse_source_aware_growth_context_cache_json,
         parse_source_aware_growth_e2e_summary_json,
         parse_source_aware_operator_dashboard_json,
         stable_growth_e2e_performance_hotspots_json,
         stable_growth_opportunity_decision_score_json,
+        stable_persistent_source_cache_performance_report_json,
+        stable_persistent_source_inventory_cache_manifest_json,
+        stable_persistent_source_inventory_cache_policy_json,
+        stable_persistent_source_inventory_cache_record_json,
         stable_source_archive_cache_performance_report_json,
         stable_source_archive_intake_cache_json,
         stable_source_archive_intake_cache_key_json,
+        stable_source_cache_clear_json,
+        stable_source_cache_status_json,
         stable_source_aware_growth_context_cache_json,
         stable_source_aware_growth_e2e_summary_json,
         validate_growth_e2e_performance_hotspots,
         validate_growth_opportunity_decision_score,
+        validate_persistent_source_cache_performance_report,
+        validate_persistent_source_inventory_cache_manifest,
+        validate_persistent_source_inventory_cache_policy,
+        validate_persistent_source_inventory_cache_record,
         validate_source_archive_cache_performance_report,
         validate_source_archive_intake_cache,
         validate_source_archive_intake_cache_key,
+        validate_source_cache_clear,
+        validate_source_cache_status,
         validate_source_aware_growth_context_cache,
         validate_source_aware_growth_e2e_summary,
     )
+
+    import os
+    import link_modes.growth.link_growth_console as growth_console
 
     headroom_source = "research/headroom-main.zip"
     crawler_source = "research/gpt-crawler-main.zip"
@@ -18898,6 +18925,86 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     validate_source_archive_cache_performance_report(source_perf)
     _require(parse_source_archive_cache_performance_report_json(stable_source_archive_cache_performance_report_json(source_perf)) == source_perf,
              "source cache performance report JSON must round trip")
+
+    old_cache_root = os.environ.get("LINK_SOURCE_CACHE_ROOT")
+    with tempfile.TemporaryDirectory(prefix="link-source-cache-test-") as cache_root:
+        os.environ["LINK_SOURCE_CACHE_ROOT"] = cache_root
+        growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
+        policy = collect_persistent_source_inventory_cache_policy()
+        _require(policy["cache_root"] == cache_root and policy["cache_root_source"] == "LINK_SOURCE_CACHE_ROOT",
+                 "persistent cache policy must honor LINK_SOURCE_CACHE_ROOT")
+        _require("full_raw_archive_content" in policy["prohibited_payload_types"] and "secrets" in policy["prohibited_payload_types"],
+                 "persistent cache policy must prohibit raw archive contents and secrets")
+        validate_persistent_source_inventory_cache_policy(policy)
+        _require(parse_persistent_source_inventory_cache_policy_json(stable_persistent_source_inventory_cache_policy_json(policy)) == policy,
+                 "persistent cache policy JSON must round trip")
+
+        manifest = collect_persistent_source_inventory_cache_manifest(source_path=headroom_source)
+        _require(manifest["cache_file_path"].startswith(cache_root) and manifest["cache_valid"] is False,
+                 "persistent cache manifest must start missing under temp root")
+        validate_persistent_source_inventory_cache_manifest(manifest)
+        _require(parse_persistent_source_inventory_cache_manifest_json(stable_persistent_source_inventory_cache_manifest_json(manifest)) == manifest,
+                 "persistent cache manifest JSON must round trip")
+
+        missing_record = collect_persistent_source_inventory_cache_record(source_path=headroom_source)
+        _require(missing_record["cache_hit"] is False and missing_record["fallback_to_request_cache"] is True,
+                 "missing persistent cache read must fail open to request cache")
+        validate_persistent_source_inventory_cache_record(missing_record)
+
+        written_record = collect_persistent_source_inventory_cache_record(source_path=headroom_source, write_cache=True)
+        _require(written_record["cache_hit"] is True and written_record["cache_write_performed"] is True,
+                 "write-cache must create a valid persistent source cache record")
+        _require(written_record["cached_size_bytes"] > 0 and written_record["cached_size_bytes"] < policy["max_cached_entry_bytes"],
+                 "persistent cache file must be bounded")
+        _require(parse_persistent_source_inventory_cache_record_json(stable_persistent_source_inventory_cache_record_json(written_record)) == written_record,
+                 "persistent source cache record JSON must round trip")
+
+        growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
+        hit_summary = collect_source_aware_growth_e2e_summary(source_path=headroom_source)
+        _require(hit_summary["persistent_cache_hit"] is True and hit_summary["cache_source"] == "persistent",
+                 "e2e summary must reuse valid persistent cache")
+        _require(hit_summary["performance_summary"]["cache_miss_count"] == 0,
+                 "persistent cache e2e summary should avoid computed cache misses")
+
+        hit_score = collect_growth_opportunity_decision_score(source_path=headroom_source, summary=hit_summary)
+        _require(hit_score["persistent_cache_hit"] is True and hit_score["cache_source"] == "persistent",
+                 "opportunity score must preserve persistent cache metadata")
+
+        hit_perf = collect_persistent_source_cache_performance_report(source_path=headroom_source)
+        _require(hit_perf["cache_hit"] is True and hit_perf["expected_rebuilds_avoided"],
+                 "persistent cache performance report must show avoided rebuilds on hit")
+        validate_persistent_source_cache_performance_report(hit_perf)
+        _require(parse_persistent_source_cache_performance_report_json(stable_persistent_source_cache_performance_report_json(hit_perf)) == hit_perf,
+                 "persistent cache performance JSON must round trip")
+
+        status = collect_source_cache_status(source_path=headroom_source)
+        _require(status["cache_hit"] is True and status["cache_valid"] is True,
+                 "source-cache-status must report hit after write")
+        validate_source_cache_status(status)
+        _require(parse_source_cache_status_json(stable_source_cache_status_json(status)) == status,
+                 "source cache status JSON must round trip")
+
+        clear = collect_source_cache_clear(source_path=headroom_source)
+        _require(clear["removed_count"] == 1 and clear["clear_scope"] == "source",
+                 "source-cache-clear must remove only the selected source cache file")
+        validate_source_cache_clear(clear)
+        _require(parse_source_cache_clear_json(stable_source_cache_clear_json(clear)) == clear,
+                 "source cache clear JSON must round trip")
+        status_after_clear = collect_source_cache_status(source_path=headroom_source)
+        _require(status_after_clear["cache_hit"] is False and status_after_clear["cache_file_exists"] is False,
+                 "source-cache-status must report missing after source clear")
+
+        gpt_record = collect_persistent_source_inventory_cache_record(source_path=crawler_source, write_cache=True)
+        _require(gpt_record["cache_hit"] is True and gpt_record["source_path"] == crawler_source,
+                 "gpt-crawler persistent cache write must validate")
+        clear_all = collect_source_cache_clear(clear_all=True)
+        _require(clear_all["removed_count"] >= 1 and clear_all["clear_scope"] == "all",
+                 "source-cache-clear --all must remove files under temp cache root")
+    growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
+    if old_cache_root is None:
+        os.environ.pop("LINK_SOURCE_CACHE_ROOT", None)
+    else:
+        os.environ["LINK_SOURCE_CACHE_ROOT"] = old_cache_root
 
     cache = collect_source_aware_growth_context_cache(source_path=headroom_source)
     _require(cache["source_path"] == headroom_source, "growth e2e cache must preserve source path")
@@ -18964,9 +19071,13 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
              "gpt-crawler best opportunity must not be compression-specific")
 
     for command, parser, id_key in (
+        ("source-cache-policy", parse_persistent_source_inventory_cache_policy_json, "persistent_source_inventory_cache_policy_id"),
         ("source-cache-key", parse_source_archive_intake_cache_key_json, "source_archive_intake_cache_key_id"),
         ("source-cache", parse_source_archive_intake_cache_json, "source_archive_intake_cache_id"),
+        ("source-cache-manifest", parse_persistent_source_inventory_cache_manifest_json, "persistent_source_inventory_cache_manifest_id"),
+        ("source-cache-status", parse_source_cache_status_json, "source_cache_status_id"),
         ("source-cache-performance", parse_source_archive_cache_performance_report_json, "source_archive_cache_performance_report_id"),
+        ("persistent-cache-performance", parse_persistent_source_cache_performance_report_json, "persistent_source_cache_performance_report_id"),
         ("e2e-cache", parse_source_aware_growth_context_cache_json, "source_aware_growth_context_cache_id"),
         ("e2e-summary", parse_source_aware_growth_e2e_summary_json, "source_aware_growth_e2e_summary_id"),
         ("opportunity-score", parse_growth_opportunity_decision_score_json, "growth_opportunity_decision_score_id"),
@@ -18977,8 +19088,12 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
             rc = _cmd_growth([command, "--source", headroom_source, "--json"])
         _require(rc == 0, f"growth {command} --source --json must return 0")
         payload = parser(out.getvalue())
-        _require(payload["source_path"] == headroom_source and id_key in payload,
-                 f"growth {command} must preserve source path and output own payload")
+        if command == "source-cache-policy":
+            _require(id_key in payload and payload["cache_enabled_by_default"] is True,
+                     "growth source-cache-policy must output policy payload")
+        else:
+            _require(payload["source_path"] == headroom_source and id_key in payload,
+                     f"growth {command} must preserve source path and output own payload")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_growth([command, "--source", headroom_source, "--write"])

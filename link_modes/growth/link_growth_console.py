@@ -10926,6 +10926,17 @@ GROWTH_E2E_PERFORMANCE_HOTSPOTS_VERSION = "link-growth-e2e-performance-hotspots-
 SOURCE_ARCHIVE_INTAKE_CACHE_KEY_VERSION = "link-source-archive-intake-cache-key-v1"
 SOURCE_ARCHIVE_INTAKE_CACHE_VERSION = "link-source-archive-intake-cache-v1"
 SOURCE_ARCHIVE_CACHE_PERFORMANCE_REPORT_VERSION = "link-source-archive-cache-performance-report-v1"
+PERSISTENT_SOURCE_INVENTORY_CACHE_POLICY_VERSION = "link-persistent-source-inventory-cache-policy-v1"
+PERSISTENT_SOURCE_INVENTORY_CACHE_MANIFEST_VERSION = "link-persistent-source-inventory-cache-manifest-v1"
+PERSISTENT_SOURCE_INVENTORY_CACHE_RECORD_VERSION = "link-persistent-source-inventory-cache-record-v1"
+PERSISTENT_SOURCE_CACHE_STATUS_VERSION = "link-persistent-source-cache-status-v1"
+PERSISTENT_SOURCE_CACHE_CLEAR_VERSION = "link-persistent-source-cache-clear-v1"
+PERSISTENT_SOURCE_CACHE_PERFORMANCE_REPORT_VERSION = "link-persistent-source-cache-performance-report-v1"
+PERSISTENT_SOURCE_INVENTORY_COLLECTOR_VERSION = "link-source-inventory-collector-v1"
+PERSISTENT_SOURCE_INVENTORY_PROVENANCE_SCHEMA_VERSION = "link-source-provenance-schema-v1"
+PERSISTENT_SOURCE_INVENTORY_CACHE_SCHEMA_VERSION = "link-source-inventory-cache-schema-v1"
+PERSISTENT_SOURCE_INVENTORY_MAX_ENTRY_BYTES = 1500000
+PERSISTENT_SOURCE_INVENTORY_MAX_SNIPPET_CHARS = 1200
 _SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
 GROWTH_UPGRADE_GENERICITY_ASSESSMENT_VERSION = "link-growth-upgrade-genericity-assessment-v1"
 RESEARCH_TARGET_ALLOWED_ROOTS = ("research", "research/_extracted")
@@ -11755,6 +11766,15 @@ def collect_source_aware_archive_concepts(
     source_path: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if research_target_intake is None and research_target_evidence_bundle is None and source_path:
+        try:
+            _cache, artifacts = get_or_collect_source_archive_intake_cache_for_request(str(source_path))
+            cached = artifacts.get("archive_concepts")
+            if isinstance(cached, dict):
+                validate_source_aware_archive_concepts(cached)
+                return cached
+        except Exception:
+            pass
     intake = research_target_intake or collect_research_target_intake(str(source_path or ""))
     validate_research_target_intake(intake)
     evidence = research_target_evidence_bundle or collect_research_target_evidence_bundle(intake)
@@ -11926,6 +11946,15 @@ def collect_compression_repo_concept_profile(
     source_path: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if archive_concepts is None and source_path:
+        try:
+            _cache, artifacts = get_or_collect_source_archive_intake_cache_for_request(str(source_path))
+            cached = artifacts.get("compression_profile")
+            if isinstance(cached, dict):
+                validate_compression_repo_concept_profile(cached)
+                return cached
+        except Exception:
+            pass
     concepts = archive_concepts or collect_source_aware_archive_concepts(source_path=source_path)
     validate_source_aware_archive_concepts(concepts)
     concept_ids = {item["concept_id"] for item in concepts["detected_concepts"]}
@@ -12187,6 +12216,15 @@ def collect_compression_aware_upgrade_scorer(
     source_path: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if archive_concepts is None and compression_profile is None and research_target_upgrade_candidates is None and source_path:
+        try:
+            _cache, artifacts = get_or_collect_source_archive_intake_cache_for_request(str(source_path))
+            cached = artifacts.get("compression_upgrade_score")
+            if isinstance(cached, dict):
+                validate_compression_aware_upgrade_scorer(cached)
+                return cached
+        except Exception:
+            pass
     concepts = archive_concepts or collect_source_aware_archive_concepts(source_path=source_path)
     validate_source_aware_archive_concepts(concepts)
     profile = compression_profile or collect_compression_repo_concept_profile(concepts)
@@ -14057,6 +14095,600 @@ def parse_research_target_recommendation_specificity_json(text: str) -> dict[str
 
 
 
+
+def _persistent_source_cache_root() -> tuple[str, str]:
+    import os as _os
+    from pathlib import Path as _Path
+
+    override = str(_os.environ.get("LINK_SOURCE_CACHE_ROOT", "")).strip()
+    if override:
+        root = _Path(override).expanduser()
+        source = "LINK_SOURCE_CACHE_ROOT"
+    else:
+        root = _Path.home() / ".cache" / "link" / "source_inventory"
+        source = "default"
+    return str(root), source
+
+
+def _persistent_source_cache_path_is_safe(path_text: str) -> bool:
+    from pathlib import Path as _Path
+
+    try:
+        path = _Path(path_text).expanduser().resolve()
+        repo = _Path.cwd().resolve()
+    except Exception:
+        return False
+    denied = {repo / ".git", repo / ".link"}
+    if path == repo or repo in path.parents:
+        # Tests may intentionally use /tmp. Production cache should not live in the repo.
+        return False
+    for item in denied:
+        if path == item or item in path.parents:
+            return False
+    return True
+
+
+def _persistent_source_cache_file_path(cache_root: str, cache_key: str) -> str:
+    from pathlib import Path as _Path
+    import re as _re
+
+    safe = _re.sub(r"[^A-Za-z0-9_.-]+", "-", cache_key).strip("-")[:180]
+    return str(_Path(cache_root).expanduser() / f"{safe}.json")
+
+
+def collect_persistent_source_inventory_cache_policy(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    cache_root, root_source = _persistent_source_cache_root()
+    payload = {
+        "persistent_source_inventory_cache_policy_version": PERSISTENT_SOURCE_INVENTORY_CACHE_POLICY_VERSION,
+        "persistent_source_inventory_cache_policy_id": "persistent-source-inventory-cache-policy-" + _research_target_hash_text({"cache_root": cache_root, "version": PERSISTENT_SOURCE_INVENTORY_CACHE_POLICY_VERSION})[:12],
+        "cache_enabled_by_default": True,
+        "cache_root": cache_root,
+        "cache_root_source": root_source,
+        "cache_namespace": "source_inventory",
+        "cache_version": SOURCE_ARCHIVE_INTAKE_CACHE_VERSION,
+        "collector_version": PERSISTENT_SOURCE_INVENTORY_COLLECTOR_VERSION,
+        "provenance_schema_version": PERSISTENT_SOURCE_INVENTORY_PROVENANCE_SCHEMA_VERSION,
+        "cache_schema_version": PERSISTENT_SOURCE_INVENTORY_CACHE_SCHEMA_VERSION,
+        "allowed_payload_types": ["source_inventory_summary", "source_refs", "evidence_refs", "provenance_metadata", "artifact_ids", "bounded_snippets", "concept_summaries"],
+        "prohibited_payload_types": ["full_raw_archive_content", "secrets", "credentials", "unbounded_file_blobs", "external_model_responses", "execution_outputs"],
+        "max_cached_entry_bytes": PERSISTENT_SOURCE_INVENTORY_MAX_ENTRY_BYTES,
+        "max_cached_snippet_chars": PERSISTENT_SOURCE_INVENTORY_MAX_SNIPPET_CHARS,
+        "cache_full_raw_archive_content": False,
+        "cache_secrets": False,
+        "external_network_allowed": False,
+        "model_allowed": False,
+        "openrouter_allowed": False,
+        "mcp_proxy_allowed": False,
+        "invalidation_fields": ["source_path", "source_size_bytes", "source_mtime_ns", "collector_version", "provenance_schema_version", "cache_schema_version", "cache_namespace", "cache_version"],
+        "recommended_next_action": "Use --write-cache only after reviewing the manifest; stale or corrupt caches fail closed to request cache.",
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_persistent_source_inventory_cache_policy(payload)
+    return payload
+
+
+def validate_persistent_source_inventory_cache_policy(payload: dict[str, Any]) -> None:
+    required = ("persistent_source_inventory_cache_policy_version", "persistent_source_inventory_cache_policy_id", "cache_enabled_by_default", "cache_root", "cache_root_source", "cache_namespace", "cache_version", "collector_version", "provenance_schema_version", "cache_schema_version", "allowed_payload_types", "prohibited_payload_types", "max_cached_entry_bytes", "max_cached_snippet_chars", "cache_full_raw_archive_content", "cache_secrets", "external_network_allowed", "model_allowed", "openrouter_allowed", "mcp_proxy_allowed", "invalidation_fields", "recommended_next_action", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"persistent source cache policy missing field: {key}")
+    if payload["persistent_source_inventory_cache_policy_version"] != PERSISTENT_SOURCE_INVENTORY_CACHE_POLICY_VERSION:
+        raise ValueError("invalid persistent source cache policy version")
+    if not payload["persistent_source_inventory_cache_policy_id"].startswith("persistent-source-inventory-cache-policy-"):
+        raise ValueError("invalid persistent source cache policy id")
+    if payload["cache_enabled_by_default"] is not True:
+        raise ValueError("persistent source cache policy must be enabled by default")
+    if payload["cache_root_source"] == "default" and not _persistent_source_cache_path_is_safe(payload["cache_root"]):
+        raise ValueError("default persistent cache root must be outside repo source")
+    for field in ("source_path", "source_size_bytes", "source_mtime_ns", "collector_version", "provenance_schema_version", "cache_schema_version"):
+        if field not in payload["invalidation_fields"]:
+            raise ValueError(f"persistent source cache policy missing invalidation field {field}")
+    if "full_raw_archive_content" not in payload["prohibited_payload_types"] or "secrets" not in payload["prohibited_payload_types"]:
+        raise ValueError("persistent source cache policy must prohibit raw archive content and secrets")
+    if payload["cache_full_raw_archive_content"] is not False or payload["cache_secrets"] is not False:
+        raise ValueError("persistent source cache policy must not cache raw archive content or secrets")
+    if payload["external_network_allowed"] is not False or payload["model_allowed"] is not False or payload["openrouter_allowed"] is not False or payload["mcp_proxy_allowed"] is not False:
+        raise ValueError("persistent source cache policy must disallow model/network/MCP/proxy")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("persistent source cache policy must remain read-only")
+
+
+def stable_persistent_source_inventory_cache_policy_json(payload: dict[str, Any]) -> str:
+    validate_persistent_source_inventory_cache_policy(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_persistent_source_inventory_cache_policy_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_persistent_source_inventory_cache_policy(payload)
+    return payload
+
+
+def collect_persistent_source_inventory_cache_manifest(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    policy = collect_persistent_source_inventory_cache_policy()
+    key_payload = collect_source_archive_intake_cache_key(source_path=source_path)
+    source_fingerprint = _research_target_hash_text({
+        "source_path": key_payload["source_path"],
+        "source_size_bytes": key_payload["source_size_bytes"],
+        "source_mtime_ns": key_payload["source_mtime_ns"],
+        "collector_version": policy["collector_version"],
+        "provenance_schema_version": policy["provenance_schema_version"],
+        "cache_schema_version": policy["cache_schema_version"],
+        "cache_namespace": policy["cache_namespace"],
+        "cache_version": policy["cache_version"],
+    })[:16]
+    cache_key = f"{policy['cache_namespace']}:{policy['cache_version']}:{source_fingerprint}"
+    cache_file_path = _persistent_source_cache_file_path(policy["cache_root"], cache_key)
+    from pathlib import Path as _Path
+    cache_file_exists = _Path(cache_file_path).exists()
+    invalidation: list[str] = []
+    cache_valid = False
+    cache_status = "missing"
+    if cache_file_exists:
+        record = read_persistent_source_inventory_cache(cache_file_path)
+        if record.get("ok"):
+            raw = record["payload"]
+            if raw.get("cache_key") == cache_key and raw.get("collector_version") == policy["collector_version"] and raw.get("cache_schema_version") == policy["cache_schema_version"]:
+                cache_valid = True
+                cache_status = "valid"
+            else:
+                cache_status = "stale"
+                invalidation.append("cache metadata does not match current manifest")
+        else:
+            cache_status = "corrupt"
+            invalidation.append(record.get("error", "cache could not be read"))
+    payload = {
+        "persistent_source_inventory_cache_manifest_version": PERSISTENT_SOURCE_INVENTORY_CACHE_MANIFEST_VERSION,
+        "persistent_source_inventory_cache_manifest_id": "persistent-source-inventory-cache-manifest-" + source_fingerprint[:12],
+        "policy_id": policy["persistent_source_inventory_cache_policy_id"],
+        "source_path": key_payload["source_path"],
+        "source_name": key_payload["source_name"],
+        "source_type": key_payload["source_type"],
+        "source_exists": key_payload["source_exists"],
+        "source_size_bytes": key_payload["source_size_bytes"],
+        "source_mtime_ns": key_payload["source_mtime_ns"],
+        "source_fingerprint": source_fingerprint,
+        "cache_key": cache_key,
+        "cache_file_path": cache_file_path,
+        "cache_file_exists": cache_file_exists,
+        "cache_status": cache_status,
+        "invalidation_reasons": _normalize_implementation_branch_refs(invalidation),
+        "cache_valid": cache_valid,
+        "collector_version": policy["collector_version"],
+        "provenance_schema_version": policy["provenance_schema_version"],
+        "cache_schema_version": policy["cache_schema_version"],
+        "cache_namespace": policy["cache_namespace"],
+        "recommended_next_action": "Persistent cache is valid." if cache_valid else "Run source-cache-persistent --write-cache to create or refresh the source inventory cache.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_persistent_source_inventory_cache_manifest(payload)
+    return payload
+
+
+def validate_persistent_source_inventory_cache_manifest(payload: dict[str, Any]) -> None:
+    required = ("persistent_source_inventory_cache_manifest_version", "persistent_source_inventory_cache_manifest_id", "policy_id", "source_path", "source_name", "source_type", "source_exists", "source_size_bytes", "source_mtime_ns", "source_fingerprint", "cache_key", "cache_file_path", "cache_file_exists", "cache_status", "invalidation_reasons", "cache_valid", "collector_version", "provenance_schema_version", "cache_schema_version", "cache_namespace", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"persistent source cache manifest missing field: {key}")
+    if payload["persistent_source_inventory_cache_manifest_version"] != PERSISTENT_SOURCE_INVENTORY_CACHE_MANIFEST_VERSION:
+        raise ValueError("invalid persistent source cache manifest version")
+    if payload["cache_status"] not in {"missing", "valid", "stale", "corrupt"}:
+        raise ValueError("invalid persistent source cache status")
+    if not payload["source_path"].startswith("research/") or payload["source_exists"] is not True:
+        raise ValueError("persistent source cache manifest requires existing research source")
+    if payload["cache_file_path"].endswith(".json") is not True:
+        raise ValueError("persistent source cache file must be JSON")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("persistent source cache manifest must not use fallback/model/network")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("persistent source cache manifest must remain read-only")
+
+
+def stable_persistent_source_inventory_cache_manifest_json(payload: dict[str, Any]) -> str:
+    validate_persistent_source_inventory_cache_manifest(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_persistent_source_inventory_cache_manifest_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_persistent_source_inventory_cache_manifest(payload)
+    return payload
+
+
+def read_persistent_source_inventory_cache(cache_file_path: str) -> dict[str, Any]:
+    import json as _json
+    from pathlib import Path as _Path
+    try:
+        path = _Path(cache_file_path)
+        if not path.exists():
+            return {"ok": False, "error": "cache file missing"}
+        payload = _json.loads(path.read_text())
+        validate_persistent_source_inventory_cache_payload(payload)
+        return {"ok": True, "payload": payload}
+    except Exception as exc:
+        return {"ok": False, "error": _source_aware_text(str(exc), max_chars=220)}
+
+
+def validate_persistent_source_inventory_cache_payload(payload: dict[str, Any]) -> None:
+    required = ("persistent_source_inventory_cache_payload_version", "cache_key", "source_path", "collector_version", "provenance_schema_version", "cache_schema_version", "created_at", "source_cache", "artifacts")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"persistent source cache payload missing field: {key}")
+    if payload["persistent_source_inventory_cache_payload_version"] != PERSISTENT_SOURCE_INVENTORY_CACHE_RECORD_VERSION:
+        raise ValueError("invalid persistent source cache payload version")
+    if not payload["source_path"].startswith("research/"):
+        raise ValueError("persistent source cache payload must be source-bound")
+    if payload["collector_version"] != PERSISTENT_SOURCE_INVENTORY_COLLECTOR_VERSION or payload["cache_schema_version"] != PERSISTENT_SOURCE_INVENTORY_CACHE_SCHEMA_VERSION:
+        raise ValueError("persistent source cache payload version mismatch")
+    validate_source_archive_intake_cache(payload["source_cache"])
+    artifacts = payload["artifacts"]
+    if not isinstance(artifacts, dict):
+        raise ValueError("persistent source cache artifacts must be a dict")
+    for key in ("target_intake", "target_evidence", "archive_concepts", "compression_profile", "target_upgrades", "operator_task_draft", "source_binding", "target_provenance", "target_patterns", "genericity_assessment", "compression_upgrade_score"):
+        if key not in artifacts or not isinstance(artifacts[key], dict):
+            raise ValueError(f"persistent source cache payload missing artifact {key}")
+    text = _stable_ruflo_json(payload)
+    if len(text.encode("utf-8")) > PERSISTENT_SOURCE_INVENTORY_MAX_ENTRY_BYTES:
+        raise ValueError("persistent source cache payload exceeds max cached entry bytes")
+    forbidden = ("BEGIN PRIVATE KEY", "AWS_SECRET", "OPENROUTER_API_KEY", "password=", "token=")
+    if any(item.lower() in text.lower() for item in forbidden):
+        raise ValueError("persistent source cache payload appears to contain secret-like content")
+
+
+def write_persistent_source_inventory_cache(cache_file_path: str, payload: dict[str, Any]) -> int:
+    from pathlib import Path as _Path
+    import os as _os
+    import tempfile as _tempfile
+
+    validate_persistent_source_inventory_cache_payload(payload)
+    path = _Path(cache_file_path).expanduser()
+    root = path.parent
+    if not _persistent_source_cache_path_is_safe(str(root)) and not str(root).startswith("/tmp/"):
+        raise ValueError("persistent source cache root is not safe to write")
+    root.mkdir(parents=True, exist_ok=True)
+    text = _stable_ruflo_json(payload, indent=2) + "\n"
+    if len(text.encode("utf-8")) > PERSISTENT_SOURCE_INVENTORY_MAX_ENTRY_BYTES:
+        raise ValueError("persistent source cache file would exceed max size")
+    fd, tmp = _tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(root))
+    try:
+        with _os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        _os.replace(tmp, path)
+    finally:
+        try:
+            if _Path(tmp).exists():
+                _Path(tmp).unlink()
+        except Exception:
+            pass
+    return len(text.encode("utf-8"))
+
+
+def _persistent_source_cache_payload_from_request(manifest: dict[str, Any], source_cache: dict[str, Any], artifacts: dict[str, Any]) -> dict[str, Any]:
+    import datetime as _dt
+    keep = {key: artifacts[key] for key in ("target_intake", "target_evidence", "archive_concepts", "compression_profile", "target_upgrades", "operator_task_draft", "source_binding", "target_provenance", "target_patterns", "genericity_assessment", "compression_upgrade_score") if key in artifacts}
+    clean_cache = dict(source_cache)
+    clean_cache["persistent_cache_hit"] = False
+    clean_cache["persistent_cache_valid"] = False
+    clean_cache["persistent_cache_write_performed"] = False
+    clean_cache["cache_source"] = "computed"
+    return {
+        "persistent_source_inventory_cache_payload_version": PERSISTENT_SOURCE_INVENTORY_CACHE_RECORD_VERSION,
+        "cache_key": manifest["cache_key"],
+        "source_path": manifest["source_path"],
+        "collector_version": manifest["collector_version"],
+        "provenance_schema_version": manifest["provenance_schema_version"],
+        "cache_schema_version": manifest["cache_schema_version"],
+        "created_at": _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "source_cache": clean_cache,
+        "artifacts": keep,
+    }
+
+
+def _request_cache_from_persistent_payload(manifest: dict[str, Any], cached_payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    source_cache = dict(cached_payload["source_cache"])
+    source_cache["total_runtime_ms"] = 0
+    source_cache["persistent_cache_policy_id"] = manifest["policy_id"]
+    source_cache["persistent_cache_manifest_id"] = manifest["persistent_source_inventory_cache_manifest_id"]
+    source_cache["persistent_cache_record_id"] = "persistent-source-inventory-cache-record-" + _research_target_hash_text({"cache_key": manifest["cache_key"], "hit": True, "version": PERSISTENT_SOURCE_INVENTORY_CACHE_RECORD_VERSION})[:12]
+    source_cache["persistent_cache_hit"] = True
+    source_cache["persistent_cache_valid"] = True
+    source_cache["persistent_cache_write_performed"] = False
+    source_cache["cache_source"] = "persistent"
+    source_cache["invalidation_reasons"] = []
+    for entry in source_cache.get("entries", []):
+        if entry.get("computed"):
+            entry["reused"] = True
+            entry["runtime_ms"] = 0
+    artifacts = dict(cached_payload["artifacts"])
+    artifacts["cache_key"] = collect_source_archive_intake_cache_key(source_path=manifest["source_path"])
+    artifacts["source_cache"] = source_cache
+    validate_source_archive_intake_cache(source_cache)
+    return source_cache, artifacts
+
+
+def collect_persistent_source_inventory_cache_record(*, source_path: str, write_cache: bool = False, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    from pathlib import Path as _Path
+
+    manifest = collect_persistent_source_inventory_cache_manifest(source_path=source_path)
+    read_result = read_persistent_source_inventory_cache(manifest["cache_file_path"])
+    cache_hit = bool(read_result.get("ok")) and manifest["cache_valid"]
+    write_performed = False
+    cached_size = 0
+    invalidation = list(manifest["invalidation_reasons"])
+    cached_artifact_ids: dict[str, str] = {}
+    cached_entry_count = 0
+    summary = "cache missing or invalid"
+    if cache_hit:
+        cached_payload = read_result["payload"]
+        cached_artifact_ids = dict(cached_payload["source_cache"].get("artifact_ids", {}))
+        cached_entry_count = len(cached_payload["source_cache"].get("entries", []))
+        cached_size = _Path(manifest["cache_file_path"]).stat().st_size if _Path(manifest["cache_file_path"]).exists() else 0
+        summary = "valid persistent cache available"
+    elif write_cache:
+        source_cache, artifacts = _source_archive_intake_cache_artifacts(source_path, metadata)
+        cache_payload = _persistent_source_cache_payload_from_request(manifest, source_cache, artifacts)
+        cached_size = write_persistent_source_inventory_cache(manifest["cache_file_path"], cache_payload)
+        write_performed = True
+        cache_hit = True
+        cached_artifact_ids = dict(source_cache.get("artifact_ids", {}))
+        cached_entry_count = len(source_cache.get("entries", []))
+        summary = "persistent cache written"
+        _SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE[manifest["cache_key"]] = _request_cache_from_persistent_payload(manifest, cache_payload)
+    elif not read_result.get("ok") and manifest["cache_file_exists"]:
+        invalidation.append(read_result.get("error", "cache read failed"))
+    payload = {
+        "persistent_source_inventory_cache_record_version": PERSISTENT_SOURCE_INVENTORY_CACHE_RECORD_VERSION,
+        "persistent_source_inventory_cache_record_id": "persistent-source-inventory-cache-record-" + _research_target_hash_text({"manifest_id": manifest["persistent_source_inventory_cache_manifest_id"], "hit": cache_hit, "write": write_performed, "version": PERSISTENT_SOURCE_INVENTORY_CACHE_RECORD_VERSION})[:12],
+        "manifest_id": manifest["persistent_source_inventory_cache_manifest_id"],
+        "source_path": manifest["source_path"],
+        "cache_key": manifest["cache_key"],
+        "cache_hit": cache_hit,
+        "cache_valid": cache_hit,
+        "cache_write_requested": bool(write_cache),
+        "cache_write_performed": write_performed,
+        "cache_file_path": manifest["cache_file_path"],
+        "cached_payload_summary": summary,
+        "cached_artifact_ids": cached_artifact_ids,
+        "cached_entry_count": cached_entry_count,
+        "cached_size_bytes": cached_size,
+        "created_at": read_result.get("payload", {}).get("created_at", "") if read_result.get("ok") else "",
+        "invalidation_reasons": _normalize_implementation_branch_refs(invalidation),
+        "fallback_to_request_cache": not cache_hit,
+        "recommended_next_action": "Persistent cache hit; downstream CLI invocations can reuse it." if cache_hit else "Run with --write-cache to create a persistent cache record.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": bool(write_cache),
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [manifest["cache_file_path"]] if write_performed else [],
+    }
+    validate_persistent_source_inventory_cache_record(payload)
+    return payload
+
+
+def validate_persistent_source_inventory_cache_record(payload: dict[str, Any]) -> None:
+    required = ("persistent_source_inventory_cache_record_version", "persistent_source_inventory_cache_record_id", "manifest_id", "source_path", "cache_key", "cache_hit", "cache_valid", "cache_write_requested", "cache_write_performed", "cache_file_path", "cached_payload_summary", "cached_artifact_ids", "cached_entry_count", "cached_size_bytes", "created_at", "invalidation_reasons", "fallback_to_request_cache", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"persistent source cache record missing field: {key}")
+    if payload["persistent_source_inventory_cache_record_version"] != PERSISTENT_SOURCE_INVENTORY_CACHE_RECORD_VERSION:
+        raise ValueError("invalid persistent source cache record version")
+    if not payload["persistent_source_inventory_cache_record_id"].startswith("persistent-source-inventory-cache-record-"):
+        raise ValueError("invalid persistent source cache record id")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("persistent source cache record must avoid fallback/model/network")
+    if payload["cache_write_performed"] and not payload["writes"]:
+        raise ValueError("persistent source cache write must report written file")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["automation_allowed"] is not False:
+        raise ValueError("persistent source cache record must stay deterministic")
+
+
+def stable_persistent_source_inventory_cache_record_json(payload: dict[str, Any]) -> str:
+    validate_persistent_source_inventory_cache_record(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_persistent_source_inventory_cache_record_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_persistent_source_inventory_cache_record(payload)
+    return payload
+
+
+
+def collect_source_cache_status(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    from pathlib import Path as _Path
+    manifest = collect_persistent_source_inventory_cache_manifest(source_path=source_path)
+    size = _Path(manifest["cache_file_path"]).stat().st_size if _Path(manifest["cache_file_path"]).exists() else 0
+    created = ""
+    read_result = read_persistent_source_inventory_cache(manifest["cache_file_path"])
+    if read_result.get("ok"):
+        created = read_result["payload"].get("created_at", "")
+    payload = {
+        "source_cache_status_version": PERSISTENT_SOURCE_CACHE_STATUS_VERSION,
+        "source_cache_status_id": "source-cache-status-" + _research_target_hash_text({"manifest_id": manifest["persistent_source_inventory_cache_manifest_id"], "status": manifest["cache_status"], "version": PERSISTENT_SOURCE_CACHE_STATUS_VERSION})[:12],
+        "source_path": manifest["source_path"],
+        "manifest_id": manifest["persistent_source_inventory_cache_manifest_id"],
+        "cache_file_exists": manifest["cache_file_exists"],
+        "cache_valid": manifest["cache_valid"],
+        "cache_hit": manifest["cache_valid"],
+        "cached_size_bytes": size,
+        "created_at": created,
+        "invalidation_reasons": manifest["invalidation_reasons"],
+        "recommended_next_action": manifest["recommended_next_action"],
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_source_cache_status(payload)
+    return payload
+
+
+def validate_source_cache_status(payload: dict[str, Any]) -> None:
+    required=("source_cache_status_version","source_cache_status_id","source_path","manifest_id","cache_file_exists","cache_valid","cache_hit","cached_size_bytes","created_at","invalidation_reasons","recommended_next_action","safety_metadata","dry_run","write_allowed","automation_allowed","writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source cache status missing field: {key}")
+    if payload["source_cache_status_version"] != PERSISTENT_SOURCE_CACHE_STATUS_VERSION:
+        raise ValueError("invalid source cache status version")
+    if not payload["source_cache_status_id"].startswith("source-cache-status-"):
+        raise ValueError("invalid source cache status id")
+    if not payload["source_path"].startswith("research/"):
+        raise ValueError("source cache status must be source-bound")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("source cache status must be read-only")
+
+
+def stable_source_cache_status_json(payload: dict[str, Any]) -> str:
+    validate_source_cache_status(payload)
+    return _stable_ruflo_json(payload, indent=2)+"\n"
+
+
+def parse_source_cache_status_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload=_json.loads(text)
+    validate_source_cache_status(payload)
+    return payload
+
+
+def collect_source_cache_clear(*, source_path: str | None = None, clear_all: bool = False, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    from pathlib import Path as _Path
+    policy = collect_persistent_source_inventory_cache_policy()
+    root = _Path(policy["cache_root"]).expanduser().resolve()
+    if not str(root).startswith("/tmp/") and not _persistent_source_cache_path_is_safe(str(root)):
+        raise ValueError("refusing unsafe persistent cache root")
+    files: list[str] = []
+    scope = "all" if clear_all else "source"
+    if clear_all:
+        if root.exists():
+            for item in sorted(root.glob("*.json")):
+                if item.is_file() and item.parent == root:
+                    item.unlink()
+                    files.append(str(item))
+    else:
+        if not source_path:
+            raise ValueError("source-cache-clear requires --source or --all")
+        manifest = collect_persistent_source_inventory_cache_manifest(source_path=source_path)
+        path = _Path(manifest["cache_file_path"]).expanduser().resolve()
+        if path.exists() and path.parent == root:
+            path.unlink()
+            files.append(str(path))
+    payload = {
+        "source_cache_clear_version": PERSISTENT_SOURCE_CACHE_CLEAR_VERSION,
+        "source_cache_clear_id": "source-cache-clear-" + _research_target_hash_text({"scope": scope, "files": files, "version": PERSISTENT_SOURCE_CACHE_CLEAR_VERSION})[:12],
+        "clear_scope": scope,
+        "source_path": source_path or "",
+        "cache_root": str(root),
+        "files_removed": files,
+        "removed_count": len(files),
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": True,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": files,
+    }
+    validate_source_cache_clear(payload)
+    return payload
+
+
+def validate_source_cache_clear(payload: dict[str, Any]) -> None:
+    required=("source_cache_clear_version","source_cache_clear_id","clear_scope","source_path","cache_root","files_removed","removed_count","safety_metadata","dry_run","write_allowed","automation_allowed","writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"source cache clear missing field: {key}")
+    if payload["source_cache_clear_version"] != PERSISTENT_SOURCE_CACHE_CLEAR_VERSION:
+        raise ValueError("invalid source cache clear version")
+    if payload["clear_scope"] not in {"source","all"}:
+        raise ValueError("invalid source cache clear scope")
+    if payload["removed_count"] != len(payload["files_removed"]):
+        raise ValueError("source cache clear removed count mismatch")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not True or payload["automation_allowed"] is not False:
+        raise ValueError("source cache clear must remain bounded and explicit")
+
+
+def stable_source_cache_clear_json(payload: dict[str, Any]) -> str:
+    validate_source_cache_clear(payload)
+    return _stable_ruflo_json(payload, indent=2)+"\n"
+
+
+def parse_source_cache_clear_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload=_json.loads(text)
+    validate_source_cache_clear(payload)
+    return payload
+
+
+def collect_persistent_source_cache_performance_report(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    status = collect_source_cache_status(source_path=source_path)
+    payload = {
+        "persistent_source_cache_performance_report_version": PERSISTENT_SOURCE_CACHE_PERFORMANCE_REPORT_VERSION,
+        "persistent_source_cache_performance_report_id": "persistent-source-cache-performance-report-" + _research_target_hash_text({"status_id": status["source_cache_status_id"], "version": PERSISTENT_SOURCE_CACHE_PERFORMANCE_REPORT_VERSION})[:12],
+        "source_path": status["source_path"],
+        "persistent_cache_status_id": status["source_cache_status_id"],
+        "cache_hit": status["cache_hit"],
+        "expected_rebuilds_avoided": _normalize_implementation_branch_refs(["target_intake archive walk", "target_evidence rebuild", "archive_concepts rebuild", "target_upgrades rebuild", "operator dashboard source context rebuild"] if status["cache_hit"] else []),
+        "remaining_rebuild_hotspots": _normalize_implementation_branch_refs(["first cache write still computes target_intake", "separate commands still parse final compact JSON", "persistent invalidation depends on source size and mtime"]),
+        "slowest_artifacts": [],
+        "recommendation": "Persistent cache hit; use e2e-summary/dashboard/target-command normally." if status["cache_hit"] else "Run source-cache-persistent --write-cache to populate the cache before repeated CLI runs.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_persistent_source_cache_performance_report(payload)
+    return payload
+
+
+def validate_persistent_source_cache_performance_report(payload: dict[str, Any]) -> None:
+    required=("persistent_source_cache_performance_report_version","persistent_source_cache_performance_report_id","source_path","persistent_cache_status_id","cache_hit","expected_rebuilds_avoided","remaining_rebuild_hotspots","slowest_artifacts","recommendation","fallback_allowed","model_used","safety_metadata","dry_run","write_allowed","automation_allowed","writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"persistent source cache performance report missing field: {key}")
+    if payload["persistent_source_cache_performance_report_version"] != PERSISTENT_SOURCE_CACHE_PERFORMANCE_REPORT_VERSION:
+        raise ValueError("invalid persistent cache performance report version")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False:
+        raise ValueError("persistent cache performance report must be no-model/no-fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("persistent cache performance report must remain read-only")
+
+
+def stable_persistent_source_cache_performance_report_json(payload: dict[str, Any]) -> str:
+    validate_persistent_source_cache_performance_report(payload)
+    return _stable_ruflo_json(payload, indent=2)+"\n"
+
+
+def parse_persistent_source_cache_performance_report_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload=_json.loads(text)
+    validate_persistent_source_cache_performance_report(payload)
+    return payload
+
 def collect_source_archive_intake_cache_key(*, source_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     from pathlib import Path as _Path
 
@@ -14174,6 +14806,16 @@ def _source_archive_intake_cache_artifacts(source_path: str, metadata: dict[str,
     if request_key in _SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE:
         return _SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE[request_key]
 
+    try:
+        manifest = collect_persistent_source_inventory_cache_manifest(source_path=source_path)
+        read_result = read_persistent_source_inventory_cache(manifest["cache_file_path"])
+        if manifest["cache_valid"] and read_result.get("ok"):
+            persistent_pair = _request_cache_from_persistent_payload(manifest, read_result["payload"])
+            _SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE[request_key] = persistent_pair
+            return persistent_pair
+    except Exception:
+        pass
+
     start = _time.perf_counter()
     entries: list[dict[str, Any]] = []
     artifacts: dict[str, Any] = {"cache_key": key_payload}
@@ -14277,6 +14919,14 @@ def _source_archive_intake_cache_artifacts(source_path: str, metadata: dict[str,
         "writes": [],
     }
     artifacts["source_cache"] = payload
+    payload["persistent_cache_policy_id"] = ""
+    payload["persistent_cache_manifest_id"] = ""
+    payload["persistent_cache_record_id"] = ""
+    payload["persistent_cache_hit"] = False
+    payload["persistent_cache_valid"] = False
+    payload["persistent_cache_write_performed"] = False
+    payload["cache_source"] = "computed"
+    payload["invalidation_reasons"] = []
     validate_source_archive_intake_cache(payload)
     _SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE[request_key] = (payload, artifacts)
     return payload, artifacts
@@ -14296,6 +14946,9 @@ def validate_source_archive_intake_cache(payload: dict[str, Any]) -> None:
         "source_archive_intake_cache_version", "source_archive_intake_cache_id", "cache_key_id", "source_path",
         "cache_scope", "cache_version", "entries", "artifact_ids", "computed_count", "reused_count",
         "skipped_count", "error_count", "total_runtime_ms", "slowest_entries", "context_rebuild_warnings",
+        "persistent_cache_policy_id", "persistent_cache_manifest_id", "persistent_cache_record_id",
+        "persistent_cache_hit", "persistent_cache_valid", "persistent_cache_write_performed",
+        "cache_source", "invalidation_reasons",
         "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata",
         "dry_run", "write_allowed", "automation_allowed", "writes",
     )
@@ -14308,6 +14961,11 @@ def validate_source_archive_intake_cache(payload: dict[str, Any]) -> None:
         raise ValueError("invalid source archive cache id")
     if payload["cache_scope"] != "request" or payload["cache_version"] != SOURCE_ARCHIVE_INTAKE_CACHE_VERSION:
         raise ValueError("source archive cache must be request-scoped")
+    if payload["cache_source"] not in {"request", "persistent", "computed", "mixed"}:
+        raise ValueError("source archive cache has invalid cache_source")
+    for field in ("persistent_cache_hit", "persistent_cache_valid", "persistent_cache_write_performed"):
+        if not isinstance(payload[field], bool):
+            raise ValueError(f"source archive cache {field} must be boolean")
     if not payload["source_path"].startswith("research/"):
         raise ValueError("source archive cache must be source-bound")
     if not isinstance(payload["entries"], list) or not payload["entries"]:
@@ -14499,6 +15157,22 @@ def _collect_source_aware_growth_context_cache_artifacts(source_path: str, metad
         "source_aware_growth_context_cache_id": "source-aware-growth-context-cache-" + _research_target_hash_text({"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "artifact_ids": computed_ids, "version": SOURCE_AWARE_GROWTH_CONTEXT_CACHE_VERSION})[:12],
         "source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"],
         "cache_key_id": source_cache["cache_key_id"],
+        "persistent_cache_policy_id": source_cache.get("persistent_cache_policy_id", ""),
+        "persistent_cache_manifest_id": source_cache.get("persistent_cache_manifest_id", ""),
+        "persistent_cache_record_id": source_cache.get("persistent_cache_record_id", ""),
+        "persistent_cache_hit": bool(source_cache.get("persistent_cache_hit", False)),
+        "persistent_cache_valid": bool(source_cache.get("persistent_cache_valid", False)),
+        "persistent_cache_write_performed": bool(source_cache.get("persistent_cache_write_performed", False)),
+        "cache_source": source_cache.get("cache_source", "computed"),
+        "invalidation_reasons": source_cache.get("invalidation_reasons", []),
+        "persistent_cache_policy_id": source_cache.get("persistent_cache_policy_id", ""),
+        "persistent_cache_manifest_id": source_cache.get("persistent_cache_manifest_id", ""),
+        "persistent_cache_record_id": source_cache.get("persistent_cache_record_id", ""),
+        "persistent_cache_hit": bool(source_cache.get("persistent_cache_hit", False)),
+        "persistent_cache_valid": bool(source_cache.get("persistent_cache_valid", False)),
+        "persistent_cache_write_performed": bool(source_cache.get("persistent_cache_write_performed", False)),
+        "cache_source": source_cache.get("cache_source", "computed"),
+        "invalidation_reasons": source_cache.get("invalidation_reasons", []),
         "source_path": intake["source_path"],
         "source_name": intake["source_name"],
         "source_type": intake["source_type"],
@@ -14532,7 +15206,11 @@ def collect_source_aware_growth_context_cache(*, source_path: str, metadata: dic
 def validate_source_aware_growth_context_cache(payload: dict[str, Any]) -> None:
     required = (
         "source_aware_growth_context_cache_version", "source_aware_growth_context_cache_id", "source_path",
-        "source_name", "source_type", "source_archive_intake_cache_id", "cache_key_id", "cache_scope", "cache_version", "cache_keys", "cache_entries",
+        "source_name", "source_type", "source_archive_intake_cache_id", "cache_key_id",
+        "persistent_cache_policy_id", "persistent_cache_manifest_id", "persistent_cache_record_id",
+        "persistent_cache_hit", "persistent_cache_valid", "persistent_cache_write_performed",
+        "cache_source", "invalidation_reasons",
+        "cache_scope", "cache_version", "cache_keys", "cache_entries",
         "cache_hit_count", "cache_miss_count", "computed_artifact_ids", "skipped_artifacts", "total_runtime_ms",
         "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed",
         "automation_allowed", "writes",
@@ -14662,6 +15340,14 @@ def collect_source_aware_growth_e2e_summary(*, source_path: str, metadata: dict[
         "cache_id": cache["source_aware_growth_context_cache_id"],
         "source_archive_intake_cache_id": cache["source_archive_intake_cache_id"],
         "cache_key_id": cache["cache_key_id"],
+        "persistent_cache_policy_id": cache.get("persistent_cache_policy_id", ""),
+        "persistent_cache_manifest_id": cache.get("persistent_cache_manifest_id", ""),
+        "persistent_cache_record_id": cache.get("persistent_cache_record_id", ""),
+        "persistent_cache_hit": bool(cache.get("persistent_cache_hit", False)),
+        "persistent_cache_valid": bool(cache.get("persistent_cache_valid", False)),
+        "persistent_cache_write_performed": bool(cache.get("persistent_cache_write_performed", False)),
+        "cache_source": cache.get("cache_source", "computed"),
+        "invalidation_reasons": cache.get("invalidation_reasons", []),
         "repo_role_summary": concepts["repo_role_summary"],
         "top_concept_families": concepts["concept_families"][:6],
         "top_concepts": [item["concept_name"] for item in concepts["detected_concepts"][:6]],
@@ -14727,7 +15413,11 @@ def collect_source_aware_growth_e2e_summary(*, source_path: str, metadata: dict[
 def validate_source_aware_growth_e2e_summary(payload: dict[str, Any]) -> None:
     required = (
         "source_aware_growth_e2e_summary_version", "source_aware_growth_e2e_summary_id", "source_path",
-        "source_name", "cache_id", "source_archive_intake_cache_id", "cache_key_id", "repo_role_summary", "top_concept_families", "top_concepts",
+        "source_name", "cache_id", "source_archive_intake_cache_id", "cache_key_id",
+        "persistent_cache_policy_id", "persistent_cache_manifest_id", "persistent_cache_record_id",
+        "persistent_cache_hit", "persistent_cache_valid", "persistent_cache_write_performed",
+        "cache_source", "invalidation_reasons",
+        "repo_role_summary", "top_concept_families", "top_concepts",
         "best_growth_opportunity", "runner_up_opportunities", "rejected_or_generic_opportunities",
         "evidence_support_summary", "provenance_summary", "task_draft_summary", "sandbox_boundary_summary",
         "advisor_status_summary", "model_status_summary", "performance_summary", "operator_decision",
@@ -14802,6 +15492,14 @@ def collect_growth_opportunity_decision_score(*, source_path: str, summary: dict
         "e2e_summary_id": e2e["source_aware_growth_e2e_summary_id"],
         "source_archive_intake_cache_id": e2e["source_archive_intake_cache_id"],
         "cache_key_id": e2e["cache_key_id"],
+        "persistent_cache_policy_id": e2e.get("persistent_cache_policy_id", ""),
+        "persistent_cache_manifest_id": e2e.get("persistent_cache_manifest_id", ""),
+        "persistent_cache_record_id": e2e.get("persistent_cache_record_id", ""),
+        "persistent_cache_hit": bool(e2e.get("persistent_cache_hit", False)),
+        "persistent_cache_valid": bool(e2e.get("persistent_cache_valid", False)),
+        "persistent_cache_write_performed": bool(e2e.get("persistent_cache_write_performed", False)),
+        "cache_source": e2e.get("cache_source", "computed"),
+        "invalidation_reasons": e2e.get("invalidation_reasons", []),
         "best_opportunity_id": best["opportunity_id"],
         "source_specificity_score": source_specificity,
         "evidence_support_score": evidence_support,
@@ -14828,7 +15526,11 @@ def collect_growth_opportunity_decision_score(*, source_path: str, summary: dict
 def validate_growth_opportunity_decision_score(payload: dict[str, Any]) -> None:
     required = (
         "growth_opportunity_decision_score_version", "growth_opportunity_decision_score_id", "source_path",
-        "e2e_summary_id", "source_archive_intake_cache_id", "cache_key_id", "best_opportunity_id", "source_specificity_score", "evidence_support_score",
+        "e2e_summary_id", "source_archive_intake_cache_id", "cache_key_id",
+        "persistent_cache_policy_id", "persistent_cache_manifest_id", "persistent_cache_record_id",
+        "persistent_cache_hit", "persistent_cache_valid", "persistent_cache_write_performed",
+        "cache_source", "invalidation_reasons",
+        "best_opportunity_id", "source_specificity_score", "evidence_support_score",
         "implementation_feasibility_score", "link_growth_value_score", "safety_risk_score",
         "operator_confidence_score", "decision", "reason", "recommended_next_action", "fallback_allowed",
         "model_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
@@ -14882,6 +15584,14 @@ def collect_growth_e2e_performance_hotspots(*, source_path: str, cache: dict[str
         "cache_id": cache_payload["source_aware_growth_context_cache_id"],
         "source_archive_intake_cache_id": cache_payload["source_archive_intake_cache_id"],
         "cache_key_id": cache_payload["cache_key_id"],
+        "persistent_cache_policy_id": cache_payload.get("persistent_cache_policy_id", ""),
+        "persistent_cache_manifest_id": cache_payload.get("persistent_cache_manifest_id", ""),
+        "persistent_cache_record_id": cache_payload.get("persistent_cache_record_id", ""),
+        "persistent_cache_hit": bool(cache_payload.get("persistent_cache_hit", False)),
+        "persistent_cache_valid": bool(cache_payload.get("persistent_cache_valid", False)),
+        "persistent_cache_write_performed": bool(cache_payload.get("persistent_cache_write_performed", False)),
+        "cache_source": cache_payload.get("cache_source", "computed"),
+        "invalidation_reasons": cache_payload.get("invalidation_reasons", []),
         "total_runtime_ms": cache_payload["total_runtime_ms"],
         "artifact_runtime_breakdown": breakdown,
         "slowest_artifacts": slowest,
@@ -14907,7 +15617,11 @@ def collect_growth_e2e_performance_hotspots(*, source_path: str, cache: dict[str
 def validate_growth_e2e_performance_hotspots(payload: dict[str, Any]) -> None:
     required = (
         "growth_e2e_performance_hotspots_version", "growth_e2e_performance_hotspots_id", "source_path",
-        "cache_id", "source_archive_intake_cache_id", "cache_key_id", "total_runtime_ms", "artifact_runtime_breakdown", "slowest_artifacts",
+        "cache_id", "source_archive_intake_cache_id", "cache_key_id",
+        "persistent_cache_policy_id", "persistent_cache_manifest_id", "persistent_cache_record_id",
+        "persistent_cache_hit", "persistent_cache_valid", "persistent_cache_write_performed",
+        "cache_source", "invalidation_reasons",
+        "total_runtime_ms", "artifact_runtime_breakdown", "slowest_artifacts",
         "repeated_context_rebuild_warnings", "cache_reuse_recommendations", "recommended_next_action",
         "fallback_allowed", "model_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
     )
@@ -20553,6 +21267,14 @@ def _advisor_command_preview_payload_from_cache(source_path: str, metadata: dict
         "advisor_provider_card_id": _source_aware_hash_id("source-aware-advisor-provider-card", {"source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"], "version": SOURCE_AWARE_ADVISOR_PROVIDER_CARD_VERSION}),
         "source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"],
         "cache_key_id": source_cache["cache_key_id"],
+        "persistent_cache_policy_id": source_cache.get("persistent_cache_policy_id", ""),
+        "persistent_cache_manifest_id": source_cache.get("persistent_cache_manifest_id", ""),
+        "persistent_cache_record_id": source_cache.get("persistent_cache_record_id", ""),
+        "persistent_cache_hit": bool(source_cache.get("persistent_cache_hit", False)),
+        "persistent_cache_valid": bool(source_cache.get("persistent_cache_valid", False)),
+        "persistent_cache_write_performed": bool(source_cache.get("persistent_cache_write_performed", False)),
+        "cache_source": source_cache.get("cache_source", "computed"),
+        "invalidation_reasons": source_cache.get("invalidation_reasons", []),
         "deterministic_preview_command": deterministic,
         "local_advisor_command": local,
         "ref_alias_map_command": f"python3 link.py advisor ref-alias-map --source {source_path} --json",
@@ -20686,6 +21408,14 @@ def collect_source_aware_advisor_command_preview(
         "advisor_provider_card_id": card["source_aware_advisor_provider_card_id"],
         "source_archive_intake_cache_id": source_cache["source_archive_intake_cache_id"],
         "cache_key_id": source_cache["cache_key_id"],
+        "persistent_cache_policy_id": source_cache.get("persistent_cache_policy_id", ""),
+        "persistent_cache_manifest_id": source_cache.get("persistent_cache_manifest_id", ""),
+        "persistent_cache_record_id": source_cache.get("persistent_cache_record_id", ""),
+        "persistent_cache_hit": bool(source_cache.get("persistent_cache_hit", False)),
+        "persistent_cache_valid": bool(source_cache.get("persistent_cache_valid", False)),
+        "persistent_cache_write_performed": bool(source_cache.get("persistent_cache_write_performed", False)),
+        "cache_source": source_cache.get("cache_source", "computed"),
+        "invalidation_reasons": source_cache.get("invalidation_reasons", []),
         "deterministic_preview_command": card["deterministic_preview_command"],
         "local_advisor_command": card["local_advisor_command"],
         "ref_alias_map_command": card["ref_alias_map_command"],
@@ -22019,6 +22749,177 @@ def _research_target_print_summary(title: str, payload: dict[str, Any], lines: l
 
 
 
+
+
+
+def _growth_persistent_cache_print_policy(payload: dict[str, Any]) -> None:
+    print("Persistent Source Cache Policy")
+    print(f"cache root: {payload['cache_root']} ({payload['cache_root_source']})")
+    print(f"enabled by default: {payload['cache_enabled_by_default']}")
+    print(f"namespace/version: {payload['cache_namespace']} / {payload['cache_version']}")
+    print(f"max entry bytes: {payload['max_cached_entry_bytes']}")
+    print("prohibited: " + ", ".join(payload["prohibited_payload_types"][:5]))
+    print(f"next: {payload['recommended_next_action']}")
+
+
+def _growth_persistent_cache_print_manifest(payload: dict[str, Any]) -> None:
+    print("Persistent Source Cache Manifest")
+    print(f"source: {payload['source_path']}")
+    print(f"cache root file: {payload['cache_file_path']}")
+    print(f"cache key: {payload['cache_key']}")
+    print(f"status: {payload['cache_status']}  valid: {payload['cache_valid']}")
+    if payload["invalidation_reasons"]:
+        print("invalidation: " + "; ".join(payload["invalidation_reasons"][:3]))
+    print(f"next: {payload['recommended_next_action']}")
+
+
+def _growth_persistent_cache_print_record(payload: dict[str, Any]) -> None:
+    print("Persistent Source Cache")
+    print(f"source: {payload['source_path']}")
+    print(f"cache key: {payload['cache_key']}")
+    print(f"hit: {payload['cache_hit']}  valid: {payload['cache_valid']}  write: {payload['cache_write_performed']}")
+    print(f"entries: {payload['cached_entry_count']}  bytes: {payload['cached_size_bytes']}")
+    print(f"file: {payload['cache_file_path']}")
+    if payload["invalidation_reasons"]:
+        print("invalidation: " + "; ".join(payload["invalidation_reasons"][:3]))
+    print(f"next: {payload['recommended_next_action']}")
+
+
+def _growth_persistent_cache_print_status(payload: dict[str, Any]) -> None:
+    print("Persistent Source Cache Status")
+    print(f"source: {payload['source_path']}")
+    print(f"manifest: {payload['manifest_id']}")
+    print(f"exists: {payload['cache_file_exists']}  valid: {payload['cache_valid']}  hit: {payload['cache_hit']}")
+    print(f"bytes: {payload['cached_size_bytes']}  created: {payload['created_at'] or 'not available'}")
+    if payload["invalidation_reasons"]:
+        print("invalidation: " + "; ".join(payload["invalidation_reasons"][:3]))
+    print(f"next: {payload['recommended_next_action']}")
+
+
+def _growth_persistent_cache_print_performance(payload: dict[str, Any]) -> None:
+    print("Persistent Source Cache Performance")
+    print(f"source: {payload['source_path']}")
+    print(f"cache hit: {payload['cache_hit']}")
+    print("avoided:")
+    for item in payload["expected_rebuilds_avoided"][:5] or ["not available until cache hit"]:
+        print(f"  - {item}")
+    print("remaining:")
+    for item in payload["remaining_rebuild_hotspots"][:4]:
+        print(f"  - {item}")
+    print(f"next: {payload['recommendation']}")
+
+
+def growth_source_cache_policy_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if "--write" in args:
+        print("error: source-cache-policy is read-only", file=sys.stderr)
+        return 2
+    payload = collect_persistent_source_inventory_cache_policy()
+    if "--json" in args:
+        print(stable_persistent_source_inventory_cache_policy_json(payload), end="")
+    else:
+        _growth_persistent_cache_print_policy(payload)
+    return 0
+
+
+def growth_source_cache_manifest_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if "--write" in args or "--write-cache" in args:
+        print("error: source-cache-manifest is read-only", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "source-cache-manifest")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_persistent_source_inventory_cache_manifest(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_persistent_source_inventory_cache_manifest_json(payload), end="")
+    else:
+        _growth_persistent_cache_print_manifest(payload)
+    return 0
+
+
+def growth_source_cache_persistent_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    source, rc = _research_target_cli_source_or_error(args, "source-cache-persistent")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_persistent_source_inventory_cache_record(source_path=source or "", write_cache="--write-cache" in args)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_persistent_source_inventory_cache_record_json(payload), end="")
+    else:
+        _growth_persistent_cache_print_record(payload)
+    return 0
+
+
+def growth_source_cache_status_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if "--write" in args or "--write-cache" in args:
+        print("error: source-cache-status is read-only", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "source-cache-status")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_source_cache_status(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_source_cache_status_json(payload), end="")
+    else:
+        _growth_persistent_cache_print_status(payload)
+    return 0
+
+
+def growth_source_cache_clear_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    clear_all = "--all" in args
+    source = ""
+    if not clear_all:
+        source, rc = _research_target_cli_source_or_error(args, "source-cache-clear")
+        if rc is not None:
+            return rc
+    try:
+        payload = collect_source_cache_clear(source_path=source or None, clear_all=clear_all)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_source_cache_clear_json(payload), end="")
+    else:
+        print("Persistent Source Cache Clear")
+        print(f"scope: {payload['clear_scope']}")
+        print(f"removed: {payload['removed_count']}")
+        print(f"root: {payload['cache_root']}")
+    return 0
+
+
+def growth_persistent_cache_performance_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if "--write" in args or "--write-cache" in args:
+        print("error: persistent-cache-performance is read-only", file=sys.stderr)
+        return 2
+    source, rc = _research_target_cli_source_or_error(args, "persistent-cache-performance")
+    if rc is not None:
+        return rc
+    try:
+        payload = collect_persistent_source_cache_performance_report(source_path=source or "")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_persistent_source_cache_performance_report_json(payload), end="")
+    else:
+        _growth_persistent_cache_print_performance(payload)
+    return 0
 
 def _growth_source_cache_print_key(payload: dict[str, Any]) -> None:
     print("Source cache key")
