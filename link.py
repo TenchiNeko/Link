@@ -199,6 +199,22 @@ def _cmd_research(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import research_archive_concepts_main as _research_archive_concepts_main
 
         return _research_archive_concepts_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "repo-role-policy":
+        from link_modes.growth.link_growth_console import research_repo_role_policy_main as _research_repo_role_policy_main
+
+        return _research_repo_role_policy_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "repo-role-fixtures":
+        from link_modes.growth.link_growth_console import research_repo_role_fixtures_main as _research_repo_role_fixtures_main
+
+        return _research_repo_role_fixtures_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "repo-role":
+        from link_modes.growth.link_growth_console import research_repo_role_main as _research_repo_role_main
+
+        return _research_repo_role_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "concept-confidence":
+        from link_modes.growth.link_growth_console import research_concept_confidence_main as _research_concept_confidence_main
+
+        return _research_concept_confidence_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "compression-profile":
         from link_modes.growth.link_growth_console import research_compression_profile_main as _research_compression_profile_main
 
@@ -1220,6 +1236,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import growth_source_queue_e2e_main as _growth_source_queue_e2e_main
 
         return _growth_source_queue_e2e_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "concept-calibration-report":
+        from link_modes.growth.link_growth_console import growth_concept_calibration_report_main as _growth_concept_calibration_report_main
+
+        return _growth_concept_calibration_report_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "source-cache":
         from link_modes.growth.link_growth_console import growth_source_cache_main as _growth_source_cache_main
 

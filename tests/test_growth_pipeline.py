@@ -18683,34 +18683,51 @@ def check_source_aware_archive_concept_extractor_helpers() -> None:
     from link import _cmd_research
     from link_modes.growth.link_growth_console import (
         classify_repo_concept_family,
+        collect_calibrated_repo_role_classification,
+        collect_concept_confidence_calibration,
         collect_compression_aware_upgrade_scorer,
         collect_compression_repo_concept_profile,
         collect_growth_upgrade_genericity_assessment,
+        collect_repo_role_calibration_fixtures,
+        collect_repo_role_calibration_policy,
         collect_research_target_operator_task_draft,
         collect_research_target_recommendation_specificity,
         collect_research_target_upgrade_candidates,
         collect_research_target_upgrade_rationale_card,
         collect_source_aware_archive_concepts,
+        parse_calibrated_repo_role_classification_json,
+        parse_concept_confidence_calibration_json,
         parse_compression_aware_upgrade_scorer_json,
         parse_compression_repo_concept_profile_json,
         parse_growth_upgrade_genericity_assessment_json,
+        parse_repo_role_calibration_fixtures_json,
+        parse_repo_role_calibration_policy_json,
         parse_source_aware_archive_concepts_json,
+        stable_calibrated_repo_role_classification_json,
+        stable_concept_confidence_calibration_json,
         rank_detected_repo_concepts,
         score_archive_concept_signals,
         stable_compression_aware_upgrade_scorer_json,
         stable_compression_repo_concept_profile_json,
         stable_growth_upgrade_genericity_assessment_json,
+        stable_repo_role_calibration_fixtures_json,
+        stable_repo_role_calibration_policy_json,
         stable_research_target_upgrade_candidates_json,
         stable_source_aware_archive_concepts_json,
+        validate_calibrated_repo_role_classification,
+        validate_concept_confidence_calibration,
         summarize_repo_role_from_concepts,
         validate_compression_aware_upgrade_scorer,
         validate_compression_repo_concept_profile,
         validate_growth_upgrade_genericity_assessment,
+        validate_repo_role_calibration_fixtures,
+        validate_repo_role_calibration_policy,
         validate_source_aware_archive_concepts,
     )
 
     headroom_source = "research/headroom-main.zip"
     crawler_source = "research/gpt-crawler-main.zip"
+    agent_reach_source = "research/Agent-Reach-main.zip"
 
     scored_signal = score_archive_concept_signals("headroom compression token reduction rag chunks", {
         "concept_id": "compression_library",
@@ -18738,9 +18755,47 @@ def check_source_aware_archive_concept_extractor_helpers() -> None:
     _require(parse_source_aware_archive_concepts_json(stable_source_aware_archive_concepts_json(headroom_concepts)) == headroom_concepts,
              "archive concepts JSON must round trip")
 
+    role_policy = collect_repo_role_calibration_policy()
+    _require(any(item["role_family"] == "business_reach_outreach" for item in role_policy["role_families"]),
+             "repo role policy must include business/reach role")
+    _require(any(item["role_family"] == "crawler_source_collection" for item in role_policy["role_families"]),
+             "repo role policy must include crawler/source collection role")
+    _require(next(item for item in role_policy["role_families"] if item["role_family"] == "compression_context")["conflicting_role_families"],
+             "compression role must include conflicting roles")
+    validate_repo_role_calibration_policy(role_policy)
+    _require(parse_repo_role_calibration_policy_json(stable_repo_role_calibration_policy_json(role_policy)) == role_policy,
+             "repo role policy JSON must round trip")
+
+    role_fixtures = collect_repo_role_calibration_fixtures()
+    _require(next(item for item in role_fixtures["fixtures"] if item["source_path"] == headroom_source)["expected_primary_role"] == "compression_context",
+             "Headroom fixture must expect compression role")
+    _require(next(item for item in role_fixtures["fixtures"] if item["source_path"] == crawler_source)["expected_primary_role"] == "crawler_source_collection",
+             "gpt-crawler fixture must expect crawler role")
+    _require("compression_context" in next(item for item in role_fixtures["fixtures"] if item["source_path"] == agent_reach_source)["expected_negative_roles"],
+             "Agent-Reach fixture must reject compression role")
+    validate_repo_role_calibration_fixtures(role_fixtures)
+    _require(parse_repo_role_calibration_fixtures_json(stable_repo_role_calibration_fixtures_json(role_fixtures)) == role_fixtures,
+             "repo role fixtures JSON must round trip")
+
+    headroom_role = collect_calibrated_repo_role_classification(headroom_concepts)
+    _require(headroom_role["primary_role"] == "compression_context" and headroom_role["primary_role_confidence"] == "high",
+             "Headroom calibrated role must be high-confidence compression_context")
+    validate_calibrated_repo_role_classification(headroom_role, headroom_concepts)
+    _require(parse_calibrated_repo_role_classification_json(stable_calibrated_repo_role_classification_json(headroom_role)) == headroom_role,
+             "calibrated repo role JSON must round trip")
+
+    headroom_confidence = collect_concept_confidence_calibration(headroom_concepts, headroom_role)
+    _require(any(item["concept_family"] == "compression" and item["calibrated_confidence"] >= 55 for item in headroom_confidence["concept_calibrations"]),
+             "Headroom compression concepts must stay medium/high after calibration")
+    validate_concept_confidence_calibration(headroom_confidence, headroom_concepts, headroom_role)
+    _require(parse_concept_confidence_calibration_json(stable_concept_confidence_calibration_json(headroom_confidence)) == headroom_confidence,
+             "concept confidence JSON must round trip")
+
     profile = collect_compression_repo_concept_profile(headroom_concepts)
     _require(profile["is_compression_repo"] is True and profile["compression_score"] >= 45,
              "Headroom compression profile must identify compression repo")
+    _require(profile["compression_profile_decision"] == "compression_repo" and profile["calibrated_compression_score"] >= profile["raw_compression_score"],
+             "Headroom compression profile must expose calibrated compression decision")
     _require(profile["recommended_integration_mode"] == "preview_or_bounded_local_adapter",
              "Headroom profile must recommend preview/bounded local adapter")
     _require("mcp_server" in profile["interface_modes"] and "auto_mcp_server_start" in profile["unsafe_modes"],
@@ -18799,15 +18854,51 @@ def check_source_aware_archive_concept_extractor_helpers() -> None:
              "Headroom task draft must include compression-specific task steps")
 
     crawler_concepts = collect_source_aware_archive_concepts(source_path=crawler_source)
+    crawler_role = collect_calibrated_repo_role_classification(crawler_concepts)
+    _require(crawler_role["primary_role"] == "crawler_source_collection",
+             "gpt-crawler calibrated role must be crawler_source_collection")
+    crawler_confidence = collect_concept_confidence_calibration(crawler_concepts, crawler_role)
+    _require(not any(item["concept_family"] == "compression" and item["calibrated_confidence"] >= 55 for item in crawler_confidence["concept_calibrations"]),
+             "gpt-crawler compression concepts must not remain high")
     crawler_profile = collect_compression_repo_concept_profile(crawler_concepts)
     crawler_scorer = collect_compression_aware_upgrade_scorer(crawler_concepts, crawler_profile)
+    _require(crawler_profile["compression_profile_decision"] == "not_compression_repo" and crawler_profile["calibrated_compression_score"] < profile["calibrated_compression_score"],
+             "gpt-crawler calibrated compression profile must be low")
     _require(crawler_profile["is_compression_repo"] is False or crawler_profile["compression_score"] < profile["compression_score"],
              "gpt-crawler must not score like Headroom as a compression repo")
     _require(crawler_scorer["compression_relevance_score"] < scorer["compression_relevance_score"],
              "gpt-crawler compression relevance must stay below Headroom")
 
+    agent_reach_concepts = collect_source_aware_archive_concepts(source_path=agent_reach_source)
+    agent_reach_role = collect_calibrated_repo_role_classification(agent_reach_concepts)
+    _require(agent_reach_role["primary_role"] != "compression_context",
+             "Agent-Reach calibrated role must not be compression_context")
+    agent_reach_confidence = collect_concept_confidence_calibration(agent_reach_concepts, agent_reach_role)
+    _require(not any(item["concept_family"] == "compression" and item["calibrated_confidence"] >= 55 for item in agent_reach_confidence["concept_calibrations"]),
+             "Agent-Reach compression concepts must be downranked unless direct evidence exists")
+    agent_reach_profile = collect_compression_repo_concept_profile(agent_reach_concepts)
+    _require(agent_reach_profile["compression_profile_decision"] == "not_compression_repo",
+             "Agent-Reach compression profile must reject compression false positive")
+
+    for command, parser, id_key in (
+        ("repo-role-policy", parse_repo_role_calibration_policy_json, "repo_role_calibration_policy_id"),
+        ("repo-role-fixtures", parse_repo_role_calibration_fixtures_json, "repo_role_calibration_fixtures_id"),
+    ):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = _cmd_research([command, "--json"])
+        _require(rc == 0, f"research {command} --json must return 0")
+        payload = parser(out.getvalue())
+        _require(id_key in payload, f"research {command} must output own payload")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            write_rc = _cmd_research([command, "--write"])
+        _require(write_rc != 0 and "read-only" in err.getvalue(), f"research {command} --write must be rejected")
+
     for command, parser in (
         ("archive-concepts", parse_source_aware_archive_concepts_json),
+        ("repo-role", parse_calibrated_repo_role_classification_json),
+        ("concept-confidence", parse_concept_confidence_calibration_json),
         ("compression-profile", parse_compression_repo_concept_profile_json),
         ("compression-upgrade-score", parse_compression_aware_upgrade_scorer_json),
         ("upgrade-genericity", parse_growth_upgrade_genericity_assessment_json),
@@ -18836,6 +18927,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         collect_growth_source_queue_e2e_summary,
         collect_growth_source_queue_policy,
         collect_growth_source_queue_warmup_plan,
+        collect_repo_concept_calibration_report,
         collect_persistent_source_cache_performance_report,
         collect_persistent_source_inventory_cache_manifest,
         collect_persistent_source_inventory_cache_policy,
@@ -18857,6 +18949,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         parse_growth_source_queue_json,
         parse_growth_source_queue_policy_json,
         parse_growth_source_queue_warmup_plan_json,
+        parse_repo_concept_calibration_report_json,
         parse_persistent_source_cache_performance_report_json,
         parse_persistent_source_inventory_cache_manifest_json,
         parse_persistent_source_inventory_cache_policy_json,
@@ -18880,6 +18973,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         stable_growth_source_queue_json,
         stable_growth_source_queue_policy_json,
         stable_growth_source_queue_warmup_plan_json,
+        stable_repo_concept_calibration_report_json,
         stable_persistent_source_cache_performance_report_json,
         stable_persistent_source_inventory_cache_manifest_json,
         stable_persistent_source_inventory_cache_policy_json,
@@ -18901,6 +18995,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         validate_growth_source_queue_e2e_summary,
         validate_growth_source_queue_policy,
         validate_growth_source_queue_warmup_plan,
+        validate_repo_concept_calibration_report,
         validate_persistent_source_cache_performance_report,
         validate_persistent_source_inventory_cache_manifest,
         validate_persistent_source_inventory_cache_policy,
@@ -19107,6 +19202,12 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
                  "queue e2e must preserve Headroom compression differentiation")
         _require(any("crawler" in item["repo_role_summary"].lower() or "source collection" in item["repo_role_summary"].lower() for item in queue_e2e["source_summaries"]),
                  "queue e2e must preserve gpt-crawler differentiation")
+        _require(any(item["primary_repo_role"] == "compression_context" for item in queue_e2e["source_summaries"]),
+                 "queue e2e must include calibrated Headroom compression role")
+        _require(any(item["primary_repo_role"] == "crawler_source_collection" for item in queue_e2e["source_summaries"]),
+                 "queue e2e must include calibrated gpt-crawler role")
+        _require(queue_e2e["best_overall_opportunity"].get("calibrated_direct_usefulness_score", 0) >= 7,
+                 "queue e2e must rank by calibrated direct usefulness")
         validate_growth_source_queue_e2e_summary(queue_e2e)
         _require(parse_growth_source_queue_e2e_summary_json(stable_growth_source_queue_e2e_summary_json(queue_e2e)) == queue_e2e,
                  "growth source queue e2e JSON must round trip")
@@ -19203,6 +19304,8 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     _require(score["decision"] == "accept", "Headroom compression-specific opportunity should score as accepted")
     _require(score["source_specificity_score"] >= 7 and score["link_growth_value_score"] >= 7,
              "growth opportunity score must expose strong source specificity and Link value")
+    _require(score["role_alignment_score"] >= 7 and score["calibrated_direct_usefulness_score"] >= 7,
+             "growth opportunity score must expose calibrated role alignment and direct usefulness")
     validate_growth_opportunity_decision_score(score)
     _require(parse_growth_opportunity_decision_score_json(stable_growth_opportunity_decision_score_json(score)) == score,
              "growth opportunity score JSON must round trip")
@@ -19221,6 +19324,20 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
              "gpt-crawler e2e summary must identify crawler/source collection role")
     _require("compression" not in crawler_summary["best_growth_opportunity"]["title"].lower(),
              "gpt-crawler best opportunity must not be compression-specific")
+    crawler_score = collect_growth_opportunity_decision_score(source_path=crawler_source, summary=crawler_summary)
+    _require(crawler_score["role_alignment_score"] >= 7 and crawler_score["calibration_warnings"] is not None,
+             "gpt-crawler opportunity score must include calibrated role alignment")
+
+    calibration_report = collect_repo_concept_calibration_report(sources=[headroom_source, crawler_source, activepieces_source])
+    _require(any(item["primary_role"] == "compression_context" for item in calibration_report["sources"]),
+             "calibration report must include Headroom compression role")
+    _require(any(item["primary_role"] == "crawler_source_collection" for item in calibration_report["sources"]),
+             "calibration report must include gpt-crawler role")
+    _require(calibration_report["model_used"] is False and calibration_report["external_network_used"] is False,
+             "calibration report must stay deterministic/no-network")
+    validate_repo_concept_calibration_report(calibration_report)
+    _require(parse_repo_concept_calibration_report_json(stable_repo_concept_calibration_report_json(calibration_report)) == calibration_report,
+             "calibration report JSON must round trip")
 
     for command, parser, id_key in (
         ("source-cache-policy", parse_persistent_source_inventory_cache_policy_json, "persistent_source_inventory_cache_policy_id"),
@@ -19260,6 +19377,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         ("source-queue-status", parse_growth_source_queue_cache_status_json, "growth_source_queue_cache_status_id"),
         ("source-queue-warm", parse_growth_source_queue_warmup_plan_json, "growth_source_queue_warmup_plan_id"),
         ("source-queue-e2e", parse_growth_source_queue_e2e_summary_json, "growth_source_queue_e2e_summary_id"),
+        ("concept-calibration-report", parse_repo_concept_calibration_report_json, "repo_concept_calibration_report_id"),
     ):
         out = io.StringIO()
         argv = [command, "--source", headroom_source, "--source", crawler_source, "--json"] if command != "source-queue-policy" else [command, "--json"]
@@ -19293,6 +19411,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         ("source-queue-status", "Growth Source Queue Cache Status"),
         ("source-queue-warm", "Queue Warmup"),
         ("source-queue-e2e", "Queue E2E"),
+        ("concept-calibration-report", "Calibration Report"),
     ):
         human_out = io.StringIO()
         with contextlib.redirect_stdout(human_out):
