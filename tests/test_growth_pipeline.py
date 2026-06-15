@@ -19425,12 +19425,30 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
                  "direct upgrade eval must keep crawler-like fixture from becoming compression-first")
         _require(all(item["task_alignment_source"] for item in direct_eval["per_target_summaries"]),
                  "direct upgrade eval must surface task alignment source")
+        _require(all(item["summary_reuse_source"] in {"queue_e2e", "mixed", "recomputed"} for item in direct_eval["per_target_summaries"]),
+                 "direct upgrade eval per-target summaries must expose reuse source")
+        _require(any(item["summary_reuse_source"] in {"queue_e2e", "mixed"} for item in direct_eval["per_target_summaries"]),
+                 "direct upgrade eval must reuse queue E2E summaries for suitable sources")
+        _require(all("reused_fields" in item and "recomputed_fields" in item for item in direct_eval["per_target_summaries"]),
+                 "direct upgrade eval per-target summaries must expose reused/recomputed fields")
         _require(direct_eval["model_used"] is False and direct_eval["external_network_used"] is False and direct_eval["fallback_allowed"] is False,
                  "direct upgrade eval must avoid model/network/fallback")
         _require(direct_eval["request_reuse_summary"]["request_cache_enabled"] is True and "repeated_rebuilds_avoided_count" in direct_eval["request_reuse_summary"],
                  "direct upgrade eval must include request reuse summary")
+        _require(direct_eval["request_reuse_summary"]["source_queue_e2e_reused_for_targets_count"] >= 1,
+                 "direct upgrade eval must count queue E2E target reuse")
+        _require(direct_eval["request_reuse_summary"]["avoided_per_target_recompute_count"] > 0,
+                 "direct upgrade eval must report avoided per-target recomputes")
+        _require(direct_eval["request_reuse_summary"]["opportunity_score_recompute_count"] < len(direct_eval["targets_evaluated"]),
+                 "direct upgrade eval must avoid recomputing opportunity scores for every target")
+        _require(direct_eval["performance_summary"]["reuse_optimization_enabled"] is True,
+                 "direct upgrade eval must expose reuse optimization status")
         roi_scores = {item["total_roi_score"] for item in direct_eval["candidate_upgrades"]}
         _require(len(roi_scores) > 1, "direct upgrade eval candidate ROI scores must be non-uniform")
+        _require(all("candidate_source_artifact" in item and "reused_queue_score" in item for item in direct_eval["candidate_upgrades"]),
+                 "direct upgrade eval candidates must expose source artifact provenance")
+        _require(any(item["candidate_source_artifact"] == "queue_e2e_source_summary" for item in direct_eval["candidate_upgrades"]),
+                 "direct upgrade eval must build source candidates from queue E2E summaries")
         _require(any(item["rejection_reason"] for item in direct_eval["rejected_candidates"]),
                  "direct upgrade eval must include rejected candidates with reasons")
         _require(direct_eval["broken_unoptimized_items"],
@@ -19662,6 +19680,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         human = human_out.getvalue()
         _require(rc == 0 and marker in human and not human.lstrip().startswith("{"),
                  f"growth {command} human output must be compact and not raw JSON")
+        if command == "direct-upgrade-eval":
+            _require("reuse:" in human and "queue E2E reused" in human,
+                     "direct upgrade eval human output must summarize reuse")
     queue_e2e_human = io.StringIO()
     with contextlib.redirect_stdout(queue_e2e_human):
         rc = _cmd_growth(["source-queue-e2e", "--source", headroom_source, "--source", crawler_source])

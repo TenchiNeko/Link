@@ -16560,6 +16560,14 @@ def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None,
                 "primary_repo_role_confidence": role["primary_role_confidence"],
                 "calibrated_top_concepts": calibrated_top,
                 "calibrated_best_opportunity": best["title"],
+                "calibrated_direct_usefulness_score": score["calibrated_direct_usefulness_score"],
+                "role_alignment_score": score["role_alignment_score"],
+                "concept_confidence_score": score["concept_confidence_score"],
+                "evidence_support_score": score["evidence_support_score"],
+                "source_specificity_score": score["source_specificity_score"],
+                "link_growth_value_score": score["link_growth_value_score"],
+                "implementation_feasibility_score": score["implementation_feasibility_score"],
+                "safety_risk_score": score["safety_risk_score"],
                 "calibration_warnings": score["calibration_warnings"],
                 "role_mismatch_warnings": score["rejected_due_to_role_mismatch"],
                 "false_positive_warnings": role["overclassification_warnings"],
@@ -16604,6 +16612,14 @@ def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None,
                 "primary_repo_role_confidence": "low",
                 "calibrated_top_concepts": [],
                 "calibrated_best_opportunity": "unavailable",
+                "calibrated_direct_usefulness_score": 0,
+                "role_alignment_score": 0,
+                "concept_confidence_score": 0,
+                "evidence_support_score": 0,
+                "source_specificity_score": 0,
+                "link_growth_value_score": 0,
+                "implementation_feasibility_score": 0,
+                "safety_risk_score": 10,
                 "calibration_warnings": [reason],
                 "role_mismatch_warnings": [],
                 "false_positive_warnings": [],
@@ -16644,6 +16660,14 @@ def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None,
             "primary_repo_role_confidence": "low",
             "calibrated_top_concepts": [],
             "calibrated_best_opportunity": "unavailable",
+            "calibrated_direct_usefulness_score": 0,
+            "role_alignment_score": 0,
+            "concept_confidence_score": 0,
+            "evidence_support_score": 0,
+            "source_specificity_score": 0,
+            "link_growth_value_score": 0,
+            "implementation_feasibility_score": 0,
+            "safety_risk_score": 10,
             "calibration_warnings": [reason],
             "role_mismatch_warnings": [],
             "false_positive_warnings": [],
@@ -17827,6 +17851,102 @@ def parse_repo_concept_calibration_report_json(text: str) -> dict[str, Any]:
     return payload
 
 
+def collect_repo_concept_calibration_report_from_queue_e2e(queue_e2e: dict[str, Any], queue: dict[str, Any], *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    source_entries: list[dict[str, Any]] = []
+    false_positive_sources: list[dict[str, Any]] = []
+    weak_sources: list[dict[str, Any]] = []
+    best_opportunities: list[dict[str, Any]] = []
+    distribution: dict[str, int] = {}
+    for item in queue_e2e.get("source_summaries", []):
+        source_path = str(item.get("source_path", ""))
+        if not source_path:
+            continue
+        top_concepts = list(item.get("calibrated_top_concepts", []))[:5]
+        warnings = _normalize_implementation_branch_refs(
+            list(item.get("false_positive_warnings", []))
+            + list(item.get("role_mismatch_warnings", []))
+            + list(item.get("calibration_warnings", []))
+        )
+        primary_role = str(item.get("primary_repo_role", "unknown"))
+        confidence = str(item.get("primary_repo_role_confidence", "low"))
+        decision = str(item.get("operator_decision", "needs_more_evidence"))
+        best_title = str(item.get("best_growth_opportunity_title") or item.get("calibrated_best_opportunity") or "unavailable")
+        source_entry = {
+            "source_path": source_path,
+            "primary_role": primary_role,
+            "confidence": confidence,
+            "top_concepts": top_concepts,
+            "overclassification_warnings": warnings,
+            "best_opportunity": best_title,
+            "decision": decision,
+            "recommended_next_action": str(item.get("recommended_next_action", "Review queue E2E calibrated source summary.")),
+        }
+        source_entries.append(source_entry)
+        distribution[primary_role] = distribution.get(primary_role, 0) + 1
+        if warnings:
+            false_positive_sources.append(source_entry)
+        if confidence in {"weak", "low"} or decision == "blocked":
+            weak_sources.append(source_entry)
+        best_opportunities.append({
+            "source_path": source_path,
+            "title": best_title,
+            "primary_role": primary_role,
+            "calibrated_direct_usefulness_score": int(item.get("calibrated_direct_usefulness_score", 0)),
+            "decision": decision,
+        })
+    summarized_paths = {item["source_path"] for item in source_entries}
+    for quarantine in queue.get("quarantine_records", []):
+        if quarantine["quarantine_status"] == "not_quarantined" or quarantine["source_path"] in summarized_paths:
+            continue
+        weak_sources.append({
+            "source_path": quarantine["source_path"],
+            "primary_role": "unknown",
+            "confidence": "low",
+            "top_concepts": [],
+            "overclassification_warnings": [quarantine["quarantine_reason"]],
+            "best_opportunity": "skipped",
+            "decision": "blocked",
+            "recommended_next_action": quarantine["recommended_next_action"],
+        })
+    total = max(1, len(source_entries))
+    high_or_medium = sum(1 for item in source_entries if item["confidence"] in {"high", "medium"})
+    penalty = len(false_positive_sources) + len(weak_sources)
+    quality = max(0, min(100, int((high_or_medium / total) * 100) - penalty * 5))
+    payload = {
+        "repo_concept_calibration_report_version": REPO_CONCEPT_CALIBRATION_REPORT_VERSION,
+        "repo_concept_calibration_report_id": "repo-concept-calibration-report-" + _research_target_hash_text({"source": "queue-e2e", "queue_id": queue_e2e.get("growth_source_queue_e2e_summary_id", ""), "sources": [item["source_path"] for item in source_entries], "version": REPO_CONCEPT_CALIBRATION_REPORT_VERSION})[:12],
+        "sources": source_entries,
+        "overclassification_summary": {
+            "source_count": len(false_positive_sources),
+            "sources": [{"source_path": item["source_path"], "warnings": item["overclassification_warnings"][:3]} for item in false_positive_sources],
+        },
+        "false_positive_summary": {
+            "compression_false_positive_count": sum(1 for item in false_positive_sources if any("compression" in warning.lower() for warning in item["overclassification_warnings"])),
+            "sources": [item["source_path"] for item in false_positive_sources],
+        },
+        "underclassification_summary": {
+            "weak_source_count": len(weak_sources),
+            "sources": [{"source_path": item["source_path"], "reason": item["recommended_next_action"]} for item in weak_sources],
+        },
+        "role_family_distribution": distribution,
+        "calibration_quality_score": quality,
+        "best_calibrated_opportunities": sorted(best_opportunities, key=lambda entry: (entry["calibrated_direct_usefulness_score"], entry["title"]), reverse=True)[:5],
+        "needs_profile_work": weak_sources[:8],
+        "recommended_next_action": "Review queue E2E role-aligned opportunities; add profile fixtures for weak or mismatched sources.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_repo_concept_calibration_report(payload)
+    return payload
+
+
 def _growth_direct_eval_issue(issue_id: str, severity: str, category: str, title: str, observed: str, expected: str, evidence: str, fix: str, *, implement_now: bool = False, blocked_reason: str = "") -> dict[str, Any]:
     return {
         "issue_id": issue_id,
@@ -17860,6 +17980,9 @@ def _growth_direct_eval_candidate(
     next_slice: str,
     blocked: bool = False,
     rejection_reason: str = "",
+    candidate_source_artifact: str = "direct_eval_summary",
+    reused_queue_score: bool = False,
+    recompute_reason: str = "",
 ) -> dict[str, Any]:
     scores = [direct_value, friction, test_speed, source_specificity, confidence, safety, verification]
     direct_value, friction, test_speed, source_specificity, confidence, safety, verification = [max(0, min(10, int(item))) for item in scores]
@@ -17883,6 +18006,9 @@ def _growth_direct_eval_candidate(
         "rejection_reason": _source_aware_text(rejection_reason, max_chars=180),
         "evidence_summary": _source_aware_text(evidence, max_chars=260),
         "recommended_implementation_slice": _source_aware_text(next_slice, max_chars=240),
+        "candidate_source_artifact": candidate_source_artifact,
+        "reused_queue_score": bool(reused_queue_score),
+        "recompute_reason": _source_aware_text(recompute_reason, max_chars=180),
     }
 
 
@@ -17903,24 +18029,97 @@ def _growth_direct_eval_rank_candidates(candidates: list[dict[str, Any]]) -> lis
     return ranked
 
 
+def _growth_direct_eval_normalized_source_path(source_path: str) -> str:
+    return str(source_path or "").strip()
+
+
+def build_queue_e2e_source_summary_index(queue_e2e: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for item in queue_e2e.get("source_summaries", []):
+        source_path = _growth_direct_eval_normalized_source_path(str(item.get("source_path", "")))
+        if source_path:
+            index[source_path] = item
+    return index
+
+
+def get_queue_e2e_source_summary_for_source(index: dict[str, dict[str, Any]], source_path: str) -> dict[str, Any]:
+    return dict(index.get(_growth_direct_eval_normalized_source_path(source_path), {}))
+
+
+def summarize_queue_e2e_source_for_direct_eval(source_path: str, queue_e2e: dict[str, Any]) -> dict[str, Any]:
+    index = build_queue_e2e_source_summary_index(queue_e2e)
+    item = get_queue_e2e_source_summary_for_source(index, source_path)
+    if not item:
+        return {
+            "reuse_status": "missing_from_queue_e2e",
+            "source_path": source_path,
+            "reused_fields": [],
+            "missing_fields": ["best_growth_opportunity_title", "primary_repo_role", "calibrated_direct_usefulness_score"],
+            "summary": {},
+        }
+    required_fields = (
+        "best_growth_opportunity_title", "primary_repo_role", "primary_repo_role_confidence",
+        "calibrated_top_concepts", "calibrated_direct_usefulness_score", "role_alignment_score",
+        "evidence_support_score", "safety_risk_score", "operator_confidence_score",
+    )
+    missing = [field for field in required_fields if field not in item]
+    reuse_status = "reused_from_queue_e2e" if not missing else "incomplete_queue_e2e_summary"
+    return {
+        "reuse_status": reuse_status,
+        "source_path": source_path,
+        "reused_fields": [field for field in required_fields if field in item],
+        "missing_fields": missing,
+        "summary": item,
+    }
+
+
 def _growth_direct_eval_per_target_summary(source_path: str, queue: dict[str, Any], status: dict[str, Any], queue_e2e: dict[str, Any]) -> dict[str, Any]:
     source_entry = next((item for item in queue["selected_sources"] if item["source_path"] == source_path), {})
     source_status = next((item for item in status["source_statuses"] if item["source_path"] == source_path), {})
-    e2e_item = next((item for item in queue_e2e["source_summaries"] if item["source_path"] == source_path), {})
-    summary = collect_source_aware_growth_e2e_summary(source_path=source_path)
-    score = collect_growth_opportunity_decision_score(source_path=source_path, summary=summary)
+    queue_summary = summarize_queue_e2e_source_for_direct_eval(source_path, queue_e2e)
+    e2e_item = dict(queue_summary.get("summary", {}))
+    recomputed_fields: list[str] = []
+    reuse_warnings: list[str] = []
+    if queue_summary["reuse_status"] == "missing_from_queue_e2e":
+        summary = collect_source_aware_growth_e2e_summary(source_path=source_path)
+        score = collect_growth_opportunity_decision_score(source_path=source_path, summary=summary)
+        best_title = summary["best_growth_opportunity"]["title"]
+        e2e_item = {
+            "best_growth_opportunity_title": best_title,
+            "calibrated_best_opportunity": best_title,
+            "primary_repo_role": "unknown",
+            "primary_repo_role_confidence": "low",
+            "calibrated_top_concepts": [],
+            "calibrated_direct_usefulness_score": score["calibrated_direct_usefulness_score"],
+            "role_alignment_score": score["role_alignment_score"],
+            "evidence_support_score": score["evidence_support_score"],
+            "safety_risk_score": score["safety_risk_score"],
+            "operator_confidence_score": score["operator_confidence_score"],
+            "recommended_next_action": score["recommended_next_action"],
+            "cache_status": source_status.get("cache_status", "miss"),
+        }
+        recomputed_fields.extend(["e2e_summary", "opportunity_score"])
+    elif queue_summary["reuse_status"] == "incomplete_queue_e2e_summary":
+        reuse_warnings.append("queue E2E summary was reused with missing optional direct-eval fields")
     cache, artifacts = get_or_collect_source_archive_intake_cache_for_request(source_path)
     profile = artifacts.get("compression_profile", {})
     task = artifacts.get("operator_task_draft", {})
-    best = summary["best_growth_opportunity"]
+    best_title = str(e2e_item.get("best_growth_opportunity_title") or e2e_item.get("calibrated_best_opportunity") or "unavailable")
     task_title = str(task.get("calibrated_best_growth_opportunity") or task.get("objective") or "")
-    dashboard_title = best["title"]
-    e2e_title = best["title"]
+    dashboard_title = best_title
+    e2e_title = best_title
     divergence = []
     if task_title and task_title != e2e_title and e2e_title not in task_title:
         divergence.append(f"task draft title differs from E2E best: {task_title}")
     task_alignment_source = str(task.get("task_alignment_source") or ("calibrated_task_candidate" if not divergence else "diverged"))
     task_alignment_warnings = _normalize_implementation_branch_refs(list(task.get("task_alignment_warnings", [])) + divergence)
+    reused_fields = list(queue_summary.get("reused_fields", [])) + ["source_archive_intake_request_cache", "compression_profile", "operator_task_draft"]
+    missing_fields = list(queue_summary.get("missing_fields", []))
+    summary_reuse_source = "queue_e2e" if not recomputed_fields else "mixed"
+    if queue_summary["reuse_status"] == "incomplete_queue_e2e_summary":
+        summary_reuse_source = "mixed"
+    if queue_summary["reuse_status"] == "missing_from_queue_e2e":
+        summary_reuse_source = "recomputed"
     return {
         "source_path": source_path,
         "source_name": source_entry.get("source_name", source_path.rsplit("/", 1)[-1]),
@@ -17931,12 +18130,12 @@ def _growth_direct_eval_per_target_summary(source_path: str, queue: dict[str, An
         "primary_repo_role_confidence": e2e_item.get("primary_repo_role_confidence", "low"),
         "calibrated_top_concepts": e2e_item.get("calibrated_top_concepts", [])[:5],
         "compression_profile_decision": profile.get("compression_profile_decision", "insufficient_evidence"),
-        "best_growth_opportunity_title": best["title"],
-        "calibrated_direct_usefulness_score": score["calibrated_direct_usefulness_score"],
-        "role_alignment_score": score["role_alignment_score"],
-        "evidence_support_score": score["evidence_support_score"],
-        "safety_risk_score": score["safety_risk_score"],
-        "operator_confidence_score": score["operator_confidence_score"],
+        "best_growth_opportunity_title": best_title,
+        "calibrated_direct_usefulness_score": e2e_item.get("calibrated_direct_usefulness_score", 0),
+        "role_alignment_score": e2e_item.get("role_alignment_score", 0),
+        "evidence_support_score": e2e_item.get("evidence_support_score", 0),
+        "safety_risk_score": e2e_item.get("safety_risk_score", 10),
+        "operator_confidence_score": e2e_item.get("operator_confidence_score", 0),
         "task_draft_title": task_title,
         "task_alignment_source": task_alignment_source,
         "task_alignment_warnings": task_alignment_warnings,
@@ -17944,7 +18143,12 @@ def _growth_direct_eval_per_target_summary(source_path: str, queue: dict[str, An
         "e2e_best_opportunity_title": e2e_title,
         "divergence_warnings": _normalize_implementation_branch_refs(divergence),
         "source_archive_intake_cache_id": cache["source_archive_intake_cache_id"],
-        "recommended_next_action": score["recommended_next_action"],
+        "recommended_next_action": e2e_item.get("recommended_next_action", "Review queue E2E opportunity before implementation."),
+        "summary_reuse_source": summary_reuse_source,
+        "recomputed_fields": recomputed_fields,
+        "reused_fields": _normalize_implementation_branch_refs(reused_fields),
+        "missing_fields": _normalize_implementation_branch_refs(missing_fields),
+        "reuse_warnings": _normalize_implementation_branch_refs(reuse_warnings),
     }
 
 
@@ -17975,6 +18179,9 @@ def _growth_direct_eval_build_candidates(per_target: list[dict[str, Any]], issue
             next_slice=item["recommended_next_action"],
             blocked=blocked,
             rejection_reason="task/dashboard/E2E divergence must be resolved first" if blocked else "",
+            candidate_source_artifact="queue_e2e_source_summary" if item["summary_reuse_source"] in {"queue_e2e", "mixed"} else "recomputed_opportunity_score",
+            reused_queue_score=item["summary_reuse_source"] in {"queue_e2e", "mixed"} and "opportunity_score" not in item["recomputed_fields"],
+            recompute_reason="; ".join(item["recomputed_fields"]),
         ))
     if any(issue["issue_id"] == "planning-deterministic-hotspot" for issue in issues):
         candidates.append(_growth_direct_eval_candidate(
@@ -17992,6 +18199,7 @@ def _growth_direct_eval_build_candidates(per_target: list[dict[str, Any]], issue
             maintenance=3,
             evidence="Prior measured planning-deterministic runtime remains about 69-70s.",
             next_slice="Add per-check timings and move expensive console data coverage behind an explicit deeper planning suite.",
+            candidate_source_artifact="direct_eval_issue",
         ))
     if any(issue["issue_id"] == "activepieces-quarantined" for issue in issues):
         candidates.append(_growth_direct_eval_candidate(
@@ -18009,6 +18217,7 @@ def _growth_direct_eval_build_candidates(per_target: list[dict[str, Any]], issue
             maintenance=6,
             evidence="activepieces remains quarantined by deterministic source-ref generation checks.",
             next_slice="Inspect source-ref path normalization failure and add a fail-closed adapter only if the archive shape is clearly supported.",
+            candidate_source_artifact="direct_eval_issue",
         ))
     candidates.append(_growth_direct_eval_candidate(
         candidate_id="growth-direct-upgrade-candidate-model-status",
@@ -18027,6 +18236,7 @@ def _growth_direct_eval_build_candidates(per_target: list[dict[str, Any]], issue
         next_slice="Keep model work out of Growth deterministic path; only improve status text if needed.",
         blocked=True,
         rejection_reason="model path is out of scope for deterministic Growth evaluator",
+        candidate_source_artifact="prior_observed_issue",
     ))
     return _growth_direct_eval_rank_candidates(candidates)
 
@@ -18151,11 +18361,15 @@ def collect_growth_direct_upgrade_eval(*, sources: list[str] | None = None, writ
     warmup = collect_growth_source_queue_warmup_plan(sources=explicit_sources or None, write_cache=write_cache)
     status = collect_growth_source_queue_cache_status(sources=explicit_sources or None) if write_cache else status_before
     queue_e2e = collect_growth_source_queue_e2e_summary(sources=explicit_sources or None)
-    calibration = collect_repo_concept_calibration_report(sources=explicit_sources or None)
+    calibration = collect_repo_concept_calibration_report_from_queue_e2e(queue_e2e, queue)
     selected_sources = [item["source_path"] for item in queue["selected_sources"]]
+    per_target_started = _time.perf_counter()
     per_target = [_growth_direct_eval_per_target_summary(source, queue, status, queue_e2e) for source in selected_sources]
+    per_target_runtime_ms = int((_time.perf_counter() - per_target_started) * 1000)
     issues = _growth_direct_eval_build_issues(status, warmup, queue_e2e, calibration, per_target, queue)
+    candidate_started = _time.perf_counter()
     candidates = _growth_direct_eval_build_candidates(per_target, issues)
+    candidate_runtime_ms = int((_time.perf_counter() - candidate_started) * 1000)
     accepted = [item for item in candidates if item["decision"] == "accept"]
     runners = [item for item in candidates if item["decision"] == "runner_up"]
     rejected = [item for item in candidates if item["decision"] in {"reject", "blocked", "needs_more_evidence"}]
@@ -18170,6 +18384,27 @@ def collect_growth_direct_upgrade_eval(*, sources: list[str] | None = None, writ
             reused += int(cache.get("reused_count", 0))
         except Exception:
             pass
+    reused_queue_targets = sum(1 for item in per_target if item.get("summary_reuse_source") in {"queue_e2e", "mixed"})
+    per_target_e2e_recompute_count = sum(1 for item in per_target if "e2e_summary" in item.get("recomputed_fields", []))
+    opportunity_recompute_count = sum(1 for item in per_target if "opportunity_score" in item.get("recomputed_fields", []))
+    repo_role_recompute_count = sum(1 for item in per_target if "repo_role" in item.get("recomputed_fields", []))
+    concept_confidence_recompute_count = sum(1 for item in per_target if "concept_confidence" in item.get("recomputed_fields", []))
+    task_draft_recompute_count = sum(1 for item in per_target if "task_draft" in item.get("recomputed_fields", []))
+    dashboard_recompute_count = sum(1 for item in per_target if "dashboard" in item.get("recomputed_fields", []))
+    avoided_per_target_recompute_count = max(0, reused_queue_targets * 2 - per_target_e2e_recompute_count - opportunity_recompute_count)
+    reuse_notes = [
+        "source archive intake artifacts are reused in-process",
+        "persistent cache writes are controlled only by --write-cache",
+        "queue E2E source summaries are reused for per-target direct evaluator title/role/score fields",
+    ]
+    if avoided_per_target_recompute_count:
+        reuse_notes.append("avoided_per_target_recompute_count is a conservative E2E plus opportunity-score estimate")
+    slowest_steps = sorted([
+        {"step": "queue_e2e", "runtime_ms": int(queue_e2e["performance_summary"]["total_runtime_ms"])},
+        {"step": "warmup", "runtime_ms": int(warmup["total_runtime_ms"])},
+        {"step": "per_target_summary", "runtime_ms": per_target_runtime_ms},
+        {"step": "candidate_ranking", "runtime_ms": candidate_runtime_ms},
+    ], key=lambda item: item["runtime_ms"], reverse=True)
     payload = {
         "growth_direct_upgrade_eval_version": GROWTH_DIRECT_UPGRADE_EVAL_VERSION,
         "eval_version": GROWTH_DIRECT_UPGRADE_EVAL_VERSION,
@@ -18220,12 +18455,30 @@ def collect_growth_direct_upgrade_eval(*, sources: list[str] | None = None, writ
             "source_artifacts_reused_count": reused,
             "source_artifacts_computed_count": computed,
             "repeated_rebuilds_avoided_count": max(0, reused + len(selected_sources) * 2),
-            "notes": _normalize_implementation_branch_refs(["source archive intake artifacts are reused in-process", "persistent cache writes are controlled only by --write-cache"]),
+            "source_queue_e2e_reused_for_targets_count": reused_queue_targets,
+            "per_target_e2e_recompute_count": per_target_e2e_recompute_count,
+            "opportunity_score_recompute_count": opportunity_recompute_count,
+            "repo_role_recompute_count": repo_role_recompute_count,
+            "concept_confidence_recompute_count": concept_confidence_recompute_count,
+            "task_draft_recompute_count": task_draft_recompute_count,
+            "dashboard_recompute_count": dashboard_recompute_count,
+            "avoided_per_target_recompute_count": avoided_per_target_recompute_count,
+        "queue_summary_reuse_enabled": True,
+            "concept_calibration_report_reused_from_queue_e2e": True,
+            "notes": _normalize_implementation_branch_refs(reuse_notes),
         },
         "performance_summary": {
             "total_runtime_ms": int((_time.perf_counter() - started) * 1000),
             "queue_e2e_runtime_ms": queue_e2e["performance_summary"]["total_runtime_ms"],
+            "per_target_summary_runtime_ms": per_target_runtime_ms,
+            "candidate_ranking_runtime_ms": candidate_runtime_ms,
             "warmup_runtime_ms": warmup["total_runtime_ms"],
+            "reuse_optimization_enabled": True,
+            "slowest_steps": slowest_steps,
+            "hotspot_notes": _normalize_implementation_branch_refs([
+                "queue E2E remains the dominant deterministic step when source summaries are cold",
+                "direct evaluator no longer recomputes per-target E2E/opportunity scores when queue E2E summaries are complete",
+            ]),
             "slowest_sources": queue_e2e["performance_summary"].get("slowest_sources", [])[:5],
         },
         "write_cache_requested": bool(write_cache),
@@ -18265,11 +18518,13 @@ def validate_growth_direct_upgrade_eval(payload: dict[str, Any]) -> None:
     if not payload["growth_direct_upgrade_eval_id"].startswith("growth-direct-upgrade-eval-"):
         raise ValueError("invalid growth direct upgrade eval id")
     for item in payload["per_target_summaries"]:
-        for key in ("source_path", "source_name", "suitability_status", "quarantine_status", "cache_status", "primary_repo_role", "primary_repo_role_confidence", "calibrated_top_concepts", "compression_profile_decision", "best_growth_opportunity_title", "calibrated_direct_usefulness_score", "role_alignment_score", "evidence_support_score", "safety_risk_score", "operator_confidence_score", "task_draft_title", "task_alignment_source", "task_alignment_warnings", "dashboard_best_opportunity_title", "e2e_best_opportunity_title", "divergence_warnings", "recommended_next_action"):
+        for key in ("source_path", "source_name", "suitability_status", "quarantine_status", "cache_status", "primary_repo_role", "primary_repo_role_confidence", "calibrated_top_concepts", "compression_profile_decision", "best_growth_opportunity_title", "calibrated_direct_usefulness_score", "role_alignment_score", "evidence_support_score", "safety_risk_score", "operator_confidence_score", "task_draft_title", "task_alignment_source", "task_alignment_warnings", "dashboard_best_opportunity_title", "e2e_best_opportunity_title", "divergence_warnings", "recommended_next_action", "summary_reuse_source", "recomputed_fields", "reused_fields", "missing_fields", "reuse_warnings"):
             if key not in item:
                 raise ValueError(f"growth direct eval per-target summary missing {key}")
+        if item["summary_reuse_source"] not in {"queue_e2e", "concept_calibration_report", "cache_status", "recomputed", "mixed"}:
+            raise ValueError("invalid growth direct eval per-target summary reuse source")
     for candidate in payload["candidate_upgrades"]:
-        for key in ("candidate_id", "source_path", "title", "candidate_type", "direct_growth_functionality_value", "operator_friction_reduction", "test_checkpoint_speed_value", "source_specificity", "implementation_confidence", "safety_score", "verification_clarity", "expected_maintenance_burden", "total_roi_score", "decision", "rejection_reason", "evidence_summary", "recommended_implementation_slice"):
+        for key in ("candidate_id", "source_path", "title", "candidate_type", "direct_growth_functionality_value", "operator_friction_reduction", "test_checkpoint_speed_value", "source_specificity", "implementation_confidence", "safety_score", "verification_clarity", "expected_maintenance_burden", "total_roi_score", "decision", "rejection_reason", "evidence_summary", "recommended_implementation_slice", "candidate_source_artifact", "reused_queue_score", "recompute_reason"):
             if key not in candidate:
                 raise ValueError(f"growth direct eval candidate missing {key}")
         if candidate["decision"] not in {"accept", "runner_up", "reject", "needs_more_evidence", "blocked"}:
@@ -18283,9 +18538,13 @@ def validate_growth_direct_upgrade_eval(payload: dict[str, Any]) -> None:
         if issue["severity"] not in {"critical", "high", "medium", "low"}:
             raise ValueError("invalid growth direct eval issue severity")
     reuse = payload["request_reuse_summary"]
-    for key in ("request_cache_id", "request_cache_enabled", "source_artifacts_reused_count", "source_artifacts_computed_count", "repeated_rebuilds_avoided_count", "notes"):
+    for key in ("request_cache_id", "request_cache_enabled", "source_artifacts_reused_count", "source_artifacts_computed_count", "repeated_rebuilds_avoided_count", "source_queue_e2e_reused_for_targets_count", "per_target_e2e_recompute_count", "opportunity_score_recompute_count", "repo_role_recompute_count", "concept_confidence_recompute_count", "task_draft_recompute_count", "dashboard_recompute_count", "avoided_per_target_recompute_count", "queue_summary_reuse_enabled", "notes"):
         if key not in reuse:
             raise ValueError(f"growth direct eval reuse summary missing {key}")
+    perf = payload["performance_summary"]
+    for key in ("total_runtime_ms", "queue_e2e_runtime_ms", "per_target_summary_runtime_ms", "candidate_ranking_runtime_ms", "warmup_runtime_ms", "reuse_optimization_enabled", "slowest_steps", "hotspot_notes"):
+        if key not in perf:
+            raise ValueError(f"growth direct eval performance summary missing {key}")
     if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
         raise ValueError("growth direct eval must avoid model/network/fallback")
     if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["automation_allowed"] is not False:
@@ -26051,7 +26310,14 @@ def _growth_print_direct_upgrade_eval(payload: dict[str, Any]) -> None:
     print(f"    model used: {safety}")
     print("    OpenRouter: no")
     print(f"    network: {'yes' if payload['external_network_used'] else 'no'}")
-    print(f"  reuse: avoided {payload['request_reuse_summary']['repeated_rebuilds_avoided_count']} repeated rebuild(s)")
+    reuse = payload["request_reuse_summary"]
+    print("  reuse:")
+    print(
+        "    queue E2E reused for "
+        f"{reuse['source_queue_e2e_reused_for_targets_count']} targets; "
+        f"opportunity recomputes {reuse['opportunity_score_recompute_count']}; "
+        f"avoided {reuse['avoided_per_target_recompute_count']} per-target recomputes"
+    )
     print(f"  next: {payload['recommended_next_action']}")
 
 
