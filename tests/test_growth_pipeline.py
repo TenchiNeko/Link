@@ -78,15 +78,21 @@ REAL_RESEARCH_ARCHIVE_MARKERS = (
 )
 SUITE_TIMING_ORDER = (
     "foundation-fast",
+    "planning-fast",
+    "planning-deep",
     "planning-deterministic",
     "execution-deterministic",
+    "base",
     "source-fast",
     "source-slow",
 )
 SUITE_TIMING_THRESHOLDS = {
     "foundation-fast": 30.0,
-    "planning-deterministic": 45.0,
+    "planning-fast": 20.0,
+    "planning-deep": 90.0,
+    "planning-deterministic": 90.0,
     "execution-deterministic": 45.0,
+    "base": 45.0,
     "source-fast": 60.0,
     "source-slow": 180.0,
 }
@@ -135,6 +141,10 @@ def _print_growth_test_timing_summary(total_seconds: float | None = None) -> Non
 
 def _run_slow_growth_archive_tests() -> bool:
     return os.environ.get("LINK_RUN_SLOW_GROWTH_ARCHIVE_TESTS") == "1"
+
+
+def _run_deep_growth_planning_tests() -> bool:
+    return os.environ.get("LINK_RUN_DEEP_GROWTH_PLANNING_TESTS") == "1"
 
 
 def _tiny_source_archive_fixture_root() -> Path:
@@ -21610,8 +21620,7 @@ FOUNDATION_FAST_CHECKS = (
 )
 
 
-PLANNING_DETERMINISTIC_CHECKS = (
-    check_growth_console_data,
+PLANNING_FAST_CHECKS = (
     check_growth_proposals_data,
     check_growth_propose_command,
     check_growth_approve_command,
@@ -21709,6 +21718,14 @@ PLANNING_DETERMINISTIC_CHECKS = (
 )
 
 
+PLANNING_DEEP_CHECKS = (
+    check_growth_console_data,
+)
+
+
+PLANNING_DETERMINISTIC_CHECKS = PLANNING_FAST_CHECKS + PLANNING_DEEP_CHECKS
+
+
 EXECUTION_DETERMINISTIC_CHECKS = (
     check_growth_execute_dry_run,
     check_growth_execute_write,
@@ -21775,10 +21792,25 @@ def run_foundation_fast_suite() -> None:
     print("Growth pipeline foundation-fast suite passed")
 
 
+def run_planning_fast_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("planning-fast", slow_threshold_seconds=20.0):
+        _run_check_group(PLANNING_FAST_CHECKS)
+    print("Growth pipeline planning-fast suite passed")
+
+
+def run_planning_deep_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("planning-deep", slow_threshold_seconds=90.0):
+        _run_check_group(PLANNING_DEEP_CHECKS)
+    print("Growth pipeline planning-deep suite passed")
+
+
 def run_planning_deterministic_suite() -> None:
     _ensure_growth_test_setup()
-    with time_section("planning-deterministic"):
-        _run_check_group(PLANNING_DETERMINISTIC_CHECKS)
+    with time_section("planning-deterministic", slow_threshold_seconds=90.0):
+        run_planning_fast_suite()
+        run_planning_deep_suite()
     print("Growth pipeline planning-deterministic suite passed")
 
 
@@ -21790,9 +21822,10 @@ def run_execution_deterministic_suite() -> None:
 
 
 def run_base_suite() -> None:
-    run_foundation_fast_suite()
-    run_planning_deterministic_suite()
-    run_execution_deterministic_suite()
+    with time_section("base", slow_threshold_seconds=45.0):
+        run_foundation_fast_suite()
+        run_planning_fast_suite()
+        run_execution_deterministic_suite()
     print("Growth pipeline base suite passed")
 
 
@@ -21832,6 +21865,11 @@ def run_default_suite() -> None:
     started = time.perf_counter()
     run_base_suite()
     run_source_fast_suite()
+    if _run_deep_growth_planning_tests():
+        run_planning_deep_suite()
+    else:
+        _GROWTH_TEST_SKIPPED_SUITES.add("planning-deep")
+        print("planning-deep: skipped; run --suite planning-deep or --suite all for deep deterministic planning checks")
     if _run_slow_growth_archive_tests():
         run_source_slow_suite()
     else:
@@ -21844,6 +21882,7 @@ def run_default_suite() -> None:
 def run_all_suites() -> None:
     started = time.perf_counter()
     run_base_suite()
+    run_planning_deep_suite()
     run_source_fast_suite()
     run_source_slow_suite()
     _print_growth_test_timing_summary(time.perf_counter() - started)
@@ -21853,14 +21892,17 @@ def run_all_suites() -> None:
 def _print_suite_list() -> None:
     print("Growth pipeline test suites:")
     print("  foundation-fast          Fast foundational deterministic checks.")
-    print("  planning-deterministic   Deterministic planning/control-plane checks.")
+    print("  planning-fast            Fast deterministic planning/console checks.")
+    print("  planning-deep            Deeper deterministic planning/console checks.")
+    print("  planning-deterministic   planning-fast + planning-deep.")
     print("  execution-deterministic  Deterministic execution/receipt/verifier checks.")
-    print("  base                     foundation-fast + planning-deterministic + execution-deterministic.")
+    print("  base                     foundation-fast + planning-fast + execution-deterministic.")
     print("  source-fast              Tiny fixture source-aware checks.")
     print("  source-slow              Real archive integration checks.")
-    print("  all                      base + source-fast + source-slow.")
+    print("  all                      base + planning-deep + source-fast + source-slow.")
     print("Recommended commands:")
     print("  python3 tests/test_growth_pipeline.py --suite foundation-fast")
+    print("  python3 tests/test_growth_pipeline.py --suite planning-fast")
     print("  python3 tests/test_growth_pipeline.py --suite base")
     print("  python3 tests/test_growth_pipeline.py --suite source-fast")
     print("  python3 tests/test_growth_pipeline.py --suite all")
@@ -21868,7 +21910,7 @@ def _print_suite_list() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run deterministic Growth pipeline smoke test suites.")
-    parser.add_argument("--suite", choices=("foundation-fast", "planning-deterministic", "execution-deterministic", "base", "source-fast", "source-slow", "all"), help="suite to run")
+    parser.add_argument("--suite", choices=("foundation-fast", "planning-fast", "planning-deep", "planning-deterministic", "execution-deterministic", "base", "source-fast", "source-slow", "all"), help="suite to run")
     parser.add_argument("--list-suites", action="store_true", help="list available suites and recommended commands")
     args = parser.parse_args(argv)
     if args.list_suites:
@@ -21878,6 +21920,14 @@ def main(argv: list[str] | None = None) -> int:
     started = time.perf_counter()
     if suite == "foundation-fast":
         run_foundation_fast_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "planning-fast":
+        run_planning_fast_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "planning-deep":
+        run_planning_deep_suite()
         _print_growth_test_timing_summary(time.perf_counter() - started)
         return 0
     if suite == "planning-deterministic":
