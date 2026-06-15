@@ -67,6 +67,29 @@ _GROWTH_TEST_TIMINGS: list[tuple[str, float]] = []
 _GROWTH_TEST_SKIPPED_SUITES: set[str] = set()
 _TINY_SOURCE_ARCHIVE_FIXTURE_DIR: tempfile.TemporaryDirectory[str] | None = None
 _TINY_SOURCE_ARCHIVE_FIXTURES: dict[str, str] = {}
+REAL_RESEARCH_ARCHIVE_MARKERS = (
+    "research/headroom-main.zip",
+    "research/gpt-crawler-main.zip",
+    "research/Agent-Reach-main.zip",
+    "research/Flowise-main.zip",
+    "research/AiToEarn-main.zip",
+    "research/agentmemory-main.zip",
+    "research/activepieces-main.zip",
+)
+SUITE_TIMING_ORDER = (
+    "foundation-fast",
+    "planning-deterministic",
+    "execution-deterministic",
+    "source-fast",
+    "source-slow",
+)
+SUITE_TIMING_THRESHOLDS = {
+    "foundation-fast": 30.0,
+    "planning-deterministic": 45.0,
+    "execution-deterministic": 45.0,
+    "source-fast": 60.0,
+    "source-slow": 180.0,
+}
 
 
 def _growth_test_timing_enabled() -> bool:
@@ -88,17 +111,21 @@ def time_section(name: str, slow_threshold_seconds: float = 10.0):
 def _print_growth_test_timing_summary(total_seconds: float | None = None) -> None:
     if not _growth_test_timing_enabled():
         return
-    suite_names = ("base", "source-fast", "source-slow")
     timing_by_name: dict[str, float] = {}
     for name, elapsed in _GROWTH_TEST_TIMINGS:
         timing_by_name[name] = elapsed
     print("Growth test timings:")
-    if any(name in timing_by_name or name in _GROWTH_TEST_SKIPPED_SUITES for name in suite_names):
-        for name in suite_names:
+    if any(name in timing_by_name or name in _GROWTH_TEST_SKIPPED_SUITES for name in SUITE_TIMING_ORDER):
+        for name in SUITE_TIMING_ORDER:
             if name in _GROWTH_TEST_SKIPPED_SUITES:
                 print(f"  {name}: skipped")
             elif name in timing_by_name:
                 print(f"  {name}: {timing_by_name[name]:.2f}s")
+        for name in SUITE_TIMING_ORDER:
+            elapsed = timing_by_name.get(name)
+            threshold = SUITE_TIMING_THRESHOLDS.get(name)
+            if elapsed is not None and threshold is not None and elapsed > threshold:
+                print(f"  warning: {name} exceeded {threshold:.0f}s threshold ({elapsed:.2f}s)")
         if total_seconds is not None:
             print(f"  total: {total_seconds:.2f}s")
         return
@@ -198,18 +225,16 @@ def check_growth_suite_selector_boundaries() -> None:
     }
     _require(all(item.startswith("research/.growth-test-fixtures-") for item in generated_sources),
              "source-fast fixtures must be generated tiny archives")
-    real_archive_sources = {
-        "research/headroom-main.zip",
-        "research/gpt-crawler-main.zip",
-        "research/Agent-Reach-main.zip",
-        "research/Flowise-main.zip",
-        "research/AiToEarn-main.zip",
-        "research/agentmemory-main.zip",
-        "research/activepieces-main.zip",
-    }
-    _require(not generated_sources.intersection(real_archive_sources),
+    _require(not generated_sources.intersection(set(REAL_RESEARCH_ARCHIVE_MARKERS)),
              "source-fast fixtures must not point at real archive integration targets")
     print("growth suite selector boundaries OK")
+
+
+def check_base_suite_boundary_guards() -> None:
+    for source in REAL_RESEARCH_ARCHIVE_MARKERS:
+        _require(source not in {make_headroom_like_fixture(), make_crawler_like_fixture(), make_reach_like_fixture(), make_workflow_like_fixture()},
+                 "base tiers must not point generated fixtures at real archive targets")
+    print("growth base suite boundary guards OK")
 
 
 def _sample_control_plane_proposal(
@@ -21373,172 +21398,205 @@ def _ensure_growth_test_setup() -> None:
     _install_growth_collector_test_cache()
 
 
-def run_base_suite() -> None:
+FOUNDATION_FAST_CHECKS = (
+    check_base_suite_boundary_guards,
+    check_fork_lineage_receipt_helper,
+    check_transcript_snapshot_receipt_helper,
+    check_growth_facade,
+    check_upgrade_miner_candidates,
+    check_research_archive_miner,
+    check_approved_research_handoff_executor,
+    check_self_learning_dashboard,
+    check_control_plane_accepts_valid_proposal,
+    check_bridge_produces_valid_proposal,
+    check_bridge_rejects_bad_input,
+    check_growth_propose_function,
+)
+
+
+PLANNING_DETERMINISTIC_CHECKS = (
+    check_growth_console_data,
+    check_growth_proposals_data,
+    check_growth_propose_command,
+    check_growth_approve_command,
+    check_growth_reject_command,
+    check_growth_approve_reject_missing_id,
+    check_growth_handoff_dry_run,
+    check_growth_handoff_write,
+    check_growth_handoff_errors,
+    check_growth_run_guide,
+    check_growth_run_with_source,
+    check_growth_run_smart_router,
+    check_growth_handoffs_empty,
+    check_growth_handoffs_populated,
+    check_growth_archive_inventory_empty,
+    check_growth_archive_inventory_populated,
+    check_growth_archive_extract_dry_run,
+    check_growth_archive_extract_write,
+    check_growth_archive_extract_blocked,
+    check_growth_archive_catalog_dry_run,
+    check_growth_archive_catalog_write,
+    check_growth_archive_catalog_refuses_existing,
+    check_growth_archive_queue_empty,
+    check_growth_archive_queue_populated,
+    check_growth_archive_queue_invalid_catalog,
+    check_growth_archive_mine_dry_run_rank,
+    check_growth_archive_mine_dry_run_source,
+    check_growth_archive_mine_errors,
+    check_growth_archive_batch_mine_dry_run,
+    check_growth_archive_batch_mine_top_clamp,
+    check_growth_archive_batch_mine_partial_failure,
+    check_growth_archive_code_queue_empty,
+    check_growth_archive_code_queue_populated,
+    check_growth_archive_code_queue_top_clamp,
+    check_growth_business_opportunity_scan_helper,
+    check_growth_business_opportunities_cli,
+    check_growth_business_evidence_contract_helper,
+    check_growth_business_evidence_contract_cli,
+    check_growth_opportunity_review_package_helper,
+    check_growth_opportunity_review_cli,
+    check_growth_campaign_plan_preview_helper,
+    check_growth_campaign_plan_preview_cli,
+    check_link_module_boundary_registry_helper,
+    check_link_module_boundary_registry_cli,
+    check_growth_campaign_governance_helpers,
+    check_growth_campaign_governance_clis,
+    check_business_development_intake_governance_helpers,
+    check_business_development_intake_governance_clis,
+    check_business_development_source_governance_helpers,
+    check_business_development_source_governance_clis,
+    check_business_development_collection_planning_helpers,
+    check_business_development_collection_planning_clis,
+    check_business_operations_governance_helpers,
+    check_business_operations_governance_clis,
+    check_business_readiness_governance_helpers,
+    check_business_readiness_governance_clis,
+    check_business_execution_governance_helpers,
+    check_business_execution_governance_clis,
+    check_governance_dashboard_helpers,
+    check_governance_dashboard_clis,
+    check_control_plane_dashboard_helpers,
+    check_control_plane_dashboard_clis,
+    check_control_plane_operator_ux_helpers,
+    check_control_plane_operator_ux_clis,
+    check_business_execution_simulation_helpers,
+    check_business_execution_simulation_clis,
+    check_simulation_analysis_helpers,
+    check_simulation_analysis_clis,
+    check_simulation_remediation_planning_helpers,
+    check_simulation_remediation_planning_clis,
+    check_execution_readiness_sandbox_helpers,
+    check_execution_readiness_sandbox_clis,
+    check_operator_decision_engine_helpers,
+    check_operator_decision_engine_clis,
+    check_operator_decision_trace_helpers,
+    check_operator_decision_trace_clis,
+    check_operator_action_plan_helpers,
+    check_operator_action_plan_clis,
+    check_operator_task_draft_helpers,
+    check_operator_task_draft_clis,
+    check_sandbox_executor_boundary_helpers,
+    check_sandbox_executor_boundary_clis,
+    check_growth_code_brief_propose_batch,
+    check_ruflo_upgrade_intake_helper,
+    check_ruflo_upgrade_plan_helper,
+    check_self_learning_feedback_receipt_helper,
+    check_self_learning_next_step_recommendations_helper,
+    check_repo_value_scan_helper,
+    check_link_capability_inventory_helper,
+    check_capability_gap_preview_helper,
+    check_growth_planning_preview_helper,
+    check_capability_graph_helper,
+    check_capability_evidence_graph_helper,
+    check_capability_discovery_helper,
+    check_capability_intelligence_payload_helper,
+)
+
+
+EXECUTION_DETERMINISTIC_CHECKS = (
+    check_growth_execute_dry_run,
+    check_growth_execute_write,
+    check_growth_execute_errors,
+    check_growth_receipts_empty,
+    check_growth_receipts_populated,
+    check_growth_finalize_command,
+    check_upgrade_execution_plan_helper,
+    check_implementation_branch_plan_helper,
+    check_implementation_work_packages_helper,
+    check_verification_plan_helper,
+    check_verified_patch_plan_helper,
+    check_verified_patch_diff_helper,
+    check_patch_applier_boundary_helper,
+    check_patch_behavior_quality_gate_helper,
+    check_autonomous_execution_package_helper,
+    check_growth_planning_chain_cli,
+    check_growth_execution_readiness_cli,
+    check_growth_execution_gates_cli,
+    check_growth_execution_approval_checklist_cli,
+    check_growth_execution_review_cli,
+    check_workspace_creator_runtime_boundary_helper,
+    check_growth_workspace_boundary_cli,
+    check_growth_patch_boundary_cli,
+    check_workspace_creator_runtime_plan_helper,
+    check_guarded_workspace_creator_runtime_component,
+    check_guarded_patch_applier_runtime_component,
+    check_verification_runner_boundary_helper,
+    check_growth_verification_boundary_cli,
+    check_guarded_verification_runner_runtime_component,
+    check_rollback_runtime_boundary_helper,
+    check_growth_rollback_boundary_cli,
+    check_guarded_rollback_executor_runtime_component,
+    check_execution_evidence_collector_runtime_component,
+    check_growth_evidence_collect_cli,
+    check_supervised_execution_write_boundary_helper,
+    check_supervised_execution_review_package_helper,
+    check_growth_supervised_execution_review_package_cli,
+    check_growth_supervised_execution_boundary_cli,
+    check_growth_supervised_execution_cli,
+    check_supervised_execution_orchestrator_runtime_component,
+    check_guarded_workspace_lifecycle_cleanup_abandon,
+    check_planning_chain_review_bundle_helper,
+    check_execution_readiness_stack_helper,
+    check_execution_journal_schema_helper,
+    check_execution_evidence_contract_helper,
+    check_execution_preflight_checklist_helper,
+    check_execution_attempt_history_helper,
+    check_execution_readiness_dashboard_summary_helper,
+    check_execution_gate_stack_preview_helper,
+    check_growth_archive_code_brief_dry_run,
+    check_growth_archive_code_brief_write,
+    check_growth_code_brief_propose,
+    check_make_unique_title,
+    check_content_replacement_entry_helper,
+    check_fork_lineage_with_content_replacements,
+)
+
+
+def run_foundation_fast_suite() -> None:
     _ensure_growth_test_setup()
-    with time_section("base"):
-        _run_check_group((
-            check_fork_lineage_receipt_helper,
-            check_transcript_snapshot_receipt_helper,
-            check_growth_facade,
-            check_upgrade_miner_candidates,
-            check_research_archive_miner,
-            check_approved_research_handoff_executor,
-            check_self_learning_dashboard,
-            check_control_plane_accepts_valid_proposal,
-            check_bridge_produces_valid_proposal,
-            check_bridge_rejects_bad_input,
-            check_growth_propose_function,
-            check_growth_console_data,
-            check_growth_proposals_data,
-            check_growth_propose_command,
-            check_growth_approve_command,
-            check_growth_reject_command,
-            check_growth_approve_reject_missing_id,
-            check_growth_handoff_dry_run,
-            check_growth_handoff_write,
-            check_growth_handoff_errors,
-            check_growth_run_guide,
-            check_growth_run_with_source,
-            check_growth_run_smart_router,
-            check_growth_handoffs_empty,
-            check_growth_handoffs_populated,
-            check_growth_execute_dry_run,
-            check_growth_execute_write,
-            check_growth_execute_errors,
-            check_growth_receipts_empty,
-            check_growth_receipts_populated,
-            check_growth_finalize_command,
-            check_growth_archive_inventory_empty,
-            check_growth_archive_inventory_populated,
-            check_growth_archive_extract_dry_run,
-            check_growth_archive_extract_write,
-            check_growth_archive_extract_blocked,
-            check_growth_archive_catalog_dry_run,
-            check_growth_archive_catalog_write,
-            check_growth_archive_catalog_refuses_existing,
-            check_growth_archive_queue_empty,
-            check_growth_archive_queue_populated,
-            check_growth_archive_queue_invalid_catalog,
-            check_growth_archive_mine_dry_run_rank,
-            check_growth_archive_mine_dry_run_source,
-            check_growth_archive_mine_errors,
-            check_growth_archive_batch_mine_dry_run,
-            check_growth_archive_batch_mine_top_clamp,
-            check_growth_archive_batch_mine_partial_failure,
-            check_growth_archive_code_queue_empty,
-            check_growth_archive_code_queue_populated,
-            check_growth_archive_code_queue_top_clamp,
-            check_growth_business_opportunity_scan_helper,
-            check_growth_business_opportunities_cli,
-            check_growth_business_evidence_contract_helper,
-            check_growth_business_evidence_contract_cli,
-            check_growth_opportunity_review_package_helper,
-            check_growth_opportunity_review_cli,
-            check_growth_campaign_plan_preview_helper,
-            check_growth_campaign_plan_preview_cli,
-            check_link_module_boundary_registry_helper,
-            check_link_module_boundary_registry_cli,
-            check_growth_campaign_governance_helpers,
-            check_growth_campaign_governance_clis,
-            check_business_development_intake_governance_helpers,
-            check_business_development_intake_governance_clis,
-            check_business_development_source_governance_helpers,
-            check_business_development_source_governance_clis,
-            check_business_development_collection_planning_helpers,
-            check_business_development_collection_planning_clis,
-            check_business_operations_governance_helpers,
-            check_business_operations_governance_clis,
-            check_business_readiness_governance_helpers,
-            check_business_readiness_governance_clis,
-            check_business_execution_governance_helpers,
-            check_business_execution_governance_clis,
-            check_governance_dashboard_helpers,
-            check_governance_dashboard_clis,
-            check_control_plane_dashboard_helpers,
-            check_control_plane_dashboard_clis,
-            check_control_plane_operator_ux_helpers,
-            check_control_plane_operator_ux_clis,
-            check_business_execution_simulation_helpers,
-            check_business_execution_simulation_clis,
-            check_simulation_analysis_helpers,
-            check_simulation_analysis_clis,
-            check_simulation_remediation_planning_helpers,
-            check_simulation_remediation_planning_clis,
-            check_execution_readiness_sandbox_helpers,
-            check_execution_readiness_sandbox_clis,
-            check_operator_decision_engine_helpers,
-            check_operator_decision_engine_clis,
-            check_operator_decision_trace_helpers,
-            check_operator_decision_trace_clis,
-            check_operator_action_plan_helpers,
-            check_operator_action_plan_clis,
-            check_operator_task_draft_helpers,
-            check_operator_task_draft_clis,
-            check_sandbox_executor_boundary_helpers,
-            check_sandbox_executor_boundary_clis,
-            check_growth_code_brief_propose_batch,
-            check_ruflo_upgrade_intake_helper,
-            check_ruflo_upgrade_plan_helper,
-            check_self_learning_feedback_receipt_helper,
-            check_self_learning_next_step_recommendations_helper,
-            check_repo_value_scan_helper,
-            check_link_capability_inventory_helper,
-            check_capability_gap_preview_helper,
-            check_growth_planning_preview_helper,
-            check_capability_graph_helper,
-            check_capability_evidence_graph_helper,
-            check_capability_discovery_helper,
-            check_capability_intelligence_payload_helper,
-            check_upgrade_execution_plan_helper,
-            check_implementation_branch_plan_helper,
-            check_implementation_work_packages_helper,
-            check_verification_plan_helper,
-            check_verified_patch_plan_helper,
-            check_verified_patch_diff_helper,
-            check_patch_applier_boundary_helper,
-            check_patch_behavior_quality_gate_helper,
-            check_autonomous_execution_package_helper,
-            check_growth_planning_chain_cli,
-            check_growth_execution_readiness_cli,
-            check_growth_execution_gates_cli,
-            check_growth_execution_approval_checklist_cli,
-            check_growth_execution_review_cli,
-            check_workspace_creator_runtime_boundary_helper,
-            check_growth_workspace_boundary_cli,
-            check_growth_patch_boundary_cli,
-            check_workspace_creator_runtime_plan_helper,
-            check_guarded_workspace_creator_runtime_component,
-            check_guarded_patch_applier_runtime_component,
-            check_verification_runner_boundary_helper,
-            check_growth_verification_boundary_cli,
-            check_guarded_verification_runner_runtime_component,
-            check_rollback_runtime_boundary_helper,
-            check_growth_rollback_boundary_cli,
-            check_guarded_rollback_executor_runtime_component,
-            check_execution_evidence_collector_runtime_component,
-            check_growth_evidence_collect_cli,
-            check_supervised_execution_write_boundary_helper,
-            check_supervised_execution_review_package_helper,
-            check_growth_supervised_execution_review_package_cli,
-            check_growth_supervised_execution_boundary_cli,
-            check_growth_supervised_execution_cli,
-            check_supervised_execution_orchestrator_runtime_component,
-            check_guarded_workspace_lifecycle_cleanup_abandon,
-            check_planning_chain_review_bundle_helper,
-            check_execution_readiness_stack_helper,
-            check_execution_journal_schema_helper,
-            check_execution_evidence_contract_helper,
-            check_execution_preflight_checklist_helper,
-            check_execution_attempt_history_helper,
-            check_execution_readiness_dashboard_summary_helper,
-            check_execution_gate_stack_preview_helper,
-            check_growth_archive_code_brief_dry_run,
-            check_growth_archive_code_brief_write,
-            check_growth_code_brief_propose,
-            check_make_unique_title,
-            check_content_replacement_entry_helper,
-            check_fork_lineage_with_content_replacements,
-        ))
+    with time_section("foundation-fast"):
+        _run_check_group(FOUNDATION_FAST_CHECKS)
+    print("Growth pipeline foundation-fast suite passed")
+
+
+def run_planning_deterministic_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("planning-deterministic"):
+        _run_check_group(PLANNING_DETERMINISTIC_CHECKS)
+    print("Growth pipeline planning-deterministic suite passed")
+
+
+def run_execution_deterministic_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("execution-deterministic"):
+        _run_check_group(EXECUTION_DETERMINISTIC_CHECKS)
+    print("Growth pipeline execution-deterministic suite passed")
+
+
+def run_base_suite() -> None:
+    run_foundation_fast_suite()
+    run_planning_deterministic_suite()
+    run_execution_deterministic_suite()
     print("Growth pipeline base suite passed")
 
 
@@ -21598,20 +21656,23 @@ def run_all_suites() -> None:
 
 def _print_suite_list() -> None:
     print("Growth pipeline test suites:")
-    print("  base         foundational deterministic checks; fastest normal checkpoint")
-    print("  source-fast  tiny-fixture source/cache/queue/role calibration checks")
-    print("  source-slow  real archive integration for Headroom/gpt-crawler/Agent-Reach")
-    print("  all          base + source-fast + source-slow")
+    print("  foundation-fast          Fast foundational deterministic checks.")
+    print("  planning-deterministic   Deterministic planning/control-plane checks.")
+    print("  execution-deterministic  Deterministic execution/receipt/verifier checks.")
+    print("  base                     foundation-fast + planning-deterministic + execution-deterministic.")
+    print("  source-fast              Tiny fixture source-aware checks.")
+    print("  source-slow              Real archive integration checks.")
+    print("  all                      base + source-fast + source-slow.")
     print("Recommended commands:")
+    print("  python3 tests/test_growth_pipeline.py --suite foundation-fast")
     print("  python3 tests/test_growth_pipeline.py --suite base")
     print("  python3 tests/test_growth_pipeline.py --suite source-fast")
-    print("  python3 tests/test_growth_pipeline.py")
-    print("  python3 tests/test_growth_pipeline.py --suite source-slow")
+    print("  python3 tests/test_growth_pipeline.py --suite all")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run deterministic Growth pipeline smoke test suites.")
-    parser.add_argument("--suite", choices=("base", "source-fast", "source-slow", "all"), help="suite to run")
+    parser.add_argument("--suite", choices=("foundation-fast", "planning-deterministic", "execution-deterministic", "base", "source-fast", "source-slow", "all"), help="suite to run")
     parser.add_argument("--list-suites", action="store_true", help="list available suites and recommended commands")
     args = parser.parse_args(argv)
     if args.list_suites:
@@ -21619,6 +21680,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     suite = args.suite
     started = time.perf_counter()
+    if suite == "foundation-fast":
+        run_foundation_fast_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "planning-deterministic":
+        run_planning_deterministic_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "execution-deterministic":
+        run_execution_deterministic_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
     if suite == "base":
         run_base_suite()
         _print_growth_test_timing_summary(time.perf_counter() - started)
