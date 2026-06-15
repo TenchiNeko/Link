@@ -13995,10 +13995,41 @@ def _collect_source_aware_operator_task_review_package(
     return package
 
 
+def _select_source_aware_operator_task_candidate(
+    decision: dict[str, Any],
+    source_context: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str, list[str]]:
+    ranked_top = next(item for item in decision["candidate_set"]["candidates"] if item["decision_candidate_id"] == decision["ranking"]["top_candidate_id"])
+    if source_context is None:
+        return ranked_top, "decision_ranking", []
+    calibrated_task = source_context.get("research_target_operator_task_draft")
+    if not isinstance(calibrated_task, dict):
+        return ranked_top, "decision_ranking", []
+    selected_id = calibrated_task.get("selected_upgrade_candidate_id")
+    if not isinstance(selected_id, str) or not selected_id:
+        return ranked_top, "decision_ranking", []
+    aligned = next(
+        (
+            item for item in decision["candidate_set"]["candidates"]
+            if item.get("selected_upgrade_candidate_id") == selected_id
+        ),
+        None,
+    )
+    if not isinstance(aligned, dict):
+        return ranked_top, "decision_ranking", [
+            "calibrated task candidate was not present in the decision candidate set",
+        ]
+    if aligned["decision_candidate_id"] == ranked_top["decision_candidate_id"]:
+        return aligned, "decision_ranking", []
+    return aligned, "calibrated_task_candidate", [
+        f"task draft aligned to calibrated candidate {selected_id} instead of raw decision ranking {ranked_top.get('selected_upgrade_candidate_id', '')}",
+    ]
+
+
 def _source_aware_operator_chain(source_path: str | None = None, *, source_context: dict[str, Any] | None = None) -> dict[str, Any]:
     decision = source_context["decision_chain"] if source_context is not None else _source_aware_decision_chain(source_path)
     binding = decision["binding"]
-    top = next(item for item in decision["candidate_set"]["candidates"] if item["decision_candidate_id"] == decision["ranking"]["top_candidate_id"])
+    top, task_alignment_source, task_alignment_warnings = _select_source_aware_operator_task_candidate(decision, source_context)
     selected_metadata = {**_source_aware_source_metadata(binding), "selected_upgrade_candidate_id": top["selected_upgrade_candidate_id"]}
     target_candidates_payload = source_context.get("research_target_upgrade_candidates", {}) if source_context is not None else {}
     is_compression_profile = bool(target_candidates_payload.get("compression_profile_id"))
@@ -14053,6 +14084,8 @@ def _source_aware_operator_chain(source_path: str | None = None, *, source_conte
         ]),
         "rollback_plan": _normalize_implementation_branch_refs(["do not modify the selected research target", "revert only intended Link source/test edits if rejected", "do not copy external code"]),
         "execution_allowed": False,
+        "task_alignment_source": task_alignment_source,
+        "task_alignment_warnings": _normalize_implementation_branch_refs(task_alignment_warnings),
         **selected_metadata,
         "recommended_next_action": "Review the source-bound action plan before authorizing any implementation slice.",
         "safety_metadata": _read_only_safety_metadata(),
@@ -14084,6 +14117,9 @@ def _source_aware_operator_chain(source_path: str | None = None, *, source_conte
         "concept_confidence_warnings": _normalize_implementation_branch_refs([item["concept_name"] for item in confidence["downranked_concepts"][:5]]),
         "overclassification_warnings": role["overclassification_warnings"],
         "calibrated_best_growth_opportunity": top["title"],
+        "task_alignment_source": task_alignment_source,
+        "task_alignment_warnings": _normalize_implementation_branch_refs(task_alignment_warnings),
+        "task_draft_divergence_warning": "; ".join(_normalize_implementation_branch_refs(task_alignment_warnings)),
         "role_aligned_task_steps": [
             f"verify {role['primary_role']} evidence refs before patching",
             "keep the implementation slice aligned to the calibrated primary repo role",

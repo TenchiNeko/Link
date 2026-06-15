@@ -18877,6 +18877,7 @@ def check_source_aware_archive_concept_extractor_helpers() -> None:
         collect_research_target_upgrade_candidates,
         collect_research_target_upgrade_rationale_card,
         collect_source_aware_archive_concepts,
+        build_source_aware_context_for_cli,
         parse_calibrated_repo_role_classification_json,
         parse_concept_confidence_calibration_json,
         parse_compression_aware_upgrade_scorer_json,
@@ -19065,6 +19066,14 @@ def check_source_aware_archive_concept_extractor_helpers() -> None:
     agent_reach_profile = collect_compression_repo_concept_profile(agent_reach_concepts)
     _require(agent_reach_profile["compression_profile_decision"] == "not_compression_repo",
              "Agent-Reach compression profile must reject compression false positive")
+    agent_reach_calibrated_task = collect_research_target_operator_task_draft(source_path=agent_reach_source)
+    agent_reach_operator_task = build_source_aware_context_for_cli(agent_reach_source)["operator_chain"]["task_draft"]
+    _require(agent_reach_operator_task["selected_upgrade_candidate_id"] == agent_reach_calibrated_task["selected_upgrade_candidate_id"],
+             "source-aware operator task draft must align with calibrated task candidate")
+    _require(agent_reach_operator_task["calibrated_best_growth_opportunity"] == agent_reach_calibrated_task["calibrated_best_growth_opportunity"],
+             "source-aware operator task draft must expose calibrated best opportunity")
+    _require(agent_reach_operator_task["task_alignment_source"] in {"decision_ranking", "calibrated_task_candidate"},
+             "source-aware operator task draft must record alignment source")
 
     workflow_concepts = collect_source_aware_archive_concepts(source_path=workflow_source)
     workflow_role = collect_calibrated_repo_role_classification(workflow_concepts)
