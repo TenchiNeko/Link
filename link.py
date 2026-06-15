@@ -1236,6 +1236,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import growth_source_queue_e2e_main as _growth_source_queue_e2e_main
 
         return _growth_source_queue_e2e_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "direct-upgrade-eval":
+        from link_modes.growth.link_growth_console import growth_direct_upgrade_eval_main as _growth_direct_upgrade_eval_main
+
+        return _growth_direct_upgrade_eval_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "concept-calibration-report":
         from link_modes.growth.link_growth_console import growth_concept_calibration_report_main as _growth_concept_calibration_report_main
 

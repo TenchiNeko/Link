@@ -19124,6 +19124,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     from link import _cmd_growth, _cmd_operator
     from link_modes.growth.link_growth_console import (
         collect_growth_e2e_performance_hotspots,
+        collect_growth_direct_upgrade_eval,
         collect_growth_opportunity_decision_score,
         collect_growth_source_queue,
         collect_growth_source_queue_cache_status,
@@ -19146,6 +19147,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         collect_source_aware_growth_context_cache,
         collect_source_aware_growth_e2e_summary,
         parse_growth_e2e_performance_hotspots_json,
+        parse_growth_direct_upgrade_eval_json,
         parse_growth_opportunity_decision_score_json,
         parse_growth_source_queue_cache_status_json,
         parse_growth_source_queue_e2e_summary_json,
@@ -19170,6 +19172,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         parse_source_aware_growth_e2e_summary_json,
         parse_source_aware_operator_dashboard_json,
         stable_growth_e2e_performance_hotspots_json,
+        stable_growth_direct_upgrade_eval_json,
         stable_growth_opportunity_decision_score_json,
         stable_growth_source_queue_cache_status_json,
         stable_growth_source_queue_e2e_summary_json,
@@ -19192,6 +19195,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         stable_source_aware_growth_context_cache_json,
         stable_source_aware_growth_e2e_summary_json,
         validate_growth_e2e_performance_hotspots,
+        validate_growth_direct_upgrade_eval,
         validate_growth_opportunity_decision_score,
         validate_growth_source_queue,
         validate_growth_source_queue_cache_status,
@@ -19220,6 +19224,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
 
     headroom_source = make_headroom_like_fixture()
     crawler_source = make_crawler_like_fixture()
+    workflow_source = make_workflow_like_fixture()
     missing_source = "research/missing-source-fixture.zip"
 
     cache_key = collect_source_archive_intake_cache_key(source_path=headroom_source)
@@ -19407,6 +19412,40 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         _require(parse_growth_source_queue_e2e_summary_json(stable_growth_source_queue_e2e_summary_json(queue_e2e)) == queue_e2e,
                  "growth source queue e2e JSON must round trip")
 
+        direct_eval = collect_growth_direct_upgrade_eval(sources=[headroom_source, crawler_source, missing_source])
+        _require(direct_eval["targets_evaluated"] == [headroom_source, crawler_source],
+                 "direct upgrade eval must evaluate selected suitable explicit sources")
+        _require(direct_eval["write_cache_requested"] is False and direct_eval["write_cache_performed"] is False and direct_eval["writes"] == [],
+                 "direct upgrade eval must not write cache by default")
+        _require(direct_eval["best_direct_upgrade"] and direct_eval["best_direct_upgrade"]["total_roi_score"] > 0,
+                 "direct upgrade eval must include a best direct upgrade")
+        _require(any(item["primary_repo_role"] == "compression_context" for item in direct_eval["per_target_summaries"]),
+                 "direct upgrade eval must include Headroom-like compression role")
+        _require(any(item["primary_repo_role"] == "crawler_source_collection" and "compression" not in item["best_growth_opportunity_title"].lower() for item in direct_eval["per_target_summaries"]),
+                 "direct upgrade eval must keep crawler-like fixture from becoming compression-first")
+        _require(all(item["task_alignment_source"] for item in direct_eval["per_target_summaries"]),
+                 "direct upgrade eval must surface task alignment source")
+        _require(direct_eval["model_used"] is False and direct_eval["external_network_used"] is False and direct_eval["fallback_allowed"] is False,
+                 "direct upgrade eval must avoid model/network/fallback")
+        _require(direct_eval["request_reuse_summary"]["request_cache_enabled"] is True and "repeated_rebuilds_avoided_count" in direct_eval["request_reuse_summary"],
+                 "direct upgrade eval must include request reuse summary")
+        roi_scores = {item["total_roi_score"] for item in direct_eval["candidate_upgrades"]}
+        _require(len(roi_scores) > 1, "direct upgrade eval candidate ROI scores must be non-uniform")
+        _require(any(item["rejection_reason"] for item in direct_eval["rejected_candidates"]),
+                 "direct upgrade eval must include rejected candidates with reasons")
+        _require(direct_eval["broken_unoptimized_items"],
+                 "direct upgrade eval must capture broken/unoptimized operator notes")
+        validate_growth_direct_upgrade_eval(direct_eval)
+        _require(parse_growth_direct_upgrade_eval_json(stable_growth_direct_upgrade_eval_json(direct_eval)) == direct_eval,
+                 "growth direct upgrade eval JSON must round trip")
+
+        direct_eval_write = collect_growth_direct_upgrade_eval(sources=[workflow_source], write_cache=True)
+        _require(direct_eval_write["write_cache_requested"] is True and direct_eval_write["write_cache_performed"] is True,
+                 "direct upgrade eval --write-cache must perform queue cache writes when needed")
+        _require(direct_eval_write["source_queue_warmup_result_id"] == direct_eval_write["source_queue_warmup_plan_id"],
+                 "direct upgrade eval write result id must link to warmup result")
+        validate_growth_direct_upgrade_eval(direct_eval_write)
+
         growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
         hit_summary = collect_source_aware_growth_e2e_summary(source_path=headroom_source)
         _require(hit_summary["persistent_cache_hit"] is True and hit_summary["cache_source"] == "persistent",
@@ -19578,6 +19617,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         ("source-queue-status", parse_growth_source_queue_cache_status_json, "growth_source_queue_cache_status_id"),
         ("source-queue-warm", parse_growth_source_queue_warmup_plan_json, "growth_source_queue_warmup_plan_id"),
         ("source-queue-e2e", parse_growth_source_queue_e2e_summary_json, "growth_source_queue_e2e_summary_id"),
+        ("direct-upgrade-eval", parse_growth_direct_upgrade_eval_json, "growth_direct_upgrade_eval_id"),
         ("concept-calibration-report", parse_repo_concept_calibration_report_json, "repo_concept_calibration_report_id"),
     ):
         out = io.StringIO()
@@ -19612,6 +19652,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         ("source-queue-status", "Growth Source Queue Cache Status"),
         ("source-queue-warm", "Queue Warmup"),
         ("source-queue-e2e", "Queue E2E"),
+        ("direct-upgrade-eval", "Growth Direct Upgrade Eval"),
         ("concept-calibration-report", "Calibration Report"),
     ):
         human_out = io.StringIO()
