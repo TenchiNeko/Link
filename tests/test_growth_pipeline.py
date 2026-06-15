@@ -19124,6 +19124,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     from link import _cmd_growth, _cmd_operator
     from link_modes.growth.link_growth_console import (
         collect_growth_e2e_performance_hotspots,
+        collect_growth_direct_eval_cache_plan,
         collect_growth_direct_upgrade_eval,
         collect_growth_opportunity_decision_score,
         collect_growth_source_queue,
@@ -19149,6 +19150,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         collect_source_aware_growth_context_cache,
         collect_source_aware_growth_e2e_summary,
         parse_growth_e2e_performance_hotspots_json,
+        parse_growth_direct_eval_cache_plan_json,
         parse_growth_direct_upgrade_eval_json,
         parse_growth_opportunity_decision_score_json,
         parse_growth_source_queue_cache_status_json,
@@ -19176,6 +19178,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         parse_source_aware_growth_e2e_summary_json,
         parse_source_aware_operator_dashboard_json,
         stable_growth_e2e_performance_hotspots_json,
+        stable_growth_direct_eval_cache_plan_json,
         stable_growth_direct_upgrade_eval_json,
         stable_growth_opportunity_decision_score_json,
         stable_growth_source_queue_cache_status_json,
@@ -19201,6 +19204,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         stable_source_aware_growth_context_cache_json,
         stable_source_aware_growth_e2e_summary_json,
         validate_growth_e2e_performance_hotspots,
+        validate_growth_direct_eval_cache_plan,
         validate_growth_direct_upgrade_eval,
         validate_growth_opportunity_decision_score,
         validate_growth_source_queue,
@@ -19354,6 +19358,15 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         _require(parse_growth_source_queue_cache_status_json(stable_growth_source_queue_cache_status_json(queue_status_missing)) == queue_status_missing,
                  "growth source queue cache status JSON must round trip")
 
+        direct_cache_plan_missing = collect_growth_direct_eval_cache_plan(sources=[headroom_source, crawler_source])
+        _require(direct_cache_plan_missing["source_inventory_cache_miss_count"] == 2 and direct_cache_plan_missing["source_inventory_warm_required"] is True,
+                 "direct eval cache plan must detect missing source inventory cache")
+        _require(any(item["action_type"] == "warm_source_inventory_cache" for item in direct_cache_plan_missing["planned_cache_actions"]),
+                 "direct eval cache plan must include source inventory warm actions on misses")
+        validate_growth_direct_eval_cache_plan(direct_cache_plan_missing)
+        _require(parse_growth_direct_eval_cache_plan_json(stable_growth_direct_eval_cache_plan_json(direct_cache_plan_missing)) == direct_cache_plan_missing,
+                 "direct eval cache plan JSON must round trip")
+
         warm_preview = collect_growth_source_queue_warmup_plan(sources=[headroom_source, crawler_source])
         _require(warm_preview["write_cache_requested"] is False and warm_preview["writes"] == [] and warm_preview["estimated_work_count"] == 2,
                  "queue warmup must preview missing cache writes without writing by default")
@@ -19461,10 +19474,16 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
                  "direct upgrade eval must keep crawler-like fixture from becoming compression-first")
         _require(all(item["task_alignment_source"] for item in direct_eval["per_target_summaries"]),
                  "direct upgrade eval must surface task alignment source")
-        _require(all(item["summary_reuse_source"] in {"queue_e2e", "mixed", "recomputed"} for item in direct_eval["per_target_summaries"]),
+        _require(all(item["summary_reuse_source"] in {"queue_e2e", "mixed", "recomputed", "queue_e2e_compact_cache", "queue_e2e_computed"} for item in direct_eval["per_target_summaries"]),
                  "direct upgrade eval per-target summaries must expose reuse source")
-        _require(any(item["summary_reuse_source"] in {"queue_e2e", "mixed"} for item in direct_eval["per_target_summaries"]),
+        _require(any(item["summary_reuse_source"] in {"queue_e2e", "mixed", "queue_e2e_compact_cache", "queue_e2e_computed"} for item in direct_eval["per_target_summaries"]),
                  "direct upgrade eval must reuse queue E2E summaries for suitable sources")
+        _require(all("source_inventory_cache_hit" in item and "source_inventory_cache_used" in item for item in direct_eval["per_target_summaries"]),
+                 "direct upgrade eval per-target summaries must expose source inventory cache state")
+        _require(all("per_target_archive_recompute_avoided" in item for item in direct_eval["per_target_summaries"]),
+                 "direct upgrade eval per-target summaries must expose archive touch avoidance")
+        _require(any(item["per_target_archive_recompute_avoided"] for item in direct_eval["per_target_summaries"]),
+                 "direct upgrade eval must avoid per-target archive touches when queue E2E summaries are sufficient")
         _require(all("reused_fields" in item and "recomputed_fields" in item for item in direct_eval["per_target_summaries"]),
                  "direct upgrade eval per-target summaries must expose reused/recomputed fields")
         _require(direct_eval["model_used"] is False and direct_eval["external_network_used"] is False and direct_eval["fallback_allowed"] is False,
@@ -19477,6 +19496,10 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
                  "direct upgrade eval must report avoided per-target recomputes")
         _require(direct_eval["request_reuse_summary"]["opportunity_score_recompute_count"] < len(direct_eval["targets_evaluated"]),
                  "direct upgrade eval must avoid recomputing opportunity scores for every target")
+        _require("source_inventory_cache_before_hit_count" in direct_eval["request_reuse_summary"] and "per_target_archive_touch_avoided_count" in direct_eval["request_reuse_summary"],
+                 "direct upgrade eval reuse summary must expose source inventory layer fields")
+        _require(direct_eval["request_reuse_summary"]["per_target_archive_touch_avoided_count"] >= 1,
+                 "direct upgrade eval must count avoided per-target archive touches")
         _require(direct_eval["performance_summary"]["reuse_optimization_enabled"] is True,
                  "direct upgrade eval must expose reuse optimization status")
         _require(direct_eval["queue_e2e_cache_used"] is True and direct_eval["request_reuse_summary"]["queue_e2e_compact_cache_used"] is True,
@@ -19500,9 +19523,24 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
                  "direct upgrade eval --write-cache must perform queue cache writes when needed")
         _require(direct_eval_write["queue_e2e_cache_write_performed"] is True,
                  "direct upgrade eval --write-cache must write compact queue E2E cache")
+        _require(direct_eval_write["source_inventory_cache_warm_performed"] is True and direct_eval_write["source_inventory_cache_warmed_count"] >= 1,
+                 "direct upgrade eval --write-cache must warm source inventory cache")
+        _require("source_inventory" in direct_eval_write["cache_layers_warmed"] and "queue_e2e_compact" in direct_eval_write["cache_layers_warmed"],
+                 "direct upgrade eval --write-cache must warm both cache layers")
         _require(direct_eval_write["source_queue_warmup_result_id"] == direct_eval_write["source_queue_warmup_plan_id"],
                  "direct upgrade eval write result id must link to warmup result")
         validate_growth_direct_upgrade_eval(direct_eval_write)
+
+        direct_eval_hot = collect_growth_direct_upgrade_eval(sources=[workflow_source])
+        _require(direct_eval_hot["queue_e2e_cache_used"] is True and direct_eval_hot["request_reuse_summary"]["queue_e2e_compact_cache_used"] is True,
+                 "hot direct eval must use compact queue E2E cache after write")
+        _require(direct_eval_hot["request_reuse_summary"]["source_inventory_cache_after_hit_count"] >= 1,
+                 "hot direct eval must see source inventory cache hits after write")
+        _require(direct_eval_hot["request_reuse_summary"]["source_inventory_cache_used_for_targets_count"] >= 1,
+                 "hot direct eval must use source inventory cache state for target summaries")
+        _require(any(item["source_inventory_cache_hit"] and item["per_target_archive_recompute_avoided"] for item in direct_eval_hot["per_target_summaries"]),
+                 "hot direct eval must avoid archive touches for cache-hot target summaries")
+        validate_growth_direct_upgrade_eval(direct_eval_hot)
 
         growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
         hit_summary = collect_source_aware_growth_e2e_summary(source_path=headroom_source)
@@ -19700,6 +19738,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         ("source-queue-e2e-cache-status", parse_growth_source_queue_e2e_summary_cache_record_json, "growth_source_queue_e2e_cache_record_id"),
         ("source-queue-e2e-cache", parse_growth_source_queue_e2e_summary_cache_record_json, "growth_source_queue_e2e_cache_record_id"),
         ("source-queue-e2e", parse_growth_source_queue_e2e_summary_json, "growth_source_queue_e2e_summary_id"),
+        ("direct-upgrade-eval-cache-plan", parse_growth_direct_eval_cache_plan_json, "growth_direct_eval_cache_plan_id"),
         ("direct-upgrade-eval", parse_growth_direct_upgrade_eval_json, "growth_direct_upgrade_eval_id"),
         ("concept-calibration-report", parse_repo_concept_calibration_report_json, "repo_concept_calibration_report_id"),
     ):

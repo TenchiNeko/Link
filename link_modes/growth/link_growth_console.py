@@ -10948,6 +10948,7 @@ GROWTH_SOURCE_QUEUE_E2E_CACHE_KEY_VERSION = "link-growth-source-queue-e2e-cache-
 GROWTH_SOURCE_QUEUE_E2E_CACHE_RECORD_VERSION = "link-growth-source-queue-e2e-cache-record-v1"
 REPO_CONCEPT_CALIBRATION_REPORT_VERSION = "link-repo-concept-calibration-report-v1"
 GROWTH_DIRECT_UPGRADE_EVAL_VERSION = "link-growth-direct-upgrade-eval-v1"
+GROWTH_DIRECT_EVAL_CACHE_PLAN_VERSION = "link-growth-direct-eval-cache-plan-v1"
 PERSISTENT_SOURCE_INVENTORY_COLLECTOR_VERSION = "link-source-inventory-collector-v1"
 PERSISTENT_SOURCE_INVENTORY_PROVENANCE_SCHEMA_VERSION = "link-source-provenance-schema-v1"
 PERSISTENT_SOURCE_INVENTORY_CACHE_SCHEMA_VERSION = "link-source-inventory-cache-schema-v1"
@@ -18617,6 +18618,145 @@ def summarize_queue_e2e_source_for_direct_eval(source_path: str, queue_e2e: dict
     }
 
 
+def _growth_source_inventory_cache_status_summary(status: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "growth_source_queue_cache_status_id": status.get("growth_source_queue_cache_status_id", ""),
+        "cache_root": status.get("cache_root", ""),
+        "cache_hit_count": int(status.get("cache_hit_count", 0) or 0),
+        "cache_miss_count": int(status.get("cache_miss_count", 0) or 0),
+        "stale_count": int(status.get("stale_count", 0) or 0),
+        "invalid_count": int(status.get("invalid_count", 0) or 0),
+        "queue_ready_for_e2e": bool(status.get("queue_ready_for_e2e", False)),
+    }
+
+
+def collect_growth_direct_eval_cache_plan(*, sources: list[str] | None = None, write_cache_requested: bool = False, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    explicit_sources = [str(item).strip() for item in (sources or []) if str(item).strip()]
+    queue = collect_growth_source_queue(sources=explicit_sources or None)
+    source_status = collect_growth_source_queue_cache_status(sources=explicit_sources or None)
+    queue_cache = collect_growth_source_queue_e2e_summary_cache_record(sources=explicit_sources or None)
+    planned_actions: list[dict[str, Any]] = []
+    planned_actions.append({
+        "action_type": "observe_source_inventory_cache",
+        "source_path": "",
+        "reason": "direct-upgrade-eval checks persistent source inventory cache before per-target summaries",
+        "command_hint": "python3 link.py growth source-queue-status --json",
+    })
+    for skipped in queue.get("skipped_sources", []):
+        planned_actions.append({
+            "action_type": "skip_quarantined_source",
+            "source_path": skipped.get("source_path", ""),
+            "reason": skipped.get("skip_reason") or skipped.get("quarantine_status") or "source skipped by queue policy",
+            "command_hint": "python3 link.py growth source-quarantine --source <source> --json",
+        })
+    for item in source_status.get("source_statuses", []):
+        if item.get("source_path") and not item.get("cache_hit"):
+            planned_actions.append({
+                "action_type": "warm_source_inventory_cache",
+                "source_path": item["source_path"],
+                "reason": item.get("recommended_action") or item.get("cache_status") or "source inventory cache is not hot",
+                "command_hint": "python3 link.py growth direct-upgrade-eval --write-cache --json",
+            })
+    planned_actions.append({
+        "action_type": "observe_queue_e2e_cache",
+        "source_path": "",
+        "reason": "direct-upgrade-eval checks the compact queue E2E cache before full queue E2E compute",
+        "command_hint": "python3 link.py growth source-queue-e2e-cache-status --json",
+    })
+    if write_cache_requested or not queue_cache.get("cache_valid"):
+        planned_actions.append({
+            "action_type": "write_queue_e2e_cache",
+            "source_path": "",
+            "reason": "compact queue E2E cache is missing or write-cache was requested",
+            "command_hint": "python3 link.py growth source-queue-e2e-cache --write-cache --json",
+        })
+    payload = {
+        "growth_direct_eval_cache_plan_version": GROWTH_DIRECT_EVAL_CACHE_PLAN_VERSION,
+        "growth_direct_eval_cache_plan_id": "growth-direct-eval-cache-plan-" + _research_target_hash_text({
+            "queue": queue["growth_source_queue_id"],
+            "status": source_status["growth_source_queue_cache_status_id"],
+            "queue_cache": queue_cache["growth_source_queue_e2e_cache_record_id"],
+            "write": bool(write_cache_requested),
+            "version": GROWTH_DIRECT_EVAL_CACHE_PLAN_VERSION,
+        })[:12],
+        "source_queue_id": queue["growth_source_queue_id"],
+        "source_inventory_cache_status_id": source_status["growth_source_queue_cache_status_id"],
+        "queue_e2e_cache_status_id": queue_cache["growth_source_queue_e2e_cache_record_id"],
+        "write_cache_requested": bool(write_cache_requested),
+        "source_inventory_cache_hit_count": source_status["cache_hit_count"],
+        "source_inventory_cache_miss_count": source_status["cache_miss_count"],
+        "source_inventory_cache_stale_count": source_status["stale_count"],
+        "queue_e2e_cache_hit": bool(queue_cache.get("cache_hit", False)),
+        "queue_e2e_cache_valid": bool(queue_cache.get("cache_valid", False)),
+        "source_inventory_warm_required": bool(source_status["cache_miss_count"] or source_status["stale_count"] or source_status["invalid_count"]),
+        "queue_e2e_compact_cache_write_required": bool(write_cache_requested or not queue_cache.get("cache_valid")),
+        "planned_cache_actions": planned_actions,
+        "skipped_sources": queue["skipped_sources"],
+        "recommended_next_action": "Run growth direct-upgrade-eval --write-cache --json to prepare both cache layers." if write_cache_requested or source_status["cache_miss_count"] or not queue_cache.get("cache_valid") else "Both cache layers appear ready for a hot direct-upgrade-eval run.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_direct_eval_cache_plan(payload)
+    return payload
+
+
+def validate_growth_direct_eval_cache_plan(payload: dict[str, Any]) -> None:
+    required = (
+        "growth_direct_eval_cache_plan_version", "growth_direct_eval_cache_plan_id",
+        "source_queue_id", "source_inventory_cache_status_id", "queue_e2e_cache_status_id",
+        "write_cache_requested", "source_inventory_cache_hit_count",
+        "source_inventory_cache_miss_count", "source_inventory_cache_stale_count",
+        "queue_e2e_cache_hit", "queue_e2e_cache_valid", "source_inventory_warm_required",
+        "queue_e2e_compact_cache_write_required", "planned_cache_actions", "skipped_sources",
+        "recommended_next_action", "fallback_allowed", "model_used", "external_network_used",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"growth direct eval cache plan missing {key}")
+    if payload["growth_direct_eval_cache_plan_version"] != GROWTH_DIRECT_EVAL_CACHE_PLAN_VERSION:
+        raise ValueError("invalid growth direct eval cache plan version")
+    if not payload["growth_direct_eval_cache_plan_id"].startswith("growth-direct-eval-cache-plan-"):
+        raise ValueError("invalid growth direct eval cache plan id")
+    for action in payload["planned_cache_actions"]:
+        for key in ("action_type", "source_path", "reason", "command_hint"):
+            if key not in action:
+                raise ValueError(f"growth direct eval cache action missing {key}")
+        if action["action_type"] not in {
+            "observe_source_inventory_cache",
+            "warm_source_inventory_cache",
+            "observe_queue_e2e_cache",
+            "write_queue_e2e_cache",
+            "skip_quarantined_source",
+        }:
+            raise ValueError("invalid growth direct eval cache action type")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("growth direct eval cache plan must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False:
+        raise ValueError("growth direct eval cache plan must remain read-only")
+    if payload["writes"] != []:
+        raise ValueError("growth direct eval cache plan must not report writes")
+
+
+def stable_growth_direct_eval_cache_plan_json(payload: dict[str, Any]) -> str:
+    validate_growth_direct_eval_cache_plan(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_growth_direct_eval_cache_plan_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_growth_direct_eval_cache_plan(payload)
+    return payload
+
+
 def _growth_direct_eval_per_target_summary(source_path: str, queue: dict[str, Any], status: dict[str, Any], queue_e2e: dict[str, Any]) -> dict[str, Any]:
     source_entry = next((item for item in queue["selected_sources"] if item["source_path"] == source_path), {})
     source_status = next((item for item in status["source_statuses"] if item["source_path"] == source_path), {})
@@ -18624,7 +18764,13 @@ def _growth_direct_eval_per_target_summary(source_path: str, queue: dict[str, An
     e2e_item = dict(queue_summary.get("summary", {}))
     recomputed_fields: list[str] = []
     reuse_warnings: list[str] = []
+    archive_touch_required = False
+    archive_touch_reason = ""
+    cache: dict[str, Any] = {}
+    artifacts: dict[str, Any] = {}
     if queue_summary["reuse_status"] == "missing_from_queue_e2e":
+        archive_touch_required = True
+        archive_touch_reason = "queue E2E summary did not include this selected source"
         summary = collect_source_aware_growth_e2e_summary(source_path=source_path)
         score = collect_growth_opportunity_decision_score(source_path=source_path, summary=summary)
         best_title = summary["best_growth_opportunity"]["title"]
@@ -18645,35 +18791,62 @@ def _growth_direct_eval_per_target_summary(source_path: str, queue: dict[str, An
         recomputed_fields.extend(["e2e_summary", "opportunity_score"])
     elif queue_summary["reuse_status"] == "incomplete_queue_e2e_summary":
         reuse_warnings.append("queue E2E summary was reused with missing optional direct-eval fields")
-    cache, artifacts = get_or_collect_source_archive_intake_cache_for_request(source_path)
+    if archive_touch_required:
+        cache, artifacts = get_or_collect_source_archive_intake_cache_for_request(source_path)
     profile = artifacts.get("compression_profile", {})
     task = artifacts.get("operator_task_draft", {})
     best_title = str(e2e_item.get("best_growth_opportunity_title") or e2e_item.get("calibrated_best_opportunity") or "unavailable")
-    task_title = str(task.get("calibrated_best_growth_opportunity") or task.get("objective") or "")
+    task_title = str(task.get("calibrated_best_growth_opportunity") or task.get("objective") or best_title)
     dashboard_title = best_title
     e2e_title = best_title
     divergence = []
-    if task_title and task_title != e2e_title and e2e_title not in task_title:
+    if archive_touch_required and task_title and task_title != e2e_title and e2e_title not in task_title:
         divergence.append(f"task draft title differs from E2E best: {task_title}")
-    task_alignment_source = str(task.get("task_alignment_source") or ("calibrated_task_candidate" if not divergence else "diverged"))
+    if archive_touch_required:
+        task_alignment_source = str(task.get("task_alignment_source") or ("calibrated_task_candidate" if not divergence else "diverged"))
+    elif queue_e2e.get("queue_e2e_cache_used"):
+        task_alignment_source = "queue_e2e_compact_cache"
+    else:
+        task_alignment_source = "queue_e2e_source_summary"
     task_alignment_warnings = _normalize_implementation_branch_refs(list(task.get("task_alignment_warnings", [])) + divergence)
-    reused_fields = list(queue_summary.get("reused_fields", [])) + ["source_archive_intake_request_cache", "compression_profile", "operator_task_draft"]
+    reused_fields = list(queue_summary.get("reused_fields", []))
+    if archive_touch_required:
+        reused_fields.extend(["source_archive_intake_request_cache", "compression_profile", "operator_task_draft"])
+    else:
+        reused_fields.extend(["source_queue_status", "queue_e2e_per_target_summary"])
     missing_fields = list(queue_summary.get("missing_fields", []))
-    summary_reuse_source = "queue_e2e" if not recomputed_fields else "mixed"
-    if queue_summary["reuse_status"] == "incomplete_queue_e2e_summary":
+    if queue_e2e.get("queue_e2e_cache_used") and not archive_touch_required:
+        summary_reuse_source = "queue_e2e_compact_cache"
+    elif not archive_touch_required:
+        summary_reuse_source = "queue_e2e_computed"
+    else:
         summary_reuse_source = "mixed"
+    if queue_summary["reuse_status"] == "incomplete_queue_e2e_summary":
+        summary_reuse_source = "mixed" if archive_touch_required else summary_reuse_source
     if queue_summary["reuse_status"] == "missing_from_queue_e2e":
         summary_reuse_source = "recomputed"
+    primary_role = e2e_item.get("primary_repo_role", "unknown")
+    if profile:
+        compression_decision = profile.get("compression_profile_decision", "insufficient_evidence")
+    elif primary_role == "compression_context":
+        compression_decision = "compression_repo"
+    elif primary_role == "unknown":
+        compression_decision = "insufficient_evidence"
+    else:
+        compression_decision = "not_compression_repo"
+    source_inventory_cache_hit = bool(source_status.get("cache_hit", False))
+    source_inventory_cache_used = source_inventory_cache_hit and not archive_touch_required
+    archive_recompute_avoided = not archive_touch_required and queue_summary["reuse_status"] in {"reused_from_queue_e2e", "incomplete_queue_e2e_summary"}
     return {
         "source_path": source_path,
         "source_name": source_entry.get("source_name", source_path.rsplit("/", 1)[-1]),
         "suitability_status": source_entry.get("suitability_status", "suitable"),
         "quarantine_status": source_entry.get("quarantine_status", "not_quarantined"),
         "cache_status": source_status.get("cache_status", e2e_item.get("cache_status", "miss")),
-        "primary_repo_role": e2e_item.get("primary_repo_role", "unknown"),
+        "primary_repo_role": primary_role,
         "primary_repo_role_confidence": e2e_item.get("primary_repo_role_confidence", "low"),
         "calibrated_top_concepts": e2e_item.get("calibrated_top_concepts", [])[:5],
-        "compression_profile_decision": profile.get("compression_profile_decision", "insufficient_evidence"),
+        "compression_profile_decision": compression_decision,
         "best_growth_opportunity_title": best_title,
         "calibrated_direct_usefulness_score": e2e_item.get("calibrated_direct_usefulness_score", 0),
         "role_alignment_score": e2e_item.get("role_alignment_score", 0),
@@ -18686,7 +18859,13 @@ def _growth_direct_eval_per_target_summary(source_path: str, queue: dict[str, An
         "dashboard_best_opportunity_title": dashboard_title,
         "e2e_best_opportunity_title": e2e_title,
         "divergence_warnings": _normalize_implementation_branch_refs(divergence),
-        "source_archive_intake_cache_id": cache["source_archive_intake_cache_id"],
+        "source_archive_intake_cache_id": cache.get("source_archive_intake_cache_id", ""),
+        "source_inventory_cache_hit": source_inventory_cache_hit,
+        "source_inventory_cache_used": source_inventory_cache_used,
+        "source_inventory_cache_record_id": source_status.get("cache_observability_card_id", ""),
+        "archive_touch_required": archive_touch_required,
+        "archive_touch_reason": archive_touch_reason,
+        "per_target_archive_recompute_avoided": archive_recompute_avoided,
         "recommended_next_action": e2e_item.get("recommended_next_action", "Review queue E2E opportunity before implementation."),
         "summary_reuse_source": summary_reuse_source,
         "recomputed_fields": recomputed_fields,
@@ -18723,8 +18902,8 @@ def _growth_direct_eval_build_candidates(per_target: list[dict[str, Any]], issue
             next_slice=item["recommended_next_action"],
             blocked=blocked,
             rejection_reason="task/dashboard/E2E divergence must be resolved first" if blocked else "",
-            candidate_source_artifact="queue_e2e_source_summary" if item["summary_reuse_source"] in {"queue_e2e", "mixed"} else "recomputed_opportunity_score",
-            reused_queue_score=item["summary_reuse_source"] in {"queue_e2e", "mixed"} and "opportunity_score" not in item["recomputed_fields"],
+            candidate_source_artifact="queue_e2e_source_summary" if item["summary_reuse_source"] in {"queue_e2e", "mixed", "queue_e2e_compact_cache", "queue_e2e_computed"} else "recomputed_opportunity_score",
+            reused_queue_score=item["summary_reuse_source"] in {"queue_e2e", "mixed", "queue_e2e_compact_cache", "queue_e2e_computed"} and "opportunity_score" not in item["recomputed_fields"],
             recompute_reason="; ".join(item["recomputed_fields"]),
         ))
     if any(issue["issue_id"] == "planning-deterministic-hotspot" for issue in issues):
@@ -18901,6 +19080,7 @@ def collect_growth_direct_upgrade_eval(*, sources: list[str] | None = None, writ
     explicit_sources = [str(item).strip() for item in (sources or []) if str(item).strip()]
     policy = collect_growth_source_queue_policy()
     queue = collect_growth_source_queue(sources=explicit_sources or None)
+    cache_plan = collect_growth_direct_eval_cache_plan(sources=explicit_sources or None, write_cache_requested=write_cache)
     status_before = collect_growth_source_queue_cache_status(sources=explicit_sources or None)
     warmup = collect_growth_source_queue_warmup_plan(sources=explicit_sources or None, write_cache=write_cache)
     status = collect_growth_source_queue_cache_status(sources=explicit_sources or None) if write_cache else status_before
@@ -18919,16 +19099,10 @@ def collect_growth_direct_upgrade_eval(*, sources: list[str] | None = None, writ
     rejected = [item for item in candidates if item["decision"] in {"reject", "blocked", "needs_more_evidence"}]
     best = accepted[0] if accepted else (candidates[0] if candidates else {})
     after_cache_keys = set(_SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE)
-    computed = 0
-    reused = 0
-    for source in selected_sources:
-        try:
-            cache, _ = get_or_collect_source_archive_intake_cache_for_request(source)
-            computed += int(cache.get("computed_count", 0))
-            reused += int(cache.get("reused_count", 0))
-        except Exception:
-            pass
-    reused_queue_targets = sum(1 for item in per_target if item.get("summary_reuse_source") in {"queue_e2e", "mixed"})
+    computed = sum(1 for item in per_target if item.get("archive_touch_required"))
+    reused = sum(1 for item in per_target if item.get("per_target_archive_recompute_avoided"))
+    queue_reuse_sources = {"queue_e2e", "mixed", "queue_e2e_compact_cache", "queue_e2e_computed"}
+    reused_queue_targets = sum(1 for item in per_target if item.get("summary_reuse_source") in queue_reuse_sources)
     per_target_e2e_recompute_count = sum(1 for item in per_target if "e2e_summary" in item.get("recomputed_fields", []))
     opportunity_recompute_count = sum(1 for item in per_target if "opportunity_score" in item.get("recomputed_fields", []))
     repo_role_recompute_count = sum(1 for item in per_target if "repo_role" in item.get("recomputed_fields", []))
@@ -18936,11 +19110,23 @@ def collect_growth_direct_upgrade_eval(*, sources: list[str] | None = None, writ
     task_draft_recompute_count = sum(1 for item in per_target if "task_draft" in item.get("recomputed_fields", []))
     dashboard_recompute_count = sum(1 for item in per_target if "dashboard" in item.get("recomputed_fields", []))
     avoided_per_target_recompute_count = max(0, reused_queue_targets * 2 - per_target_e2e_recompute_count - opportunity_recompute_count)
+    source_inventory_used_for_targets = sum(1 for item in per_target if item.get("source_inventory_cache_used"))
+    per_target_archive_touch_avoided_count = sum(1 for item in per_target if item.get("per_target_archive_recompute_avoided"))
+    per_target_archive_touch_required_count = sum(1 for item in per_target if item.get("archive_touch_required"))
+    cache_layers_warmed = []
+    if warmup.get("write_cache_performed"):
+        cache_layers_warmed.append("source_inventory")
+    if queue_e2e.get("queue_e2e_cache_write_performed"):
+        cache_layers_warmed.append("queue_e2e_compact")
+    source_inventory_before = _growth_source_inventory_cache_status_summary(status_before)
+    source_inventory_after = _growth_source_inventory_cache_status_summary(status)
     reuse_notes = [
-        "source archive intake artifacts are reused in-process",
+        "per-target summaries prefer compact queue E2E fields before archive-derived artifacts",
         "persistent cache writes are controlled only by --write-cache",
         "queue E2E source summaries are reused for per-target direct evaluator title/role/score fields",
     ]
+    if per_target_archive_touch_avoided_count:
+        reuse_notes.append("per-target archive touches were avoided when queue E2E summaries were sufficient")
     if avoided_per_target_recompute_count:
         reuse_notes.append("avoided_per_target_recompute_count is a conservative E2E plus opportunity-score estimate")
     slowest_steps = sorted([
@@ -18960,10 +19146,18 @@ def collect_growth_direct_upgrade_eval(*, sources: list[str] | None = None, writ
         "source_queue_warmup_result_id": warmup["growth_source_queue_warmup_plan_id"] if write_cache else "",
         "source_queue_e2e_summary_id": queue_e2e["growth_source_queue_e2e_summary_id"],
         "concept_calibration_report_id": calibration["repo_concept_calibration_report_id"],
+        "cache_plan_id": cache_plan["growth_direct_eval_cache_plan_id"],
         "queue_e2e_cache_hit": bool(queue_e2e.get("queue_e2e_cache_hit", False)),
         "queue_e2e_cache_used": bool(queue_e2e.get("queue_e2e_cache_used", False)),
         "queue_e2e_cache_write_performed": bool(queue_e2e.get("queue_e2e_cache_write_performed", False)),
         "queue_e2e_summary_source": str(queue_e2e.get("queue_e2e_summary_source", "computed")),
+        "source_inventory_cache_before": source_inventory_before,
+        "source_inventory_cache_after": source_inventory_after,
+        "source_inventory_cache_warm_performed": bool(warmup.get("write_cache_performed", False)),
+        "source_inventory_cache_warmed_count": int(warmup.get("warmed_count", 0) or 0),
+        "source_inventory_cache_failed_count": int(warmup.get("failed_count", 0) or 0),
+        "source_inventory_cache_skipped_count": int(warmup.get("skipped_count", 0) or 0),
+        "cache_layers_warmed": cache_layers_warmed,
         "targets_evaluated": selected_sources,
         "skipped_sources": queue["skipped_sources"],
         "cache_summary": {
@@ -19011,12 +19205,22 @@ def collect_growth_direct_upgrade_eval(*, sources: list[str] | None = None, writ
             "task_draft_recompute_count": task_draft_recompute_count,
             "dashboard_recompute_count": dashboard_recompute_count,
             "avoided_per_target_recompute_count": avoided_per_target_recompute_count,
-        "queue_summary_reuse_enabled": True,
+            "source_inventory_cache_before_hit_count": status_before["cache_hit_count"],
+            "source_inventory_cache_before_miss_count": status_before["cache_miss_count"],
+            "source_inventory_cache_after_hit_count": status["cache_hit_count"],
+            "source_inventory_cache_after_miss_count": status["cache_miss_count"],
+            "source_inventory_cache_warm_performed": bool(warmup.get("write_cache_performed", False)),
+            "source_inventory_sources_warmed_count": int(warmup.get("warmed_count", 0) or 0),
+            "source_inventory_cache_used_for_targets_count": source_inventory_used_for_targets,
+            "per_target_archive_touch_avoided_count": per_target_archive_touch_avoided_count,
+            "per_target_archive_touch_required_count": per_target_archive_touch_required_count,
+            "queue_summary_reuse_enabled": True,
             "concept_calibration_report_reused_from_queue_e2e": True,
             "queue_e2e_compact_cache_used": bool(queue_e2e.get("queue_e2e_cache_used", False)),
             "queue_e2e_compact_cache_hit": bool(queue_e2e.get("queue_e2e_cache_hit", False)),
             "full_queue_e2e_compute_avoided": bool(queue_e2e.get("queue_e2e_cache_used", False)),
             "compact_cache_write_performed": bool(queue_e2e.get("queue_e2e_cache_write_performed", False)),
+            "cache_layers_ready": bool(status["cache_miss_count"] == 0 and (queue_e2e.get("queue_e2e_cache_used") or queue_e2e.get("queue_e2e_cache_write_performed"))),
             "notes": _normalize_implementation_branch_refs(reuse_notes),
         },
         "performance_summary": {
@@ -19054,7 +19258,7 @@ def validate_growth_direct_upgrade_eval(payload: dict[str, Any]) -> None:
         "growth_direct_upgrade_eval_version", "eval_version", "growth_direct_upgrade_eval_id",
         "source_queue_id", "source_queue_policy_id", "source_queue_cache_status_id",
         "source_queue_warmup_plan_id", "source_queue_warmup_result_id", "source_queue_e2e_summary_id",
-        "concept_calibration_report_id", "queue_e2e_cache_hit", "queue_e2e_cache_used", "queue_e2e_cache_write_performed", "queue_e2e_summary_source", "targets_evaluated", "skipped_sources", "cache_summary",
+        "concept_calibration_report_id", "cache_plan_id", "queue_e2e_cache_hit", "queue_e2e_cache_used", "queue_e2e_cache_write_performed", "queue_e2e_summary_source", "source_inventory_cache_before", "source_inventory_cache_after", "source_inventory_cache_warm_performed", "source_inventory_cache_warmed_count", "source_inventory_cache_failed_count", "source_inventory_cache_skipped_count", "cache_layers_warmed", "targets_evaluated", "skipped_sources", "cache_summary",
         "queue_summary", "per_target_summaries", "candidate_upgrades", "best_direct_upgrade",
         "runner_up_upgrades", "rejected_candidates", "broken_unoptimized_items", "operator_notes",
         "recommended_next_implementation_slice", "recommended_next_action", "request_reuse_summary",
@@ -19070,10 +19274,10 @@ def validate_growth_direct_upgrade_eval(payload: dict[str, Any]) -> None:
     if not payload["growth_direct_upgrade_eval_id"].startswith("growth-direct-upgrade-eval-"):
         raise ValueError("invalid growth direct upgrade eval id")
     for item in payload["per_target_summaries"]:
-        for key in ("source_path", "source_name", "suitability_status", "quarantine_status", "cache_status", "primary_repo_role", "primary_repo_role_confidence", "calibrated_top_concepts", "compression_profile_decision", "best_growth_opportunity_title", "calibrated_direct_usefulness_score", "role_alignment_score", "evidence_support_score", "safety_risk_score", "operator_confidence_score", "task_draft_title", "task_alignment_source", "task_alignment_warnings", "dashboard_best_opportunity_title", "e2e_best_opportunity_title", "divergence_warnings", "recommended_next_action", "summary_reuse_source", "recomputed_fields", "reused_fields", "missing_fields", "reuse_warnings"):
+        for key in ("source_path", "source_name", "suitability_status", "quarantine_status", "cache_status", "primary_repo_role", "primary_repo_role_confidence", "calibrated_top_concepts", "compression_profile_decision", "best_growth_opportunity_title", "calibrated_direct_usefulness_score", "role_alignment_score", "evidence_support_score", "safety_risk_score", "operator_confidence_score", "task_draft_title", "task_alignment_source", "task_alignment_warnings", "dashboard_best_opportunity_title", "e2e_best_opportunity_title", "divergence_warnings", "source_inventory_cache_hit", "source_inventory_cache_used", "source_inventory_cache_record_id", "archive_touch_required", "archive_touch_reason", "per_target_archive_recompute_avoided", "recommended_next_action", "summary_reuse_source", "recomputed_fields", "reused_fields", "missing_fields", "reuse_warnings"):
             if key not in item:
                 raise ValueError(f"growth direct eval per-target summary missing {key}")
-        if item["summary_reuse_source"] not in {"queue_e2e", "concept_calibration_report", "cache_status", "recomputed", "mixed"}:
+        if item["summary_reuse_source"] not in {"queue_e2e", "queue_e2e_compact_cache", "queue_e2e_computed", "concept_calibration_report", "cache_status", "source_inventory_cache", "recomputed", "mixed"}:
             raise ValueError("invalid growth direct eval per-target summary reuse source")
     for candidate in payload["candidate_upgrades"]:
         for key in ("candidate_id", "source_path", "title", "candidate_type", "direct_growth_functionality_value", "operator_friction_reduction", "test_checkpoint_speed_value", "source_specificity", "implementation_confidence", "safety_score", "verification_clarity", "expected_maintenance_burden", "total_roi_score", "decision", "rejection_reason", "evidence_summary", "recommended_implementation_slice", "candidate_source_artifact", "reused_queue_score", "recompute_reason"):
@@ -19090,7 +19294,7 @@ def validate_growth_direct_upgrade_eval(payload: dict[str, Any]) -> None:
         if issue["severity"] not in {"critical", "high", "medium", "low"}:
             raise ValueError("invalid growth direct eval issue severity")
     reuse = payload["request_reuse_summary"]
-    for key in ("request_cache_id", "request_cache_enabled", "source_artifacts_reused_count", "source_artifacts_computed_count", "repeated_rebuilds_avoided_count", "source_queue_e2e_reused_for_targets_count", "per_target_e2e_recompute_count", "opportunity_score_recompute_count", "repo_role_recompute_count", "concept_confidence_recompute_count", "task_draft_recompute_count", "dashboard_recompute_count", "avoided_per_target_recompute_count", "queue_summary_reuse_enabled", "queue_e2e_compact_cache_used", "queue_e2e_compact_cache_hit", "full_queue_e2e_compute_avoided", "compact_cache_write_performed", "notes"):
+    for key in ("request_cache_id", "request_cache_enabled", "source_artifacts_reused_count", "source_artifacts_computed_count", "repeated_rebuilds_avoided_count", "source_queue_e2e_reused_for_targets_count", "per_target_e2e_recompute_count", "opportunity_score_recompute_count", "repo_role_recompute_count", "concept_confidence_recompute_count", "task_draft_recompute_count", "dashboard_recompute_count", "avoided_per_target_recompute_count", "source_inventory_cache_before_hit_count", "source_inventory_cache_before_miss_count", "source_inventory_cache_after_hit_count", "source_inventory_cache_after_miss_count", "source_inventory_cache_warm_performed", "source_inventory_sources_warmed_count", "source_inventory_cache_used_for_targets_count", "per_target_archive_touch_avoided_count", "per_target_archive_touch_required_count", "queue_summary_reuse_enabled", "queue_e2e_compact_cache_used", "queue_e2e_compact_cache_hit", "full_queue_e2e_compute_avoided", "compact_cache_write_performed", "cache_layers_ready", "notes"):
         if key not in reuse:
             raise ValueError(f"growth direct eval reuse summary missing {key}")
     perf = payload["performance_summary"]
@@ -26858,12 +27062,26 @@ def _growth_print_direct_upgrade_eval(payload: dict[str, Any]) -> None:
     best = payload["best_direct_upgrade"]
     cache = payload["cache_summary"]
     queue = payload["queue_summary"]
+    reuse = payload["request_reuse_summary"]
     print("Growth Direct Upgrade Eval")
     print("  queue:")
     print(f"    selected: {queue['selected_count']}")
     print(f"    skipped: {queue['skipped_count']}  quarantined: {queue['quarantined_count']}")
     print(f"    cache: hits {cache['after_hit_count']} / misses {cache['after_miss_count']} / stale {cache['stale_count']}")
     print(f"    cache writes: {'yes' if payload['write_cache_performed'] else 'no'}")
+    print("  cache:")
+    print(
+        f"    source inventory: {reuse['source_inventory_cache_after_hit_count']} hit / "
+        f"{reuse['source_inventory_cache_after_miss_count']} miss"
+    )
+    if payload["write_cache_requested"]:
+        print(
+            f"    source inventory warm: warmed {payload['source_inventory_cache_warmed_count']} / "
+            f"failed {payload['source_inventory_cache_failed_count']} / skipped {payload['source_inventory_cache_skipped_count']}"
+        )
+    print(
+        f"    hot path: {'ready' if reuse['cache_layers_ready'] else 'not ready'}"
+    )
     print("  queue E2E cache:")
     print(
         f"    hit: {payload.get('queue_e2e_cache_hit', False)}  "
@@ -26891,13 +27109,17 @@ def _growth_print_direct_upgrade_eval(payload: dict[str, Any]) -> None:
     print(f"    model used: {safety}")
     print("    OpenRouter: no")
     print(f"    network: {'yes' if payload['external_network_used'] else 'no'}")
-    reuse = payload["request_reuse_summary"]
     print("  reuse:")
     print(
         "    queue E2E reused for "
         f"{reuse['source_queue_e2e_reused_for_targets_count']} targets; "
         f"opportunity recomputes {reuse['opportunity_score_recompute_count']}; "
         f"avoided {reuse['avoided_per_target_recompute_count']} per-target recomputes"
+    )
+    print(
+        f"    per-target archive touches avoided: {reuse['per_target_archive_touch_avoided_count']}; "
+        f"required: {reuse['per_target_archive_touch_required_count']}; "
+        f"full queue E2E avoided: {'yes' if reuse['full_queue_e2e_compute_avoided'] else 'no'}"
     )
     print(f"  next: {payload['recommended_next_action']}")
 
@@ -27171,6 +27393,34 @@ def growth_source_queue_e2e_cache_main(argv: list[str] | None = None) -> int:
 
 def growth_source_queue_e2e_cache_status_main(argv: list[str] | None = None) -> int:
     return growth_source_queue_e2e_cache_main(argv)
+
+
+def growth_direct_upgrade_eval_cache_plan_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth direct-upgrade-eval-cache-plan: read-only cache plan for direct evaluator")
+        print("  python3 link.py growth direct-upgrade-eval-cache-plan [--source <path> ...] --json")
+        return 0
+    if "--write" in args or "--write-cache" in args:
+        print("error: direct-upgrade-eval-cache-plan is read-only", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_growth_direct_eval_cache_plan(sources=_growth_extract_source_args(args))
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_growth_direct_eval_cache_plan_json(payload), end="")
+    else:
+        print("Growth Direct Eval Cache Plan")
+        print(f"  source inventory: {payload['source_inventory_cache_hit_count']} hit / {payload['source_inventory_cache_miss_count']} miss")
+        print(f"  queue E2E compact: hit {payload['queue_e2e_cache_hit']} / valid {payload['queue_e2e_cache_valid']}")
+        print("  actions:")
+        for action in payload["planned_cache_actions"][:8]:
+            source = f" {action['source_path']}" if action["source_path"] else ""
+            print(f"    - {action['action_type']}{source}: {action['reason']}")
+        print(f"  next: {payload['recommended_next_action']}")
+    return 0
 
 
 def growth_direct_upgrade_eval_main(argv: list[str] | None = None) -> int:
