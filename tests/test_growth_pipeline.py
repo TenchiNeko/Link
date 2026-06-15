@@ -23,6 +23,11 @@ Known gap (documented, not fixed here):
 
 Style: if condition: raise AssertionError(msg) -- no bare assert statements.
 No forbidden legacy tokens. No network. No subprocess calls.
+
+Source-aware Growth coverage defaults to tiny runtime zip fixtures so normal
+checkpoints stay fast. Real research archive integration is still available with
+LINK_RUN_SLOW_GROWTH_ARCHIVE_TESTS=1 and uses LINK_SOURCE_CACHE_ROOT/temp roots
+for persistent cache writes.
 """
 
 from __future__ import annotations
@@ -30,8 +35,10 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -53,6 +60,117 @@ def _require_keys(d: dict[str, Any], keys: tuple[str, ...], label: str) -> None:
     for key in keys:
         if key not in d:
             raise AssertionError(f"{label} is missing required key: {key!r}")
+
+
+_GROWTH_TEST_TIMINGS: list[tuple[str, float]] = []
+_TINY_SOURCE_ARCHIVE_FIXTURE_DIR: tempfile.TemporaryDirectory[str] | None = None
+_TINY_SOURCE_ARCHIVE_FIXTURES: dict[str, str] = {}
+
+
+def _growth_test_timing_enabled() -> bool:
+    return os.environ.get("LINK_GROWTH_TEST_TIMINGS") == "1"
+
+
+@contextlib.contextmanager
+def time_section(name: str, slow_threshold_seconds: float = 10.0):
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - started
+        _GROWTH_TEST_TIMINGS.append((name, elapsed))
+        if _growth_test_timing_enabled() or elapsed >= slow_threshold_seconds:
+            print(f"growth test section: {name}: {elapsed:.2f}s")
+
+
+def _print_growth_test_timing_summary() -> None:
+    if not _growth_test_timing_enabled():
+        return
+    print("Growth test timings:")
+    for name, elapsed in _GROWTH_TEST_TIMINGS:
+        print(f"  {name}: {elapsed:.2f}s")
+
+
+def _run_slow_growth_archive_tests() -> bool:
+    return os.environ.get("LINK_RUN_SLOW_GROWTH_ARCHIVE_TESTS") == "1"
+
+
+def _tiny_source_archive_fixture_root() -> Path:
+    global _TINY_SOURCE_ARCHIVE_FIXTURE_DIR
+    if _TINY_SOURCE_ARCHIVE_FIXTURE_DIR is None:
+        _TINY_SOURCE_ARCHIVE_FIXTURE_DIR = tempfile.TemporaryDirectory(
+            prefix=".growth-test-fixtures-",
+            dir=str(ROOT / "research"),
+        )
+    return Path(_TINY_SOURCE_ARCHIVE_FIXTURE_DIR.name)
+
+
+def make_tiny_source_archive_fixture(name: str, files: dict[str, str]) -> str:
+    if name in _TINY_SOURCE_ARCHIVE_FIXTURES:
+        return _TINY_SOURCE_ARCHIVE_FIXTURES[name]
+    archive_path = _tiny_source_archive_fixture_root() / f"{name}.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for member_name in sorted(files):
+            zf.writestr(member_name, files[member_name])
+    relative = archive_path.relative_to(ROOT).as_posix()
+    _TINY_SOURCE_ARCHIVE_FIXTURES[name] = relative
+    return relative
+
+
+def make_headroom_like_fixture() -> str:
+    return make_tiny_source_archive_fixture("headroom-like", {
+        "README.md": "\n".join([
+            "Headroom-like context compression library.",
+            "Reduces tokens by compressing tool outputs, logs, files, and RAG chunks.",
+            "Supports MCP server mode, proxy mode, CLI mode, and library API usage.",
+            "Preserves source references and provenance while shrinking context windows.",
+        ]),
+        "package.json": '{"name": "headroom-like", "bin": {"headroom-like": "src/headroom.py"}}',
+        "src/compress.py": "def compress_tool_output(text):\n    return text[:120]\n",
+        "src/headroom.py": "MCP_SERVER = True\nPROXY_MODE = True\n",
+    })
+
+
+def make_crawler_like_fixture() -> str:
+    return make_tiny_source_archive_fixture("crawler-like", {
+        "README.md": "\n".join([
+            "Crawler-like source collection tool.",
+            "Crawls websites, follows sitemaps, scrapes pages, and collects source documents.",
+            "Exports page metadata, URLs, crawl queues, and extracted content for downstream indexing.",
+        ]),
+        "package.json": '{"name": "crawler-like", "scripts": {"crawl": "python src/crawler.py"}}',
+        "src/crawler.py": "def crawl_site(url):\n    return ['sitemap.xml', url]\n",
+        "workflow/automation_runbook.md": "automation workflow trigger action connector runbook",
+        "market/product_pricing.md": "market research product pricing ecommerce validation",
+        "crm/lead_business_source.md": "lead sourcing business development source governance",
+    })
+
+
+def make_reach_like_fixture() -> str:
+    return make_tiny_source_archive_fixture("reach-like", {
+        "README.md": "\n".join([
+            "Reach-like business outreach workflow.",
+            "Manages leads, prospects, contacts, campaigns, and follow-up sequences.",
+            "Scores business growth opportunities and routes outreach tasks.",
+        ]),
+        "src/reach.py": "def plan_campaign(leads):\n    return {'prospects': leads, 'outreach': True}\n",
+        "crm/lead_business_source.md": "lead vendor supplier sourcing sales crm revenue business",
+        "workflow/campaign_automation.md": "workflow automation trigger action connector campaign follow-up",
+        "market/product_validation.md": "market research product validation pricing campaign",
+    })
+
+
+def make_workflow_like_fixture() -> str:
+    return make_tiny_source_archive_fixture("workflow-like", {
+        "README.md": "\n".join([
+            "Flowise-like workflow automation builder.",
+            "Users compose flow nodes, chatflow canvases, triggers, actions, and integrations.",
+            "The app runs workflow pipelines and agentflow automation routing.",
+        ]),
+        "package.json": '{"name": "workflow-like", "dependencies": {"flow-node-builder": "0.0.0"}}',
+        "flowise/chatflow_builder.py": "def build_chatflow(nodes):\n    return {'agentflow': nodes, 'pipeline': True}\n",
+        "workflow/automation_pipeline.py": "def run_flow(nodes):\n    return [node for node in nodes]\n",
+    })
 
 
 def _sample_control_plane_proposal(
@@ -17856,7 +17974,7 @@ def check_growth_opportunity_review_package_helper() -> None:
 # ---------------------------------------------------------------------------
 
 def _research_target_test_paths() -> tuple[str, str, str]:
-    zip_source = "research/gpt-crawler-main.zip"
+    zip_source = make_crawler_like_fixture()
     folder_source = "research/_extracted/sota-scan-master/sota-scan-master"
     file_source = "research/hermes_upgrade_actionable_shortlist.md"
     for source in (zip_source, folder_source, file_source):
@@ -18122,7 +18240,7 @@ def check_source_aware_downstream_binding_helpers() -> None:
     scan = collect_growth_business_opportunity_scan(source_path=zip_source)
     validate_growth_business_opportunity_scan(scan)
     _require(scan["source_bound"] is True, "source-aware opportunity scan must be source-bound")
-    _require(scan["source_path"] == zip_source and scan["source_name"] == "gpt-crawler-main.zip",
+    _require(scan["source_path"] == zip_source and scan["source_name"] == Path(zip_source).name,
              "source-aware opportunity scan must include top-level source metadata")
     _require(scan["source_refs"] and all("!" in item for item in scan["source_refs"]),
              "source-aware opportunity scan must include archive-qualified source refs")
@@ -18321,7 +18439,7 @@ def check_source_aware_downstream_binding_clis() -> None:
         _require(payload["source_path"] == zip_source, f"operator {command} must include top-level source_path")
         _require(payload["source_refs"] and payload["evidence_refs"], f"operator {command} must include source and evidence refs")
         if command == "task-draft":
-            _require(payload["source_path"] == zip_source and payload["source_name"] == "gpt-crawler-main.zip",
+            _require(payload["source_path"] == zip_source and payload["source_name"] == Path(zip_source).name,
                      "source-aware operator task draft must reference selected source")
             _require(payload["execution_allowed"] is False,
                      "source-aware operator task draft must remain non-executable")
@@ -18725,9 +18843,13 @@ def check_source_aware_archive_concept_extractor_helpers() -> None:
         validate_source_aware_archive_concepts,
     )
 
-    headroom_source = "research/headroom-main.zip"
-    crawler_source = "research/gpt-crawler-main.zip"
-    agent_reach_source = "research/Agent-Reach-main.zip"
+    real_headroom_source = "research/headroom-main.zip"
+    real_crawler_source = "research/gpt-crawler-main.zip"
+    real_agent_reach_source = "research/Agent-Reach-main.zip"
+    headroom_source = make_headroom_like_fixture()
+    crawler_source = make_crawler_like_fixture()
+    agent_reach_source = make_reach_like_fixture()
+    workflow_source = make_workflow_like_fixture()
 
     scored_signal = score_archive_concept_signals("headroom compression token reduction rag chunks", {
         "concept_id": "compression_library",
@@ -18767,11 +18889,11 @@ def check_source_aware_archive_concept_extractor_helpers() -> None:
              "repo role policy JSON must round trip")
 
     role_fixtures = collect_repo_role_calibration_fixtures()
-    _require(next(item for item in role_fixtures["fixtures"] if item["source_path"] == headroom_source)["expected_primary_role"] == "compression_context",
+    _require(next(item for item in role_fixtures["fixtures"] if item["source_path"] == real_headroom_source)["expected_primary_role"] == "compression_context",
              "Headroom fixture must expect compression role")
-    _require(next(item for item in role_fixtures["fixtures"] if item["source_path"] == crawler_source)["expected_primary_role"] == "crawler_source_collection",
+    _require(next(item for item in role_fixtures["fixtures"] if item["source_path"] == real_crawler_source)["expected_primary_role"] == "crawler_source_collection",
              "gpt-crawler fixture must expect crawler role")
-    _require("compression_context" in next(item for item in role_fixtures["fixtures"] if item["source_path"] == agent_reach_source)["expected_negative_roles"],
+    _require("compression_context" in next(item for item in role_fixtures["fixtures"] if item["source_path"] == real_agent_reach_source)["expected_negative_roles"],
              "Agent-Reach fixture must reject compression role")
     validate_repo_role_calibration_fixtures(role_fixtures)
     _require(parse_repo_role_calibration_fixtures_json(stable_repo_role_calibration_fixtures_json(role_fixtures)) == role_fixtures,
@@ -18879,6 +19001,14 @@ def check_source_aware_archive_concept_extractor_helpers() -> None:
     agent_reach_profile = collect_compression_repo_concept_profile(agent_reach_concepts)
     _require(agent_reach_profile["compression_profile_decision"] == "not_compression_repo",
              "Agent-Reach compression profile must reject compression false positive")
+
+    workflow_concepts = collect_source_aware_archive_concepts(source_path=workflow_source)
+    workflow_role = collect_calibrated_repo_role_classification(workflow_concepts)
+    _require(workflow_role["primary_role"] in {"workflow_automation", "ai_workflow_builder"},
+             "workflow-like fixture must classify as workflow/AI builder, not compression")
+    workflow_profile = collect_compression_repo_concept_profile(workflow_concepts)
+    _require(workflow_profile["compression_profile_decision"] == "not_compression_repo",
+             "workflow-like fixture compression profile must reject compression false positive")
 
     for command, parser, id_key in (
         ("repo-role-policy", parse_repo_role_calibration_policy_json, "repo_role_calibration_policy_id"),
@@ -19015,8 +19145,8 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     import os
     import link_modes.growth.link_growth_console as growth_console
 
-    headroom_source = "research/headroom-main.zip"
-    crawler_source = "research/gpt-crawler-main.zip"
+    headroom_source = make_headroom_like_fixture()
+    crawler_source = make_crawler_like_fixture()
     activepieces_source = "research/activepieces-main.zip"
 
     cache_key = collect_source_archive_intake_cache_key(source_path=headroom_source)
@@ -19128,7 +19258,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
                  "growth source queue JSON must round trip")
 
         default_queue = collect_growth_source_queue()
-        _require({item["source_path"] for item in default_queue["selected_sources"]}.issuperset({headroom_source, crawler_source, "research/Agent-Reach-main.zip"}),
+        _require({item["source_path"] for item in default_queue["selected_sources"]}.issuperset({"research/headroom-main.zip", "research/gpt-crawler-main.zip", "research/Agent-Reach-main.zip"}),
                  "default growth source queue must include existing required sources")
         _require(activepieces_source not in {item["source_path"] for item in default_queue["selected_sources"]},
                  "default growth source queue must exclude quarantined activepieces")
@@ -19327,6 +19457,12 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     crawler_score = collect_growth_opportunity_decision_score(source_path=crawler_source, summary=crawler_summary)
     _require(crawler_score["role_alignment_score"] >= 7 and crawler_score["calibration_warnings"] is not None,
              "gpt-crawler opportunity score must include calibrated role alignment")
+    role_mismatch_summary = json.loads(stable_source_aware_growth_e2e_summary_json(crawler_summary))
+    role_mismatch_summary["best_growth_opportunity"]["title"] = "Add compression-specific context reducer"
+    role_mismatch_summary["best_growth_opportunity"]["why_good"] = "Synthetic mismatch: compression upgrade proposed for crawler role."
+    role_mismatch_score = collect_growth_opportunity_decision_score(source_path=crawler_source, summary=role_mismatch_summary)
+    _require(role_mismatch_score["rejected_due_to_role_mismatch"] and role_mismatch_score["calibrated_direct_usefulness_score"] < crawler_score["calibrated_direct_usefulness_score"],
+             "crawler fixture must downrank role-mismatched compression opportunities")
 
     calibration_report = collect_repo_concept_calibration_report(sources=[headroom_source, crawler_source, activepieces_source])
     _require(any(item["primary_role"] == "compression_context" for item in calibration_report["sources"]),
@@ -19469,6 +19605,116 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     print("source-aware growth e2e summary cache helpers OK")
 
 
+def check_slow_source_aware_real_archive_integration_helpers() -> None:
+    if not _run_slow_growth_archive_tests():
+        print("slow Growth archive integration tests skipped; set LINK_RUN_SLOW_GROWTH_ARCHIVE_TESTS=1 to run")
+        return
+
+    from link_modes.growth.link_growth_console import (
+        collect_calibrated_repo_role_classification,
+        collect_compression_repo_concept_profile,
+        collect_concept_confidence_calibration,
+        collect_growth_opportunity_decision_score,
+        collect_growth_source_queue_cache_status,
+        collect_growth_source_queue_e2e_summary,
+        collect_growth_source_queue_warmup_plan,
+        collect_source_archive_suitability_assessment,
+        collect_source_aware_archive_concepts,
+        collect_source_aware_growth_e2e_summary,
+        collect_source_aware_operator_dashboard,
+        collect_research_target_operator_task_draft,
+    )
+
+    import link_modes.growth.link_growth_console as growth_console
+
+    required_sources = [
+        "research/headroom-main.zip",
+        "research/gpt-crawler-main.zip",
+        "research/Agent-Reach-main.zip",
+    ]
+    for source in required_sources:
+        _require((ROOT / source).exists(), f"slow archive fixture must exist: {source}")
+
+    optional_sources = [
+        "research/Flowise-main.zip",
+        "research/AiToEarn-main.zip",
+        "research/agentmemory-main.zip",
+        "research/activepieces-main.zip",
+    ]
+    selected_sources = list(required_sources)
+    skipped_sources: list[str] = []
+    for source in optional_sources:
+        if not (ROOT / source).exists():
+            continue
+        suitability = collect_source_archive_suitability_assessment(source_path=source)
+        if suitability["queue_eligible"] is True:
+            selected_sources.append(source)
+        else:
+            skipped_sources.append(source)
+
+    old_cache_root = os.environ.get("LINK_SOURCE_CACHE_ROOT")
+    with tempfile.TemporaryDirectory(prefix="link-slow-source-cache-test-") as cache_root:
+        os.environ["LINK_SOURCE_CACHE_ROOT"] = cache_root
+        growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
+
+        status_before = collect_growth_source_queue_cache_status(sources=selected_sources)
+        _require(status_before["source_count"] >= 3, "slow archive status must include required sources")
+
+        warm = collect_growth_source_queue_warmup_plan(sources=selected_sources + skipped_sources, write_cache=True)
+        _require(warm["failed_count"] == 0, "slow archive queue warmup must not fail selected sources")
+        _require(all(Path(item["cache_file_path"]).resolve().parent == Path(cache_root).resolve() for item in warm["warmed_sources"]),
+                 "slow archive queue warmup writes must stay under temp cache root")
+
+        status_after = collect_growth_source_queue_cache_status(sources=selected_sources)
+        _require(status_after["cache_hit_count"] >= 3 and status_after["queue_ready_for_e2e"] is True,
+                 "slow archive status must report warmed required sources")
+
+        queue_e2e = collect_growth_source_queue_e2e_summary(sources=selected_sources)
+        _require(queue_e2e["best_overall_opportunity"] and len(queue_e2e["source_summaries"]) >= 3,
+                 "slow archive queue e2e must summarize required sources")
+        _require(any(item["primary_repo_role"] == "compression_context" for item in queue_e2e["source_summaries"]),
+                 "slow archive queue e2e must preserve Headroom compression role")
+        _require(any(item["primary_repo_role"] == "crawler_source_collection" for item in queue_e2e["source_summaries"]),
+                 "slow archive queue e2e must preserve gpt-crawler source collection role")
+
+        for source, expected_role, expected_profile in (
+            ("research/headroom-main.zip", "compression_context", "compression_repo"),
+            ("research/gpt-crawler-main.zip", "crawler_source_collection", "not_compression_repo"),
+            ("research/Agent-Reach-main.zip", None, "not_compression_repo"),
+        ):
+            concepts = collect_source_aware_archive_concepts(source_path=source)
+            role = collect_calibrated_repo_role_classification(concepts)
+            if expected_role is None:
+                _require(role["primary_role"] != "compression_context",
+                         "slow archive Agent-Reach role must not be compression_context")
+            else:
+                _require(role["primary_role"] == expected_role,
+                         f"slow archive {source} role must be {expected_role}")
+            confidence = collect_concept_confidence_calibration(concepts, role)
+            _require(confidence["concept_calibrations"], f"slow archive {source} must calibrate concepts")
+            profile = collect_compression_repo_concept_profile(concepts)
+            _require(profile["compression_profile_decision"] == expected_profile,
+                     f"slow archive {source} compression profile must be {expected_profile}")
+            summary = collect_source_aware_growth_e2e_summary(source_path=source)
+            score = collect_growth_opportunity_decision_score(source_path=source, summary=summary)
+            _require(score["calibrated_direct_usefulness_score"] >= 0,
+                     f"slow archive {source} opportunity score must validate")
+
+        for source in ("research/headroom-main.zip", "research/gpt-crawler-main.zip"):
+            dashboard = collect_source_aware_operator_dashboard(source_path=source)
+            task = collect_research_target_operator_task_draft(source_path=source)
+            _require(dashboard["source_path"] == source and (source in task["objective"] or source in task["scope_summary"]),
+                     f"slow archive dashboard/task draft must preserve {source}")
+
+    growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
+    if old_cache_root is None:
+        os.environ.pop("LINK_SOURCE_CACHE_ROOT", None)
+    else:
+        os.environ["LINK_SOURCE_CACHE_ROOT"] = old_cache_root
+
+    print("slow source-aware real archive integration helpers OK")
+
+
 def check_source_aware_control_plane_dashboard_clis() -> None:
     from link import _cmd_advisor, _cmd_control_plane, _cmd_decision, _cmd_operator
     from link_modes.growth.link_growth_console import (
@@ -19596,7 +19842,7 @@ def check_source_aware_human_summary_clis() -> None:
         _require("llamacpp" in output and "OpenRouter" in output, f"{title} human summary must show local and OpenRouter providers")
         _require("Next Action:" in output, f"{title} human summary must include next action section")
         _require("Read-only:" in output, f"{title} human summary must state read-only behavior")
-        _require("research/gpt-crawler-main.zip!" in output, f"{title} human summary must show archive-qualified provenance")
+        _require(zip_source + "!" in output, f"{title} human summary must show archive-qualified provenance")
         _require(len(output.splitlines()) <= 120, f"{title} human summary must remain compact")
         for key in forbidden_raw_keys:
             _require(key not in output, f"{title} human summary must not dump raw nested payload key {key}")
@@ -19607,7 +19853,7 @@ def check_source_aware_human_summary_clis() -> None:
     source_dashboard = source_dashboard_out.getvalue()
     _require(rc == 0, "operator source-dashboard human summary must return 0")
     for expected in (
-        "source: research/gpt-crawler-main.zip",
+        f"source: {zip_source}",
         "module:",
         "strength/status:",
         "recommendation:",
@@ -19782,7 +20028,7 @@ def check_source_aware_provenance_specificity_clis() -> None:
     human = human_out.getvalue()
     _require(rc == 0 and "Research target provenance" in human and zip_source in human,
              "target-provenance human mode must render concise table output")
-    _require("research/gpt-crawler-main.zip!" in human,
+    _require(zip_source + "!" in human,
              "target-provenance human mode must show archive-qualified provenance")
 
     print("source-aware provenance and specificity CLIs OK")
@@ -19798,9 +20044,8 @@ def check_source_aware_cross_target_specificity() -> None:
         collect_research_target_operator_report,
     )
 
-    primary = "research/gpt-crawler-main.zip"
-    comparison = "research/Agent-Reach-main.zip"
-    _require((ROOT / comparison).exists(), "comparison target Agent-Reach archive must exist")
+    primary = make_crawler_like_fixture()
+    comparison = make_reach_like_fixture()
     primary_context = build_source_aware_context_for_cli(primary)
     comparison_context = build_source_aware_context_for_cli(comparison)
 
@@ -20335,7 +20580,7 @@ def check_local_model_advisor_foundation_helpers() -> None:
              "Headroom adapter contract JSON must round trip")
 
     headroom_sample = collect_headroom_adapter_sample()
-    _require(headroom_sample["source_path"] == zip_source and headroom_sample["required_aliases"] == ["S1", "E1"],
+    _require(headroom_sample["source_path"] == headroom_sample["required_source_path"] and headroom_sample["required_aliases"] == ["S1", "E1"],
              "Headroom adapter sample must include source path and S1/E1 aliases")
     validate_headroom_adapter_sample(headroom_sample)
     _require(parse_headroom_adapter_sample_json(stable_headroom_adapter_sample_json(headroom_sample)) == headroom_sample,
@@ -20897,7 +21142,7 @@ def check_local_model_advisor_clis() -> None:
         headroom_sample_rc = _cmd_advisor(["headroom-sample", "--json"])
     _require(headroom_sample_rc == 0, "advisor headroom-sample --json must return 0")
     headroom_sample = parse_headroom_adapter_sample_json(headroom_sample_out.getvalue())
-    _require(headroom_sample["source_path"] == zip_source and headroom_sample["required_aliases"] == ["S1", "E1"],
+    _require(headroom_sample["source_path"] == headroom_sample["required_source_path"] and headroom_sample["required_aliases"] == ["S1", "E1"],
              "advisor headroom-sample must include source path and aliases")
 
     headroom_sample_run_out = io.StringIO()
@@ -21175,20 +21420,27 @@ def main() -> None:
     check_operator_task_draft_clis()
     check_sandbox_executor_boundary_helpers()
     check_sandbox_executor_boundary_clis()
-    check_research_target_intake_helpers()
-    check_research_target_clis()
-    check_source_aware_downstream_binding_helpers()
-    check_source_aware_downstream_binding_clis()
-    check_source_aware_operator_report_and_sandbox_helpers()
-    check_source_aware_operator_report_and_sandbox_clis()
-    check_source_aware_control_plane_dashboard_helpers()
-    check_source_aware_archive_concept_extractor_helpers()
-    check_source_aware_growth_e2e_summary_cache_helpers()
-    check_source_aware_control_plane_dashboard_clis()
-    check_source_aware_human_summary_clis()
-    check_source_aware_provenance_specificity_helpers()
-    check_source_aware_provenance_specificity_clis()
-    check_source_aware_cross_target_specificity()
+    with time_section("source target intake"):
+        check_research_target_intake_helpers()
+        check_research_target_clis()
+    with time_section("source-aware downstream"):
+        check_source_aware_downstream_binding_helpers()
+        check_source_aware_downstream_binding_clis()
+        check_source_aware_operator_report_and_sandbox_helpers()
+        check_source_aware_operator_report_and_sandbox_clis()
+        check_source_aware_control_plane_dashboard_helpers()
+    with time_section("source-aware fixture calibration"):
+        check_source_aware_archive_concept_extractor_helpers()
+    with time_section("source-aware fixture cache queue e2e"):
+        check_source_aware_growth_e2e_summary_cache_helpers()
+    with time_section("source-aware slow real archives"):
+        check_slow_source_aware_real_archive_integration_helpers()
+    with time_section("source-aware CLI summaries"):
+        check_source_aware_control_plane_dashboard_clis()
+        check_source_aware_human_summary_clis()
+        check_source_aware_provenance_specificity_helpers()
+        check_source_aware_provenance_specificity_clis()
+        check_source_aware_cross_target_specificity()
     check_local_model_advisor_foundation_helpers()
     check_local_model_advisor_clis()
     check_growth_code_brief_propose_batch()
@@ -21253,6 +21505,7 @@ def main() -> None:
     check_make_unique_title()
     check_content_replacement_entry_helper()
     check_fork_lineage_with_content_replacements()
+    _print_growth_test_timing_summary()
     print("Growth pipeline smoke tests passed")
 
 
