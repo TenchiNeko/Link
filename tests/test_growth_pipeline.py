@@ -33,6 +33,7 @@ for persistent cache writes.
 from __future__ import annotations
 
 import contextlib
+import argparse
 import io
 import json
 import os
@@ -63,6 +64,7 @@ def _require_keys(d: dict[str, Any], keys: tuple[str, ...], label: str) -> None:
 
 
 _GROWTH_TEST_TIMINGS: list[tuple[str, float]] = []
+_GROWTH_TEST_SKIPPED_SUITES: set[str] = set()
 _TINY_SOURCE_ARCHIVE_FIXTURE_DIR: tempfile.TemporaryDirectory[str] | None = None
 _TINY_SOURCE_ARCHIVE_FIXTURES: dict[str, str] = {}
 
@@ -79,14 +81,27 @@ def time_section(name: str, slow_threshold_seconds: float = 10.0):
     finally:
         elapsed = time.perf_counter() - started
         _GROWTH_TEST_TIMINGS.append((name, elapsed))
-        if _growth_test_timing_enabled() or elapsed >= slow_threshold_seconds:
+        if not _growth_test_timing_enabled() and elapsed >= slow_threshold_seconds:
             print(f"growth test section: {name}: {elapsed:.2f}s")
 
 
-def _print_growth_test_timing_summary() -> None:
+def _print_growth_test_timing_summary(total_seconds: float | None = None) -> None:
     if not _growth_test_timing_enabled():
         return
+    suite_names = ("base", "source-fast", "source-slow")
+    timing_by_name: dict[str, float] = {}
+    for name, elapsed in _GROWTH_TEST_TIMINGS:
+        timing_by_name[name] = elapsed
     print("Growth test timings:")
+    if any(name in timing_by_name or name in _GROWTH_TEST_SKIPPED_SUITES for name in suite_names):
+        for name in suite_names:
+            if name in _GROWTH_TEST_SKIPPED_SUITES:
+                print(f"  {name}: skipped")
+            elif name in timing_by_name:
+                print(f"  {name}: {timing_by_name[name]:.2f}s")
+        if total_seconds is not None:
+            print(f"  total: {total_seconds:.2f}s")
+        return
     for name, elapsed in _GROWTH_TEST_TIMINGS:
         print(f"  {name}: {elapsed:.2f}s")
 
@@ -171,6 +186,30 @@ def make_workflow_like_fixture() -> str:
         "flowise/chatflow_builder.py": "def build_chatflow(nodes):\n    return {'agentflow': nodes, 'pipeline': True}\n",
         "workflow/automation_pipeline.py": "def run_flow(nodes):\n    return [node for node in nodes]\n",
     })
+
+
+def check_growth_suite_selector_boundaries() -> None:
+    generated_sources = {
+        make_headroom_like_fixture(),
+        make_crawler_like_fixture(),
+        make_reach_like_fixture(),
+        make_workflow_like_fixture(),
+        _research_target_test_paths()[0],
+    }
+    _require(all(item.startswith("research/.growth-test-fixtures-") for item in generated_sources),
+             "source-fast fixtures must be generated tiny archives")
+    real_archive_sources = {
+        "research/headroom-main.zip",
+        "research/gpt-crawler-main.zip",
+        "research/Agent-Reach-main.zip",
+        "research/Flowise-main.zip",
+        "research/AiToEarn-main.zip",
+        "research/agentmemory-main.zip",
+        "research/activepieces-main.zip",
+    }
+    _require(not generated_sources.intersection(real_archive_sources),
+             "source-fast fixtures must not point at real archive integration targets")
+    print("growth suite selector boundaries OK")
 
 
 def _sample_control_plane_proposal(
@@ -19147,7 +19186,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
 
     headroom_source = make_headroom_like_fixture()
     crawler_source = make_crawler_like_fixture()
-    activepieces_source = "research/activepieces-main.zip"
+    missing_source = "research/missing-source-fixture.zip"
 
     cache_key = collect_source_archive_intake_cache_key(source_path=headroom_source)
     _require(cache_key["source_path"] == headroom_source and cache_key["source_exists"] is True,
@@ -19185,7 +19224,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
              "source cache performance report JSON must round trip")
 
     queue_policy = collect_growth_source_queue_policy()
-    _require(activepieces_source in queue_policy["optional_sources"] and queue_policy["optional_source_failure_policy"] == "skip_with_reason",
+    _require("research/activepieces-main.zip" in queue_policy["optional_sources"] and queue_policy["optional_source_failure_policy"] == "skip_with_reason",
              "source queue policy must keep activepieces optional and skipped on failure")
     validate_growth_source_queue_policy(queue_policy)
     _require(parse_growth_source_queue_policy_json(stable_growth_source_queue_policy_json(queue_policy)) == queue_policy,
@@ -19199,21 +19238,21 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     _require(parse_source_archive_suitability_assessment_json(stable_source_archive_suitability_assessment_json(headroom_suitability)) == headroom_suitability,
              "source suitability JSON must round trip")
 
-    active_suitability = collect_source_archive_suitability_assessment(source_path=activepieces_source)
-    _require(active_suitability["queue_eligible"] is False and active_suitability["failure_category"] == "source_ref_generation_error",
-             "activepieces suitability must fail closed with source-ref failure category")
+    active_suitability = collect_source_archive_suitability_assessment(source_path=missing_source)
+    _require(active_suitability["queue_eligible"] is False and active_suitability["failure_category"] == "source_missing",
+             "missing-source suitability must fail closed with source_missing category")
     validate_source_archive_suitability_assessment(active_suitability)
 
-    missing_suitability = collect_source_archive_suitability_assessment(source_path="research/missing-source-fixture.zip")
+    missing_suitability = collect_source_archive_suitability_assessment(source_path=missing_source)
     _require(missing_suitability["suitability_status"] == "failed" and missing_suitability["failure_category"] == "source_missing",
              "missing source suitability must report source_missing without crashing")
 
     headroom_quarantine = collect_source_queue_quarantine_record(source_path=headroom_source)
-    active_quarantine = collect_source_queue_quarantine_record(source_path=activepieces_source)
+    active_quarantine = collect_source_queue_quarantine_record(source_path=missing_source)
     _require(headroom_quarantine["quarantine_status"] == "not_quarantined",
              "Headroom must not be quarantined")
     _require(active_quarantine["quarantine_status"] == "quarantined" and active_quarantine["excluded_from_default_queue"] is True,
-             "activepieces must be quarantined and excluded from default queue")
+             "missing source must be quarantined and excluded from default queue")
     validate_source_queue_quarantine_record(active_quarantine)
     _require(parse_source_queue_quarantine_record_json(stable_source_queue_quarantine_record_json(active_quarantine)) == active_quarantine,
              "source quarantine JSON must round trip")
@@ -19250,24 +19289,16 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
                  "missing persistent cache read must fail open to request cache")
         validate_persistent_source_inventory_cache_record(missing_record)
 
-        explicit_queue = collect_growth_source_queue(sources=[headroom_source, crawler_source, "research/missing-source-fixture.zip"])
+        explicit_queue = collect_growth_source_queue(sources=[headroom_source, crawler_source, missing_source])
         _require(explicit_queue["source_count"] == 2 and explicit_queue["missing_sources"],
                  "explicit source queue must select existing sources and report missing sources")
         validate_growth_source_queue(explicit_queue)
         _require(parse_growth_source_queue_json(stable_growth_source_queue_json(explicit_queue)) == explicit_queue,
                  "growth source queue JSON must round trip")
 
-        default_queue = collect_growth_source_queue()
-        _require({item["source_path"] for item in default_queue["selected_sources"]}.issuperset({"research/headroom-main.zip", "research/gpt-crawler-main.zip", "research/Agent-Reach-main.zip"}),
-                 "default growth source queue must include existing required sources")
-        _require(activepieces_source not in {item["source_path"] for item in default_queue["selected_sources"]},
-                 "default growth source queue must exclude quarantined activepieces")
-        _require(any(item["source_path"] == activepieces_source for item in default_queue["default_queue_excluded_sources"]),
-                 "default growth source queue must report activepieces as excluded")
-
-        explicit_active_queue = collect_growth_source_queue(sources=[activepieces_source])
+        explicit_active_queue = collect_growth_source_queue(sources=[missing_source])
         _require(explicit_active_queue["source_count"] == 0 and explicit_active_queue["quarantined_source_count"] == 1,
-                 "explicit activepieces queue must fail closed as quarantined")
+                 "explicit missing-source queue must fail closed as quarantined")
 
         queue_status_missing = collect_growth_source_queue_cache_status(sources=[headroom_source, crawler_source])
         _require(queue_status_missing["cache_miss_count"] == 2 and queue_status_missing["cache_hit_count"] == 0,
@@ -19283,9 +19314,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         _require(parse_growth_source_queue_warmup_plan_json(stable_growth_source_queue_warmup_plan_json(warm_preview)) == warm_preview,
                  "growth source queue warmup preview JSON must round trip")
 
-        active_warm_preview = collect_growth_source_queue_warmup_plan(sources=[activepieces_source])
+        active_warm_preview = collect_growth_source_queue_warmup_plan(sources=[missing_source])
         _require(active_warm_preview["estimated_work_count"] == 0 and active_warm_preview["skipped_count"] >= 1,
-                 "explicit activepieces warmup must skip without write-cache work")
+                 "explicit missing-source warmup must skip without write-cache work")
 
         written_record = collect_persistent_source_inventory_cache_record(source_path=headroom_source, write_cache=True)
         _require(written_record["cache_hit"] is True and written_record["cache_write_performed"] is True,
@@ -19311,7 +19342,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         _require(refresh_record["cache_hit"] is True and refresh_record["cache_write_performed"] is True,
                  "write-cache must refresh corrupt persistent source cache")
 
-        queue_warm_write = collect_growth_source_queue_warmup_plan(sources=[headroom_source, crawler_source, "research/missing-source-fixture.zip"], write_cache=True)
+        queue_warm_write = collect_growth_source_queue_warmup_plan(sources=[headroom_source, crawler_source, missing_source], write_cache=True)
         _require(queue_warm_write["write_cache_requested"] is True and queue_warm_write["warmed_count"] >= 1 and queue_warm_write["failed_count"] == 0,
                  "queue warmup write must warm missing sources and continue past missing queue entries")
         _require(all(Path(item["cache_file_path"]).resolve().parent == Path(cache_root).resolve() for item in queue_warm_write["warmed_sources"]),
@@ -19464,7 +19495,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     _require(role_mismatch_score["rejected_due_to_role_mismatch"] and role_mismatch_score["calibrated_direct_usefulness_score"] < crawler_score["calibrated_direct_usefulness_score"],
              "crawler fixture must downrank role-mismatched compression opportunities")
 
-    calibration_report = collect_repo_concept_calibration_report(sources=[headroom_source, crawler_source, activepieces_source])
+    calibration_report = collect_repo_concept_calibration_report(sources=[headroom_source, crawler_source, missing_source])
     _require(any(item["primary_role"] == "compression_context" for item in calibration_report["sources"]),
              "calibration report must include Headroom compression role")
     _require(any(item["primary_role"] == "crawler_source_collection" for item in calibration_report["sources"]),
@@ -19605,9 +19636,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     print("source-aware growth e2e summary cache helpers OK")
 
 
-def check_slow_source_aware_real_archive_integration_helpers() -> None:
-    if not _run_slow_growth_archive_tests():
-        print("slow Growth archive integration tests skipped; set LINK_RUN_SLOW_GROWTH_ARCHIVE_TESTS=1 to run")
+def check_slow_source_aware_real_archive_integration_helpers(*, force: bool = False) -> None:
+    if not force and not _run_slow_growth_archive_tests():
+        print("source-slow: skipped; run --suite source-slow or set LINK_RUN_SLOW_GROWTH_ARCHIVE_TESTS=1")
         return
 
     from link_modes.growth.link_growth_console import (
@@ -19615,9 +19646,11 @@ def check_slow_source_aware_real_archive_integration_helpers() -> None:
         collect_compression_repo_concept_profile,
         collect_concept_confidence_calibration,
         collect_growth_opportunity_decision_score,
+        collect_growth_source_queue,
         collect_growth_source_queue_cache_status,
         collect_growth_source_queue_e2e_summary,
         collect_growth_source_queue_warmup_plan,
+        collect_source_queue_quarantine_record,
         collect_source_archive_suitability_assessment,
         collect_source_aware_archive_concepts,
         collect_source_aware_growth_e2e_summary,
@@ -19634,6 +19667,18 @@ def check_slow_source_aware_real_archive_integration_helpers() -> None:
     ]
     for source in required_sources:
         _require((ROOT / source).exists(), f"slow archive fixture must exist: {source}")
+
+    default_queue = collect_growth_source_queue()
+    _require({item["source_path"] for item in default_queue["selected_sources"]}.issuperset(set(required_sources)),
+             "slow archive default growth source queue must include existing required sources")
+    activepieces_source = "research/activepieces-main.zip"
+    if (ROOT / activepieces_source).exists():
+        active_quarantine = collect_source_queue_quarantine_record(source_path=activepieces_source)
+        _require(active_quarantine["quarantine_status"] in {"quarantined", "skipped", "needs_review", "not_quarantined"},
+                 "slow archive activepieces quarantine record must validate")
+        if active_quarantine["quarantine_status"] != "not_quarantined":
+            _require(activepieces_source not in {item["source_path"] for item in default_queue["selected_sources"]},
+                     "slow archive default queue must exclude quarantined activepieces")
 
     optional_sources = [
         "research/Flowise-main.zip",
@@ -21319,195 +21364,279 @@ def check_local_model_advisor_clis() -> None:
 # main
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def _run_check_group(checks: tuple[Any, ...]) -> None:
+    for check in checks:
+        check()
+
+
+def _ensure_growth_test_setup() -> None:
     _install_growth_collector_test_cache()
-    check_fork_lineage_receipt_helper()
-    check_transcript_snapshot_receipt_helper()
-    check_growth_facade()
-    check_upgrade_miner_candidates()
-    check_research_archive_miner()
-    check_approved_research_handoff_executor()
-    check_self_learning_dashboard()
-    check_control_plane_accepts_valid_proposal()
-    check_bridge_produces_valid_proposal()
-    check_bridge_rejects_bad_input()
-    check_growth_propose_function()
-    check_growth_console_data()
-    check_growth_proposals_data()
-    check_growth_propose_command()
-    check_growth_approve_command()
-    check_growth_reject_command()
-    check_growth_approve_reject_missing_id()
-    check_growth_handoff_dry_run()
-    check_growth_handoff_write()
-    check_growth_handoff_errors()
-    check_growth_run_guide()
-    check_growth_run_with_source()
-    check_growth_run_smart_router()
-    check_growth_handoffs_empty()
-    check_growth_handoffs_populated()
-    check_growth_execute_dry_run()
-    check_growth_execute_write()
-    check_growth_execute_errors()
-    check_growth_receipts_empty()
-    check_growth_receipts_populated()
-    check_growth_finalize_command()
-    check_growth_archive_inventory_empty()
-    check_growth_archive_inventory_populated()
-    check_growth_archive_extract_dry_run()
-    check_growth_archive_extract_write()
-    check_growth_archive_extract_blocked()
-    check_growth_archive_catalog_dry_run()
-    check_growth_archive_catalog_write()
-    check_growth_archive_catalog_refuses_existing()
-    check_growth_archive_queue_empty()
-    check_growth_archive_queue_populated()
-    check_growth_archive_queue_invalid_catalog()
-    check_growth_archive_mine_dry_run_rank()
-    check_growth_archive_mine_dry_run_source()
-    check_growth_archive_mine_errors()
-    check_growth_archive_batch_mine_dry_run()
-    check_growth_archive_batch_mine_top_clamp()
-    check_growth_archive_batch_mine_partial_failure()
-    check_growth_archive_code_queue_empty()
-    check_growth_archive_code_queue_populated()
-    check_growth_archive_code_queue_top_clamp()
-    check_growth_business_opportunity_scan_helper()
-    check_growth_business_opportunities_cli()
-    check_growth_business_evidence_contract_helper()
-    check_growth_business_evidence_contract_cli()
-    check_growth_opportunity_review_package_helper()
-    check_growth_opportunity_review_cli()
-    check_growth_campaign_plan_preview_helper()
-    check_growth_campaign_plan_preview_cli()
-    check_link_module_boundary_registry_helper()
-    check_link_module_boundary_registry_cli()
-    check_growth_campaign_governance_helpers()
-    check_growth_campaign_governance_clis()
-    check_business_development_intake_governance_helpers()
-    check_business_development_intake_governance_clis()
-    check_business_development_source_governance_helpers()
-    check_business_development_source_governance_clis()
-    check_business_development_collection_planning_helpers()
-    check_business_development_collection_planning_clis()
-    check_business_operations_governance_helpers()
-    check_business_operations_governance_clis()
-    check_business_readiness_governance_helpers()
-    check_business_readiness_governance_clis()
-    check_business_execution_governance_helpers()
-    check_business_execution_governance_clis()
-    check_governance_dashboard_helpers()
-    check_governance_dashboard_clis()
-    check_control_plane_dashboard_helpers()
-    check_control_plane_dashboard_clis()
-    check_control_plane_operator_ux_helpers()
-    check_control_plane_operator_ux_clis()
-    check_business_execution_simulation_helpers()
-    check_business_execution_simulation_clis()
-    check_simulation_analysis_helpers()
-    check_simulation_analysis_clis()
-    check_simulation_remediation_planning_helpers()
-    check_simulation_remediation_planning_clis()
-    check_execution_readiness_sandbox_helpers()
-    check_execution_readiness_sandbox_clis()
-    check_operator_decision_engine_helpers()
-    check_operator_decision_engine_clis()
-    check_operator_decision_trace_helpers()
-    check_operator_decision_trace_clis()
-    check_operator_action_plan_helpers()
-    check_operator_action_plan_clis()
-    check_operator_task_draft_helpers()
-    check_operator_task_draft_clis()
-    check_sandbox_executor_boundary_helpers()
-    check_sandbox_executor_boundary_clis()
-    with time_section("source target intake"):
-        check_research_target_intake_helpers()
-        check_research_target_clis()
-    with time_section("source-aware downstream"):
-        check_source_aware_downstream_binding_helpers()
-        check_source_aware_downstream_binding_clis()
-        check_source_aware_operator_report_and_sandbox_helpers()
-        check_source_aware_operator_report_and_sandbox_clis()
-        check_source_aware_control_plane_dashboard_helpers()
-    with time_section("source-aware fixture calibration"):
-        check_source_aware_archive_concept_extractor_helpers()
-    with time_section("source-aware fixture cache queue e2e"):
-        check_source_aware_growth_e2e_summary_cache_helpers()
-    with time_section("source-aware slow real archives"):
-        check_slow_source_aware_real_archive_integration_helpers()
-    with time_section("source-aware CLI summaries"):
-        check_source_aware_control_plane_dashboard_clis()
-        check_source_aware_human_summary_clis()
-        check_source_aware_provenance_specificity_helpers()
-        check_source_aware_provenance_specificity_clis()
-        check_source_aware_cross_target_specificity()
-    check_local_model_advisor_foundation_helpers()
-    check_local_model_advisor_clis()
-    check_growth_code_brief_propose_batch()
-    check_ruflo_upgrade_intake_helper()
-    check_ruflo_upgrade_plan_helper()
-    check_self_learning_feedback_receipt_helper()
-    check_self_learning_next_step_recommendations_helper()
-    check_repo_value_scan_helper()
-    check_link_capability_inventory_helper()
-    check_capability_gap_preview_helper()
-    check_growth_planning_preview_helper()
-    check_capability_graph_helper()
-    check_capability_evidence_graph_helper()
-    check_capability_discovery_helper()
-    check_capability_intelligence_payload_helper()
-    check_upgrade_execution_plan_helper()
-    check_implementation_branch_plan_helper()
-    check_implementation_work_packages_helper()
-    check_verification_plan_helper()
-    check_verified_patch_plan_helper()
-    check_verified_patch_diff_helper()
-    check_patch_applier_boundary_helper()
-    check_patch_behavior_quality_gate_helper()
-    check_autonomous_execution_package_helper()
-    check_growth_planning_chain_cli()
-    check_growth_execution_readiness_cli()
-    check_growth_execution_gates_cli()
-    check_growth_execution_approval_checklist_cli()
-    check_growth_execution_review_cli()
-    check_workspace_creator_runtime_boundary_helper()
-    check_growth_workspace_boundary_cli()
-    check_growth_patch_boundary_cli()
-    check_workspace_creator_runtime_plan_helper()
-    check_guarded_workspace_creator_runtime_component()
-    check_guarded_patch_applier_runtime_component()
-    check_verification_runner_boundary_helper()
-    check_growth_verification_boundary_cli()
-    check_guarded_verification_runner_runtime_component()
-    check_rollback_runtime_boundary_helper()
-    check_growth_rollback_boundary_cli()
-    check_guarded_rollback_executor_runtime_component()
-    check_execution_evidence_collector_runtime_component()
-    check_growth_evidence_collect_cli()
-    check_supervised_execution_write_boundary_helper()
-    check_supervised_execution_review_package_helper()
-    check_growth_supervised_execution_review_package_cli()
-    check_growth_supervised_execution_boundary_cli()
-    check_growth_supervised_execution_cli()
-    check_supervised_execution_orchestrator_runtime_component()
-    check_guarded_workspace_lifecycle_cleanup_abandon()
-    check_planning_chain_review_bundle_helper()
-    check_execution_readiness_stack_helper()
-    check_execution_journal_schema_helper()
-    check_execution_evidence_contract_helper()
-    check_execution_preflight_checklist_helper()
-    check_execution_attempt_history_helper()
-    check_execution_readiness_dashboard_summary_helper()
-    check_execution_gate_stack_preview_helper()
-    check_growth_archive_code_brief_dry_run()
-    check_growth_archive_code_brief_write()
-    check_growth_code_brief_propose()
-    check_make_unique_title()
-    check_content_replacement_entry_helper()
-    check_fork_lineage_with_content_replacements()
-    _print_growth_test_timing_summary()
-    print("Growth pipeline smoke tests passed")
+
+
+def run_base_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("base"):
+        _run_check_group((
+            check_fork_lineage_receipt_helper,
+            check_transcript_snapshot_receipt_helper,
+            check_growth_facade,
+            check_upgrade_miner_candidates,
+            check_research_archive_miner,
+            check_approved_research_handoff_executor,
+            check_self_learning_dashboard,
+            check_control_plane_accepts_valid_proposal,
+            check_bridge_produces_valid_proposal,
+            check_bridge_rejects_bad_input,
+            check_growth_propose_function,
+            check_growth_console_data,
+            check_growth_proposals_data,
+            check_growth_propose_command,
+            check_growth_approve_command,
+            check_growth_reject_command,
+            check_growth_approve_reject_missing_id,
+            check_growth_handoff_dry_run,
+            check_growth_handoff_write,
+            check_growth_handoff_errors,
+            check_growth_run_guide,
+            check_growth_run_with_source,
+            check_growth_run_smart_router,
+            check_growth_handoffs_empty,
+            check_growth_handoffs_populated,
+            check_growth_execute_dry_run,
+            check_growth_execute_write,
+            check_growth_execute_errors,
+            check_growth_receipts_empty,
+            check_growth_receipts_populated,
+            check_growth_finalize_command,
+            check_growth_archive_inventory_empty,
+            check_growth_archive_inventory_populated,
+            check_growth_archive_extract_dry_run,
+            check_growth_archive_extract_write,
+            check_growth_archive_extract_blocked,
+            check_growth_archive_catalog_dry_run,
+            check_growth_archive_catalog_write,
+            check_growth_archive_catalog_refuses_existing,
+            check_growth_archive_queue_empty,
+            check_growth_archive_queue_populated,
+            check_growth_archive_queue_invalid_catalog,
+            check_growth_archive_mine_dry_run_rank,
+            check_growth_archive_mine_dry_run_source,
+            check_growth_archive_mine_errors,
+            check_growth_archive_batch_mine_dry_run,
+            check_growth_archive_batch_mine_top_clamp,
+            check_growth_archive_batch_mine_partial_failure,
+            check_growth_archive_code_queue_empty,
+            check_growth_archive_code_queue_populated,
+            check_growth_archive_code_queue_top_clamp,
+            check_growth_business_opportunity_scan_helper,
+            check_growth_business_opportunities_cli,
+            check_growth_business_evidence_contract_helper,
+            check_growth_business_evidence_contract_cli,
+            check_growth_opportunity_review_package_helper,
+            check_growth_opportunity_review_cli,
+            check_growth_campaign_plan_preview_helper,
+            check_growth_campaign_plan_preview_cli,
+            check_link_module_boundary_registry_helper,
+            check_link_module_boundary_registry_cli,
+            check_growth_campaign_governance_helpers,
+            check_growth_campaign_governance_clis,
+            check_business_development_intake_governance_helpers,
+            check_business_development_intake_governance_clis,
+            check_business_development_source_governance_helpers,
+            check_business_development_source_governance_clis,
+            check_business_development_collection_planning_helpers,
+            check_business_development_collection_planning_clis,
+            check_business_operations_governance_helpers,
+            check_business_operations_governance_clis,
+            check_business_readiness_governance_helpers,
+            check_business_readiness_governance_clis,
+            check_business_execution_governance_helpers,
+            check_business_execution_governance_clis,
+            check_governance_dashboard_helpers,
+            check_governance_dashboard_clis,
+            check_control_plane_dashboard_helpers,
+            check_control_plane_dashboard_clis,
+            check_control_plane_operator_ux_helpers,
+            check_control_plane_operator_ux_clis,
+            check_business_execution_simulation_helpers,
+            check_business_execution_simulation_clis,
+            check_simulation_analysis_helpers,
+            check_simulation_analysis_clis,
+            check_simulation_remediation_planning_helpers,
+            check_simulation_remediation_planning_clis,
+            check_execution_readiness_sandbox_helpers,
+            check_execution_readiness_sandbox_clis,
+            check_operator_decision_engine_helpers,
+            check_operator_decision_engine_clis,
+            check_operator_decision_trace_helpers,
+            check_operator_decision_trace_clis,
+            check_operator_action_plan_helpers,
+            check_operator_action_plan_clis,
+            check_operator_task_draft_helpers,
+            check_operator_task_draft_clis,
+            check_sandbox_executor_boundary_helpers,
+            check_sandbox_executor_boundary_clis,
+            check_growth_code_brief_propose_batch,
+            check_ruflo_upgrade_intake_helper,
+            check_ruflo_upgrade_plan_helper,
+            check_self_learning_feedback_receipt_helper,
+            check_self_learning_next_step_recommendations_helper,
+            check_repo_value_scan_helper,
+            check_link_capability_inventory_helper,
+            check_capability_gap_preview_helper,
+            check_growth_planning_preview_helper,
+            check_capability_graph_helper,
+            check_capability_evidence_graph_helper,
+            check_capability_discovery_helper,
+            check_capability_intelligence_payload_helper,
+            check_upgrade_execution_plan_helper,
+            check_implementation_branch_plan_helper,
+            check_implementation_work_packages_helper,
+            check_verification_plan_helper,
+            check_verified_patch_plan_helper,
+            check_verified_patch_diff_helper,
+            check_patch_applier_boundary_helper,
+            check_patch_behavior_quality_gate_helper,
+            check_autonomous_execution_package_helper,
+            check_growth_planning_chain_cli,
+            check_growth_execution_readiness_cli,
+            check_growth_execution_gates_cli,
+            check_growth_execution_approval_checklist_cli,
+            check_growth_execution_review_cli,
+            check_workspace_creator_runtime_boundary_helper,
+            check_growth_workspace_boundary_cli,
+            check_growth_patch_boundary_cli,
+            check_workspace_creator_runtime_plan_helper,
+            check_guarded_workspace_creator_runtime_component,
+            check_guarded_patch_applier_runtime_component,
+            check_verification_runner_boundary_helper,
+            check_growth_verification_boundary_cli,
+            check_guarded_verification_runner_runtime_component,
+            check_rollback_runtime_boundary_helper,
+            check_growth_rollback_boundary_cli,
+            check_guarded_rollback_executor_runtime_component,
+            check_execution_evidence_collector_runtime_component,
+            check_growth_evidence_collect_cli,
+            check_supervised_execution_write_boundary_helper,
+            check_supervised_execution_review_package_helper,
+            check_growth_supervised_execution_review_package_cli,
+            check_growth_supervised_execution_boundary_cli,
+            check_growth_supervised_execution_cli,
+            check_supervised_execution_orchestrator_runtime_component,
+            check_guarded_workspace_lifecycle_cleanup_abandon,
+            check_planning_chain_review_bundle_helper,
+            check_execution_readiness_stack_helper,
+            check_execution_journal_schema_helper,
+            check_execution_evidence_contract_helper,
+            check_execution_preflight_checklist_helper,
+            check_execution_attempt_history_helper,
+            check_execution_readiness_dashboard_summary_helper,
+            check_execution_gate_stack_preview_helper,
+            check_growth_archive_code_brief_dry_run,
+            check_growth_archive_code_brief_write,
+            check_growth_code_brief_propose,
+            check_make_unique_title,
+            check_content_replacement_entry_helper,
+            check_fork_lineage_with_content_replacements,
+        ))
+    print("Growth pipeline base suite passed")
+
+
+def run_source_fast_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("source-fast"):
+        _run_check_group((
+            check_growth_suite_selector_boundaries,
+            check_research_target_intake_helpers,
+            check_research_target_clis,
+            check_source_aware_downstream_binding_helpers,
+            check_source_aware_downstream_binding_clis,
+            check_source_aware_operator_report_and_sandbox_helpers,
+            check_source_aware_operator_report_and_sandbox_clis,
+            check_source_aware_control_plane_dashboard_helpers,
+            check_source_aware_archive_concept_extractor_helpers,
+            check_source_aware_growth_e2e_summary_cache_helpers,
+            check_source_aware_control_plane_dashboard_clis,
+            check_source_aware_human_summary_clis,
+            check_source_aware_provenance_specificity_helpers,
+            check_source_aware_provenance_specificity_clis,
+            check_source_aware_cross_target_specificity,
+        ))
+    print("Growth pipeline source-fast suite passed")
+
+
+def run_source_slow_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("source-slow"):
+        check_slow_source_aware_real_archive_integration_helpers(force=True)
+        check_local_model_advisor_foundation_helpers()
+        check_local_model_advisor_clis()
+    print("Growth pipeline source-slow suite passed")
+
+
+def run_default_suite() -> None:
+    started = time.perf_counter()
+    run_base_suite()
+    run_source_fast_suite()
+    if _run_slow_growth_archive_tests():
+        run_source_slow_suite()
+    else:
+        _GROWTH_TEST_SKIPPED_SUITES.add("source-slow")
+        print("source-slow: skipped; run --suite source-slow or set LINK_RUN_SLOW_GROWTH_ARCHIVE_TESTS=1")
+    _print_growth_test_timing_summary(time.perf_counter() - started)
+    print("Growth pipeline default suites passed")
+
+
+def run_all_suites() -> None:
+    started = time.perf_counter()
+    run_base_suite()
+    run_source_fast_suite()
+    run_source_slow_suite()
+    _print_growth_test_timing_summary(time.perf_counter() - started)
+    print("Growth pipeline all suites passed")
+
+
+def _print_suite_list() -> None:
+    print("Growth pipeline test suites:")
+    print("  base         foundational deterministic checks; fastest normal checkpoint")
+    print("  source-fast  tiny-fixture source/cache/queue/role calibration checks")
+    print("  source-slow  real archive integration for Headroom/gpt-crawler/Agent-Reach")
+    print("  all          base + source-fast + source-slow")
+    print("Recommended commands:")
+    print("  python3 tests/test_growth_pipeline.py --suite base")
+    print("  python3 tests/test_growth_pipeline.py --suite source-fast")
+    print("  python3 tests/test_growth_pipeline.py")
+    print("  python3 tests/test_growth_pipeline.py --suite source-slow")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run deterministic Growth pipeline smoke test suites.")
+    parser.add_argument("--suite", choices=("base", "source-fast", "source-slow", "all"), help="suite to run")
+    parser.add_argument("--list-suites", action="store_true", help="list available suites and recommended commands")
+    args = parser.parse_args(argv)
+    if args.list_suites:
+        _print_suite_list()
+        return 0
+    suite = args.suite
+    started = time.perf_counter()
+    if suite == "base":
+        run_base_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "source-fast":
+        run_source_fast_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "source-slow":
+        run_source_slow_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "all":
+        run_all_suites()
+        return 0
+    run_default_suite()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
