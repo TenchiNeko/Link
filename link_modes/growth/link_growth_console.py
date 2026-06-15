@@ -17707,13 +17707,111 @@ def parse_growth_opportunity_decision_score_json(text: str) -> dict[str, Any]:
     return payload
 
 
-def collect_repo_concept_calibration_report(*, sources: list[str] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+def _concept_calibration_report_policy() -> dict[str, Any]:
+    return {
+        "concept_calibration_report_policy_id": "concept-calibration-report-policy-" + _research_target_hash_text({"version": REPO_CONCEPT_CALIBRATION_REPORT_VERSION, "default": "fast"})[:12],
+        "default_mode": "fast",
+        "supported_modes": ["fast", "deep"],
+        "fast_mode_behavior": "Reuse queue E2E calibrated source summaries for operator-facing calibration quality.",
+        "deep_mode_behavior": "Recompute per-source intake, evidence, concepts, repo role, concept confidence, and candidates.",
+        "reuse_queue_e2e_by_default": True,
+        "write_cache_default": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+    }
+
+
+def _repo_concept_calibration_base_payload(
+    *,
+    source_entries: list[dict[str, Any]],
+    false_positive_sources: list[dict[str, Any]],
+    weak_sources: list[dict[str, Any]],
+    best_opportunities: list[dict[str, Any]],
+    distribution: dict[str, int],
+    report_mode: str,
+    request_reuse_summary: dict[str, Any],
+    performance_summary: dict[str, Any],
+    metadata: dict[str, Any] | None,
+    id_source: dict[str, Any],
+    recommended_next_action: str,
+) -> dict[str, Any]:
+    total = max(1, len(source_entries))
+    high_or_medium = sum(1 for item in source_entries if item["confidence"] in {"high", "medium"})
+    penalty = len(false_positive_sources) + len(weak_sources)
+    quality = max(0, min(100, int((high_or_medium / total) * 100) - penalty * 5))
+    payload = {
+        "repo_concept_calibration_report_version": REPO_CONCEPT_CALIBRATION_REPORT_VERSION,
+        "repo_concept_calibration_report_id": "repo-concept-calibration-report-" + _research_target_hash_text({"mode": report_mode, "sources": [item["source_path"] for item in source_entries], "id_source": id_source, "version": REPO_CONCEPT_CALIBRATION_REPORT_VERSION})[:12],
+        "report_mode": report_mode,
+        "mode": report_mode,
+        "deep_mode_available": True,
+        "deep_command": "python3 link.py growth concept-calibration-report --mode deep --json",
+        "concept_calibration_report_policy": _concept_calibration_report_policy(),
+        "sources": source_entries,
+        "overclassification_summary": {
+            "source_count": len(false_positive_sources),
+            "sources": [{"source_path": item["source_path"], "warnings": item["overclassification_warnings"][:3]} for item in false_positive_sources],
+        },
+        "false_positive_summary": {
+            "compression_false_positive_count": sum(1 for item in false_positive_sources if any("compression" in warning.lower() for warning in item["overclassification_warnings"])),
+            "sources": [item["source_path"] for item in false_positive_sources],
+        },
+        "underclassification_summary": {
+            "weak_source_count": len(weak_sources),
+            "sources": [{"source_path": item["source_path"], "reason": item["recommended_next_action"]} for item in weak_sources],
+        },
+        "role_family_distribution": distribution,
+        "calibration_quality_score": quality,
+        "best_calibrated_opportunities": sorted(best_opportunities, key=lambda item: (item["calibrated_direct_usefulness_score"], item["title"]), reverse=True)[:5],
+        "needs_profile_work": weak_sources[:8],
+        "request_reuse_summary": request_reuse_summary,
+        "performance_summary": performance_summary,
+        "recommended_next_action": recommended_next_action,
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_repo_concept_calibration_report(payload)
+    return payload
+
+
+def collect_repo_concept_calibration_report(*, sources: list[str] | None = None, mode: str = "fast", metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    import time as _time
+
+    report_mode = str(mode or "fast").strip().lower()
+    if report_mode not in {"fast", "deep"}:
+        raise ValueError("concept-calibration-report --mode must be fast or deep")
+    if report_mode == "fast":
+        started = _time.perf_counter()
+        queue = collect_growth_source_queue(sources=sources)
+        queue_e2e_started = _time.perf_counter()
+        queue_e2e = collect_growth_source_queue_e2e_summary(sources=sources)
+        queue_e2e_runtime_ms = int((_time.perf_counter() - queue_e2e_started) * 1000)
+        payload = collect_repo_concept_calibration_report_from_queue_e2e(
+            queue_e2e,
+            queue,
+            metadata=metadata,
+            total_started=started,
+            queue_e2e_runtime_ms=queue_e2e_runtime_ms,
+            report_mode="fast",
+        )
+        return payload
+
+    started = _time.perf_counter()
     queue = collect_growth_source_queue(sources=sources)
     source_entries: list[dict[str, Any]] = []
     false_positive_sources: list[dict[str, Any]] = []
     weak_sources: list[dict[str, Any]] = []
     best_opportunities: list[dict[str, Any]] = []
     distribution: dict[str, int] = {}
+    source_summary_started = _time.perf_counter()
     for entry in queue["selected_sources"]:
         source_path = entry["source_path"]
         try:
@@ -17735,12 +17833,18 @@ def collect_repo_concept_calibration_report(*, sources: list[str] | None = None,
             source_entry = {
                 "source_path": source_path,
                 "primary_role": role["primary_role"],
+                "primary_role_confidence": role["primary_role_confidence"],
                 "confidence": role["primary_role_confidence"],
                 "top_concepts": top_concepts,
                 "overclassification_warnings": role["overclassification_warnings"] + (["candidate title mismatches calibrated role"] if compression_mismatch else []),
+                "false_positive_warnings": role["overclassification_warnings"] + (["candidate title mismatches calibrated role"] if compression_mismatch else []),
                 "best_opportunity": best_candidate["title"],
                 "decision": decision,
                 "recommended_next_action": best_candidate["recommended_next_action"],
+                "summary_reuse_source": "recomputed",
+                "reused_fields": [],
+                "recomputed_fields": ["intake", "evidence", "archive_concepts", "repo_role", "concept_confidence", "upgrade_candidates"],
+                "reuse_warnings": ["deep mode intentionally recomputes source calibration artifacts"],
             }
             source_entries.append(source_entry)
             distribution[role["primary_role"]] = distribution.get(role["primary_role"], 0) + 1
@@ -17759,12 +17863,18 @@ def collect_repo_concept_calibration_report(*, sources: list[str] | None = None,
             weak_sources.append({
                 "source_path": source_path,
                 "primary_role": "unknown",
+                "primary_role_confidence": "low",
                 "confidence": "low",
                 "top_concepts": [],
                 "overclassification_warnings": [_source_aware_text(str(exc), max_chars=180)],
+                "false_positive_warnings": [_source_aware_text(str(exc), max_chars=180)],
                 "best_opportunity": "unavailable",
                 "decision": "blocked",
                 "recommended_next_action": "Inspect deterministic classification failure before using this source.",
+                "summary_reuse_source": "recomputed",
+                "reused_fields": [],
+                "recomputed_fields": ["intake", "evidence", "archive_concepts", "repo_role", "concept_confidence", "upgrade_candidates"],
+                "reuse_warnings": ["deep mode source recompute failed closed"],
             })
     for quarantine in queue["quarantine_records"]:
         if quarantine["quarantine_status"] == "not_quarantined":
@@ -17772,67 +17882,89 @@ def collect_repo_concept_calibration_report(*, sources: list[str] | None = None,
         weak_sources.append({
             "source_path": quarantine["source_path"],
             "primary_role": "unknown",
+            "primary_role_confidence": "low",
             "confidence": "low",
             "top_concepts": [],
             "overclassification_warnings": [quarantine["quarantine_reason"]],
+            "false_positive_warnings": [quarantine["quarantine_reason"]],
             "best_opportunity": "skipped",
             "decision": "blocked",
             "recommended_next_action": quarantine["recommended_next_action"],
+            "summary_reuse_source": "quarantine",
+            "reused_fields": ["quarantine_record"],
+            "recomputed_fields": [],
+            "reuse_warnings": [],
         })
-    total = max(1, len(source_entries))
-    high_or_medium = sum(1 for item in source_entries if item["confidence"] in {"high", "medium"})
-    penalty = len(false_positive_sources) + len(weak_sources)
-    quality = max(0, min(100, int((high_or_medium / total) * 100) - penalty * 5))
-    payload = {
-        "repo_concept_calibration_report_version": REPO_CONCEPT_CALIBRATION_REPORT_VERSION,
-        "repo_concept_calibration_report_id": "repo-concept-calibration-report-" + _research_target_hash_text({"sources": [item["source_path"] for item in source_entries], "version": REPO_CONCEPT_CALIBRATION_REPORT_VERSION})[:12],
-        "sources": source_entries,
-        "overclassification_summary": {
-            "source_count": len(false_positive_sources),
-            "sources": [{"source_path": item["source_path"], "warnings": item["overclassification_warnings"][:3]} for item in false_positive_sources],
-        },
-        "false_positive_summary": {
-            "compression_false_positive_count": sum(1 for item in false_positive_sources if any("compression" in warning.lower() for warning in item["overclassification_warnings"])),
-            "sources": [item["source_path"] for item in false_positive_sources],
-        },
-        "underclassification_summary": {
-            "weak_source_count": len(weak_sources),
-            "sources": [{"source_path": item["source_path"], "reason": item["recommended_next_action"]} for item in weak_sources],
-        },
-        "role_family_distribution": distribution,
-        "calibration_quality_score": quality,
-        "best_calibrated_opportunities": sorted(best_opportunities, key=lambda item: (item["calibrated_direct_usefulness_score"], item["title"]), reverse=True)[:5],
-        "needs_profile_work": weak_sources[:8],
-        "recommended_next_action": "Implement the highest role-aligned opportunity; add profile fixtures for weak or mismatched sources.",
-        "fallback_allowed": False,
-        "model_used": False,
-        "external_network_used": False,
-        "safety_metadata": _read_only_safety_metadata(),
-        "dry_run": True,
-        "write_allowed": False,
-        "automation_allowed": False,
-        "metadata": dict(metadata or {}),
-        "writes": [],
+    source_summary_runtime_ms = int((_time.perf_counter() - source_summary_started) * 1000)
+    request_reuse_summary = {
+        "request_cache_id": "concept-calibration-report-request-cache-" + _research_target_hash_text({"mode": "deep", "sources": [item["source_path"] for item in source_entries], "version": REPO_CONCEPT_CALIBRATION_REPORT_VERSION})[:12],
+        "request_cache_enabled": True,
+        "queue_e2e_reuse_enabled": False,
+        "queue_e2e_sources_reused_count": 0,
+        "source_entries_recomputed_count": len(source_entries),
+        "concept_confidence_recompute_count": len(source_entries),
+        "repo_role_recompute_count": len(source_entries),
+        "compression_profile_recompute_count": 0,
+        "avoided_source_recompute_count": 0,
+        "notes": ["deep mode preserves full deterministic source/archive calibration recompute"],
     }
-    validate_repo_concept_calibration_report(payload)
-    return payload
+    performance_summary = {
+        "total_runtime_ms": int((_time.perf_counter() - started) * 1000),
+        "queue_e2e_runtime_ms": 0,
+        "source_summary_runtime_ms": source_summary_runtime_ms,
+        "reuse_optimization_enabled": False,
+        "report_mode": "deep",
+        "slowest_steps": [{"step": "source_summary_recompute", "runtime_ms": source_summary_runtime_ms}],
+        "hotspot_notes": ["deep mode is intentionally slower and should be used when full recomputation is needed"],
+    }
+    return _repo_concept_calibration_base_payload(
+        source_entries=source_entries,
+        false_positive_sources=false_positive_sources,
+        weak_sources=weak_sources,
+        best_opportunities=best_opportunities,
+        distribution=distribution,
+        report_mode="deep",
+        request_reuse_summary=request_reuse_summary,
+        performance_summary=performance_summary,
+        metadata=metadata,
+        id_source={"mode": "deep"},
+        recommended_next_action="Review deep calibration results; use default fast mode for normal operator loops.",
+    )
 
 
 def validate_repo_concept_calibration_report(payload: dict[str, Any]) -> None:
-    required = ("repo_concept_calibration_report_version", "repo_concept_calibration_report_id", "sources", "overclassification_summary", "false_positive_summary", "underclassification_summary", "role_family_distribution", "calibration_quality_score", "best_calibrated_opportunities", "needs_profile_work", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    required = ("repo_concept_calibration_report_version", "repo_concept_calibration_report_id", "report_mode", "mode", "deep_mode_available", "deep_command", "concept_calibration_report_policy", "sources", "overclassification_summary", "false_positive_summary", "underclassification_summary", "role_family_distribution", "calibration_quality_score", "best_calibrated_opportunities", "needs_profile_work", "request_reuse_summary", "performance_summary", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
     for key in required:
         if key not in payload:
             raise ValueError(f"repo concept calibration report missing field: {key}")
     if payload["repo_concept_calibration_report_version"] != REPO_CONCEPT_CALIBRATION_REPORT_VERSION:
         raise ValueError("invalid repo concept calibration report version")
+    if payload["report_mode"] not in {"fast", "deep"} or payload["mode"] != payload["report_mode"]:
+        raise ValueError("invalid repo concept calibration report mode")
+    policy = payload["concept_calibration_report_policy"]
+    for key in ("concept_calibration_report_policy_id", "default_mode", "supported_modes", "reuse_queue_e2e_by_default", "model_used", "external_network_used", "safety_metadata"):
+        if key not in policy:
+            raise ValueError(f"concept calibration report policy missing {key}")
+    if policy["model_used"] is not False or policy["external_network_used"] is not False or policy["safety_metadata"] != _read_only_safety_metadata():
+        raise ValueError("concept calibration report policy must avoid model/network")
     if not isinstance(payload["sources"], list):
         raise TypeError("repo concept calibration report sources must be a list")
     for item in payload["sources"]:
-        for key in ("source_path", "primary_role", "confidence", "top_concepts", "overclassification_warnings", "best_opportunity", "decision", "recommended_next_action"):
+        for key in ("source_path", "primary_role", "primary_role_confidence", "confidence", "top_concepts", "overclassification_warnings", "false_positive_warnings", "best_opportunity", "decision", "recommended_next_action", "summary_reuse_source", "reused_fields", "recomputed_fields", "reuse_warnings"):
             if key not in item:
                 raise ValueError(f"repo concept calibration report source missing {key}")
+        if item["summary_reuse_source"] not in {"queue_e2e", "concept_confidence", "repo_role", "recomputed", "mixed", "quarantine"}:
+            raise ValueError("invalid repo concept calibration report source reuse status")
     if not isinstance(payload["calibration_quality_score"], int) or not 0 <= payload["calibration_quality_score"] <= 100:
         raise ValueError("calibration quality score must be 0..100")
+    reuse = payload["request_reuse_summary"]
+    for key in ("request_cache_id", "request_cache_enabled", "queue_e2e_reuse_enabled", "queue_e2e_sources_reused_count", "source_entries_recomputed_count", "concept_confidence_recompute_count", "repo_role_recompute_count", "compression_profile_recompute_count", "avoided_source_recompute_count", "notes"):
+        if key not in reuse:
+            raise ValueError(f"repo concept calibration report reuse summary missing {key}")
+    perf = payload["performance_summary"]
+    for key in ("total_runtime_ms", "queue_e2e_runtime_ms", "source_summary_runtime_ms", "reuse_optimization_enabled", "report_mode", "slowest_steps", "hotspot_notes"):
+        if key not in perf:
+            raise ValueError(f"repo concept calibration report performance summary missing {key}")
     if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
         raise ValueError("repo concept calibration report must be deterministic/no-model/no-network")
     if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
@@ -17851,15 +17983,30 @@ def parse_repo_concept_calibration_report_json(text: str) -> dict[str, Any]:
     return payload
 
 
-def collect_repo_concept_calibration_report_from_queue_e2e(queue_e2e: dict[str, Any], queue: dict[str, Any], *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+def collect_repo_concept_calibration_report_from_queue_e2e(
+    queue_e2e: dict[str, Any],
+    queue: dict[str, Any],
+    *,
+    metadata: dict[str, Any] | None = None,
+    total_started: float | None = None,
+    queue_e2e_runtime_ms: int | None = None,
+    report_mode: str = "fast",
+) -> dict[str, Any]:
+    import time as _time
+
+    started = total_started if total_started is not None else _time.perf_counter()
+    source_summary_started = _time.perf_counter()
     source_entries: list[dict[str, Any]] = []
     false_positive_sources: list[dict[str, Any]] = []
     weak_sources: list[dict[str, Any]] = []
     best_opportunities: list[dict[str, Any]] = []
     distribution: dict[str, int] = {}
+    selected_paths = {item["source_path"] for item in queue.get("selected_sources", [])}
     for item in queue_e2e.get("source_summaries", []):
         source_path = str(item.get("source_path", ""))
         if not source_path:
+            continue
+        if selected_paths and source_path not in selected_paths:
             continue
         top_concepts = list(item.get("calibrated_top_concepts", []))[:5]
         warnings = _normalize_implementation_branch_refs(
@@ -17874,12 +18021,21 @@ def collect_repo_concept_calibration_report_from_queue_e2e(queue_e2e: dict[str, 
         source_entry = {
             "source_path": source_path,
             "primary_role": primary_role,
+            "primary_role_confidence": confidence,
             "confidence": confidence,
             "top_concepts": top_concepts,
             "overclassification_warnings": warnings,
+            "false_positive_warnings": warnings,
             "best_opportunity": best_title,
             "decision": decision,
             "recommended_next_action": str(item.get("recommended_next_action", "Review queue E2E calibrated source summary.")),
+            "summary_reuse_source": "queue_e2e",
+            "reused_fields": [
+                "primary_repo_role", "primary_repo_role_confidence", "calibrated_top_concepts",
+                "best_growth_opportunity_title", "operator_decision", "calibration_warnings",
+            ],
+            "recomputed_fields": [],
+            "reuse_warnings": [],
         }
         source_entries.append(source_entry)
         distribution[primary_role] = distribution.get(primary_role, 0) + 1
@@ -17901,50 +18057,66 @@ def collect_repo_concept_calibration_report_from_queue_e2e(queue_e2e: dict[str, 
         weak_sources.append({
             "source_path": quarantine["source_path"],
             "primary_role": "unknown",
+            "primary_role_confidence": "low",
             "confidence": "low",
             "top_concepts": [],
             "overclassification_warnings": [quarantine["quarantine_reason"]],
+            "false_positive_warnings": [quarantine["quarantine_reason"]],
             "best_opportunity": "skipped",
             "decision": "blocked",
             "recommended_next_action": quarantine["recommended_next_action"],
+            "summary_reuse_source": "quarantine",
+            "reused_fields": ["quarantine_record"],
+            "recomputed_fields": [],
+            "reuse_warnings": [],
         })
-    total = max(1, len(source_entries))
-    high_or_medium = sum(1 for item in source_entries if item["confidence"] in {"high", "medium"})
-    penalty = len(false_positive_sources) + len(weak_sources)
-    quality = max(0, min(100, int((high_or_medium / total) * 100) - penalty * 5))
-    payload = {
-        "repo_concept_calibration_report_version": REPO_CONCEPT_CALIBRATION_REPORT_VERSION,
-        "repo_concept_calibration_report_id": "repo-concept-calibration-report-" + _research_target_hash_text({"source": "queue-e2e", "queue_id": queue_e2e.get("growth_source_queue_e2e_summary_id", ""), "sources": [item["source_path"] for item in source_entries], "version": REPO_CONCEPT_CALIBRATION_REPORT_VERSION})[:12],
-        "sources": source_entries,
-        "overclassification_summary": {
-            "source_count": len(false_positive_sources),
-            "sources": [{"source_path": item["source_path"], "warnings": item["overclassification_warnings"][:3]} for item in false_positive_sources],
-        },
-        "false_positive_summary": {
-            "compression_false_positive_count": sum(1 for item in false_positive_sources if any("compression" in warning.lower() for warning in item["overclassification_warnings"])),
-            "sources": [item["source_path"] for item in false_positive_sources],
-        },
-        "underclassification_summary": {
-            "weak_source_count": len(weak_sources),
-            "sources": [{"source_path": item["source_path"], "reason": item["recommended_next_action"]} for item in weak_sources],
-        },
-        "role_family_distribution": distribution,
-        "calibration_quality_score": quality,
-        "best_calibrated_opportunities": sorted(best_opportunities, key=lambda entry: (entry["calibrated_direct_usefulness_score"], entry["title"]), reverse=True)[:5],
-        "needs_profile_work": weak_sources[:8],
-        "recommended_next_action": "Review queue E2E role-aligned opportunities; add profile fixtures for weak or mismatched sources.",
-        "fallback_allowed": False,
-        "model_used": False,
-        "external_network_used": False,
-        "safety_metadata": _read_only_safety_metadata(),
-        "dry_run": True,
-        "write_allowed": False,
-        "automation_allowed": False,
-        "metadata": dict(metadata or {}),
-        "writes": [],
+    source_summary_runtime_ms = int((_time.perf_counter() - source_summary_started) * 1000)
+    queue_runtime = int(queue_e2e_runtime_ms if queue_e2e_runtime_ms is not None else queue_e2e.get("performance_summary", {}).get("total_runtime_ms", 0))
+    reused_count = sum(1 for item in source_entries if item["summary_reuse_source"] == "queue_e2e")
+    recomputed_count = sum(1 for item in source_entries if item["recomputed_fields"])
+    request_reuse_summary = {
+        "request_cache_id": "concept-calibration-report-request-cache-" + _research_target_hash_text({"mode": report_mode, "queue_id": queue_e2e.get("growth_source_queue_e2e_summary_id", ""), "sources": [item["source_path"] for item in source_entries], "version": REPO_CONCEPT_CALIBRATION_REPORT_VERSION})[:12],
+        "request_cache_enabled": True,
+        "queue_e2e_reuse_enabled": True,
+        "queue_e2e_sources_reused_count": reused_count,
+        "source_entries_recomputed_count": recomputed_count,
+        "concept_confidence_recompute_count": 0,
+        "repo_role_recompute_count": 0,
+        "compression_profile_recompute_count": 0,
+        "avoided_source_recompute_count": max(0, reused_count * 2 - recomputed_count),
+        "notes": [
+            "fast mode reuses queue E2E calibrated source summaries",
+            "avoided_source_recompute_count is a conservative repo-role plus concept-confidence estimate",
+        ],
     }
-    validate_repo_concept_calibration_report(payload)
-    return payload
+    performance_summary = {
+        "total_runtime_ms": int((_time.perf_counter() - started) * 1000),
+        "queue_e2e_runtime_ms": queue_runtime,
+        "source_summary_runtime_ms": source_summary_runtime_ms,
+        "reuse_optimization_enabled": True,
+        "report_mode": report_mode,
+        "slowest_steps": sorted([
+            {"step": "queue_e2e", "runtime_ms": queue_runtime},
+            {"step": "source_summary_reuse", "runtime_ms": source_summary_runtime_ms},
+        ], key=lambda entry: entry["runtime_ms"], reverse=True),
+        "hotspot_notes": [
+            "fast mode no longer runs a separate per-source calibration recompute after queue E2E",
+            "queue E2E remains the dominant cost when source summaries are cold",
+        ],
+    }
+    return _repo_concept_calibration_base_payload(
+        source_entries=source_entries,
+        false_positive_sources=false_positive_sources,
+        weak_sources=weak_sources,
+        best_opportunities=best_opportunities,
+        distribution=distribution,
+        report_mode=report_mode,
+        request_reuse_summary=request_reuse_summary,
+        performance_summary=performance_summary,
+        metadata=metadata,
+        id_source={"source": "queue-e2e", "queue_id": queue_e2e.get("growth_source_queue_e2e_summary_id", "")},
+        recommended_next_action="Review queue E2E role-aligned opportunities; add profile fixtures for weak or mismatched sources.",
+    )
 
 
 def _growth_direct_eval_issue(issue_id: str, severity: str, category: str, title: str, observed: str, expected: str, evidence: str, fix: str, *, implement_now: bool = False, blocked_reason: str = "") -> dict[str, Any]:
@@ -25907,14 +26079,25 @@ def _research_print_concept_confidence(payload: dict[str, Any]) -> None:
 
 
 def _growth_print_concept_calibration_report(payload: dict[str, Any]) -> None:
-    print("Calibration Report:")
+    print("Concept Calibration Report")
     best = payload["best_calibrated_opportunities"][0] if payload["best_calibrated_opportunities"] else {}
+    reuse = payload["request_reuse_summary"]
+    perf = payload["performance_summary"]
+    print(f"  mode: {payload['report_mode']}")
+    print(f"  sources: {len(payload['sources'])}")
+    print(f"  calibration quality: {payload['calibration_quality_score']}")
     print(f"  best classified: {best.get('source_path', 'none')} {best.get('primary_role', '')}")
     print("  weak classifications:")
     for item in payload["needs_profile_work"][:5] or [{"source_path": "none", "primary_role": ""}]:
         print(f"    - {item['source_path']}: {item.get('primary_role', 'unknown')}")
     print(f"  false positives: {payload['false_positive_summary']['compression_false_positive_count']}")
-    print(f"  quality: {payload['calibration_quality_score']}")
+    print("  reuse:")
+    print(
+        f"    queue E2E reused for {reuse['queue_e2e_sources_reused_count']} sources; "
+        f"recomputed {reuse['source_entries_recomputed_count']} source summaries; "
+        f"avoided {reuse['avoided_source_recompute_count']}"
+    )
+    print(f"  performance: total {perf['total_runtime_ms']}ms; queue E2E {perf['queue_e2e_runtime_ms']}ms")
     print(f"  next: {payload['recommended_next_action']}")
 
 
@@ -26554,14 +26737,24 @@ def growth_concept_calibration_report_main(argv: list[str] | None = None) -> int
     args = _research_target_normalize_args(argv)
     if any(arg in {"-h", "--help", "help"} for arg in args):
         print("Link growth concept-calibration-report: calibrated repo-role/concept quality across queue")
-        print("  python3 link.py growth concept-calibration-report [--source <path> ...] --json")
+        print("  python3 link.py growth concept-calibration-report [--source <path> ...] [--mode fast|deep] --json")
         print("Read-only. --write is not supported.")
         return 0
     if "--write" in args or "--write-cache" in args:
         print("error: concept-calibration-report is read-only; --write is not supported", file=sys.stderr)
         return 2
+    mode = "fast"
+    if "--mode" in args:
+        index = args.index("--mode")
+        if index + 1 >= len(args):
+            print("error: concept-calibration-report --mode requires fast or deep", file=sys.stderr)
+            return 2
+        mode = args[index + 1]
+    if mode not in {"fast", "deep"}:
+        print("error: concept-calibration-report --mode must be fast or deep", file=sys.stderr)
+        return 2
     try:
-        payload = collect_repo_concept_calibration_report(sources=_growth_extract_source_args(args) or None)
+        payload = collect_repo_concept_calibration_report(sources=_growth_extract_source_args(args) or None, mode=mode)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

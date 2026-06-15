@@ -19591,11 +19591,29 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
              "calibration report must include Headroom compression role")
     _require(any(item["primary_role"] == "crawler_source_collection" for item in calibration_report["sources"]),
              "calibration report must include gpt-crawler role")
+    _require(calibration_report["report_mode"] == "fast" and calibration_report["concept_calibration_report_policy"]["default_mode"] == "fast",
+             "calibration report default mode must be fast")
+    _require(calibration_report["request_reuse_summary"]["queue_e2e_reuse_enabled"] is True,
+             "calibration report fast mode must reuse queue E2E")
+    _require(calibration_report["request_reuse_summary"]["queue_e2e_sources_reused_count"] >= 2,
+             "calibration report must count reused queue E2E sources")
+    _require(calibration_report["request_reuse_summary"]["avoided_source_recompute_count"] > 0,
+             "calibration report must report avoided source recomputes")
+    _require(calibration_report["performance_summary"]["reuse_optimization_enabled"] is True,
+             "calibration report must expose reuse performance metadata")
+    _require(all(item["summary_reuse_source"] in {"queue_e2e", "quarantine"} for item in calibration_report["sources"]),
+             "calibration report fast mode must expose source summary reuse")
     _require(calibration_report["model_used"] is False and calibration_report["external_network_used"] is False,
              "calibration report must stay deterministic/no-network")
     validate_repo_concept_calibration_report(calibration_report)
     _require(parse_repo_concept_calibration_report_json(stable_repo_concept_calibration_report_json(calibration_report)) == calibration_report,
              "calibration report JSON must round trip")
+    deep_calibration_report = collect_repo_concept_calibration_report(sources=[headroom_source, crawler_source], mode="deep")
+    _require(deep_calibration_report["report_mode"] == "deep" and deep_calibration_report["request_reuse_summary"]["queue_e2e_reuse_enabled"] is False,
+             "calibration report deep mode must preserve full recompute behavior")
+    _require(all(item["summary_reuse_source"] == "recomputed" for item in deep_calibration_report["sources"]),
+             "calibration report deep mode must mark recomputed sources")
+    validate_repo_concept_calibration_report(deep_calibration_report)
 
     for command, parser, id_key in (
         ("source-cache-policy", parse_persistent_source_inventory_cache_policy_json, "persistent_source_inventory_cache_policy_id"),
@@ -19645,11 +19663,29 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         _require(rc == 0, f"growth {command} --json must return 0")
         payload = parser(out.getvalue())
         _require(id_key in payload, f"growth {command} must output own payload")
+        if command == "concept-calibration-report":
+            _require(payload["report_mode"] == "fast" and payload["request_reuse_summary"]["queue_e2e_reuse_enabled"] is True,
+                     "growth concept-calibration-report CLI must default to fast reuse mode")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_growth([command, "--source", headroom_source, "--write"])
         _require(write_rc != 0 and ("read-only" in err.getvalue() or "--write-cache" in err.getvalue()),
                  f"growth {command} --write must be rejected")
+    fast_mode_out = io.StringIO()
+    with contextlib.redirect_stdout(fast_mode_out):
+        rc = _cmd_growth(["concept-calibration-report", "--source", headroom_source, "--source", crawler_source, "--mode", "fast", "--json"])
+    _require(rc == 0 and parse_repo_concept_calibration_report_json(fast_mode_out.getvalue())["report_mode"] == "fast",
+             "growth concept-calibration-report --mode fast must work")
+    deep_mode_out = io.StringIO()
+    with contextlib.redirect_stdout(deep_mode_out):
+        rc = _cmd_growth(["concept-calibration-report", "--source", headroom_source, "--source", crawler_source, "--mode", "deep", "--json"])
+    _require(rc == 0 and parse_repo_concept_calibration_report_json(deep_mode_out.getvalue())["report_mode"] == "deep",
+             "growth concept-calibration-report --mode deep must work")
+    invalid_mode_err = io.StringIO()
+    with contextlib.redirect_stderr(invalid_mode_err):
+        rc = _cmd_growth(["concept-calibration-report", "--mode", "not-a-mode", "--json"])
+    _require(rc != 0 and "--mode" in invalid_mode_err.getvalue(),
+             "growth concept-calibration-report invalid --mode must fail clearly")
 
     human_out = io.StringIO()
     with contextlib.redirect_stdout(human_out):
@@ -19683,6 +19719,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         if command == "direct-upgrade-eval":
             _require("reuse:" in human and "queue E2E reused" in human,
                      "direct upgrade eval human output must summarize reuse")
+        if command == "concept-calibration-report":
+            _require("mode:" in human and "reuse:" in human,
+                     "concept calibration report human output must summarize mode and reuse")
     queue_e2e_human = io.StringIO()
     with contextlib.redirect_stdout(queue_e2e_human):
         rc = _cmd_growth(["source-queue-e2e", "--source", headroom_source, "--source", crawler_source])
