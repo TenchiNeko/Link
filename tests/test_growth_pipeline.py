@@ -19128,7 +19128,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         collect_growth_opportunity_decision_score,
         collect_growth_source_queue,
         collect_growth_source_queue_cache_status,
+        collect_growth_source_queue_e2e_cache_key,
         collect_growth_source_queue_e2e_summary,
+        collect_growth_source_queue_e2e_summary_cache_record,
         collect_growth_source_queue_policy,
         collect_growth_source_queue_warmup_plan,
         collect_repo_concept_calibration_report,
@@ -19150,7 +19152,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         parse_growth_direct_upgrade_eval_json,
         parse_growth_opportunity_decision_score_json,
         parse_growth_source_queue_cache_status_json,
+        parse_growth_source_queue_e2e_cache_key_json,
         parse_growth_source_queue_e2e_summary_json,
+        parse_growth_source_queue_e2e_summary_cache_record_json,
         parse_growth_source_queue_json,
         parse_growth_source_queue_policy_json,
         parse_growth_source_queue_warmup_plan_json,
@@ -19175,7 +19179,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         stable_growth_direct_upgrade_eval_json,
         stable_growth_opportunity_decision_score_json,
         stable_growth_source_queue_cache_status_json,
+        stable_growth_source_queue_e2e_cache_key_json,
         stable_growth_source_queue_e2e_summary_json,
+        stable_growth_source_queue_e2e_summary_cache_record_json,
         stable_growth_source_queue_json,
         stable_growth_source_queue_policy_json,
         stable_growth_source_queue_warmup_plan_json,
@@ -19199,7 +19205,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         validate_growth_opportunity_decision_score,
         validate_growth_source_queue,
         validate_growth_source_queue_cache_status,
+        validate_growth_source_queue_e2e_cache_key,
         validate_growth_source_queue_e2e_summary,
+        validate_growth_source_queue_e2e_summary_cache_record,
         validate_growth_source_queue_policy,
         validate_growth_source_queue_warmup_plan,
         validate_repo_concept_calibration_report,
@@ -19395,7 +19403,18 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         _require(queue_status_warm["cache_hit_count"] == 2 and queue_status_warm["queue_ready_for_e2e"] is True,
                  "queue cache status must report ready after queue warmup")
 
-        queue_e2e = collect_growth_source_queue_e2e_summary(sources=[headroom_source, crawler_source])
+        queue_e2e_cache_key = collect_growth_source_queue_e2e_cache_key(sources=[headroom_source, crawler_source])
+        _require(queue_e2e_cache_key["selected_sources"] == [headroom_source, crawler_source] and queue_e2e_cache_key["source_manifest_ids"],
+                 "queue E2E cache key must include selected source manifests")
+        validate_growth_source_queue_e2e_cache_key(queue_e2e_cache_key)
+        _require(parse_growth_source_queue_e2e_cache_key_json(stable_growth_source_queue_e2e_cache_key_json(queue_e2e_cache_key)) == queue_e2e_cache_key,
+                 "queue E2E cache key JSON must round trip")
+        missing_queue_e2e_cache = collect_growth_source_queue_e2e_summary_cache_record(sources=[headroom_source, crawler_source])
+        _require(missing_queue_e2e_cache["cache_hit"] is False and missing_queue_e2e_cache["cache_write_performed"] is False,
+                 "missing queue E2E cache status must validate without writing")
+        validate_growth_source_queue_e2e_summary_cache_record(missing_queue_e2e_cache)
+
+        queue_e2e = collect_growth_source_queue_e2e_summary(sources=[headroom_source, crawler_source], mode="deep")
         _require(queue_e2e["best_overall_opportunity"] and queue_e2e["cache_summary"]["cache_hit_count"] == 2,
                  "queue e2e must include best opportunity and cache summary")
         _require(any("compression" in item["repo_role_summary"].lower() for item in queue_e2e["source_summaries"]),
@@ -19411,6 +19430,23 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         validate_growth_source_queue_e2e_summary(queue_e2e)
         _require(parse_growth_source_queue_e2e_summary_json(stable_growth_source_queue_e2e_summary_json(queue_e2e)) == queue_e2e,
                  "growth source queue e2e JSON must round trip")
+        written_queue_e2e_cache = collect_growth_source_queue_e2e_summary_cache_record(sources=[headroom_source, crawler_source], write_cache=True, summary=queue_e2e)
+        _require(written_queue_e2e_cache["cache_hit"] is True and written_queue_e2e_cache["cache_write_performed"] is True,
+                 "queue E2E cache write must create a compact record")
+        _require(Path(written_queue_e2e_cache["cache_file_path"]).resolve().parent == Path(cache_root).resolve(),
+                 "queue E2E compact cache must write under LINK_SOURCE_CACHE_ROOT")
+        validate_growth_source_queue_e2e_summary_cache_record(written_queue_e2e_cache)
+        _require(parse_growth_source_queue_e2e_summary_cache_record_json(stable_growth_source_queue_e2e_summary_cache_record_json(written_queue_e2e_cache)) == written_queue_e2e_cache,
+                 "queue E2E cache record JSON must round trip")
+        hot_queue_e2e_cache = collect_growth_source_queue_e2e_summary_cache_record(sources=[headroom_source, crawler_source])
+        _require(hot_queue_e2e_cache["cache_hit"] is True and hot_queue_e2e_cache["cache_valid"] is True,
+                 "queue E2E cache status must hit after write")
+        hot_queue_e2e = collect_growth_source_queue_e2e_summary(sources=[headroom_source, crawler_source], mode="fast")
+        _require(hot_queue_e2e["queue_e2e_cache_used"] is True and hot_queue_e2e["queue_e2e_summary_reuse_source"] == "compact_cache",
+                 "queue E2E fast mode must use valid compact cache")
+        validate_growth_source_queue_e2e_summary(hot_queue_e2e)
+        direct_queue_e2e = collect_growth_source_queue_e2e_summary(sources=[headroom_source, crawler_source, missing_source], mode="deep")
+        collect_growth_source_queue_e2e_summary_cache_record(sources=[headroom_source, crawler_source, missing_source], write_cache=True, summary=direct_queue_e2e)
 
         direct_eval = collect_growth_direct_upgrade_eval(sources=[headroom_source, crawler_source, missing_source])
         _require(direct_eval["targets_evaluated"] == [headroom_source, crawler_source],
@@ -19443,6 +19479,8 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
                  "direct upgrade eval must avoid recomputing opportunity scores for every target")
         _require(direct_eval["performance_summary"]["reuse_optimization_enabled"] is True,
                  "direct upgrade eval must expose reuse optimization status")
+        _require(direct_eval["queue_e2e_cache_used"] is True and direct_eval["request_reuse_summary"]["queue_e2e_compact_cache_used"] is True,
+                 "direct upgrade eval must use compact queue E2E cache when valid")
         roi_scores = {item["total_roi_score"] for item in direct_eval["candidate_upgrades"]}
         _require(len(roi_scores) > 1, "direct upgrade eval candidate ROI scores must be non-uniform")
         _require(all("candidate_source_artifact" in item and "reused_queue_score" in item for item in direct_eval["candidate_upgrades"]),
@@ -19460,6 +19498,8 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         direct_eval_write = collect_growth_direct_upgrade_eval(sources=[workflow_source], write_cache=True)
         _require(direct_eval_write["write_cache_requested"] is True and direct_eval_write["write_cache_performed"] is True,
                  "direct upgrade eval --write-cache must perform queue cache writes when needed")
+        _require(direct_eval_write["queue_e2e_cache_write_performed"] is True,
+                 "direct upgrade eval --write-cache must write compact queue E2E cache")
         _require(direct_eval_write["source_queue_warmup_result_id"] == direct_eval_write["source_queue_warmup_plan_id"],
                  "direct upgrade eval write result id must link to warmup result")
         validate_growth_direct_upgrade_eval(direct_eval_write)
@@ -19586,6 +19626,8 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
     _require(role_mismatch_score["rejected_due_to_role_mismatch"] and role_mismatch_score["calibrated_direct_usefulness_score"] < crawler_score["calibrated_direct_usefulness_score"],
              "crawler fixture must downrank role-mismatched compression opportunities")
 
+    calibration_queue_e2e = collect_growth_source_queue_e2e_summary(sources=[headroom_source, crawler_source, missing_source], mode="deep")
+    collect_growth_source_queue_e2e_summary_cache_record(sources=[headroom_source, crawler_source, missing_source], write_cache=True, summary=calibration_queue_e2e)
     calibration_report = collect_repo_concept_calibration_report(sources=[headroom_source, crawler_source, missing_source])
     _require(any(item["primary_role"] == "compression_context" for item in calibration_report["sources"]),
              "calibration report must include Headroom compression role")
@@ -19595,6 +19637,8 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
              "calibration report default mode must be fast")
     _require(calibration_report["request_reuse_summary"]["queue_e2e_reuse_enabled"] is True,
              "calibration report fast mode must reuse queue E2E")
+    _require(calibration_report["queue_e2e_cache_used"] is True and calibration_report["request_reuse_summary"]["queue_e2e_compact_cache_used"] is True,
+             "calibration report fast mode must use compact queue E2E cache when valid")
     _require(calibration_report["request_reuse_summary"]["queue_e2e_sources_reused_count"] >= 2,
              "calibration report must count reused queue E2E sources")
     _require(calibration_report["request_reuse_summary"]["avoided_source_recompute_count"] > 0,
@@ -19652,6 +19696,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         ("source-queue-policy", parse_growth_source_queue_policy_json, "growth_source_queue_policy_id"),
         ("source-queue-status", parse_growth_source_queue_cache_status_json, "growth_source_queue_cache_status_id"),
         ("source-queue-warm", parse_growth_source_queue_warmup_plan_json, "growth_source_queue_warmup_plan_id"),
+        ("source-queue-e2e-cache-key", parse_growth_source_queue_e2e_cache_key_json, "growth_source_queue_e2e_cache_key_id"),
+        ("source-queue-e2e-cache-status", parse_growth_source_queue_e2e_summary_cache_record_json, "growth_source_queue_e2e_cache_record_id"),
+        ("source-queue-e2e-cache", parse_growth_source_queue_e2e_summary_cache_record_json, "growth_source_queue_e2e_cache_record_id"),
         ("source-queue-e2e", parse_growth_source_queue_e2e_summary_json, "growth_source_queue_e2e_summary_id"),
         ("direct-upgrade-eval", parse_growth_direct_upgrade_eval_json, "growth_direct_upgrade_eval_id"),
         ("concept-calibration-report", parse_repo_concept_calibration_report_json, "repo_concept_calibration_report_id"),

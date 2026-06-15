@@ -10944,6 +10944,8 @@ GROWTH_SOURCE_QUEUE_VERSION = "link-growth-source-queue-v1"
 GROWTH_SOURCE_QUEUE_CACHE_STATUS_VERSION = "link-growth-source-queue-cache-status-v1"
 GROWTH_SOURCE_QUEUE_WARMUP_PLAN_VERSION = "link-growth-source-queue-warmup-plan-v1"
 GROWTH_SOURCE_QUEUE_E2E_SUMMARY_VERSION = "link-growth-source-queue-e2e-summary-v1"
+GROWTH_SOURCE_QUEUE_E2E_CACHE_KEY_VERSION = "link-growth-source-queue-e2e-cache-key-v1"
+GROWTH_SOURCE_QUEUE_E2E_CACHE_RECORD_VERSION = "link-growth-source-queue-e2e-cache-record-v1"
 REPO_CONCEPT_CALIBRATION_REPORT_VERSION = "link-repo-concept-calibration-report-v1"
 GROWTH_DIRECT_UPGRADE_EVAL_VERSION = "link-growth-direct-upgrade-eval-v1"
 PERSISTENT_SOURCE_INVENTORY_COLLECTOR_VERSION = "link-source-inventory-collector-v1"
@@ -16521,9 +16523,321 @@ def parse_growth_source_queue_warmup_plan_json(text: str) -> dict[str, Any]:
     return payload
 
 
-def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+def _growth_source_queue_e2e_cache_file_path(cache_root: str, cache_key: str) -> str:
+    from pathlib import Path as _Path
+    digest = _research_target_hash_text(cache_key)[:24]
+    return str(_Path(cache_root).expanduser() / f"growth-source-queue-e2e-summary-{digest}.json")
+
+
+def collect_growth_source_queue_e2e_cache_key(*, sources: list[str] | None = None, mode: str = "fast", metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    queue = collect_growth_source_queue(sources=sources)
+    policy = collect_persistent_source_inventory_cache_policy()
+    source_manifest_ids: list[str] = []
+    source_inputs: list[dict[str, Any]] = []
+    for item in queue["selected_sources"]:
+        manifest = collect_persistent_source_inventory_cache_manifest(source_path=item["source_path"])
+        source_manifest_ids.append(manifest["persistent_source_inventory_cache_manifest_id"])
+        source_inputs.append({
+            "source_path": manifest["source_path"],
+            "manifest_id": manifest["persistent_source_inventory_cache_manifest_id"],
+            "source_size_bytes": manifest["source_size_bytes"],
+            "source_mtime_ns": manifest["source_mtime_ns"],
+            "source_cache_key": manifest["cache_key"],
+        })
+    skipped_inputs = [
+        {
+            "source_path": item["source_path"],
+            "quarantine_status": item.get("quarantine_status", ""),
+            "failure_category": item.get("failure_category", ""),
+            "skip_reason": item.get("skip_reason", ""),
+        }
+        for item in queue.get("default_queue_excluded_sources", []) + queue.get("skipped_sources", [])
+    ]
+    schema_versions = {
+        "queue_policy": GROWTH_SOURCE_QUEUE_POLICY_VERSION,
+        "queue": GROWTH_SOURCE_QUEUE_VERSION,
+        "queue_e2e": GROWTH_SOURCE_QUEUE_E2E_SUMMARY_VERSION,
+        "queue_e2e_cache_key": GROWTH_SOURCE_QUEUE_E2E_CACHE_KEY_VERSION,
+        "queue_e2e_cache_record": GROWTH_SOURCE_QUEUE_E2E_CACHE_RECORD_VERSION,
+        "repo_role_policy": REPO_ROLE_CALIBRATION_POLICY_VERSION,
+        "concept_confidence": CONCEPT_CONFIDENCE_CALIBRATION_VERSION,
+        "opportunity_score": GROWTH_OPPORTUNITY_DECISION_SCORE_VERSION,
+        "source_inventory_cache": PERSISTENT_SOURCE_INVENTORY_CACHE_SCHEMA_VERSION,
+    }
+    invalidation_inputs = {
+        "selected_sources": source_inputs,
+        "skipped_sources": skipped_inputs,
+        "source_queue_id": queue["growth_source_queue_id"],
+        "source_queue_policy_id": queue["source_queue_policy_id"],
+        "suitability_assessment_ids": [item["source_archive_suitability_assessment_id"] for item in queue.get("suitability_assessments", [])],
+        "quarantine_record_ids": [item["source_queue_quarantine_record_id"] for item in queue.get("quarantine_records", [])],
+        "schema_versions": schema_versions,
+        "mode": mode,
+    }
+    cache_fingerprint = _research_target_hash_text(invalidation_inputs)[:24]
+    cache_key = f"growth-source-queue-e2e-summary:{GROWTH_SOURCE_QUEUE_E2E_CACHE_RECORD_VERSION}:{cache_fingerprint}"
+    payload = {
+        "growth_source_queue_e2e_cache_key_version": GROWTH_SOURCE_QUEUE_E2E_CACHE_KEY_VERSION,
+        "growth_source_queue_e2e_cache_key_id": "growth-source-queue-e2e-cache-key-" + cache_fingerprint[:12],
+        "cache_key": cache_key,
+        "selected_sources": [item["source_path"] for item in queue["selected_sources"]],
+        "skipped_sources": skipped_inputs,
+        "source_manifest_ids": source_manifest_ids,
+        "policy_ids": [queue["source_queue_policy_id"], policy["persistent_source_inventory_cache_policy_id"]],
+        "schema_versions": schema_versions,
+        "invalidation_inputs": invalidation_inputs,
+        "cache_root": policy["cache_root"],
+        "cache_file_path": _growth_source_queue_e2e_cache_file_path(policy["cache_root"], cache_key),
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_source_queue_e2e_cache_key(payload)
+    return payload
+
+
+def validate_growth_source_queue_e2e_cache_key(payload: dict[str, Any]) -> None:
+    required = ("growth_source_queue_e2e_cache_key_version", "growth_source_queue_e2e_cache_key_id", "cache_key", "selected_sources", "skipped_sources", "source_manifest_ids", "policy_ids", "schema_versions", "invalidation_inputs", "cache_root", "cache_file_path", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"growth source queue e2e cache key missing field: {key}")
+    if payload["growth_source_queue_e2e_cache_key_version"] != GROWTH_SOURCE_QUEUE_E2E_CACHE_KEY_VERSION:
+        raise ValueError("invalid growth source queue e2e cache key version")
+    if not payload["growth_source_queue_e2e_cache_key_id"].startswith("growth-source-queue-e2e-cache-key-"):
+        raise ValueError("invalid growth source queue e2e cache key id")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("growth source queue e2e cache key must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+        raise ValueError("growth source queue e2e cache key must remain read-only")
+
+
+def stable_growth_source_queue_e2e_cache_key_json(payload: dict[str, Any]) -> str:
+    validate_growth_source_queue_e2e_cache_key(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_growth_source_queue_e2e_cache_key_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_growth_source_queue_e2e_cache_key(payload)
+    return payload
+
+
+def _growth_source_queue_e2e_cache_payload(cache_key: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
+    import datetime as _dt
+    compact = dict(summary)
+    compact["writes"] = []
+    compact["write_allowed"] = False
+    compact["queue_e2e_cache_write_performed"] = False
+    payload = {
+        "growth_source_queue_e2e_cache_payload_version": GROWTH_SOURCE_QUEUE_E2E_CACHE_RECORD_VERSION,
+        "cache_key": cache_key["cache_key"],
+        "cache_key_id": cache_key["growth_source_queue_e2e_cache_key_id"],
+        "created_at": _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "compact_queue_e2e_summary": compact,
+    }
+    validate_growth_source_queue_e2e_cache_payload(payload)
+    return payload
+
+
+def validate_growth_source_queue_e2e_cache_payload(payload: dict[str, Any]) -> None:
+    for key in ("growth_source_queue_e2e_cache_payload_version", "cache_key", "cache_key_id", "created_at", "compact_queue_e2e_summary"):
+        if key not in payload:
+            raise ValueError(f"growth source queue e2e cache payload missing {key}")
+    if payload["growth_source_queue_e2e_cache_payload_version"] != GROWTH_SOURCE_QUEUE_E2E_CACHE_RECORD_VERSION:
+        raise ValueError("invalid growth source queue e2e cache payload version")
+    validate_growth_source_queue_e2e_summary(payload["compact_queue_e2e_summary"])
+    text = _stable_ruflo_json(payload)
+    if len(text.encode("utf-8")) > PERSISTENT_SOURCE_INVENTORY_MAX_ENTRY_BYTES:
+        raise ValueError("growth source queue e2e compact cache payload exceeds max size")
+
+
+def read_growth_source_queue_e2e_cache(cache_file_path: str) -> dict[str, Any]:
+    import json as _json
+    from pathlib import Path as _Path
+    try:
+        path = _Path(cache_file_path)
+        if not path.exists():
+            return {"ok": False, "error": "cache file missing"}
+        payload = _json.loads(path.read_text())
+        validate_growth_source_queue_e2e_cache_payload(payload)
+        return {"ok": True, "payload": payload}
+    except Exception as exc:
+        return {"ok": False, "error": _source_aware_text(str(exc), max_chars=220)}
+
+
+def write_growth_source_queue_e2e_cache(cache_file_path: str, payload: dict[str, Any]) -> int:
+    from pathlib import Path as _Path
+    import os as _os
+    import tempfile as _tempfile
+    validate_growth_source_queue_e2e_cache_payload(payload)
+    path = _Path(cache_file_path).expanduser()
+    root = path.parent
+    if not str(root).startswith("/tmp/") and not _persistent_source_cache_path_is_safe(str(root)):
+        raise ValueError("growth source queue e2e cache root is not safe to write")
+    root.mkdir(parents=True, exist_ok=True)
+    text = _stable_ruflo_json(payload, indent=2) + "\n"
+    fd, tmp = _tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(root))
+    try:
+        with _os.fdopen(fd, "w") as handle:
+            handle.write(text)
+        _os.replace(tmp, path)
+    finally:
+        try:
+            if _Path(tmp).exists():
+                _Path(tmp).unlink()
+        except Exception:
+            pass
+    return len(text.encode("utf-8"))
+
+
+def _queue_e2e_summary_from_cache_record(record: dict[str, Any]) -> dict[str, Any]:
+    summary = dict(record["compact_queue_e2e_summary"])
+    summary["queue_e2e_cache_key_id"] = record["cache_key_id"]
+    summary["queue_e2e_cache_record_id"] = record["growth_source_queue_e2e_cache_record_id"]
+    summary["queue_e2e_cache_hit"] = True
+    summary["queue_e2e_cache_used"] = True
+    summary["queue_e2e_cache_write_performed"] = False
+    summary["queue_e2e_summary_reuse_source"] = "compact_cache"
+    summary["queue_e2e_summary_source"] = "compact_cache"
+    summary["report_mode"] = "fast"
+    summary["request_reuse_summary"] = dict(summary.get("request_reuse_summary", {}))
+    summary["request_reuse_summary"].update({
+        "queue_e2e_compact_cache_used": True,
+        "queue_e2e_compact_cache_hit": True,
+        "full_queue_e2e_compute_avoided": True,
+        "compact_cache_write_performed": False,
+    })
+    perf = dict(summary.get("performance_summary", {}))
+    perf["total_runtime_ms"] = 0
+    perf["reuse_optimization_enabled"] = True
+    perf["hotspot_notes"] = _normalize_implementation_branch_refs(list(perf.get("hotspot_notes", [])) + ["compact queue E2E summary cache hit avoided full queue E2E compute"])
+    summary["performance_summary"] = perf
+    summary["writes"] = []
+    summary["write_allowed"] = False
+    validate_growth_source_queue_e2e_summary(summary)
+    return summary
+
+
+def collect_growth_source_queue_e2e_summary_cache_record(*, sources: list[str] | None = None, write_cache: bool = False, clear: bool = False, summary: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    from pathlib import Path as _Path
+    cache_key = collect_growth_source_queue_e2e_cache_key(sources=sources)
+    path = _Path(cache_key["cache_file_path"])
+    if clear and path.exists():
+        if path.parent != _Path(cache_key["cache_root"]).expanduser().resolve() and not str(path).startswith("/tmp/"):
+            raise ValueError("refusing to clear queue E2E cache outside cache root")
+        path.unlink()
+    read_result = read_growth_source_queue_e2e_cache(cache_key["cache_file_path"])
+    cache_hit = bool(read_result.get("ok")) and read_result.get("payload", {}).get("cache_key") == cache_key["cache_key"]
+    invalidation: list[str] = []
+    stale: list[str] = []
+    compact_summary: dict[str, Any] = {}
+    created_at = ""
+    cached_size = path.stat().st_size if path.exists() else 0
+    write_performed = False
+    if cache_hit:
+        cached_payload = read_result["payload"]
+        compact_summary = cached_payload["compact_queue_e2e_summary"]
+        created_at = cached_payload.get("created_at", "")
+    elif read_result.get("ok"):
+        stale.append("cache key mismatch")
+    elif path.exists():
+        invalidation.append(read_result.get("error", "cache read failed"))
+    if write_cache and not cache_hit:
+        if summary is None:
+            summary = collect_growth_source_queue_e2e_summary(sources=sources, mode="deep", use_cache=False)
+        payload = _growth_source_queue_e2e_cache_payload(cache_key, summary)
+        cached_size = write_growth_source_queue_e2e_cache(cache_key["cache_file_path"], payload)
+        write_performed = True
+        cache_hit = True
+        compact_summary = payload["compact_queue_e2e_summary"]
+        created_at = payload["created_at"]
+    age = _growth_cache_age_seconds(created_at)
+    record = {
+        "growth_source_queue_e2e_cache_record_version": GROWTH_SOURCE_QUEUE_E2E_CACHE_RECORD_VERSION,
+        "growth_source_queue_e2e_cache_record_id": "growth-source-queue-e2e-cache-record-" + _research_target_hash_text({"key": cache_key["cache_key"], "hit": cache_hit, "write": write_performed, "version": GROWTH_SOURCE_QUEUE_E2E_CACHE_RECORD_VERSION})[:12],
+        "cache_key_id": cache_key["growth_source_queue_e2e_cache_key_id"],
+        "cache_key": cache_key["cache_key"],
+        "cache_root": cache_key["cache_root"],
+        "cache_file_path": cache_key["cache_file_path"],
+        "cache_file_exists": path.exists(),
+        "cache_valid": cache_hit,
+        "cache_hit": cache_hit,
+        "cache_write_requested": bool(write_cache),
+        "cache_write_performed": write_performed,
+        "cache_age_seconds": age,
+        "created_at": created_at,
+        "source_count": len(cache_key["selected_sources"]),
+        "selected_sources": cache_key["selected_sources"],
+        "skipped_sources": cache_key["skipped_sources"],
+        "compact_queue_e2e_summary": compact_summary,
+        "cached_size_bytes": cached_size,
+        "invalidation_reasons": _normalize_implementation_branch_refs(invalidation),
+        "stale_reasons": _normalize_implementation_branch_refs(stale),
+        "clear_command": "python3 link.py growth source-queue-e2e-cache --clear --json",
+        "refresh_command": "python3 link.py growth source-queue-e2e-cache --write-cache --json",
+        "recommended_next_action": "Compact queue E2E cache hit; operator reports can reuse it." if cache_hit else "Run growth source-queue-e2e-cache --write-cache --json to populate compact queue E2E cache.",
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": bool(write_cache or clear),
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [cache_key["cache_file_path"]] if write_performed or clear else [],
+    }
+    validate_growth_source_queue_e2e_summary_cache_record(record)
+    return record
+
+
+def validate_growth_source_queue_e2e_summary_cache_record(payload: dict[str, Any]) -> None:
+    required = ("growth_source_queue_e2e_cache_record_version", "growth_source_queue_e2e_cache_record_id", "cache_key_id", "cache_key", "cache_root", "cache_file_path", "cache_file_exists", "cache_valid", "cache_hit", "cache_write_requested", "cache_write_performed", "cache_age_seconds", "created_at", "source_count", "selected_sources", "skipped_sources", "compact_queue_e2e_summary", "cached_size_bytes", "invalidation_reasons", "stale_reasons", "clear_command", "refresh_command", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"growth source queue e2e cache record missing {key}")
+    if payload["growth_source_queue_e2e_cache_record_version"] != GROWTH_SOURCE_QUEUE_E2E_CACHE_RECORD_VERSION:
+        raise ValueError("invalid growth source queue e2e cache record version")
+    if payload["cache_hit"] and not payload["compact_queue_e2e_summary"]:
+        raise ValueError("queue E2E cache hit requires compact summary")
+    if payload["compact_queue_e2e_summary"]:
+        validate_growth_source_queue_e2e_summary(payload["compact_queue_e2e_summary"])
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("growth source queue e2e cache record must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["automation_allowed"] is not False:
+        raise ValueError("growth source queue e2e cache record must remain deterministic")
+    if not payload["write_allowed"] and payload["writes"] != []:
+        raise ValueError("queue E2E cache record cannot report writes in read-only mode")
+
+
+def stable_growth_source_queue_e2e_summary_cache_record_json(payload: dict[str, Any]) -> str:
+    validate_growth_source_queue_e2e_summary_cache_record(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_growth_source_queue_e2e_summary_cache_record_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_growth_source_queue_e2e_summary_cache_record(payload)
+    return payload
+
+
+def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None, mode: str = "fast", write_cache: bool = False, use_cache: bool = True, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     import time as _time
 
+    report_mode = str(mode or "fast").strip().lower()
+    if report_mode not in {"fast", "deep"}:
+        raise ValueError("source-queue-e2e --mode must be fast or deep")
+    if report_mode == "fast" and use_cache:
+        cache_record = collect_growth_source_queue_e2e_summary_cache_record(sources=sources)
+        if cache_record["cache_hit"]:
+            return _queue_e2e_summary_from_cache_record(cache_record)
     queue = collect_growth_source_queue(sources=sources)
     status = collect_growth_source_queue_cache_status(sources=sources)
     source_summaries: list[dict[str, Any]] = []
@@ -16733,6 +17047,26 @@ def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None,
         "queue_ready_for_warmup": queue["queue_ready_for_warmup"],
         "queue_ready_for_e2e": status["queue_ready_for_e2e"],
         "recommended_next_action": best_overall.get("recommended_next_slice", "Warm caches and rerun queue E2E."),
+        "queue_e2e_cache_key_id": "",
+        "queue_e2e_cache_record_id": "",
+        "queue_e2e_cache_hit": False,
+        "queue_e2e_cache_used": False,
+        "queue_e2e_cache_write_performed": False,
+        "queue_e2e_summary_reuse_source": "computed",
+        "queue_e2e_summary_source": "computed",
+        "report_mode": report_mode,
+        "deep_command": "python3 link.py growth source-queue-e2e --mode deep --json",
+        "refresh_command": "python3 link.py growth source-queue-e2e --mode deep --write-cache --json",
+        "request_reuse_summary": {
+            "request_cache_id": "growth-source-queue-e2e-request-cache-" + _research_target_hash_text({"sources": [item["source_path"] for item in source_summaries], "mode": report_mode, "version": GROWTH_SOURCE_QUEUE_E2E_SUMMARY_VERSION})[:12],
+            "request_cache_enabled": True,
+            "queue_e2e_compact_cache_used": False,
+            "queue_e2e_compact_cache_hit": False,
+            "full_queue_e2e_compute_avoided": False,
+            "compact_cache_write_performed": False,
+            "source_summaries_computed_count": len(queue["selected_sources"]),
+            "notes": ["queue E2E summary computed from source artifacts"],
+        },
         "fallback_allowed": False,
         "model_used": False,
         "external_network_used": False,
@@ -16743,12 +17077,22 @@ def collect_growth_source_queue_e2e_summary(*, sources: list[str] | None = None,
         "metadata": dict(metadata or {}),
         "writes": [],
     }
+    payload["performance_summary"]["reuse_optimization_enabled"] = False
+    payload["performance_summary"]["hotspot_notes"] = ["computed queue E2E remains the dominant source-aware operator-report cost"]
+    if write_cache:
+        cache_record = collect_growth_source_queue_e2e_summary_cache_record(sources=sources, write_cache=True, summary=payload)
+        payload["queue_e2e_cache_key_id"] = cache_record["cache_key_id"]
+        payload["queue_e2e_cache_record_id"] = cache_record["growth_source_queue_e2e_cache_record_id"]
+        payload["queue_e2e_cache_write_performed"] = cache_record["cache_write_performed"]
+        payload["request_reuse_summary"]["compact_cache_write_performed"] = cache_record["cache_write_performed"]
+        payload["write_allowed"] = True
+        payload["writes"] = list(cache_record["writes"])
     validate_growth_source_queue_e2e_summary(payload)
     return payload
 
 
 def validate_growth_source_queue_e2e_summary(payload: dict[str, Any]) -> None:
-    required = ("growth_source_queue_e2e_summary_version", "growth_source_queue_e2e_summary_id", "source_queue_id", "source_queue_policy_id", "queue_cache_status_id", "source_summaries", "best_overall_opportunity", "runner_up_opportunities", "rejected_or_generic_opportunities", "cache_summary", "performance_summary", "operator_decision_summary", "suitability_assessments", "quarantine_records", "suitable_source_count", "quarantined_source_count", "skipped_source_count", "unsuitable_source_count", "default_queue_excluded_sources", "explicit_include_sources", "queue_ready_for_warmup", "queue_ready_for_e2e", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    required = ("growth_source_queue_e2e_summary_version", "growth_source_queue_e2e_summary_id", "source_queue_id", "source_queue_policy_id", "queue_cache_status_id", "source_summaries", "best_overall_opportunity", "runner_up_opportunities", "rejected_or_generic_opportunities", "cache_summary", "performance_summary", "operator_decision_summary", "suitability_assessments", "quarantine_records", "suitable_source_count", "quarantined_source_count", "skipped_source_count", "unsuitable_source_count", "default_queue_excluded_sources", "explicit_include_sources", "queue_ready_for_warmup", "queue_ready_for_e2e", "recommended_next_action", "queue_e2e_cache_key_id", "queue_e2e_cache_record_id", "queue_e2e_cache_hit", "queue_e2e_cache_used", "queue_e2e_cache_write_performed", "queue_e2e_summary_reuse_source", "queue_e2e_summary_source", "report_mode", "deep_command", "refresh_command", "request_reuse_summary", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
     for key in required:
         if key not in payload:
             raise ValueError(f"growth source queue e2e summary missing field: {key}")
@@ -16766,8 +17110,18 @@ def validate_growth_source_queue_e2e_summary(payload: dict[str, Any]) -> None:
             raise ValueError(f"growth source queue e2e best opportunity missing {key}")
     if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
         raise ValueError("growth source queue e2e must avoid model/network/fallback")
-    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
+    if payload["report_mode"] not in {"fast", "deep"}:
+        raise ValueError("invalid growth source queue e2e report mode")
+    if payload["queue_e2e_summary_reuse_source"] not in {"compact_cache", "computed", "mixed"}:
+        raise ValueError("invalid growth source queue e2e reuse source")
+    reuse = payload["request_reuse_summary"]
+    for key in ("request_cache_id", "request_cache_enabled", "queue_e2e_compact_cache_used", "queue_e2e_compact_cache_hit", "full_queue_e2e_compute_avoided", "compact_cache_write_performed", "source_summaries_computed_count", "notes"):
+        if key not in reuse:
+            raise ValueError(f"growth source queue e2e reuse summary missing {key}")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["automation_allowed"] is not False:
         raise ValueError("growth source queue e2e must remain read-only")
+    if not payload["write_allowed"] and payload["writes"] != []:
+        raise ValueError("growth source queue e2e cannot report writes in read-only mode")
 
 
 def stable_growth_source_queue_e2e_summary_json(payload: dict[str, Any]) -> str:
@@ -17735,6 +18089,9 @@ def _repo_concept_calibration_base_payload(
     metadata: dict[str, Any] | None,
     id_source: dict[str, Any],
     recommended_next_action: str,
+    queue_e2e_cache_hit: bool = False,
+    queue_e2e_cache_used: bool = False,
+    queue_e2e_summary_source: str = "computed",
 ) -> dict[str, Any]:
     total = max(1, len(source_entries))
     high_or_medium = sum(1 for item in source_entries if item["confidence"] in {"high", "medium"})
@@ -17767,6 +18124,9 @@ def _repo_concept_calibration_base_payload(
         "needs_profile_work": weak_sources[:8],
         "request_reuse_summary": request_reuse_summary,
         "performance_summary": performance_summary,
+        "queue_e2e_cache_hit": bool(queue_e2e_cache_hit),
+        "queue_e2e_cache_used": bool(queue_e2e_cache_used),
+        "queue_e2e_summary_source": queue_e2e_summary_source,
         "recommended_next_action": recommended_next_action,
         "fallback_allowed": False,
         "model_used": False,
@@ -17906,6 +18266,9 @@ def collect_repo_concept_calibration_report(*, sources: list[str] | None = None,
         "repo_role_recompute_count": len(source_entries),
         "compression_profile_recompute_count": 0,
         "avoided_source_recompute_count": 0,
+        "queue_e2e_compact_cache_used": False,
+        "queue_e2e_compact_cache_hit": False,
+        "full_queue_e2e_compute_avoided": False,
         "notes": ["deep mode preserves full deterministic source/archive calibration recompute"],
     }
     performance_summary = {
@@ -17929,11 +18292,14 @@ def collect_repo_concept_calibration_report(*, sources: list[str] | None = None,
         metadata=metadata,
         id_source={"mode": "deep"},
         recommended_next_action="Review deep calibration results; use default fast mode for normal operator loops.",
+        queue_e2e_cache_hit=False,
+        queue_e2e_cache_used=False,
+        queue_e2e_summary_source="deep_recompute",
     )
 
 
 def validate_repo_concept_calibration_report(payload: dict[str, Any]) -> None:
-    required = ("repo_concept_calibration_report_version", "repo_concept_calibration_report_id", "report_mode", "mode", "deep_mode_available", "deep_command", "concept_calibration_report_policy", "sources", "overclassification_summary", "false_positive_summary", "underclassification_summary", "role_family_distribution", "calibration_quality_score", "best_calibrated_opportunities", "needs_profile_work", "request_reuse_summary", "performance_summary", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
+    required = ("repo_concept_calibration_report_version", "repo_concept_calibration_report_id", "report_mode", "mode", "deep_mode_available", "deep_command", "concept_calibration_report_policy", "sources", "overclassification_summary", "false_positive_summary", "underclassification_summary", "role_family_distribution", "calibration_quality_score", "best_calibrated_opportunities", "needs_profile_work", "request_reuse_summary", "performance_summary", "queue_e2e_cache_hit", "queue_e2e_cache_used", "queue_e2e_summary_source", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
     for key in required:
         if key not in payload:
             raise ValueError(f"repo concept calibration report missing field: {key}")
@@ -17958,7 +18324,7 @@ def validate_repo_concept_calibration_report(payload: dict[str, Any]) -> None:
     if not isinstance(payload["calibration_quality_score"], int) or not 0 <= payload["calibration_quality_score"] <= 100:
         raise ValueError("calibration quality score must be 0..100")
     reuse = payload["request_reuse_summary"]
-    for key in ("request_cache_id", "request_cache_enabled", "queue_e2e_reuse_enabled", "queue_e2e_sources_reused_count", "source_entries_recomputed_count", "concept_confidence_recompute_count", "repo_role_recompute_count", "compression_profile_recompute_count", "avoided_source_recompute_count", "notes"):
+    for key in ("request_cache_id", "request_cache_enabled", "queue_e2e_reuse_enabled", "queue_e2e_sources_reused_count", "source_entries_recomputed_count", "concept_confidence_recompute_count", "repo_role_recompute_count", "compression_profile_recompute_count", "avoided_source_recompute_count", "queue_e2e_compact_cache_used", "queue_e2e_compact_cache_hit", "full_queue_e2e_compute_avoided", "notes"):
         if key not in reuse:
             raise ValueError(f"repo concept calibration report reuse summary missing {key}")
     perf = payload["performance_summary"]
@@ -18084,6 +18450,9 @@ def collect_repo_concept_calibration_report_from_queue_e2e(
         "repo_role_recompute_count": 0,
         "compression_profile_recompute_count": 0,
         "avoided_source_recompute_count": max(0, reused_count * 2 - recomputed_count),
+        "queue_e2e_compact_cache_used": bool(queue_e2e.get("queue_e2e_cache_used", False)),
+        "queue_e2e_compact_cache_hit": bool(queue_e2e.get("queue_e2e_cache_hit", False)),
+        "full_queue_e2e_compute_avoided": bool(queue_e2e.get("queue_e2e_cache_used", False)),
         "notes": [
             "fast mode reuses queue E2E calibrated source summaries",
             "avoided_source_recompute_count is a conservative repo-role plus concept-confidence estimate",
@@ -18116,6 +18485,9 @@ def collect_repo_concept_calibration_report_from_queue_e2e(
         metadata=metadata,
         id_source={"source": "queue-e2e", "queue_id": queue_e2e.get("growth_source_queue_e2e_summary_id", "")},
         recommended_next_action="Review queue E2E role-aligned opportunities; add profile fixtures for weak or mismatched sources.",
+        queue_e2e_cache_hit=bool(queue_e2e.get("queue_e2e_cache_hit", False)),
+        queue_e2e_cache_used=bool(queue_e2e.get("queue_e2e_cache_used", False)),
+        queue_e2e_summary_source=str(queue_e2e.get("queue_e2e_summary_source", "computed")),
     )
 
 
@@ -18532,7 +18904,7 @@ def collect_growth_direct_upgrade_eval(*, sources: list[str] | None = None, writ
     status_before = collect_growth_source_queue_cache_status(sources=explicit_sources or None)
     warmup = collect_growth_source_queue_warmup_plan(sources=explicit_sources or None, write_cache=write_cache)
     status = collect_growth_source_queue_cache_status(sources=explicit_sources or None) if write_cache else status_before
-    queue_e2e = collect_growth_source_queue_e2e_summary(sources=explicit_sources or None)
+    queue_e2e = collect_growth_source_queue_e2e_summary(sources=explicit_sources or None, mode="fast", write_cache=write_cache)
     calibration = collect_repo_concept_calibration_report_from_queue_e2e(queue_e2e, queue)
     selected_sources = [item["source_path"] for item in queue["selected_sources"]]
     per_target_started = _time.perf_counter()
@@ -18588,6 +18960,10 @@ def collect_growth_direct_upgrade_eval(*, sources: list[str] | None = None, writ
         "source_queue_warmup_result_id": warmup["growth_source_queue_warmup_plan_id"] if write_cache else "",
         "source_queue_e2e_summary_id": queue_e2e["growth_source_queue_e2e_summary_id"],
         "concept_calibration_report_id": calibration["repo_concept_calibration_report_id"],
+        "queue_e2e_cache_hit": bool(queue_e2e.get("queue_e2e_cache_hit", False)),
+        "queue_e2e_cache_used": bool(queue_e2e.get("queue_e2e_cache_used", False)),
+        "queue_e2e_cache_write_performed": bool(queue_e2e.get("queue_e2e_cache_write_performed", False)),
+        "queue_e2e_summary_source": str(queue_e2e.get("queue_e2e_summary_source", "computed")),
         "targets_evaluated": selected_sources,
         "skipped_sources": queue["skipped_sources"],
         "cache_summary": {
@@ -18637,6 +19013,10 @@ def collect_growth_direct_upgrade_eval(*, sources: list[str] | None = None, writ
             "avoided_per_target_recompute_count": avoided_per_target_recompute_count,
         "queue_summary_reuse_enabled": True,
             "concept_calibration_report_reused_from_queue_e2e": True,
+            "queue_e2e_compact_cache_used": bool(queue_e2e.get("queue_e2e_cache_used", False)),
+            "queue_e2e_compact_cache_hit": bool(queue_e2e.get("queue_e2e_cache_hit", False)),
+            "full_queue_e2e_compute_avoided": bool(queue_e2e.get("queue_e2e_cache_used", False)),
+            "compact_cache_write_performed": bool(queue_e2e.get("queue_e2e_cache_write_performed", False)),
             "notes": _normalize_implementation_branch_refs(reuse_notes),
         },
         "performance_summary": {
@@ -18674,7 +19054,7 @@ def validate_growth_direct_upgrade_eval(payload: dict[str, Any]) -> None:
         "growth_direct_upgrade_eval_version", "eval_version", "growth_direct_upgrade_eval_id",
         "source_queue_id", "source_queue_policy_id", "source_queue_cache_status_id",
         "source_queue_warmup_plan_id", "source_queue_warmup_result_id", "source_queue_e2e_summary_id",
-        "concept_calibration_report_id", "targets_evaluated", "skipped_sources", "cache_summary",
+        "concept_calibration_report_id", "queue_e2e_cache_hit", "queue_e2e_cache_used", "queue_e2e_cache_write_performed", "queue_e2e_summary_source", "targets_evaluated", "skipped_sources", "cache_summary",
         "queue_summary", "per_target_summaries", "candidate_upgrades", "best_direct_upgrade",
         "runner_up_upgrades", "rejected_candidates", "broken_unoptimized_items", "operator_notes",
         "recommended_next_implementation_slice", "recommended_next_action", "request_reuse_summary",
@@ -18710,7 +19090,7 @@ def validate_growth_direct_upgrade_eval(payload: dict[str, Any]) -> None:
         if issue["severity"] not in {"critical", "high", "medium", "low"}:
             raise ValueError("invalid growth direct eval issue severity")
     reuse = payload["request_reuse_summary"]
-    for key in ("request_cache_id", "request_cache_enabled", "source_artifacts_reused_count", "source_artifacts_computed_count", "repeated_rebuilds_avoided_count", "source_queue_e2e_reused_for_targets_count", "per_target_e2e_recompute_count", "opportunity_score_recompute_count", "repo_role_recompute_count", "concept_confidence_recompute_count", "task_draft_recompute_count", "dashboard_recompute_count", "avoided_per_target_recompute_count", "queue_summary_reuse_enabled", "notes"):
+    for key in ("request_cache_id", "request_cache_enabled", "source_artifacts_reused_count", "source_artifacts_computed_count", "repeated_rebuilds_avoided_count", "source_queue_e2e_reused_for_targets_count", "per_target_e2e_recompute_count", "opportunity_score_recompute_count", "repo_role_recompute_count", "concept_confidence_recompute_count", "task_draft_recompute_count", "dashboard_recompute_count", "avoided_per_target_recompute_count", "queue_summary_reuse_enabled", "queue_e2e_compact_cache_used", "queue_e2e_compact_cache_hit", "full_queue_e2e_compute_avoided", "compact_cache_write_performed", "notes"):
         if key not in reuse:
             raise ValueError(f"growth direct eval reuse summary missing {key}")
     perf = payload["performance_summary"]
@@ -26086,6 +26466,12 @@ def _growth_print_concept_calibration_report(payload: dict[str, Any]) -> None:
     print(f"  mode: {payload['report_mode']}")
     print(f"  sources: {len(payload['sources'])}")
     print(f"  calibration quality: {payload['calibration_quality_score']}")
+    print(
+        "  queue E2E cache: "
+        f"hit {payload.get('queue_e2e_cache_hit', False)} / "
+        f"used {payload.get('queue_e2e_cache_used', False)} / "
+        f"source {payload.get('queue_e2e_summary_source', 'computed')}"
+    )
     print(f"  best classified: {best.get('source_path', 'none')} {best.get('primary_role', '')}")
     print("  weak classifications:")
     for item in payload["needs_profile_work"][:5] or [{"source_path": "none", "primary_role": ""}]:
@@ -26450,6 +26836,12 @@ def _growth_print_source_queue_e2e(payload: dict[str, Any]) -> None:
     best = payload["best_overall_opportunity"]
     cache = payload["cache_summary"]
     print("Queue E2E")
+    print(f"  mode: {payload['report_mode']}")
+    print("  cache:")
+    print(
+        f"    compact summary: hit {payload['queue_e2e_cache_hit']} / "
+        f"used {payload['queue_e2e_cache_used']} / written {payload['queue_e2e_cache_write_performed']}"
+    )
     print(f"  best opportunity: {best['title']} ({best['source_path']})")
     if payload["runner_up_opportunities"]:
         runner = payload["runner_up_opportunities"][0]
@@ -26472,6 +26864,12 @@ def _growth_print_direct_upgrade_eval(payload: dict[str, Any]) -> None:
     print(f"    skipped: {queue['skipped_count']}  quarantined: {queue['quarantined_count']}")
     print(f"    cache: hits {cache['after_hit_count']} / misses {cache['after_miss_count']} / stale {cache['stale_count']}")
     print(f"    cache writes: {'yes' if payload['write_cache_performed'] else 'no'}")
+    print("  queue E2E cache:")
+    print(
+        f"    hit: {payload.get('queue_e2e_cache_hit', False)}  "
+        f"used: {payload.get('queue_e2e_cache_used', False)}  "
+        f"written: {payload.get('queue_e2e_cache_write_performed', False)}"
+    )
     print("  best:")
     if best:
         print(f"    title: {best['title']}")
@@ -26693,14 +27091,28 @@ def growth_source_queue_e2e_main(argv: list[str] | None = None) -> int:
     args = _research_target_normalize_args(argv)
     if any(arg in {"-h", "--help", "help"} for arg in args):
         print("Link growth source-queue-e2e: deterministic E2E summaries for queued sources")
-        print("  python3 link.py growth source-queue-e2e [--source <path> ...] --json")
-        print("Read-only. --write is not supported.")
+        print("  python3 link.py growth source-queue-e2e [--source <path> ...] [--mode fast|deep] [--write-cache] --json")
         return 0
-    if "--write" in args or "--write-cache" in args:
-        print("error: source-queue-e2e is read-only; --write is not supported", file=sys.stderr)
+    if "--write" in args:
+        print("error: source-queue-e2e uses --write-cache; --write is not supported", file=sys.stderr)
+        return 2
+    mode = "fast"
+    if "--mode" in args:
+        index = args.index("--mode")
+        if index + 1 >= len(args):
+            print("error: source-queue-e2e --mode requires fast or deep", file=sys.stderr)
+            return 2
+        mode = args[index + 1]
+    if mode not in {"fast", "deep"}:
+        print("error: source-queue-e2e --mode must be fast or deep", file=sys.stderr)
         return 2
     try:
-        payload = collect_growth_source_queue_e2e_summary(sources=_growth_extract_source_args(args))
+        payload = collect_growth_source_queue_e2e_summary(
+            sources=_growth_extract_source_args(args),
+            mode=mode,
+            write_cache="--write-cache" in args,
+            use_cache="--no-cache" not in args,
+        )
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -26709,6 +27121,56 @@ def growth_source_queue_e2e_main(argv: list[str] | None = None) -> int:
     else:
         _growth_print_source_queue_e2e(payload)
     return 0
+
+
+def growth_source_queue_e2e_cache_key_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if "--write" in args or "--write-cache" in args:
+        print("error: source-queue-e2e-cache-key is read-only; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_growth_source_queue_e2e_cache_key(sources=_growth_extract_source_args(args))
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_growth_source_queue_e2e_cache_key_json(payload), end="")
+    else:
+        print("Queue E2E Cache Key")
+        print(f"  selected: {len(payload['selected_sources'])}")
+        print(f"  skipped: {len(payload['skipped_sources'])}")
+        print(f"  cache file: {payload['cache_file_path']}")
+    return 0
+
+
+def growth_source_queue_e2e_cache_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if "--write" in args:
+        print("error: source-queue-e2e-cache uses --write-cache; --write is not supported", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_growth_source_queue_e2e_summary_cache_record(
+            sources=_growth_extract_source_args(args),
+            write_cache="--write-cache" in args,
+            clear="--clear" in args,
+        )
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_growth_source_queue_e2e_summary_cache_record_json(payload), end="")
+    else:
+        print("Queue E2E Cache")
+        print(f"  hit: {payload['cache_hit']}")
+        print(f"  valid: {payload['cache_valid']}")
+        print(f"  written: {payload['cache_write_performed']}")
+        print(f"  sources: {payload['source_count']}")
+        print(f"  next: {payload['recommended_next_action']}")
+    return 0
+
+
+def growth_source_queue_e2e_cache_status_main(argv: list[str] | None = None) -> int:
+    return growth_source_queue_e2e_cache_main(argv)
 
 
 def growth_direct_upgrade_eval_main(argv: list[str] | None = None) -> int:

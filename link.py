@@ -1232,6 +1232,18 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import growth_source_queue_warm_main as _growth_source_queue_warm_main
 
         return _growth_source_queue_warm_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-queue-e2e-cache-key":
+        from link_modes.growth.link_growth_console import growth_source_queue_e2e_cache_key_main as _growth_source_queue_e2e_cache_key_main
+
+        return _growth_source_queue_e2e_cache_key_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-queue-e2e-cache-status":
+        from link_modes.growth.link_growth_console import growth_source_queue_e2e_cache_status_main as _growth_source_queue_e2e_cache_status_main
+
+        return _growth_source_queue_e2e_cache_status_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "source-queue-e2e-cache":
+        from link_modes.growth.link_growth_console import growth_source_queue_e2e_cache_main as _growth_source_queue_e2e_cache_main
+
+        return _growth_source_queue_e2e_cache_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "source-queue-e2e":
         from link_modes.growth.link_growth_console import growth_source_queue_e2e_main as _growth_source_queue_e2e_main
 
