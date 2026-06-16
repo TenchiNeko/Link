@@ -224,3 +224,119 @@ def render_growth_concept_calibration_report_text(payload: dict[str, Any]) -> st
 def print_growth_concept_calibration_report(payload: dict[str, Any]) -> None:
     """Print the concept-calibration-report human summary."""
     print(render_growth_concept_calibration_report_text(payload), end="")
+
+
+def render_growth_source_queue_e2e_text(payload: dict[str, Any]) -> str:
+    """Render a compact source-queue-e2e summary."""
+    best = payload["best_overall_opportunity"]
+    cache = payload["cache_summary"]
+    lines = [
+        "Queue E2E",
+        f"  mode: {payload['report_mode']}",
+        "  cache:",
+        (
+            f"    compact summary: hit {payload['queue_e2e_cache_hit']} / "
+            f"used {payload['queue_e2e_cache_used']} / written {payload['queue_e2e_cache_write_performed']}"
+        ),
+        f"  best opportunity: {best['title']} ({best['source_path']})",
+    ]
+    if payload["runner_up_opportunities"]:
+        runner = payload["runner_up_opportunities"][0]
+        lines.append(f"  runner-up: {runner['title']} ({runner['source_path']})")
+    else:
+        lines.append("  runner-up: none")
+    lines.extend([
+        f"  cache: hits {cache['cache_hit_count']} / misses {cache['cache_miss_count']} / stale {cache['stale_count']}",
+        f"  skipped/quarantined: {payload['skipped_source_count']}/{payload['quarantined_source_count']}",
+        f"  runtime_ms: {payload['performance_summary']['total_runtime_ms']}",
+        f"  next: {payload['recommended_next_action']}",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def print_growth_source_queue_e2e(payload: dict[str, Any]) -> None:
+    """Print the source-queue-e2e human summary."""
+    print(render_growth_source_queue_e2e_text(payload), end="")
+
+
+def render_growth_source_cache_status_text(payload: dict[str, Any]) -> str:
+    """Render a persistent source cache status summary."""
+    lines = [
+        "Persistent Source Cache Status",
+        f"source: {payload['source_path']}",
+        f"manifest: {payload['manifest_id']}",
+        f"exists: {payload['cache_file_exists']}  valid: {payload['cache_valid']}  hit: {payload['cache_hit']}",
+        f"bytes: {payload['cached_size_bytes']}  created: {payload['created_at'] or 'not available'}",
+    ]
+    if payload["invalidation_reasons"]:
+        lines.append("invalidation: " + "; ".join(payload["invalidation_reasons"][:3]))
+    lines.append(f"next: {payload['recommended_next_action']}")
+    return "\n".join(lines) + "\n"
+
+
+def print_growth_source_cache_status(payload: dict[str, Any]) -> None:
+    """Print the persistent source cache status human summary."""
+    print(render_growth_source_cache_status_text(payload), end="")
+
+
+def render_growth_source_suitability_text(payload: dict[str, Any]) -> str:
+    """Render a source suitability summary."""
+    lines = [
+        "Source Suitability",
+        f"  source: {payload['source_path']}",
+        f"  status: {payload['suitability_status']}",
+        f"  queue eligible: {payload['queue_eligible']}",
+        f"  persistent cache eligible: {payload['persistent_cache_eligible']}",
+        f"  failure: {payload['failure_category'] or 'none'}",
+    ]
+    if payload["failure_summary"]:
+        lines.append(f"  summary: {payload['failure_summary']}")
+    lines.append(f"  next: {payload['recommended_next_action']}")
+    return "\n".join(lines) + "\n"
+
+
+def print_growth_source_suitability(payload: dict[str, Any]) -> None:
+    """Print the source suitability human summary."""
+    print(render_growth_source_suitability_text(payload), end="")
+
+
+def render_growth_source_quarantine_text(payload: dict[str, Any]) -> str:
+    """Render a source quarantine summary."""
+    lines = [
+        "Source Quarantine",
+        f"  source: {payload['source_path']}",
+        f"  status: {payload['quarantine_status']}",
+        f"  failure: {payload['failure_category'] or 'none'}",
+        f"  default excluded: {payload['excluded_from_default_queue']}",
+    ]
+    if payload["quarantine_reason"]:
+        lines.append(f"  reason: {payload['quarantine_reason']}")
+    lines.append(f"  next: {payload['recommended_next_action']}")
+    return "\n".join(lines) + "\n"
+
+
+def print_growth_source_quarantine(payload: dict[str, Any]) -> None:
+    """Print the source quarantine human summary."""
+    print(render_growth_source_quarantine_text(payload), end="")
+
+
+def render_growth_source_queue_policy_text(payload: dict[str, Any]) -> str:
+    """Render a source queue policy summary."""
+    lines = [
+        "Source Queue Policy",
+        f"  suitability required: {payload['default_queue_requires_suitability']}",
+        f"  optional failure policy: {payload['optional_source_failure_policy']}",
+        f"  required failure policy: {payload['required_source_failure_policy']}",
+        "  required:",
+    ]
+    for item in payload["required_sources"]:
+        lines.append(f"    - {item}")
+    lines.append("  optional:")
+    for item in payload["optional_sources"]:
+        lines.append(f"    - {item}")
+    return "\n".join(lines) + "\n"
+
+
+def print_growth_source_queue_policy(payload: dict[str, Any]) -> None:
+    """Print the source queue policy human summary."""
+    print(render_growth_source_queue_policy_text(payload), end="")

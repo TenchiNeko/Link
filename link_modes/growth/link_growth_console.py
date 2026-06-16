@@ -26,6 +26,11 @@ from link_modes.growth.growth_human_renderers import (
     print_growth_direct_upgrade_eval as _print_growth_direct_upgrade_eval_impl,
     print_growth_operator_cache_dashboard as _print_growth_operator_cache_dashboard_impl,
     print_growth_operator_qa_check as _print_growth_operator_qa_check_impl,
+    print_growth_source_cache_status as _print_growth_source_cache_status_impl,
+    print_growth_source_queue_e2e as _print_growth_source_queue_e2e_impl,
+    print_growth_source_queue_policy as _print_growth_source_queue_policy_impl,
+    print_growth_source_quarantine as _print_growth_source_quarantine_impl,
+    print_growth_source_suitability as _print_growth_source_suitability_impl,
 )
 
 CONSOLE_VERSION = "link-growth-console-v1"
@@ -28006,14 +28011,8 @@ def _growth_persistent_cache_print_record(payload: dict[str, Any]) -> None:
 
 
 def _growth_persistent_cache_print_status(payload: dict[str, Any]) -> None:
-    print("Persistent Source Cache Status")
-    print(f"source: {payload['source_path']}")
-    print(f"manifest: {payload['manifest_id']}")
-    print(f"exists: {payload['cache_file_exists']}  valid: {payload['cache_valid']}  hit: {payload['cache_hit']}")
-    print(f"bytes: {payload['cached_size_bytes']}  created: {payload['created_at'] or 'not available'}")
-    if payload["invalidation_reasons"]:
-        print("invalidation: " + "; ".join(payload["invalidation_reasons"][:3]))
-    print(f"next: {payload['recommended_next_action']}")
+    # Compatibility wrapper; implementation lives in growth_human_renderers.py.
+    _print_growth_source_cache_status_impl(payload)
 
 
 def _growth_persistent_cache_print_performance(payload: dict[str, Any]) -> None:
@@ -28245,25 +28244,8 @@ def _growth_print_source_queue_warmup(payload: dict[str, Any]) -> None:
 
 
 def _growth_print_source_queue_e2e(payload: dict[str, Any]) -> None:
-    best = payload["best_overall_opportunity"]
-    cache = payload["cache_summary"]
-    print("Queue E2E")
-    print(f"  mode: {payload['report_mode']}")
-    print("  cache:")
-    print(
-        f"    compact summary: hit {payload['queue_e2e_cache_hit']} / "
-        f"used {payload['queue_e2e_cache_used']} / written {payload['queue_e2e_cache_write_performed']}"
-    )
-    print(f"  best opportunity: {best['title']} ({best['source_path']})")
-    if payload["runner_up_opportunities"]:
-        runner = payload["runner_up_opportunities"][0]
-        print(f"  runner-up: {runner['title']} ({runner['source_path']})")
-    else:
-        print("  runner-up: none")
-    print(f"  cache: hits {cache['cache_hit_count']} / misses {cache['cache_miss_count']} / stale {cache['stale_count']}")
-    print(f"  skipped/quarantined: {payload['skipped_source_count']}/{payload['quarantined_source_count']}")
-    print(f"  runtime_ms: {payload['performance_summary']['total_runtime_ms']}")
-    print(f"  next: {payload['recommended_next_action']}")
+    # Compatibility wrapper; implementation lives in growth_human_renderers.py.
+    _print_growth_source_queue_e2e_impl(payload)
 
 
 def _growth_print_direct_upgrade_eval(payload: dict[str, Any]) -> None:
@@ -28282,39 +28264,18 @@ def _growth_print_operator_qa_check(payload: dict[str, Any]) -> None:
 
 
 def _growth_print_source_suitability(payload: dict[str, Any]) -> None:
-    print("Source Suitability")
-    print(f"  source: {payload['source_path']}")
-    print(f"  status: {payload['suitability_status']}")
-    print(f"  queue eligible: {payload['queue_eligible']}")
-    print(f"  persistent cache eligible: {payload['persistent_cache_eligible']}")
-    print(f"  failure: {payload['failure_category'] or 'none'}")
-    if payload["failure_summary"]:
-        print(f"  summary: {payload['failure_summary']}")
-    print(f"  next: {payload['recommended_next_action']}")
+    # Compatibility wrapper; implementation lives in growth_human_renderers.py.
+    _print_growth_source_suitability_impl(payload)
 
 
 def _growth_print_source_quarantine(payload: dict[str, Any]) -> None:
-    print("Source Quarantine")
-    print(f"  source: {payload['source_path']}")
-    print(f"  status: {payload['quarantine_status']}")
-    print(f"  failure: {payload['failure_category'] or 'none'}")
-    print(f"  default excluded: {payload['excluded_from_default_queue']}")
-    if payload["quarantine_reason"]:
-        print(f"  reason: {payload['quarantine_reason']}")
-    print(f"  next: {payload['recommended_next_action']}")
+    # Compatibility wrapper; implementation lives in growth_human_renderers.py.
+    _print_growth_source_quarantine_impl(payload)
 
 
 def _growth_print_source_queue_policy(payload: dict[str, Any]) -> None:
-    print("Source Queue Policy")
-    print(f"  suitability required: {payload['default_queue_requires_suitability']}")
-    print(f"  optional failure policy: {payload['optional_source_failure_policy']}")
-    print(f"  required failure policy: {payload['required_source_failure_policy']}")
-    print("  required:")
-    for item in payload["required_sources"]:
-        print(f"    - {item}")
-    print("  optional:")
-    for item in payload["optional_sources"]:
-        print(f"    - {item}")
+    # Compatibility wrapper; implementation lives in growth_human_renderers.py.
+    _print_growth_source_queue_policy_impl(payload)
 
 
 def growth_source_suitability_main(argv: list[str] | None = None) -> int:

@@ -13364,6 +13364,180 @@ def check_growth_concept_calibration_report_renderer_extraction() -> None:
     print("growth concept calibration renderer extraction OK")
 
 
+def check_growth_source_queue_e2e_renderer_extraction() -> None:
+    """Extracted source-queue-e2e renderer preserves the human contract."""
+    from link_modes.growth.growth_human_renderers import render_growth_source_queue_e2e_text
+    from link_modes.growth.link_growth_console import _growth_print_source_queue_e2e
+
+    payload = {
+        "report_mode": "fast",
+        "queue_e2e_cache_hit": True,
+        "queue_e2e_cache_used": True,
+        "queue_e2e_cache_write_performed": False,
+        "best_overall_opportunity": {
+            "title": "Use compact queue summaries",
+            "source_path": "research/headroom-main.zip",
+        },
+        "runner_up_opportunities": [
+            {"title": "Improve queue renderer", "source_path": "research/gpt-crawler-main.zip"},
+        ],
+        "cache_summary": {
+            "cache_hit_count": 2,
+            "cache_miss_count": 0,
+            "stale_count": 0,
+        },
+        "skipped_source_count": 1,
+        "quarantined_source_count": 1,
+        "performance_summary": {
+            "total_runtime_ms": 33,
+        },
+        "recommended_next_action": "python3 link.py growth source-queue-e2e --mode fast --json",
+    }
+    rendered = render_growth_source_queue_e2e_text(payload)
+    for expected in (
+        "Queue E2E",
+        "mode: fast",
+        "compact summary:",
+        "best opportunity:",
+        "runner-up:",
+        "skipped/quarantined:",
+        "runtime_ms:",
+        "next:",
+    ):
+        _require(expected in rendered, f"extracted source queue e2e renderer missing {expected}")
+    _require(not rendered.lstrip().startswith("{"),
+             "extracted source queue e2e renderer must not return raw JSON")
+
+    wrapper_out = io.StringIO()
+    with contextlib.redirect_stdout(wrapper_out):
+        _growth_print_source_queue_e2e(payload)
+    _require(wrapper_out.getvalue() == rendered,
+             "source queue e2e compatibility wrapper must delegate to extracted renderer")
+    print("growth source queue e2e renderer extraction OK")
+
+
+def check_growth_source_cache_status_renderer_extraction() -> None:
+    """Extracted source-cache-status renderer preserves the human contract."""
+    from link_modes.growth.growth_human_renderers import render_growth_source_cache_status_text
+    from link_modes.growth.link_growth_console import _growth_persistent_cache_print_status
+
+    payload = {
+        "source_path": "research/headroom-main.zip",
+        "manifest_id": "manifest-test",
+        "cache_file_exists": True,
+        "cache_valid": True,
+        "cache_hit": True,
+        "cached_size_bytes": 2048,
+        "created_at": "2026-06-16T00:00:00Z",
+        "invalidation_reasons": [],
+        "recommended_next_action": "python3 link.py growth source-cache-status --source research/headroom-main.zip --json",
+    }
+    rendered = render_growth_source_cache_status_text(payload)
+    for expected in (
+        "Persistent Source Cache Status",
+        "source: research/headroom-main.zip",
+        "manifest:",
+        "exists: True",
+        "bytes:",
+        "next:",
+    ):
+        _require(expected in rendered, f"extracted source cache status renderer missing {expected}")
+    _require(not rendered.lstrip().startswith("{"),
+             "extracted source cache status renderer must not return raw JSON")
+
+    wrapper_out = io.StringIO()
+    with contextlib.redirect_stdout(wrapper_out):
+        _growth_persistent_cache_print_status(payload)
+    _require(wrapper_out.getvalue() == rendered,
+             "source cache status compatibility wrapper must delegate to extracted renderer")
+    print("growth source cache status renderer extraction OK")
+
+
+def check_growth_source_suitability_quarantine_renderer_extraction() -> None:
+    """Extracted suitability/quarantine renderers preserve the human contract."""
+    from link_modes.growth.growth_human_renderers import (
+        render_growth_source_quarantine_text,
+        render_growth_source_suitability_text,
+    )
+    from link_modes.growth.link_growth_console import (
+        _growth_print_source_quarantine,
+        _growth_print_source_suitability,
+    )
+
+    suitability = {
+        "source_path": "research/headroom-main.zip",
+        "suitability_status": "suitable",
+        "queue_eligible": True,
+        "persistent_cache_eligible": True,
+        "failure_category": "",
+        "failure_summary": "",
+        "recommended_next_action": "python3 link.py growth source-queue --json",
+    }
+    suitability_text = render_growth_source_suitability_text(suitability)
+    for expected in ("Source Suitability", "queue eligible:", "persistent cache eligible:", "failure:", "next:"):
+        _require(expected in suitability_text, f"extracted source suitability renderer missing {expected}")
+    _require(not suitability_text.lstrip().startswith("{"),
+             "extracted source suitability renderer must not return raw JSON")
+    suitability_out = io.StringIO()
+    with contextlib.redirect_stdout(suitability_out):
+        _growth_print_source_suitability(suitability)
+    _require(suitability_out.getvalue() == suitability_text,
+             "source suitability compatibility wrapper must delegate to extracted renderer")
+
+    quarantine = {
+        "source_path": "research/activepieces-main.zip",
+        "quarantine_status": "quarantined",
+        "failure_category": "missing_source",
+        "excluded_from_default_queue": True,
+        "quarantine_reason": "source refs incomplete",
+        "recommended_next_action": "python3 link.py growth source-quarantine --source research/activepieces-main.zip --json",
+    }
+    quarantine_text = render_growth_source_quarantine_text(quarantine)
+    for expected in ("Source Quarantine", "status:", "failure:", "default excluded:", "reason:", "next:"):
+        _require(expected in quarantine_text, f"extracted source quarantine renderer missing {expected}")
+    _require(not quarantine_text.lstrip().startswith("{"),
+             "extracted source quarantine renderer must not return raw JSON")
+    quarantine_out = io.StringIO()
+    with contextlib.redirect_stdout(quarantine_out):
+        _growth_print_source_quarantine(quarantine)
+    _require(quarantine_out.getvalue() == quarantine_text,
+             "source quarantine compatibility wrapper must delegate to extracted renderer")
+    print("growth source suitability/quarantine renderer extraction OK")
+
+
+def check_growth_source_queue_policy_renderer_extraction() -> None:
+    """Extracted source-queue-policy renderer preserves the human contract."""
+    from link_modes.growth.growth_human_renderers import render_growth_source_queue_policy_text
+    from link_modes.growth.link_growth_console import _growth_print_source_queue_policy
+
+    payload = {
+        "default_queue_requires_suitability": True,
+        "optional_source_failure_policy": "skip",
+        "required_source_failure_policy": "fail",
+        "required_sources": ["research/headroom-main.zip"],
+        "optional_sources": ["research/gpt-crawler-main.zip"],
+    }
+    rendered = render_growth_source_queue_policy_text(payload)
+    for expected in (
+        "Source Queue Policy",
+        "suitability required:",
+        "optional failure policy:",
+        "required failure policy:",
+        "required:",
+        "optional:",
+    ):
+        _require(expected in rendered, f"extracted source queue policy renderer missing {expected}")
+    _require(not rendered.lstrip().startswith("{"),
+             "extracted source queue policy renderer must not return raw JSON")
+
+    wrapper_out = io.StringIO()
+    with contextlib.redirect_stdout(wrapper_out):
+        _growth_print_source_queue_policy(payload)
+    _require(wrapper_out.getvalue() == rendered,
+             "source queue policy compatibility wrapper must delegate to extracted renderer")
+    print("growth source queue policy renderer extraction OK")
+
+
 # ---------------------------------------------------------------------------
 # 62j. Growth campaign governance and Business Development boundary
 # ---------------------------------------------------------------------------
@@ -22151,6 +22325,10 @@ PLANNING_CORE_CHECKS = (
     check_growth_operator_qa_renderer_extraction,
     check_growth_direct_upgrade_eval_renderer_extraction,
     check_growth_concept_calibration_report_renderer_extraction,
+    check_growth_source_queue_e2e_renderer_extraction,
+    check_growth_source_cache_status_renderer_extraction,
+    check_growth_source_suitability_quarantine_renderer_extraction,
+    check_growth_source_queue_policy_renderer_extraction,
     check_business_development_source_governance_helpers,
     check_business_development_source_governance_clis,
     check_business_development_collection_planning_helpers,
