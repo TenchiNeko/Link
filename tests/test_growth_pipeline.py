@@ -13538,6 +13538,106 @@ def check_growth_source_queue_policy_renderer_extraction() -> None:
     print("growth source queue policy renderer extraction OK")
 
 
+def check_growth_source_cache_module_extraction() -> None:
+    """Source inventory cache helpers live in the extracted module behind wrappers."""
+    import link_modes.growth.growth_source_cache as source_cache_module
+    import link_modes.growth.link_growth_console as growth_console
+    from link_modes.growth.link_growth_console import (
+        collect_persistent_source_cache_performance_report,
+        collect_persistent_source_inventory_cache_manifest,
+        collect_persistent_source_inventory_cache_policy,
+        collect_source_archive_intake_cache_key,
+        collect_source_cache_clear,
+        collect_source_cache_status,
+        parse_persistent_source_cache_performance_report_json,
+        parse_persistent_source_inventory_cache_manifest_json,
+        parse_persistent_source_inventory_cache_policy_json,
+        parse_source_archive_intake_cache_key_json,
+        parse_source_cache_clear_json,
+        parse_source_cache_status_json,
+        stable_persistent_source_cache_performance_report_json,
+        stable_persistent_source_inventory_cache_manifest_json,
+        stable_persistent_source_inventory_cache_policy_json,
+        stable_source_archive_intake_cache_key_json,
+        stable_source_cache_clear_json,
+        stable_source_cache_status_json,
+    )
+
+    expected_exports = (
+        "collect_persistent_source_inventory_cache_policy",
+        "collect_persistent_source_inventory_cache_manifest",
+        "collect_source_archive_intake_cache_key",
+        "collect_source_cache_status",
+        "collect_source_cache_clear",
+        "collect_persistent_source_cache_performance_report",
+    )
+    for name in expected_exports:
+        _require(callable(getattr(source_cache_module, name, None)),
+                 f"growth_source_cache must expose {name}")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in source_cache_module.__dict__.values()),
+             "growth_source_cache must not import the Growth monolith")
+
+    source_path = make_headroom_like_fixture()
+    old_cache_root = os.environ.get("LINK_SOURCE_CACHE_ROOT")
+    with tempfile.TemporaryDirectory(prefix="link-source-cache-module-test-") as cache_root:
+        os.environ["LINK_SOURCE_CACHE_ROOT"] = cache_root
+        try:
+            policy = collect_persistent_source_inventory_cache_policy()
+            module_policy = source_cache_module.collect_persistent_source_inventory_cache_policy()
+            _require(policy == module_policy,
+                     "source cache policy wrapper must delegate to extracted module")
+            _require(parse_persistent_source_inventory_cache_policy_json(stable_persistent_source_inventory_cache_policy_json(policy)) == policy,
+                     "source cache policy JSON must round trip after extraction")
+
+            key = collect_source_archive_intake_cache_key(source_path=source_path)
+            module_key = source_cache_module.collect_source_archive_intake_cache_key(source_path=source_path)
+            _require(key == module_key,
+                     "source cache key wrapper must delegate to extracted module")
+            _require(parse_source_archive_intake_cache_key_json(stable_source_archive_intake_cache_key_json(key)) == key,
+                     "source archive intake cache key JSON must round trip after extraction")
+
+            manifest = collect_persistent_source_inventory_cache_manifest(source_path=source_path)
+            module_manifest = source_cache_module.collect_persistent_source_inventory_cache_manifest(source_path=source_path)
+            _require(manifest == module_manifest,
+                     "source cache manifest wrapper must delegate to extracted module while cold")
+            _require(manifest["cache_file_path"].startswith(cache_root) and manifest["cache_valid"] is False,
+                     "source cache manifest must honor temp LINK_SOURCE_CACHE_ROOT")
+            _require(parse_persistent_source_inventory_cache_manifest_json(stable_persistent_source_inventory_cache_manifest_json(manifest)) == manifest,
+                     "source cache manifest JSON must round trip after extraction")
+
+            status = collect_source_cache_status(source_path=source_path)
+            module_status = source_cache_module.collect_source_cache_status(source_path=source_path)
+            _require(status == module_status and status["cache_hit"] is False,
+                     "source cache status wrapper must delegate to extracted module while cold")
+            _require(parse_source_cache_status_json(stable_source_cache_status_json(status)) == status,
+                     "source cache status JSON must round trip after extraction")
+
+            performance = collect_persistent_source_cache_performance_report(source_path=source_path)
+            module_performance = source_cache_module.collect_persistent_source_cache_performance_report(source_path=source_path)
+            _require(performance == module_performance and performance["cache_hit"] is False,
+                     "persistent cache performance wrapper must delegate to extracted module while cold")
+            _require(parse_persistent_source_cache_performance_report_json(stable_persistent_source_cache_performance_report_json(performance)) == performance,
+                     "persistent cache performance JSON must round trip after extraction")
+
+            cache_path = Path(manifest["cache_file_path"])
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text("{}\n")
+            clear = collect_source_cache_clear(source_path=source_path)
+            _require(clear["removed_count"] == 1 and clear["clear_scope"] == "source" and not cache_path.exists(),
+                     "source cache clear wrapper must remove only the selected file under temp root")
+            _require(parse_source_cache_clear_json(stable_source_cache_clear_json(clear)) == clear,
+                     "source cache clear JSON must round trip after extraction")
+        finally:
+            growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
+            if old_cache_root is None:
+                os.environ.pop("LINK_SOURCE_CACHE_ROOT", None)
+            else:
+                os.environ["LINK_SOURCE_CACHE_ROOT"] = old_cache_root
+
+    print("growth source cache module extraction OK")
+
+
 # ---------------------------------------------------------------------------
 # 62j. Growth campaign governance and Business Development boundary
 # ---------------------------------------------------------------------------
@@ -22478,6 +22578,7 @@ SOURCE_CORE_CHECKS = (
     check_source_aware_downstream_binding_helpers,
     check_source_aware_downstream_binding_clis,
     check_source_aware_archive_concept_extractor_helpers,
+    check_growth_source_cache_module_extraction,
 )
 
 
