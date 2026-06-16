@@ -22,6 +22,7 @@ import sys
 from typing import Any
 
 from link_modes.growth.growth_human_renderers import (
+    print_growth_direct_upgrade_eval as _print_growth_direct_upgrade_eval_impl,
     print_growth_operator_cache_dashboard as _print_growth_operator_cache_dashboard_impl,
     print_growth_operator_qa_check as _print_growth_operator_qa_check_impl,
 )
@@ -28289,69 +28290,8 @@ def _growth_print_source_queue_e2e(payload: dict[str, Any]) -> None:
 
 
 def _growth_print_direct_upgrade_eval(payload: dict[str, Any]) -> None:
-    best = payload["best_direct_upgrade"]
-    cache = payload["cache_summary"]
-    queue = payload["queue_summary"]
-    reuse = payload["request_reuse_summary"]
-    print("Growth Direct Upgrade Eval")
-    print("  queue:")
-    print(f"    selected: {queue['selected_count']}")
-    print(f"    skipped: {queue['skipped_count']}  quarantined: {queue['quarantined_count']}")
-    print(f"    cache: hits {cache['after_hit_count']} / misses {cache['after_miss_count']} / stale {cache['stale_count']}")
-    print(f"    cache writes: {'yes' if payload['write_cache_performed'] else 'no'}")
-    print("  cache:")
-    print(
-        f"    source inventory: {reuse['source_inventory_cache_after_hit_count']} hit / "
-        f"{reuse['source_inventory_cache_after_miss_count']} miss"
-    )
-    if payload["write_cache_requested"]:
-        print(
-            f"    source inventory warm: warmed {payload['source_inventory_cache_warmed_count']} / "
-            f"failed {payload['source_inventory_cache_failed_count']} / skipped {payload['source_inventory_cache_skipped_count']}"
-        )
-    print(
-        f"    hot path: {'ready' if reuse['cache_layers_ready'] else 'not ready'}"
-    )
-    print("  queue E2E cache:")
-    print(
-        f"    hit: {payload.get('queue_e2e_cache_hit', False)}  "
-        f"used: {payload.get('queue_e2e_cache_used', False)}  "
-        f"written: {payload.get('queue_e2e_cache_write_performed', False)}"
-    )
-    print("  best:")
-    if best:
-        print(f"    title: {best['title']}")
-        print(f"    source: {best['source_path'] or 'operator'}")
-        print(f"    ROI: {best['total_roi_score']}")
-        print(f"    why: {best['evidence_summary']}")
-        print(f"    next: {best['recommended_implementation_slice']}")
-    else:
-        print("    title: none")
-        print("    next: no high-quality deterministic implementation candidate")
-    print("  runners-up:")
-    for item in payload["runner_up_upgrades"][:3] or [{"title": "none", "total_roi_score": 0}]:
-        print(f"    - {item['title']} (ROI {item['total_roi_score']})")
-    print("  issues:")
-    for item in payload["broken_unoptimized_items"][:5]:
-        print(f"    - {item['severity']}/{item['category']}: {item['title']}")
-    safety = "no" if not payload["model_used"] else "yes"
-    print("  safety:")
-    print(f"    model used: {safety}")
-    print("    OpenRouter: no")
-    print(f"    network: {'yes' if payload['external_network_used'] else 'no'}")
-    print("  reuse:")
-    print(
-        "    queue E2E reused for "
-        f"{reuse['source_queue_e2e_reused_for_targets_count']} targets; "
-        f"opportunity recomputes {reuse['opportunity_score_recompute_count']}; "
-        f"avoided {reuse['avoided_per_target_recompute_count']} per-target recomputes"
-    )
-    print(
-        f"    per-target archive touches avoided: {reuse['per_target_archive_touch_avoided_count']}; "
-        f"required: {reuse['per_target_archive_touch_required_count']}; "
-        f"full queue E2E avoided: {'yes' if reuse['full_queue_e2e_compute_avoided'] else 'no'}"
-    )
-    print(f"  next: {payload['recommended_next_action']}")
+    # Compatibility wrapper; implementation lives in growth_human_renderers.py.
+    _print_growth_direct_upgrade_eval_impl(payload)
 
 
 def _growth_print_operator_cache_dashboard(payload: dict[str, Any]) -> None:

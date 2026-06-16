@@ -13215,6 +13215,87 @@ def check_growth_operator_qa_renderer_extraction() -> None:
     print("growth operator QA renderer extraction OK")
 
 
+def check_growth_direct_upgrade_eval_renderer_extraction() -> None:
+    """Extracted direct-upgrade-eval renderer preserves the human contract."""
+    from link_modes.growth.growth_human_renderers import render_growth_direct_upgrade_eval_text
+    from link_modes.growth.link_growth_console import _growth_print_direct_upgrade_eval
+
+    payload = {
+        "best_direct_upgrade": {
+            "title": "Extract direct eval renderer",
+            "source_path": "research/headroom-main.zip",
+            "total_roi_score": 74,
+            "evidence_summary": "Pure formatter can move without changing direct evaluator logic.",
+            "recommended_implementation_slice": "Move renderer only; keep evaluator in monolith.",
+        },
+        "cache_summary": {
+            "after_hit_count": 2,
+            "after_miss_count": 0,
+            "stale_count": 0,
+        },
+        "queue_summary": {
+            "selected_count": 2,
+            "skipped_count": 1,
+            "quarantined_count": 1,
+        },
+        "request_reuse_summary": {
+            "source_inventory_cache_after_hit_count": 2,
+            "source_inventory_cache_after_miss_count": 0,
+            "cache_layers_ready": True,
+            "source_queue_e2e_reused_for_targets_count": 2,
+            "opportunity_score_recompute_count": 0,
+            "avoided_per_target_recompute_count": 2,
+            "per_target_archive_touch_avoided_count": 2,
+            "per_target_archive_touch_required_count": 0,
+            "full_queue_e2e_compute_avoided": True,
+        },
+        "write_cache_performed": False,
+        "write_cache_requested": False,
+        "queue_e2e_cache_hit": True,
+        "queue_e2e_cache_used": True,
+        "queue_e2e_cache_write_performed": False,
+        "runner_up_upgrades": [
+            {"title": "Runner up", "total_roi_score": 60},
+        ],
+        "broken_unoptimized_items": [
+            {"severity": "low", "category": "testing", "title": "renderer extraction smoke"},
+        ],
+        "model_used": False,
+        "external_network_used": False,
+        "recommended_next_action": "python3 link.py growth direct-upgrade-eval --json",
+    }
+    rendered = render_growth_direct_upgrade_eval_text(payload)
+    _require(rendered.startswith("Growth Direct Upgrade Eval"),
+             "extracted direct eval renderer must include title")
+    for expected in (
+        "queue:",
+        "cache:",
+        "queue E2E cache:",
+        "best:",
+        "title: Extract direct eval renderer",
+        "ROI: 74",
+        "runners-up:",
+        "issues:",
+        "safety:",
+        "model used: no",
+        "OpenRouter: no",
+        "network: no",
+        "reuse:",
+        "full queue E2E avoided: yes",
+        "next:",
+    ):
+        _require(expected in rendered, f"extracted direct eval renderer missing {expected}")
+    _require(not rendered.lstrip().startswith("{"),
+             "extracted direct eval renderer must not return raw JSON")
+
+    wrapper_out = io.StringIO()
+    with contextlib.redirect_stdout(wrapper_out):
+        _growth_print_direct_upgrade_eval(payload)
+    _require(wrapper_out.getvalue() == rendered,
+             "direct eval compatibility wrapper must delegate to extracted renderer")
+    print("growth direct upgrade eval renderer extraction OK")
+
+
 # ---------------------------------------------------------------------------
 # 62j. Growth campaign governance and Business Development boundary
 # ---------------------------------------------------------------------------
@@ -22000,6 +22081,7 @@ PLANNING_CORE_CHECKS = (
     check_growth_console_audit_helper_and_cli,
     check_growth_operator_cache_dashboard_renderer_extraction,
     check_growth_operator_qa_renderer_extraction,
+    check_growth_direct_upgrade_eval_renderer_extraction,
     check_business_development_source_governance_helpers,
     check_business_development_source_governance_clis,
     check_business_development_collection_planning_helpers,

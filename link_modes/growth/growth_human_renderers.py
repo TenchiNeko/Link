@@ -103,3 +103,84 @@ def render_growth_operator_qa_check_text(payload: dict[str, Any]) -> str:
 def print_growth_operator_qa_check(payload: dict[str, Any]) -> None:
     """Print the operator QA check human summary."""
     print(render_growth_operator_qa_check_text(payload), end="")
+
+
+def render_growth_direct_upgrade_eval_text(payload: dict[str, Any]) -> str:
+    """Render a compact direct-upgrade-eval operator summary."""
+    best = payload.get("best_direct_upgrade") or {}
+    cache = payload.get("cache_summary") or {}
+    queue = payload.get("queue_summary") or {}
+    reuse = payload.get("request_reuse_summary") or {}
+    lines = [
+        "Growth Direct Upgrade Eval",
+        "  queue:",
+        f"    selected: {queue.get('selected_count', 0)}",
+        f"    skipped: {queue.get('skipped_count', 0)}  quarantined: {queue.get('quarantined_count', 0)}",
+        f"    cache: hits {cache.get('after_hit_count', 0)} / misses {cache.get('after_miss_count', 0)} / stale {cache.get('stale_count', 0)}",
+        f"    cache writes: {'yes' if payload.get('write_cache_performed') else 'no'}",
+        "  cache:",
+        (
+            f"    source inventory: {reuse.get('source_inventory_cache_after_hit_count', 0)} hit / "
+            f"{reuse.get('source_inventory_cache_after_miss_count', 0)} miss"
+        ),
+    ]
+    if payload.get("write_cache_requested"):
+        lines.append(
+            f"    source inventory warm: warmed {payload.get('source_inventory_cache_warmed_count', 0)} / "
+            f"failed {payload.get('source_inventory_cache_failed_count', 0)} / skipped {payload.get('source_inventory_cache_skipped_count', 0)}"
+        )
+    lines.extend([
+        f"    hot path: {'ready' if reuse.get('cache_layers_ready') else 'not ready'}",
+        "  queue E2E cache:",
+        (
+            f"    hit: {payload.get('queue_e2e_cache_hit', False)}  "
+            f"used: {payload.get('queue_e2e_cache_used', False)}  "
+            f"written: {payload.get('queue_e2e_cache_write_performed', False)}"
+        ),
+        "  best:",
+    ])
+    if best:
+        lines.extend([
+            f"    title: {best['title']}",
+            f"    source: {best['source_path'] or 'operator'}",
+            f"    ROI: {best['total_roi_score']}",
+            f"    why: {best['evidence_summary']}",
+            f"    next: {best['recommended_implementation_slice']}",
+        ])
+    else:
+        lines.extend([
+            "    title: none",
+            "    next: no high-quality deterministic implementation candidate",
+        ])
+    lines.append("  runners-up:")
+    for item in payload.get("runner_up_upgrades", [])[:3] or [{"title": "none", "total_roi_score": 0}]:
+        lines.append(f"    - {item['title']} (ROI {item['total_roi_score']})")
+    lines.append("  issues:")
+    for item in payload.get("broken_unoptimized_items", [])[:5]:
+        lines.append(f"    - {item['severity']}/{item['category']}: {item['title']}")
+    safety = "no" if not payload.get("model_used") else "yes"
+    lines.extend([
+        "  safety:",
+        f"    model used: {safety}",
+        "    OpenRouter: no",
+        f"    network: {'yes' if payload.get('external_network_used') else 'no'}",
+        "  reuse:",
+        (
+            "    queue E2E reused for "
+            f"{reuse.get('source_queue_e2e_reused_for_targets_count', 0)} targets; "
+            f"opportunity recomputes {reuse.get('opportunity_score_recompute_count', 0)}; "
+            f"avoided {reuse.get('avoided_per_target_recompute_count', 0)} per-target recomputes"
+        ),
+        (
+            f"    per-target archive touches avoided: {reuse.get('per_target_archive_touch_avoided_count', 0)}; "
+            f"required: {reuse.get('per_target_archive_touch_required_count', 0)}; "
+            f"full queue E2E avoided: {'yes' if reuse.get('full_queue_e2e_compute_avoided') else 'no'}"
+        ),
+        f"  next: {payload.get('recommended_next_action', '')}",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def print_growth_direct_upgrade_eval(payload: dict[str, Any]) -> None:
+    """Print the direct-upgrade-eval human summary."""
+    print(render_growth_direct_upgrade_eval_text(payload), end="")
