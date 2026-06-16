@@ -81,6 +81,8 @@ SUITE_TIMING_ORDER = (
     "planning-fast",
     "planning-deep",
     "planning-deterministic",
+    "execution-fast",
+    "execution-deep",
     "execution-deterministic",
     "base",
     "source-fast",
@@ -91,8 +93,10 @@ SUITE_TIMING_THRESHOLDS = {
     "planning-fast": 20.0,
     "planning-deep": 90.0,
     "planning-deterministic": 90.0,
+    "execution-fast": 10.0,
+    "execution-deep": 45.0,
     "execution-deterministic": 45.0,
-    "base": 45.0,
+    "base": 30.0,
     "source-fast": 60.0,
     "source-slow": 180.0,
 }
@@ -145,6 +149,10 @@ def _run_slow_growth_archive_tests() -> bool:
 
 def _run_deep_growth_planning_tests() -> bool:
     return os.environ.get("LINK_RUN_DEEP_GROWTH_PLANNING_TESTS") == "1"
+
+
+def _run_deep_growth_execution_tests() -> bool:
+    return os.environ.get("LINK_RUN_DEEP_GROWTH_EXECUTION_TESTS") == "1"
 
 
 def _tiny_source_archive_fixture_root() -> Path:
@@ -21784,7 +21792,7 @@ PLANNING_DEEP_CHECKS = (
 PLANNING_DETERMINISTIC_CHECKS = PLANNING_FAST_CHECKS + PLANNING_DEEP_CHECKS
 
 
-EXECUTION_DETERMINISTIC_CHECKS = (
+EXECUTION_FAST_CHECKS = (
     check_growth_execute_dry_run,
     check_growth_execute_write,
     check_growth_execute_errors,
@@ -21805,6 +21813,24 @@ EXECUTION_DETERMINISTIC_CHECKS = (
     check_growth_execution_gates_cli,
     check_growth_execution_approval_checklist_cli,
     check_growth_execution_review_cli,
+    check_planning_chain_review_bundle_helper,
+    check_execution_readiness_stack_helper,
+    check_execution_journal_schema_helper,
+    check_execution_evidence_contract_helper,
+    check_execution_preflight_checklist_helper,
+    check_execution_attempt_history_helper,
+    check_execution_readiness_dashboard_summary_helper,
+    check_execution_gate_stack_preview_helper,
+    check_growth_archive_code_brief_dry_run,
+    check_growth_archive_code_brief_write,
+    check_growth_code_brief_propose,
+    check_make_unique_title,
+    check_content_replacement_entry_helper,
+    check_fork_lineage_with_content_replacements,
+)
+
+
+EXECUTION_DEEP_CHECKS = (
     check_workspace_creator_runtime_boundary_helper,
     check_growth_workspace_boundary_cli,
     check_growth_patch_boundary_cli,
@@ -21826,21 +21852,10 @@ EXECUTION_DETERMINISTIC_CHECKS = (
     check_growth_supervised_execution_cli,
     check_supervised_execution_orchestrator_runtime_component,
     check_guarded_workspace_lifecycle_cleanup_abandon,
-    check_planning_chain_review_bundle_helper,
-    check_execution_readiness_stack_helper,
-    check_execution_journal_schema_helper,
-    check_execution_evidence_contract_helper,
-    check_execution_preflight_checklist_helper,
-    check_execution_attempt_history_helper,
-    check_execution_readiness_dashboard_summary_helper,
-    check_execution_gate_stack_preview_helper,
-    check_growth_archive_code_brief_dry_run,
-    check_growth_archive_code_brief_write,
-    check_growth_code_brief_propose,
-    check_make_unique_title,
-    check_content_replacement_entry_helper,
-    check_fork_lineage_with_content_replacements,
 )
+
+
+EXECUTION_DETERMINISTIC_CHECKS = EXECUTION_FAST_CHECKS + EXECUTION_DEEP_CHECKS
 
 
 def run_foundation_fast_suite() -> None:
@@ -21872,18 +21887,33 @@ def run_planning_deterministic_suite() -> None:
     print("Growth pipeline planning-deterministic suite passed")
 
 
+def run_execution_fast_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("execution-fast", slow_threshold_seconds=10.0):
+        _run_check_group(EXECUTION_FAST_CHECKS)
+    print("Growth pipeline execution-fast suite passed")
+
+
+def run_execution_deep_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("execution-deep", slow_threshold_seconds=45.0):
+        _run_check_group(EXECUTION_DEEP_CHECKS)
+    print("Growth pipeline execution-deep suite passed")
+
+
 def run_execution_deterministic_suite() -> None:
     _ensure_growth_test_setup()
-    with time_section("execution-deterministic"):
-        _run_check_group(EXECUTION_DETERMINISTIC_CHECKS)
+    with time_section("execution-deterministic", slow_threshold_seconds=45.0):
+        run_execution_fast_suite()
+        run_execution_deep_suite()
     print("Growth pipeline execution-deterministic suite passed")
 
 
 def run_base_suite() -> None:
-    with time_section("base", slow_threshold_seconds=45.0):
+    with time_section("base", slow_threshold_seconds=30.0):
         run_foundation_fast_suite()
         run_planning_fast_suite()
-        run_execution_deterministic_suite()
+        run_execution_fast_suite()
     print("Growth pipeline base suite passed")
 
 
@@ -21928,6 +21958,11 @@ def run_default_suite() -> None:
     else:
         _GROWTH_TEST_SKIPPED_SUITES.add("planning-deep")
         print("planning-deep: skipped; run --suite planning-deep or --suite all for deep deterministic planning checks")
+    if _run_deep_growth_execution_tests():
+        run_execution_deep_suite()
+    else:
+        _GROWTH_TEST_SKIPPED_SUITES.add("execution-deep")
+        print("execution-deep: skipped; run --suite execution-deep or --suite all for deep deterministic execution checks")
     if _run_slow_growth_archive_tests():
         run_source_slow_suite()
     else:
@@ -21941,6 +21976,7 @@ def run_all_suites() -> None:
     started = time.perf_counter()
     run_base_suite()
     run_planning_deep_suite()
+    run_execution_deep_suite()
     run_source_fast_suite()
     run_source_slow_suite()
     _print_growth_test_timing_summary(time.perf_counter() - started)
@@ -21953,22 +21989,24 @@ def _print_suite_list() -> None:
     print("  planning-fast            Fast deterministic planning/console checks.")
     print("  planning-deep            Deeper deterministic planning/console checks.")
     print("  planning-deterministic   planning-fast + planning-deep.")
-    print("  execution-deterministic  Deterministic execution/receipt/verifier checks.")
-    print("  base                     foundation-fast + planning-fast + execution-deterministic.")
+    print("  execution-fast           Fast deterministic execution/receipt checks.")
+    print("  execution-deep           Deeper deterministic execution/fork/transcript checks.")
+    print("  execution-deterministic  execution-fast + execution-deep.")
+    print("  base                     foundation-fast + planning-fast + execution-fast.")
     print("  source-fast              Tiny fixture source-aware checks.")
     print("  source-slow              Real archive integration checks.")
-    print("  all                      base + planning-deep + source-fast + source-slow.")
+    print("  all                      base + planning-deep + execution-deep + source-fast + source-slow.")
     print("Recommended commands:")
     print("  python3 tests/test_growth_pipeline.py --suite foundation-fast")
     print("  python3 tests/test_growth_pipeline.py --suite planning-fast")
+    print("  python3 tests/test_growth_pipeline.py --suite execution-fast")
     print("  python3 tests/test_growth_pipeline.py --suite base")
-    print("  python3 tests/test_growth_pipeline.py --suite source-fast")
     print("  python3 tests/test_growth_pipeline.py --suite all")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run deterministic Growth pipeline smoke test suites.")
-    parser.add_argument("--suite", choices=("foundation-fast", "planning-fast", "planning-deep", "planning-deterministic", "execution-deterministic", "base", "source-fast", "source-slow", "all"), help="suite to run")
+    parser.add_argument("--suite", choices=("foundation-fast", "planning-fast", "planning-deep", "planning-deterministic", "execution-fast", "execution-deep", "execution-deterministic", "base", "source-fast", "source-slow", "all"), help="suite to run")
     parser.add_argument("--list-suites", action="store_true", help="list available suites and recommended commands")
     args = parser.parse_args(argv)
     if args.list_suites:
@@ -21990,6 +22028,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if suite == "planning-deterministic":
         run_planning_deterministic_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "execution-fast":
+        run_execution_fast_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "execution-deep":
+        run_execution_deep_suite()
         _print_growth_test_timing_summary(time.perf_counter() - started)
         return 0
     if suite == "execution-deterministic":
