@@ -18918,13 +18918,13 @@ def _growth_operator_cache_dashboard_issues(
             "implement_now_candidate": False,
         })
     issues.append({
-        "issue_id": "execution_deterministic_checkpoint_prior_observed",
+        "issue_id": "planning_fast_checkpoint_current_observed",
         "severity": "low",
         "category": "test_coverage",
-        "title": "execution-deterministic is now the largest normal base component",
-        "observed_behavior": "Prior measured execution-deterministic runtime is about 17.5s.",
-        "expected_behavior": "Normal checkpoint tiers should remain small enough for frequent use.",
-        "recommended_fix": "Profile execution-deterministic per-check timing in a separate test-speed batch.",
+        "title": "planning-fast is the largest normal base component",
+        "observed_behavior": "Current normal base runs foundation-fast, planning-fast, and execution-fast; planning-fast is the largest remaining normal checkpoint tier at about 10s.",
+        "expected_behavior": "Normal checkpoint tiers should remain small enough for frequent use while deep planning/execution coverage stays explicit.",
+        "recommended_fix": "Profile planning-fast per-check timing or split its broad command coverage in a separate test-speed batch.",
         "evidence_scope": "prior_observed",
         "implement_now_candidate": False,
     })

@@ -19401,6 +19401,11 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
                  "operator cache dashboard must list skipped/quarantined explicit sources")
         _require(any(item["issue_id"] == "source_inventory_cache_missing" for item in cache_dashboard_cold["broken_unoptimized_items"]),
                  "operator cache dashboard must include missing source inventory issue")
+        cold_issue_ids = {item["issue_id"] for item in cache_dashboard_cold["broken_unoptimized_items"]}
+        _require("planning_fast_checkpoint_current_observed" in cold_issue_ids,
+                 "operator cache dashboard must report current remaining normal checkpoint hotspot")
+        _require("execution_deterministic_checkpoint_prior_observed" not in cold_issue_ids,
+                 "operator cache dashboard must not report stale execution-deterministic hotspot after suite split")
         validate_growth_operator_cache_dashboard(cache_dashboard_cold)
         _require(parse_growth_operator_cache_dashboard_json(stable_growth_operator_cache_dashboard_json(cache_dashboard_cold)) == cache_dashboard_cold,
                  "operator cache dashboard JSON must round trip")
