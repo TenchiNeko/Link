@@ -78,6 +78,8 @@ REAL_RESEARCH_ARCHIVE_MARKERS = (
 )
 SUITE_TIMING_ORDER = (
     "foundation-fast",
+    "planning-core",
+    "planning-extended",
     "planning-fast",
     "planning-deep",
     "planning-deterministic",
@@ -90,7 +92,9 @@ SUITE_TIMING_ORDER = (
 )
 SUITE_TIMING_THRESHOLDS = {
     "foundation-fast": 30.0,
-    "planning-fast": 20.0,
+    "planning-core": 5.0,
+    "planning-extended": 15.0,
+    "planning-fast": 15.0,
     "planning-deep": 90.0,
     "planning-deterministic": 90.0,
     "execution-fast": 10.0,
@@ -149,6 +153,10 @@ def _run_slow_growth_archive_tests() -> bool:
 
 def _run_deep_growth_planning_tests() -> bool:
     return os.environ.get("LINK_RUN_DEEP_GROWTH_PLANNING_TESTS") == "1"
+
+
+def _run_extended_growth_planning_tests() -> bool:
+    return os.environ.get("LINK_RUN_EXTENDED_GROWTH_PLANNING_TESTS") == "1"
 
 
 def _run_deep_growth_execution_tests() -> bool:
@@ -19402,8 +19410,10 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         _require(any(item["issue_id"] == "source_inventory_cache_missing" for item in cache_dashboard_cold["broken_unoptimized_items"]),
                  "operator cache dashboard must include missing source inventory issue")
         cold_issue_ids = {item["issue_id"] for item in cache_dashboard_cold["broken_unoptimized_items"]}
-        _require("planning_fast_checkpoint_current_observed" in cold_issue_ids,
-                 "operator cache dashboard must report current remaining normal checkpoint hotspot")
+        _require("planning_extended_checkpoint_current_observed" in cold_issue_ids,
+                 "operator cache dashboard must report current explicit planning coverage note")
+        _require("planning_fast_checkpoint_current_observed" not in cold_issue_ids,
+                 "operator cache dashboard must not report stale planning-fast-as-normal-base hotspot after suite split")
         _require("execution_deterministic_checkpoint_prior_observed" not in cold_issue_ids,
                  "operator cache dashboard must not report stale execution-deterministic hotspot after suite split")
         validate_growth_operator_cache_dashboard(cache_dashboard_cold)
@@ -21691,7 +21701,7 @@ FOUNDATION_FAST_CHECKS = (
 )
 
 
-PLANNING_FAST_CHECKS = (
+PLANNING_CORE_CHECKS = (
     check_growth_proposals_data,
     check_growth_propose_command,
     check_growth_approve_command,
@@ -21700,7 +21710,6 @@ PLANNING_FAST_CHECKS = (
     check_growth_handoff_dry_run,
     check_growth_handoff_write,
     check_growth_handoff_errors,
-    check_growth_run_guide,
     check_growth_run_with_source,
     check_growth_run_smart_router,
     check_growth_handoffs_empty,
@@ -21725,24 +21734,42 @@ PLANNING_FAST_CHECKS = (
     check_growth_archive_code_queue_empty,
     check_growth_archive_code_queue_populated,
     check_growth_archive_code_queue_top_clamp,
-    check_growth_business_opportunity_scan_helper,
-    check_growth_business_opportunities_cli,
     check_growth_business_evidence_contract_helper,
-    check_growth_business_evidence_contract_cli,
     check_growth_opportunity_review_package_helper,
-    check_growth_opportunity_review_cli,
-    check_growth_campaign_plan_preview_helper,
-    check_growth_campaign_plan_preview_cli,
     check_link_module_boundary_registry_helper,
     check_link_module_boundary_registry_cli,
-    check_growth_campaign_governance_helpers,
-    check_growth_campaign_governance_clis,
-    check_business_development_intake_governance_helpers,
-    check_business_development_intake_governance_clis,
     check_business_development_source_governance_helpers,
     check_business_development_source_governance_clis,
     check_business_development_collection_planning_helpers,
     check_business_development_collection_planning_clis,
+    check_growth_code_brief_propose_batch,
+    check_ruflo_upgrade_intake_helper,
+    check_ruflo_upgrade_plan_helper,
+    check_self_learning_feedback_receipt_helper,
+    check_self_learning_next_step_recommendations_helper,
+    check_repo_value_scan_helper,
+    check_link_capability_inventory_helper,
+    check_capability_gap_preview_helper,
+    check_growth_planning_preview_helper,
+    check_capability_graph_helper,
+    check_capability_evidence_graph_helper,
+    check_capability_discovery_helper,
+    check_capability_intelligence_payload_helper,
+)
+
+
+PLANNING_EXTENDED_CHECKS = (
+    check_growth_run_guide,
+    check_growth_business_opportunity_scan_helper,
+    check_growth_business_opportunities_cli,
+    check_growth_business_evidence_contract_cli,
+    check_growth_opportunity_review_cli,
+    check_growth_campaign_plan_preview_helper,
+    check_growth_campaign_plan_preview_cli,
+    check_growth_campaign_governance_helpers,
+    check_growth_campaign_governance_clis,
+    check_business_development_intake_governance_helpers,
+    check_business_development_intake_governance_clis,
     check_business_operations_governance_helpers,
     check_business_operations_governance_clis,
     check_business_readiness_governance_helpers,
@@ -21773,20 +21800,10 @@ PLANNING_FAST_CHECKS = (
     check_operator_task_draft_clis,
     check_sandbox_executor_boundary_helpers,
     check_sandbox_executor_boundary_clis,
-    check_growth_code_brief_propose_batch,
-    check_ruflo_upgrade_intake_helper,
-    check_ruflo_upgrade_plan_helper,
-    check_self_learning_feedback_receipt_helper,
-    check_self_learning_next_step_recommendations_helper,
-    check_repo_value_scan_helper,
-    check_link_capability_inventory_helper,
-    check_capability_gap_preview_helper,
-    check_growth_planning_preview_helper,
-    check_capability_graph_helper,
-    check_capability_evidence_graph_helper,
-    check_capability_discovery_helper,
-    check_capability_intelligence_payload_helper,
 )
+
+
+PLANNING_FAST_CHECKS = PLANNING_CORE_CHECKS + PLANNING_EXTENDED_CHECKS
 
 
 PLANNING_DEEP_CHECKS = (
@@ -21870,9 +21887,23 @@ def run_foundation_fast_suite() -> None:
     print("Growth pipeline foundation-fast suite passed")
 
 
+def run_planning_core_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("planning-core", slow_threshold_seconds=5.0):
+        _run_check_group(PLANNING_CORE_CHECKS)
+    print("Growth pipeline planning-core suite passed")
+
+
+def run_planning_extended_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("planning-extended", slow_threshold_seconds=15.0):
+        _run_check_group(PLANNING_EXTENDED_CHECKS)
+    print("Growth pipeline planning-extended suite passed")
+
+
 def run_planning_fast_suite() -> None:
     _ensure_growth_test_setup()
-    with time_section("planning-fast", slow_threshold_seconds=20.0):
+    with time_section("planning-fast", slow_threshold_seconds=15.0):
         _run_check_group(PLANNING_FAST_CHECKS)
     print("Growth pipeline planning-fast suite passed")
 
@@ -21915,9 +21946,9 @@ def run_execution_deterministic_suite() -> None:
 
 
 def run_base_suite() -> None:
-    with time_section("base", slow_threshold_seconds=30.0):
+    with time_section("base", slow_threshold_seconds=20.0):
         run_foundation_fast_suite()
-        run_planning_fast_suite()
+        run_planning_core_suite()
         run_execution_fast_suite()
     print("Growth pipeline base suite passed")
 
@@ -21958,6 +21989,11 @@ def run_default_suite() -> None:
     started = time.perf_counter()
     run_base_suite()
     run_source_fast_suite()
+    if _run_extended_growth_planning_tests():
+        run_planning_extended_suite()
+    else:
+        _GROWTH_TEST_SKIPPED_SUITES.add("planning-extended")
+        print("planning-extended: skipped; run --suite planning-extended or --suite all for extended deterministic planning checks")
     if _run_deep_growth_planning_tests():
         run_planning_deep_suite()
     else:
@@ -21980,6 +22016,7 @@ def run_default_suite() -> None:
 def run_all_suites() -> None:
     started = time.perf_counter()
     run_base_suite()
+    run_planning_extended_suite()
     run_planning_deep_suite()
     run_execution_deep_suite()
     run_source_fast_suite()
@@ -21991,18 +22028,21 @@ def run_all_suites() -> None:
 def _print_suite_list() -> None:
     print("Growth pipeline test suites:")
     print("  foundation-fast          Fast foundational deterministic checks.")
-    print("  planning-fast            Fast deterministic planning/console checks.")
+    print("  planning-core            Fastest deterministic planning/console checks.")
+    print("  planning-extended        Broader deterministic planning/console checks.")
+    print("  planning-fast            planning-core + planning-extended.")
     print("  planning-deep            Deeper deterministic planning/console checks.")
     print("  planning-deterministic   planning-fast + planning-deep.")
     print("  execution-fast           Fast deterministic execution/receipt checks.")
     print("  execution-deep           Deeper deterministic execution/fork/transcript checks.")
     print("  execution-deterministic  execution-fast + execution-deep.")
-    print("  base                     foundation-fast + planning-fast + execution-fast.")
+    print("  base                     foundation-fast + planning-core + execution-fast.")
     print("  source-fast              Tiny fixture source-aware checks.")
     print("  source-slow              Real archive integration checks.")
-    print("  all                      base + planning-deep + execution-deep + source-fast + source-slow.")
+    print("  all                      base + planning-extended + planning-deep + execution-deep + source-fast + source-slow.")
     print("Recommended commands:")
     print("  python3 tests/test_growth_pipeline.py --suite foundation-fast")
+    print("  python3 tests/test_growth_pipeline.py --suite planning-core")
     print("  python3 tests/test_growth_pipeline.py --suite planning-fast")
     print("  python3 tests/test_growth_pipeline.py --suite execution-fast")
     print("  python3 tests/test_growth_pipeline.py --suite base")
@@ -22011,7 +22051,7 @@ def _print_suite_list() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run deterministic Growth pipeline smoke test suites.")
-    parser.add_argument("--suite", choices=("foundation-fast", "planning-fast", "planning-deep", "planning-deterministic", "execution-fast", "execution-deep", "execution-deterministic", "base", "source-fast", "source-slow", "all"), help="suite to run")
+    parser.add_argument("--suite", choices=("foundation-fast", "planning-core", "planning-extended", "planning-fast", "planning-deep", "planning-deterministic", "execution-fast", "execution-deep", "execution-deterministic", "base", "source-fast", "source-slow", "all"), help="suite to run")
     parser.add_argument("--list-suites", action="store_true", help="list available suites and recommended commands")
     args = parser.parse_args(argv)
     if args.list_suites:
@@ -22021,6 +22061,14 @@ def main(argv: list[str] | None = None) -> int:
     started = time.perf_counter()
     if suite == "foundation-fast":
         run_foundation_fast_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "planning-core":
+        run_planning_core_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "planning-extended":
+        run_planning_extended_suite()
         _print_growth_test_timing_summary(time.perf_counter() - started)
         return 0
     if suite == "planning-fast":
