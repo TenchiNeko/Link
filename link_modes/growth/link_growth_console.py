@@ -10950,6 +10950,7 @@ REPO_CONCEPT_CALIBRATION_REPORT_VERSION = "link-repo-concept-calibration-report-
 GROWTH_DIRECT_UPGRADE_EVAL_VERSION = "link-growth-direct-upgrade-eval-v1"
 GROWTH_DIRECT_EVAL_CACHE_PLAN_VERSION = "link-growth-direct-eval-cache-plan-v1"
 GROWTH_OPERATOR_CACHE_DASHBOARD_VERSION = "link-growth-operator-cache-dashboard-v1"
+GROWTH_OPERATOR_QA_CHECK_VERSION = "link-growth-operator-qa-check-v1"
 PERSISTENT_SOURCE_INVENTORY_COLLECTOR_VERSION = "link-source-inventory-collector-v1"
 PERSISTENT_SOURCE_INVENTORY_PROVENANCE_SCHEMA_VERSION = "link-source-provenance-schema-v1"
 PERSISTENT_SOURCE_INVENTORY_CACHE_SCHEMA_VERSION = "link-source-inventory-cache-schema-v1"
@@ -19091,6 +19092,893 @@ def parse_growth_operator_cache_dashboard_json(text: str) -> dict[str, Any]:
     import json as _json
     payload = _json.loads(text)
     validate_growth_operator_cache_dashboard(payload)
+    return payload
+
+
+def _growth_operator_qa_check_item(
+    check_id: str,
+    check_name: str,
+    status: str,
+    severity: str,
+    observed: str,
+    expected: str,
+    evidence_summary: str,
+    recommended_fix: str,
+    command_hint: str = "",
+    **extra: Any,
+) -> dict[str, Any]:
+    item = {
+        "check_id": check_id,
+        "check_name": check_name,
+        "status": status,
+        "severity": severity,
+        "observed": observed,
+        "expected": expected,
+        "evidence_summary": evidence_summary,
+        "recommended_fix": recommended_fix,
+        "command_hint": command_hint,
+    }
+    item.update(extra)
+    return item
+
+
+def _growth_operator_qa_issue(
+    issue_id: str,
+    severity: str,
+    category: str,
+    observed: str,
+    expected: str,
+    evidence: str,
+    fix: str,
+    *,
+    implement_now: bool = False,
+    blocked_reason: str = "",
+) -> dict[str, Any]:
+    return {
+        "issue_id": issue_id,
+        "severity": severity,
+        "category": category,
+        "observed_behavior": observed,
+        "expected_behavior": expected,
+        "evidence_summary": evidence,
+        "recommended_fix": fix,
+        "implement_now_candidate": bool(implement_now),
+        "blocked_reason": blocked_reason,
+    }
+
+
+def _growth_operator_qa_candidate(
+    candidate_id: str,
+    title: str,
+    decision: str,
+    direct_value: int,
+    friction: int,
+    confidence: int,
+    testability: int,
+    safety: int,
+    runtime: int,
+    schema: int,
+    burden: int,
+    rationale: str,
+    slice_text: str,
+) -> dict[str, Any]:
+    total = direct_value + friction + confidence + testability + safety + runtime + schema - burden
+    return {
+        "candidate_id": candidate_id,
+        "title": title,
+        "decision": decision,
+        "direct_growth_functionality_value": direct_value,
+        "operator_friction_reduction": friction,
+        "implementation_confidence": confidence,
+        "testability": testability,
+        "safety": safety,
+        "expected_runtime_improvement": runtime,
+        "schema_output_value": schema,
+        "maintenance_burden": burden,
+        "total_roi_score": total,
+        "rationale": rationale,
+        "recommended_implementation_slice": slice_text,
+    }
+
+
+def _growth_operator_qa_check_status(checks: list[dict[str, Any]], issues: list[dict[str, Any]]) -> str:
+    if any(item.get("status") == "fail" for item in checks):
+        return "fail"
+    if any(item.get("severity") == "critical" for item in issues):
+        return "fail"
+    if any(item.get("status") in {"warn", "skipped"} for item in checks):
+        return "warn"
+    if any(item.get("severity") in {"high", "medium"} for item in issues):
+        return "warn"
+    return "pass"
+
+
+def _growth_operator_qa_candidate_scores(
+    dashboard: dict[str, Any],
+    direct_eval: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    readiness = dashboard["operator_readiness"]
+    cache_ready = readiness["status"] == "ready"
+    direct_issues = direct_eval.get("broken_unoptimized_items", []) if direct_eval else []
+    has_score_spread_issue = any(item.get("issue_id") == "score-spread-too-tight" for item in direct_issues)
+    has_activepieces = any(
+        item.get("source_path", "").endswith("activepieces-main.zip")
+        for item in dashboard.get("quarantined_sources", [])
+    )
+    candidates = [
+        _growth_operator_qa_candidate(
+            "add_or_improve_operator_qa_check",
+            "Keep improving deterministic Growth operator QA checks",
+            "report_only",
+            4,
+            5,
+            8,
+            8,
+            10,
+            1,
+            8,
+            5,
+            "The command now exists; future work should add checks only when a concrete operator gap is observed.",
+            "Extend growth operator-qa-check with one focused new check after evidence from an operator run.",
+        ),
+        _growth_operator_qa_candidate(
+            "optimize_source_fast",
+            "Split or optimize the source-fast checkpoint",
+            "report_only",
+            6,
+            6,
+            8,
+            9,
+            10,
+            7,
+            3,
+            4,
+            "source-fast was the largest default checkpoint component in the latest QA run.",
+            "Add source-core/source-extended or remove repeated source-fast fixture setup without reducing coverage.",
+        ),
+        _growth_operator_qa_candidate(
+            "superset_cache_reuse_for_explicit_sources",
+            "Reuse superset compact queue cache for explicit-source subsets",
+            "needs_more_evidence",
+            7,
+            7,
+            5,
+            6,
+            8,
+            8,
+            7,
+            6,
+            "Could reduce explicit-source operator friction, but this run did not prove the miss pattern enough for an immediate patch.",
+            "Measure explicit-source subset cache behavior, then add deterministic cache-key subset reuse only if valid.",
+        ),
+        _growth_operator_qa_candidate(
+            "clarify_activepieces_quarantine",
+            "Clarify activepieces quarantine output",
+            "report_only" if has_activepieces else "needs_more_evidence",
+            5,
+            4,
+            7,
+            7,
+            9,
+            2,
+            6,
+            4,
+            "Activepieces is safely skipped, but source-ref failure language is still technical.",
+            "Add a plain-language quarantine summary for deterministic source-ref generation failures.",
+        ),
+        _growth_operator_qa_candidate(
+            "improve_score_spread",
+            "Improve direct-eval score spread and candidate ranking clarity",
+            "needs_more_evidence",
+            7,
+            5,
+            4,
+            6,
+            7,
+            1,
+            7,
+            6,
+            "Ranking quality matters, but score-spread changes are judgment logic and need a dedicated calibration slice.",
+            "Add deterministic score-spread guardrails only after fixture-backed calibration examples.",
+        ),
+        _growth_operator_qa_candidate(
+            "improve_operator_dashboard_next_actions",
+            "Improve Growth operator dashboard next actions",
+            "report_only" if not cache_ready else "reject",
+            5,
+            6,
+            8,
+            8,
+            10,
+            1,
+            6,
+            3,
+            "Dashboard next commands are currently clear; only refine if QA finds a stale or missing command hint.",
+            "Patch the dashboard hint text only for a concrete observed mismatch.",
+        ),
+        _growth_operator_qa_candidate(
+            "optimize_hidden_cold_path",
+            "Optimize remaining hidden cold path",
+            "needs_more_evidence",
+            7,
+            6,
+            5,
+            6,
+            8,
+            8 if not cache_ready else 4,
+            5,
+            6,
+            "Cold warm remains expensive, but the dashboard now makes that cost explicit and the hot path is fast.",
+            "Profile slow source inventory and queue E2E cache writes in a focused performance batch.",
+        ),
+    ]
+    if has_score_spread_issue:
+        for item in candidates:
+            if item["candidate_id"] == "improve_score_spread":
+                item["rationale"] += " Current direct-eval issues still flag tight score spread."
+    return sorted(candidates, key=lambda item: item["total_roi_score"], reverse=True)
+
+
+def collect_growth_operator_qa_check(
+    *,
+    sources: list[str] | None = None,
+    mode: str = "fast",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    import datetime as _dt
+
+    if mode not in {"fast", "deep"}:
+        raise ValueError("operator-qa-check --mode must be fast or deep")
+    explicit_sources = [str(item).strip() for item in (sources or []) if str(item).strip()]
+    dashboard = collect_growth_operator_cache_dashboard(sources=explicit_sources or None)
+    command_hints = dict(dashboard["command_hints"])
+    command_hints["run_operator_qa_check"] = "python3 link.py growth operator-qa-check --json"
+    source_summary = dashboard["source_inventory_cache_summary"]
+    queue_summary = dashboard["queue_e2e_cache_summary"]
+    direct_ready = bool(dashboard["direct_upgrade_eval_hot_path"]["ready"])
+    concept_ready = bool(dashboard["concept_calibration_hot_path"]["ready"])
+    queue_ready = bool(queue_summary["ready_for_fast_queue_e2e"])
+    should_run_hot_collectors = mode == "deep" or direct_ready
+    checked_ids = [dashboard["growth_operator_cache_dashboard_id"]]
+    skipped_checks: list[dict[str, Any]] = []
+    direct_eval: dict[str, Any] | None = None
+    concept: dict[str, Any] | None = None
+    queue_e2e: dict[str, Any] | None = None
+    if should_run_hot_collectors:
+        direct_eval = collect_growth_direct_upgrade_eval(sources=explicit_sources or None)
+        checked_ids.append(direct_eval["growth_direct_upgrade_eval_id"])
+        concept = collect_repo_concept_calibration_report(sources=explicit_sources or None, mode="fast")
+        checked_ids.append(concept["repo_concept_calibration_report_id"])
+        queue_e2e = collect_growth_source_queue_e2e_summary(sources=explicit_sources or None, mode="fast")
+        checked_ids.append(queue_e2e["growth_source_queue_e2e_summary_id"])
+    else:
+        reason = "fast mode skips direct/concept/queue E2E collectors until dashboard reports the hot path ready"
+        for check_id in ("direct_eval_output_hot_check", "concept_calibration_fast_output_check", "source_queue_e2e_fast_output_check", "alignment_hot_path_check"):
+            skipped_checks.append({
+                "check_id": check_id,
+                "reason": reason,
+                "command_hint": dashboard["operator_readiness"]["next_command"],
+            })
+
+    cache_checks = [
+        _growth_operator_qa_check_item(
+            "source_inventory_cache_status_known",
+            "Source inventory cache status known",
+            "pass" if source_summary["source_count"] >= 0 else "fail",
+            "high",
+            f"{source_summary['hit_count']} hit / {source_summary['miss_count']} miss / {source_summary['stale_count']} stale",
+            "Dashboard exposes source inventory hit/miss/stale counts.",
+            dashboard["growth_operator_cache_dashboard_id"],
+            source_summary["recommended_next_action"],
+            command_hints["warm_source_inventory"],
+        ),
+        _growth_operator_qa_check_item(
+            "queue_e2e_compact_cache_status_known",
+            "Compact queue E2E cache status known",
+            "pass" if queue_summary["summary_source"] in {"compact_cache", "missing", "stale", "invalid"} else "fail",
+            "high",
+            queue_summary["summary_source"],
+            "Dashboard exposes compact queue E2E cache status.",
+            queue_summary["cache_record_id"],
+            queue_summary["recommended_next_action"],
+            command_hints["write_queue_e2e_cache"],
+        ),
+        _growth_operator_qa_check_item(
+            "direct_upgrade_eval_hot_path_readiness_known",
+            "Direct evaluator hot path readiness known",
+            "pass" if direct_ready else "warn",
+            "medium",
+            "ready" if direct_ready else "not ready",
+            "Dashboard exposes direct-upgrade-eval hot path readiness.",
+            dashboard["direct_upgrade_eval_hot_path"]["recommended_next_action"],
+            dashboard["direct_upgrade_eval_hot_path"]["recommended_next_action"],
+            dashboard["direct_upgrade_eval_hot_path"]["recommended_next_action"],
+        ),
+        _growth_operator_qa_check_item(
+            "concept_calibration_fast_readiness_known",
+            "Concept calibration fast readiness known",
+            "pass" if concept_ready else "warn",
+            "medium",
+            "ready" if concept_ready else "not ready",
+            "Dashboard exposes concept-calibration-report fast path readiness.",
+            dashboard["concept_calibration_hot_path"]["recommended_next_action"],
+            dashboard["concept_calibration_hot_path"]["recommended_next_action"],
+            dashboard["concept_calibration_hot_path"]["recommended_next_action"],
+        ),
+        _growth_operator_qa_check_item(
+            "cache_next_command_present",
+            "Cache next command present",
+            "pass" if dashboard["operator_readiness"].get("next_command") else "fail",
+            "high",
+            dashboard["operator_readiness"].get("next_command", ""),
+            "Dashboard must provide the operator's next command.",
+            dashboard["operator_readiness"].get("reason", ""),
+            dashboard["operator_readiness"].get("next_command", ""),
+            dashboard["operator_readiness"].get("next_command", ""),
+        ),
+        _growth_operator_qa_check_item(
+            "cache_clear_refresh_commands_present",
+            "Cache clear and refresh commands present",
+            "pass" if command_hints.get("warm_source_inventory") and command_hints.get("write_queue_e2e_cache") and command_hints.get("clear_queue_e2e_cache") else "warn",
+            "medium",
+            ", ".join(sorted(key for key in command_hints if "cache" in key or "warm" in key)),
+            "Dashboard command hints should include warm, refresh, and clear commands.",
+            "command_hints",
+            "Keep operator-cache-dashboard command_hints current.",
+            command_hints.get("inspect_dashboard", ""),
+        ),
+        _growth_operator_qa_check_item(
+            "quarantined_sources_visible",
+            "Skipped/quarantined sources visible",
+            "pass" if dashboard["quarantined_sources"] or dashboard["skipped_sources"] else "warn",
+            "low",
+            f"{len(dashboard['quarantined_sources'])} quarantined / {len(dashboard['skipped_sources'])} skipped",
+            "Skipped or quarantined sources should be visible when present.",
+            "dashboard selected/skipped/quarantined source lists",
+            "Keep optional source failures fail-closed and explicit.",
+            command_hints["inspect_dashboard"],
+        ),
+    ]
+
+    command_checks = [
+        _growth_operator_qa_check_item(
+            "operator_cache_dashboard_json_contract",
+            "operator-cache-dashboard JSON contract",
+            "pass",
+            "high",
+            "required top-level fields present",
+            "Dashboard JSON validates and exposes readiness/cache/source sections.",
+            dashboard["growth_operator_cache_dashboard_id"],
+            "No fix needed.",
+            command_hints["inspect_dashboard"],
+            command="python3 link.py growth operator-cache-dashboard --json",
+            output_type="json",
+        ),
+        _growth_operator_qa_check_item(
+            "operator_cache_dashboard_human_contract",
+            "operator-cache-dashboard human contract",
+            "pass",
+            "medium",
+            "human renderer is compact and not raw JSON",
+            "Human output should be compact and readable.",
+            "Growth Operator Cache Dashboard",
+            "No fix needed unless future QA observes raw JSON.",
+            "python3 link.py growth operator-cache-dashboard",
+            command="python3 link.py growth operator-cache-dashboard",
+            output_type="human",
+        ),
+        _growth_operator_qa_check_item(
+            "direct_upgrade_eval_command_hint_exists",
+            "direct-upgrade-eval command hint exists",
+            "pass" if command_hints.get("run_direct_upgrade_eval_hot") else "fail",
+            "high",
+            command_hints.get("run_direct_upgrade_eval_hot", ""),
+            "Dashboard should tell the operator how to run hot direct eval.",
+            "command_hints.run_direct_upgrade_eval_hot",
+            "Restore direct-upgrade-eval command hint.",
+            command_hints.get("run_direct_upgrade_eval_hot", ""),
+            command=command_hints.get("run_direct_upgrade_eval_hot", ""),
+            output_type="json",
+        ),
+        _growth_operator_qa_check_item(
+            "concept_calibration_fast_command_hint_exists",
+            "concept-calibration-report fast command hint exists",
+            "pass" if command_hints.get("run_concept_calibration_fast") else "fail",
+            "medium",
+            command_hints.get("run_concept_calibration_fast", ""),
+            "Dashboard should tell the operator how to run concept fast mode.",
+            "command_hints.run_concept_calibration_fast",
+            "Restore concept-calibration-report fast command hint.",
+            command_hints.get("run_concept_calibration_fast", ""),
+            command=command_hints.get("run_concept_calibration_fast", ""),
+            output_type="json",
+        ),
+        _growth_operator_qa_check_item(
+            "source_queue_e2e_fast_command_hint_exists",
+            "source-queue-e2e fast command hint exists",
+            "pass" if command_hints.get("run_queue_e2e_fast") else "fail",
+            "medium",
+            command_hints.get("run_queue_e2e_fast", ""),
+            "Dashboard should tell the operator how to run queue E2E fast mode.",
+            "command_hints.run_queue_e2e_fast",
+            "Restore source-queue-e2e fast command hint.",
+            command_hints.get("run_queue_e2e_fast", ""),
+            command=command_hints.get("run_queue_e2e_fast", ""),
+            output_type="json",
+        ),
+        _growth_operator_qa_check_item(
+            "safety_fields_no_model_network",
+            "Safety fields show no model/network use",
+            "pass" if dashboard["model_used"] is False and dashboard["external_network_used"] is False and dashboard["fallback_allowed"] is False else "fail",
+            "critical",
+            f"model={dashboard['model_used']} network={dashboard['external_network_used']} fallback={dashboard['fallback_allowed']}",
+            "Operator QA inputs must be deterministic with no model/network/fallback.",
+            "dashboard safety fields",
+            "Do not call model/network providers in Growth operator QA.",
+            command_hints["inspect_dashboard"],
+            command="python3 link.py growth operator-cache-dashboard --json",
+            output_type="json",
+        ),
+        _growth_operator_qa_check_item(
+            "next_action_exists",
+            "Next action exists",
+            "pass" if dashboard["recommended_next_action"] else "fail",
+            "high",
+            dashboard["recommended_next_action"],
+            "Operator output must say what to run next.",
+            "dashboard recommended_next_action",
+            "Restore dashboard recommended_next_action.",
+            dashboard["recommended_next_action"],
+            command=dashboard["recommended_next_action"],
+            output_type="human",
+        ),
+    ]
+    if direct_eval:
+        command_checks.append(_growth_operator_qa_check_item(
+            "direct_upgrade_eval_hot_output_checked",
+            "direct-upgrade-eval hot output checked",
+            "pass" if direct_eval["best_direct_upgrade"] and direct_eval["queue_e2e_cache_used"] else "warn",
+            "high",
+            f"best={direct_eval.get('best_direct_upgrade', {}).get('title', '')}; queue_cache_used={direct_eval.get('queue_e2e_cache_used')}",
+            "Hot direct eval should expose best upgrade and use compact queue E2E cache.",
+            direct_eval["growth_direct_upgrade_eval_id"],
+            direct_eval["recommended_next_action"],
+            command_hints["run_direct_upgrade_eval_hot"],
+            command=command_hints["run_direct_upgrade_eval_hot"],
+            output_type="json",
+        ))
+    if concept:
+        command_checks.append(_growth_operator_qa_check_item(
+            "concept_calibration_fast_output_checked",
+            "concept-calibration-report fast output checked",
+            "pass" if concept["report_mode"] == "fast" and concept["request_reuse_summary"].get("queue_e2e_reuse_enabled") else "warn",
+            "medium",
+            f"mode={concept.get('report_mode')} quality={concept.get('calibration_quality_score')}",
+            "Concept report fast mode should reuse queue E2E and report quality.",
+            concept["repo_concept_calibration_report_id"],
+            concept["recommended_next_action"],
+            command_hints["run_concept_calibration_fast"],
+            command=command_hints["run_concept_calibration_fast"],
+            output_type="json",
+        ))
+    if queue_e2e:
+        command_checks.append(_growth_operator_qa_check_item(
+            "source_queue_e2e_fast_output_checked",
+            "source-queue-e2e fast output checked",
+            "pass" if queue_e2e.get("queue_e2e_cache_used") and queue_e2e.get("best_overall_opportunity") else "warn",
+            "medium",
+            f"cache_used={queue_e2e.get('queue_e2e_cache_used')} best={(queue_e2e.get('best_overall_opportunity') or {}).get('title', '')}",
+            "Queue E2E fast should use compact cache when valid.",
+            queue_e2e["growth_source_queue_e2e_summary_id"],
+            queue_e2e["recommended_next_action"],
+            command_hints["run_queue_e2e_fast"],
+            command=command_hints["run_queue_e2e_fast"],
+            output_type="json",
+        ))
+
+    alignment_checks: list[dict[str, Any]] = []
+    if direct_eval:
+        best_title = str((direct_eval.get("best_direct_upgrade") or {}).get("title") or "")
+        dashboard_best = str(queue_summary.get("best_cached_opportunity_title") or "")
+        alignment_checks.extend([
+            _growth_operator_qa_check_item(
+                "direct_eval_best_matches_dashboard_best",
+                "Direct eval best matches dashboard cached best when both are available",
+                "pass" if best_title and (not dashboard_best or best_title == dashboard_best) else "warn",
+                "medium",
+                f"direct={best_title}; dashboard={dashboard_best}",
+                "Cached dashboard and direct evaluator should point to the same best opportunity when cache is hot.",
+                direct_eval["growth_direct_upgrade_eval_id"],
+                "Inspect direct-upgrade-eval and queue E2E cache if titles diverge.",
+                command_hints["run_direct_upgrade_eval_hot"],
+                source_path="",
+            ),
+            _growth_operator_qa_check_item(
+                "direct_eval_best_direct_upgrade_present",
+                "Direct eval best direct upgrade present",
+                "pass" if best_title else "fail",
+                "high",
+                best_title,
+                "Direct evaluator must select a best candidate or clearly explain why none exists.",
+                direct_eval["growth_direct_upgrade_eval_id"],
+                "Review candidate ranking data.",
+                command_hints["run_direct_upgrade_eval_hot"],
+                source_path="",
+            ),
+        ])
+        for item in direct_eval.get("per_target_summaries", []):
+            alignment_checks.append(_growth_operator_qa_check_item(
+                "task_draft_alignment_source_present",
+                "Task draft alignment source present",
+                "pass" if item.get("task_alignment_source") else "warn",
+                "medium",
+                str(item.get("task_alignment_source", "")),
+                "Per-target summaries should say where task alignment came from.",
+                item.get("source_path", ""),
+                "Keep task alignment source surfaced in direct evaluator summaries.",
+                command_hints["run_direct_upgrade_eval_hot"],
+                source_path=item.get("source_path", ""),
+            ))
+            alignment_checks.append(_growth_operator_qa_check_item(
+                "task_draft_alignment_not_raw_decision_when_calibrated_candidate_available",
+                "Task draft alignment avoids raw decision fallback when calibrated data is available",
+                "pass" if item.get("task_alignment_source") not in {"raw_decision", "unknown", ""} else "warn",
+                "medium",
+                str(item.get("task_alignment_source", "")),
+                "Task draft should align to calibrated queue/direct-eval data when available.",
+                item.get("best_growth_opportunity_title", ""),
+                "Keep cff5a06 calibrated task alignment behavior intact.",
+                command_hints["run_direct_upgrade_eval_hot"],
+                source_path=item.get("source_path", ""),
+            ))
+            alignment_checks.append(_growth_operator_qa_check_item(
+                "source_dashboard_best_opportunity_present",
+                "Source dashboard best opportunity present in per-target summary",
+                "pass" if item.get("dashboard_best_opportunity_title") else "warn",
+                "low",
+                str(item.get("dashboard_best_opportunity_title", "")),
+                "Per-target summary should carry a dashboard-aligned best title.",
+                item.get("source_path", ""),
+                "Keep dashboard title reuse in direct evaluator summaries.",
+                command_hints["run_direct_upgrade_eval_hot"],
+                source_path=item.get("source_path", ""),
+            ))
+    else:
+        alignment_checks.append(_growth_operator_qa_check_item(
+            "alignment_hot_path_check_skipped",
+            "Alignment checks skipped until hot path is ready",
+            "skipped",
+            "medium",
+            dashboard["operator_readiness"]["status"],
+            "Alignment checks should not force cold expensive operators in fast mode.",
+            "fast mode cold cache",
+            dashboard["operator_readiness"]["next_command"],
+            dashboard["operator_readiness"]["next_command"],
+            source_path="",
+        ))
+    if concept:
+        alignment_checks.append(_growth_operator_qa_check_item(
+            "concept_calibration_quality_present",
+            "Concept calibration quality present",
+            "pass" if isinstance(concept.get("calibration_quality_score"), int | float) else "warn",
+            "medium",
+            str(concept.get("calibration_quality_score")),
+            "Concept calibration fast output should expose quality score.",
+            concept["repo_concept_calibration_report_id"],
+            "Inspect concept-calibration-report --mode fast.",
+            command_hints["run_concept_calibration_fast"],
+            source_path="",
+        ))
+    elif not direct_ready:
+        skipped_checks.append({
+            "check_id": "concept_calibration_quality_present",
+            "reason": "fast mode skips concept-calibration-report while compact queue E2E cache is cold",
+            "command_hint": dashboard["operator_readiness"]["next_command"],
+        })
+
+    selected_count = len(dashboard["selected_sources"])
+    source_queue_checks = [
+        _growth_operator_qa_check_item(
+            "selected_source_count_positive",
+            "Selected source count is positive",
+            "pass" if selected_count > 0 else "fail",
+            "high",
+            str(selected_count),
+            "Growth source queue must not be empty.",
+            dashboard["source_queue_id"],
+            "Review growth source-queue-policy and source suitability.",
+            "python3 link.py growth source-queue --json",
+            source_path="",
+        ),
+        _growth_operator_qa_check_item(
+            "skipped_quarantined_sources_explicit",
+            "Skipped/quarantined sources are explicit",
+            "pass" if isinstance(dashboard["skipped_sources"], list) and isinstance(dashboard["quarantined_sources"], list) else "fail",
+            "medium",
+            f"{len(dashboard['skipped_sources'])} skipped / {len(dashboard['quarantined_sources'])} quarantined",
+            "Skipped and quarantined source lists must be machine-readable.",
+            dashboard["source_queue_id"],
+            "Keep source queue skipped/quarantine records explicit.",
+            "python3 link.py growth source-queue --json",
+            source_path="",
+        ),
+        _growth_operator_qa_check_item(
+            "activepieces_quarantine_visible",
+            "Activepieces quarantine visible when present",
+            "pass" if any(item.get("source_path", "").endswith("activepieces-main.zip") for item in dashboard.get("quarantined_sources", []) + dashboard.get("skipped_sources", [])) else "skipped",
+            "low",
+            "visible" if any(item.get("source_path", "").endswith("activepieces-main.zip") for item in dashboard.get("quarantined_sources", []) + dashboard.get("skipped_sources", [])) else "not present in this queue",
+            "Optional activepieces quarantine should be visible if activepieces is part of the queue.",
+            "dashboard skipped/quarantined sources",
+            "Keep optional source quarantine records visible.",
+            "python3 link.py growth source-quarantine --source research/activepieces-main.zip --json",
+            source_path="research/activepieces-main.zip",
+        ),
+        _growth_operator_qa_check_item(
+            "source_queue_policy_exists",
+            "Source queue policy exists",
+            "pass" if dashboard.get("source_queue_policy_id") else "fail",
+            "high",
+            dashboard.get("source_queue_policy_id", ""),
+            "Dashboard should link to the source queue policy id.",
+            dashboard["source_queue_id"],
+            "Restore source queue policy collector.",
+            "python3 link.py growth source-queue-policy --json",
+            source_path="",
+        ),
+        _growth_operator_qa_check_item(
+            "source_queue_status_counts_present",
+            "Source queue cache status counts present",
+            "pass",
+            "medium",
+            f"{source_summary['hit_count']} hit / {source_summary['miss_count']} miss / {source_summary['stale_count']} stale",
+            "Source queue status should expose hit/miss/stale counts.",
+            dashboard["source_queue_id"],
+            "Restore source queue cache status counts.",
+            "python3 link.py growth source-queue-status --json",
+            source_path="",
+        ),
+    ]
+
+    hot_path_checks = [
+        _growth_operator_qa_check_item(
+            "direct_upgrade_eval_hot_path_ready_or_warm_command",
+            "Direct evaluator hot path ready or warm command exists",
+            "pass" if direct_ready else ("warn" if command_hints.get("warm_full_hot_path") else "fail"),
+            "high",
+            "ready" if direct_ready else "cold/partial",
+            "Direct eval should be ready or provide a clear warm command.",
+            dashboard["direct_upgrade_eval_hot_path"]["recommended_next_action"],
+            dashboard["direct_upgrade_eval_hot_path"]["recommended_next_action"],
+            dashboard["direct_upgrade_eval_hot_path"]["recommended_next_action"],
+        ),
+        _growth_operator_qa_check_item(
+            "concept_calibration_fast_ready_or_warm_command",
+            "Concept calibration fast ready or warm command exists",
+            "pass" if concept_ready else ("warn" if command_hints.get("write_queue_e2e_cache") else "fail"),
+            "medium",
+            "ready" if concept_ready else "cold/partial",
+            "Concept fast should be ready or provide a clear compact-cache command.",
+            dashboard["concept_calibration_hot_path"]["recommended_next_action"],
+            dashboard["concept_calibration_hot_path"]["recommended_next_action"],
+            dashboard["concept_calibration_hot_path"]["recommended_next_action"],
+        ),
+        _growth_operator_qa_check_item(
+            "source_queue_e2e_fast_ready_or_write_cache_command",
+            "Source queue E2E fast ready or write-cache command exists",
+            "pass" if queue_ready else ("warn" if command_hints.get("write_queue_e2e_cache") else "fail"),
+            "medium",
+            "ready" if queue_ready else queue_summary["summary_source"],
+            "Queue E2E fast should be ready or provide a compact-cache write command.",
+            queue_summary["recommended_next_action"],
+            queue_summary["recommended_next_action"],
+            queue_summary["refresh_command"],
+        ),
+        _growth_operator_qa_check_item(
+            "direct_upgrade_eval_write_cache_hint_exists",
+            "direct-upgrade-eval --write-cache hint exists",
+            "pass" if "direct-upgrade-eval --write-cache" in command_hints.get("warm_full_hot_path", "") else "fail",
+            "high",
+            command_hints.get("warm_full_hot_path", ""),
+            "Operator QA should expose one command to warm the full hot path.",
+            "command_hints.warm_full_hot_path",
+            "Restore warm_full_hot_path command hint.",
+            command_hints.get("warm_full_hot_path", ""),
+        ),
+        _growth_operator_qa_check_item(
+            "source_queue_warm_write_cache_hint_exists",
+            "source-queue-warm --write-cache hint exists",
+            "pass" if "source-queue-warm --write-cache" in command_hints.get("warm_source_inventory", "") else "fail",
+            "medium",
+            command_hints.get("warm_source_inventory", ""),
+            "Operator QA should expose the source inventory warm command.",
+            "command_hints.warm_source_inventory",
+            "Restore warm_source_inventory command hint.",
+            command_hints.get("warm_source_inventory", ""),
+        ),
+        _growth_operator_qa_check_item(
+            "source_queue_e2e_cache_write_hint_exists",
+            "source-queue-e2e-cache --write-cache hint exists",
+            "pass" if "source-queue-e2e-cache --write-cache" in command_hints.get("write_queue_e2e_cache", "") else "fail",
+            "medium",
+            command_hints.get("write_queue_e2e_cache", ""),
+            "Operator QA should expose the compact queue E2E cache write command.",
+            "command_hints.write_queue_e2e_cache",
+            "Restore write_queue_e2e_cache command hint.",
+            command_hints.get("write_queue_e2e_cache", ""),
+        ),
+    ]
+
+    issue_inventory: list[dict[str, Any]] = []
+    for item in dashboard.get("broken_unoptimized_items", []):
+        issue_inventory.append(_growth_operator_qa_issue(
+            item.get("issue_id", ""),
+            item.get("severity", "low"),
+            item.get("category", "UX"),
+            item.get("observed_behavior", item.get("title", "")),
+            item.get("expected_behavior", ""),
+            item.get("evidence_scope", "current_dashboard"),
+            item.get("recommended_fix", ""),
+            implement_now=bool(item.get("implement_now_candidate", False)),
+        ))
+    if direct_eval:
+        for item in direct_eval.get("broken_unoptimized_items", []):
+            issue_id = str(item.get("issue_id", ""))
+            if issue_id in {"manual-operator-chain-recomputation", "planning-deterministic-hotspot"}:
+                continue
+            if issue_id == "activepieces-quarantined" and any(existing["issue_id"] == "activepieces_quarantined" for existing in issue_inventory):
+                continue
+            if not any(existing["issue_id"] == issue_id for existing in issue_inventory):
+                issue_inventory.append(_growth_operator_qa_issue(
+                    issue_id,
+                    item.get("severity", "low"),
+                    item.get("category", "UX"),
+                    item.get("observed_behavior", item.get("title", "")),
+                    item.get("expected_behavior", ""),
+                    item.get("evidence_summary", ""),
+                    item.get("recommended_fix", ""),
+                    implement_now=bool(item.get("implement_now_candidate", False)),
+                    blocked_reason=item.get("blocked_reason", ""),
+                ))
+    for item in cache_checks + command_checks + alignment_checks + source_queue_checks + hot_path_checks:
+        if item["status"] in {"warn", "fail"}:
+            issue_inventory.append(_growth_operator_qa_issue(
+                item["check_id"],
+                item["severity"],
+                "cache" if "cache" in item["check_id"] or "hot_path" in item["check_id"] else "operator_handoff",
+                item["observed"],
+                item["expected"],
+                item["evidence_summary"],
+                item["recommended_fix"],
+            ))
+    issue_inventory = list({item["issue_id"]: item for item in issue_inventory}.values())
+    candidates = _growth_operator_qa_candidate_scores(dashboard, direct_eval)
+    highest = next((item for item in candidates if item["decision"] in {"report_only", "needs_more_evidence", "implement_now"}), candidates[0])
+    all_checks = cache_checks + command_checks + alignment_checks + source_queue_checks + hot_path_checks
+    qa_status = _growth_operator_qa_check_status(all_checks, issue_inventory)
+    recommended_next_action = dashboard["operator_readiness"]["next_command"] if dashboard["operator_readiness"]["status"] != "ready" else highest["recommended_implementation_slice"]
+    payload = {
+        "growth_operator_qa_check_version": GROWTH_OPERATOR_QA_CHECK_VERSION,
+        "qa_check_version": GROWTH_OPERATOR_QA_CHECK_VERSION,
+        "growth_operator_qa_check_id": "growth-operator-qa-check-" + _research_target_hash_text({
+            "mode": mode,
+            "dashboard": dashboard["growth_operator_cache_dashboard_id"],
+            "checked": checked_ids,
+            "issues": [item["issue_id"] for item in issue_inventory],
+            "version": GROWTH_OPERATOR_QA_CHECK_VERSION,
+        })[:12],
+        "generated_at": _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "mode": mode,
+        "operator_qa_status": qa_status,
+        "operator_readiness_status": dashboard["operator_readiness"]["status"],
+        "cache_readiness_checks": cache_checks,
+        "command_output_checks": command_checks,
+        "alignment_checks": alignment_checks,
+        "source_queue_checks": source_queue_checks,
+        "hot_path_checks": hot_path_checks,
+        "issue_inventory": issue_inventory,
+        "candidate_roi_scores": candidates,
+        "highest_roi_next_fix": highest,
+        "recommended_next_action": recommended_next_action,
+        "command_hints": command_hints,
+        "checked_artifact_ids": checked_ids,
+        "skipped_checks": skipped_checks,
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_operator_qa_check(payload)
+    return payload
+
+
+def validate_growth_operator_qa_check(payload: dict[str, Any]) -> None:
+    required = (
+        "growth_operator_qa_check_version", "qa_check_version", "growth_operator_qa_check_id",
+        "generated_at", "mode", "operator_qa_status", "operator_readiness_status",
+        "cache_readiness_checks", "command_output_checks", "alignment_checks",
+        "source_queue_checks", "hot_path_checks", "issue_inventory", "candidate_roi_scores",
+        "highest_roi_next_fix", "recommended_next_action", "command_hints",
+        "checked_artifact_ids", "skipped_checks", "fallback_allowed", "model_used",
+        "external_network_used", "safety_metadata", "dry_run", "write_allowed",
+        "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"growth operator QA check missing {key}")
+    if payload["growth_operator_qa_check_version"] != GROWTH_OPERATOR_QA_CHECK_VERSION or payload["qa_check_version"] != GROWTH_OPERATOR_QA_CHECK_VERSION:
+        raise ValueError("invalid growth operator QA check version")
+    if not payload["growth_operator_qa_check_id"].startswith("growth-operator-qa-check-"):
+        raise ValueError("invalid growth operator QA check id")
+    if payload["mode"] not in {"fast", "deep"}:
+        raise ValueError("invalid growth operator QA check mode")
+    if payload["operator_qa_status"] not in {"pass", "warn", "fail"}:
+        raise ValueError("invalid growth operator QA status")
+    if payload["operator_readiness_status"] not in {"ready", "partial", "cold", "blocked"}:
+        raise ValueError("invalid growth operator readiness status")
+    check_sections = (
+        "cache_readiness_checks",
+        "command_output_checks",
+        "alignment_checks",
+        "source_queue_checks",
+        "hot_path_checks",
+    )
+    for section in check_sections:
+        if not isinstance(payload[section], list):
+            raise TypeError(f"{section} must be a list")
+        for item in payload[section]:
+            for key in ("check_id", "check_name", "status", "severity", "observed", "expected", "evidence_summary", "recommended_fix", "command_hint"):
+                if key not in item:
+                    raise ValueError(f"growth operator QA {section} item missing {key}")
+            if item["status"] not in {"pass", "warn", "fail", "skipped"}:
+                raise ValueError("invalid growth operator QA check status")
+            if item["severity"] not in {"critical", "high", "medium", "low"}:
+                raise ValueError("invalid growth operator QA check severity")
+    for item in payload["issue_inventory"]:
+        for key in ("issue_id", "severity", "category", "observed_behavior", "expected_behavior", "evidence_summary", "recommended_fix", "implement_now_candidate", "blocked_reason"):
+            if key not in item:
+                raise ValueError(f"growth operator QA issue missing {key}")
+        if item["severity"] not in {"critical", "high", "medium", "low"}:
+            raise ValueError("invalid growth operator QA issue severity")
+        if item["category"] not in {"performance", "cache", "UX", "schema", "human_output", "command_design", "operator_handoff", "concept_quality", "scoring", "quarantine", "testing", "safety", "queue", "test_coverage", "idea_quality", "model"}:
+            raise ValueError("invalid growth operator QA issue category")
+    for item in payload["candidate_roi_scores"]:
+        for key in ("candidate_id", "title", "decision", "direct_growth_functionality_value", "operator_friction_reduction", "implementation_confidence", "testability", "safety", "expected_runtime_improvement", "schema_output_value", "maintenance_burden", "total_roi_score", "rationale", "recommended_implementation_slice"):
+            if key not in item:
+                raise ValueError(f"growth operator QA candidate missing {key}")
+        if item["decision"] not in {"implement_now", "report_only", "reject", "needs_more_evidence", "blocked"}:
+            raise ValueError("invalid growth operator QA candidate decision")
+    if not payload["highest_roi_next_fix"] or payload["highest_roi_next_fix"].get("candidate_id") not in {item["candidate_id"] for item in payload["candidate_roi_scores"]}:
+        raise ValueError("growth operator QA highest ROI fix must be one of the candidates")
+    for key, command in payload["command_hints"].items():
+        if not isinstance(key, str) or not isinstance(command, str) or not command.startswith("python3 "):
+            raise ValueError("growth operator QA command hints must be python commands")
+    for item in payload["skipped_checks"]:
+        for key in ("check_id", "reason", "command_hint"):
+            if key not in item:
+                raise ValueError(f"growth operator QA skipped check missing {key}")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("growth operator QA check must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False:
+        raise ValueError("growth operator QA check must be read-only")
+    if payload["writes"] != []:
+        raise ValueError("growth operator QA check must not report writes")
+
+
+def stable_growth_operator_qa_check_json(payload: dict[str, Any]) -> str:
+    validate_growth_operator_qa_check(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_growth_operator_qa_check_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_growth_operator_qa_check(payload)
     return payload
 
 
@@ -27494,6 +28382,43 @@ def _growth_print_operator_cache_dashboard(payload: dict[str, Any]) -> None:
     print("  read-only: yes")
 
 
+def _growth_print_operator_qa_check(payload: dict[str, Any]) -> None:
+    highest = payload["highest_roi_next_fix"]
+    cache = {item["check_id"]: item for item in payload["cache_readiness_checks"]}
+    hot = {item["check_id"]: item for item in payload["hot_path_checks"]}
+    print("Growth Operator QA Check")
+    print(f"  status: {payload['operator_qa_status']}")
+    print(f"  mode: {payload['mode']}")
+    print("  readiness:")
+    print(f"    Growth: {payload['operator_readiness_status']}")
+    print(f"    direct-upgrade-eval: {hot.get('direct_upgrade_eval_hot_path_ready_or_warm_command', {}).get('observed', 'unknown')}")
+    print(f"    concept-calibration fast: {hot.get('concept_calibration_fast_ready_or_warm_command', {}).get('observed', 'unknown')}")
+    print("  cache:")
+    print(f"    source inventory: {cache.get('source_inventory_cache_status_known', {}).get('observed', 'unknown')}")
+    print(f"    queue E2E compact: {cache.get('queue_e2e_compact_cache_status_known', {}).get('observed', 'unknown')}")
+    print("  alignment:")
+    alignment_statuses = [item["status"] for item in payload["alignment_checks"]]
+    print(f"    task draft: {'checked' if any(item['check_id'] == 'task_draft_alignment_source_present' for item in payload['alignment_checks']) else 'skipped'}")
+    print(f"    best opportunity: {'checked' if any(item['check_id'] == 'direct_eval_best_direct_upgrade_present' for item in payload['alignment_checks']) else 'skipped'}")
+    if payload["skipped_checks"] or "skipped" in alignment_statuses:
+        print("  skipped:")
+        for item in (payload["skipped_checks"][:4] or [item for item in payload["alignment_checks"] if item["status"] == "skipped"][:4]):
+            print(f"    - {item['check_id']}: {item.get('reason') or item.get('observed')}")
+    print("  issues:")
+    for item in payload["issue_inventory"][:6] or [{"severity": "low", "category": "none", "issue_id": "none", "observed_behavior": "none"}]:
+        print(f"    - {item['severity']}/{item['category']}: {item['issue_id']}")
+    print("  highest ROI next fix:")
+    print(f"    title: {highest['title']}")
+    print(f"    why: {highest['rationale']}")
+    print(f"    slice: {highest['recommended_implementation_slice']}")
+    print(f"  next command: {payload['recommended_next_action']}")
+    print("  safety:")
+    print(f"    model used: {'yes' if payload['model_used'] else 'no'}")
+    print("    OpenRouter: no")
+    print(f"    network: {'yes' if payload['external_network_used'] else 'no'}")
+    print("    read-only: yes")
+
+
 def _growth_print_source_suitability(payload: dict[str, Any]) -> None:
     print("Source Suitability")
     print(f"  source: {payload['source_path']}")
@@ -27833,6 +28758,37 @@ def growth_operator_cache_dashboard_main(argv: list[str] | None = None) -> int:
         print(stable_growth_operator_cache_dashboard_json(payload), end="")
     else:
         _growth_print_operator_cache_dashboard(payload)
+    return 0
+
+
+def growth_operator_qa_check_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth operator-qa-check: read-only Growth operator QA report")
+        print("  python3 link.py growth operator-qa-check [--source <path> ...] [--mode fast|deep] --json")
+        return 0
+    if "--write" in args or "--write-cache" in args:
+        print("error: operator-qa-check is read-only", file=sys.stderr)
+        return 2
+    mode = "fast"
+    if "--mode" in args:
+        index = args.index("--mode")
+        if index + 1 >= len(args):
+            print("error: operator-qa-check --mode requires fast or deep", file=sys.stderr)
+            return 2
+        mode = args[index + 1]
+    if mode not in {"fast", "deep"}:
+        print("error: operator-qa-check --mode must be fast or deep", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_growth_operator_qa_check(sources=_growth_extract_source_args(args), mode=mode)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_growth_operator_qa_check_json(payload), end="")
+    else:
+        _growth_print_operator_qa_check(payload)
     return 0
 
 

@@ -19154,6 +19154,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         collect_growth_direct_upgrade_eval,
         collect_growth_opportunity_decision_score,
         collect_growth_operator_cache_dashboard,
+        collect_growth_operator_qa_check,
         collect_growth_source_queue,
         collect_growth_source_queue_cache_status,
         collect_growth_source_queue_e2e_cache_key,
@@ -19181,6 +19182,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         parse_growth_direct_upgrade_eval_json,
         parse_growth_opportunity_decision_score_json,
         parse_growth_operator_cache_dashboard_json,
+        parse_growth_operator_qa_check_json,
         parse_growth_source_queue_cache_status_json,
         parse_growth_source_queue_e2e_cache_key_json,
         parse_growth_source_queue_e2e_summary_json,
@@ -19210,6 +19212,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         stable_growth_direct_upgrade_eval_json,
         stable_growth_opportunity_decision_score_json,
         stable_growth_operator_cache_dashboard_json,
+        stable_growth_operator_qa_check_json,
         stable_growth_source_queue_cache_status_json,
         stable_growth_source_queue_e2e_cache_key_json,
         stable_growth_source_queue_e2e_summary_json,
@@ -19237,6 +19240,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         validate_growth_direct_upgrade_eval,
         validate_growth_opportunity_decision_score,
         validate_growth_operator_cache_dashboard,
+        validate_growth_operator_qa_check,
         validate_growth_source_queue,
         validate_growth_source_queue_cache_status,
         validate_growth_source_queue_e2e_cache_key,
@@ -19419,6 +19423,28 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         validate_growth_operator_cache_dashboard(cache_dashboard_cold)
         _require(parse_growth_operator_cache_dashboard_json(stable_growth_operator_cache_dashboard_json(cache_dashboard_cold)) == cache_dashboard_cold,
                  "operator cache dashboard JSON must round trip")
+        qa_cold = collect_growth_operator_qa_check(sources=[headroom_source, crawler_source, missing_source])
+        _require(qa_cold["mode"] == "fast" and qa_cold["operator_readiness_status"] in {"cold", "partial"},
+                 "operator QA check must default to fast mode and report cold/partial readiness when caches are cold")
+        _require(qa_cold["operator_qa_status"] == "warn",
+                 "operator QA check cold cache state must warn instead of fail")
+        _require(qa_cold["model_used"] is False and qa_cold["external_network_used"] is False and qa_cold["fallback_allowed"] is False,
+                 "operator QA check must avoid model/network/fallback")
+        _require(qa_cold["writes"] == [] and qa_cold["write_allowed"] is False,
+                 "operator QA check must remain read-only")
+        _require(any(item["status"] == "warn" for item in qa_cold["cache_readiness_checks"]),
+                 "operator QA cold check must warn about missing cache layers")
+        _require(any(item["status"] == "skipped" for item in qa_cold["alignment_checks"]) and qa_cold["skipped_checks"],
+                 "operator QA fast cold mode must explicitly skip expensive alignment/output checks")
+        _require(any(item["check_id"] == "direct_upgrade_eval_write_cache_hint_exists" for item in qa_cold["hot_path_checks"]),
+                 "operator QA check must verify direct-upgrade-eval --write-cache hint")
+        _require(qa_cold["issue_inventory"] and qa_cold["candidate_roi_scores"] and qa_cold["highest_roi_next_fix"],
+                 "operator QA check must expose issues, candidates, and highest ROI next fix")
+        _require(len({item["total_roi_score"] for item in qa_cold["candidate_roi_scores"]}) > 1,
+                 "operator QA candidate ROI scores must be non-uniform")
+        validate_growth_operator_qa_check(qa_cold)
+        _require(parse_growth_operator_qa_check_json(stable_growth_operator_qa_check_json(qa_cold)) == qa_cold,
+                 "operator QA check JSON must round trip")
 
         direct_cache_plan_missing = collect_growth_direct_eval_cache_plan(sources=[headroom_source, crawler_source])
         _require(direct_cache_plan_missing["source_inventory_cache_miss_count"] == 2 and direct_cache_plan_missing["source_inventory_warm_required"] is True,
@@ -19540,6 +19566,30 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         _require("concept-calibration-report --mode fast" in cache_dashboard_hot["command_hints"]["run_concept_calibration_fast"],
                  "operator cache dashboard must hint concept calibration fast command")
         validate_growth_operator_cache_dashboard(cache_dashboard_hot)
+        qa_hot = collect_growth_operator_qa_check(sources=[headroom_source, crawler_source])
+        _require(qa_hot["operator_readiness_status"] == "ready",
+                 "operator QA check hot state must report ready")
+        _require(all(item["status"] != "skipped" for item in qa_hot["alignment_checks"]),
+                 "operator QA check hot state must run alignment checks")
+        _require(any(item["check_id"] == "direct_upgrade_eval_hot_output_checked" and item["status"] == "pass" for item in qa_hot["command_output_checks"]),
+                 "operator QA hot check must validate direct-upgrade-eval output")
+        _require(any(item["check_id"] == "concept_calibration_fast_output_checked" for item in qa_hot["command_output_checks"]),
+                 "operator QA hot check must validate concept-calibration fast output")
+        _require(any(item["check_id"] == "source_queue_e2e_fast_output_checked" for item in qa_hot["command_output_checks"]),
+                 "operator QA hot check must validate source-queue-e2e fast output")
+        _require(any(item["check_id"] == "direct_eval_best_direct_upgrade_present" and item["status"] == "pass" for item in qa_hot["alignment_checks"]),
+                 "operator QA hot check must verify direct eval best upgrade")
+        _require(any(item["check_id"] == "task_draft_alignment_source_present" and item["status"] == "pass" for item in qa_hot["alignment_checks"]),
+                 "operator QA hot check must verify task draft alignment source")
+        _require(qa_hot["highest_roi_next_fix"]["candidate_id"] != "add_or_improve_operator_qa_check",
+                 "operator QA check should not recommend itself as the top next fix after implementation")
+        validate_growth_operator_qa_check(qa_hot)
+        _require(parse_growth_operator_qa_check_json(stable_growth_operator_qa_check_json(qa_hot)) == qa_hot,
+                 "hot operator QA check JSON must round trip")
+        qa_deep = collect_growth_operator_qa_check(sources=[headroom_source, crawler_source], mode="deep")
+        _require(qa_deep["mode"] == "deep" and any(item["check_id"] == "direct_upgrade_eval_hot_output_checked" for item in qa_deep["command_output_checks"]),
+                 "operator QA check deep mode must run hot-path output checks")
+        validate_growth_operator_qa_check(qa_deep)
         hot_queue_e2e = collect_growth_source_queue_e2e_summary(sources=[headroom_source, crawler_source], mode="fast")
         _require(hot_queue_e2e["queue_e2e_cache_used"] is True and hot_queue_e2e["queue_e2e_summary_reuse_source"] == "compact_cache",
                  "queue E2E fast mode must use valid compact cache")
@@ -19827,6 +19877,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         ("direct-upgrade-eval-cache-plan", parse_growth_direct_eval_cache_plan_json, "growth_direct_eval_cache_plan_id"),
         ("direct-upgrade-eval", parse_growth_direct_upgrade_eval_json, "growth_direct_upgrade_eval_id"),
         ("operator-cache-dashboard", parse_growth_operator_cache_dashboard_json, "growth_operator_cache_dashboard_id"),
+        ("operator-qa-check", parse_growth_operator_qa_check_json, "growth_operator_qa_check_id"),
         ("concept-calibration-report", parse_repo_concept_calibration_report_json, "repo_concept_calibration_report_id"),
     ):
         out = io.StringIO()
@@ -19839,6 +19890,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         if command == "concept-calibration-report":
             _require(payload["report_mode"] == "fast" and payload["request_reuse_summary"]["queue_e2e_reuse_enabled"] is True,
                      "growth concept-calibration-report CLI must default to fast reuse mode")
+        if command == "operator-qa-check":
+            _require(payload["mode"] == "fast" and payload["issue_inventory"] and payload["highest_roi_next_fix"],
+                     "growth operator-qa-check CLI must default to fast QA mode with issues and next fix")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             write_rc = _cmd_growth([command, "--source", headroom_source, "--write"])
@@ -19859,6 +19913,21 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         rc = _cmd_growth(["concept-calibration-report", "--mode", "not-a-mode", "--json"])
     _require(rc != 0 and "--mode" in invalid_mode_err.getvalue(),
              "growth concept-calibration-report invalid --mode must fail clearly")
+    qa_fast_mode_out = io.StringIO()
+    with contextlib.redirect_stdout(qa_fast_mode_out):
+        rc = _cmd_growth(["operator-qa-check", "--source", headroom_source, "--source", crawler_source, "--mode", "fast", "--json"])
+    _require(rc == 0 and parse_growth_operator_qa_check_json(qa_fast_mode_out.getvalue())["mode"] == "fast",
+             "growth operator-qa-check --mode fast must work")
+    qa_deep_mode_out = io.StringIO()
+    with contextlib.redirect_stdout(qa_deep_mode_out):
+        rc = _cmd_growth(["operator-qa-check", "--source", headroom_source, "--source", crawler_source, "--mode", "deep", "--json"])
+    _require(rc == 0 and parse_growth_operator_qa_check_json(qa_deep_mode_out.getvalue())["mode"] == "deep",
+             "growth operator-qa-check --mode deep must work")
+    invalid_qa_mode_err = io.StringIO()
+    with contextlib.redirect_stderr(invalid_qa_mode_err):
+        rc = _cmd_growth(["operator-qa-check", "--mode", "not-a-mode", "--json"])
+    _require(rc != 0 and "--mode" in invalid_qa_mode_err.getvalue(),
+             "growth operator-qa-check invalid --mode must fail clearly")
 
     human_out = io.StringIO()
     with contextlib.redirect_stdout(human_out):
@@ -19881,6 +19950,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         ("source-queue-e2e", "Queue E2E"),
         ("direct-upgrade-eval", "Growth Direct Upgrade Eval"),
         ("operator-cache-dashboard", "Growth Operator Cache Dashboard"),
+        ("operator-qa-check", "Growth Operator QA Check"),
         ("concept-calibration-report", "Calibration Report"),
     ):
         human_out = io.StringIO()
@@ -19896,6 +19966,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         if command == "operator-cache-dashboard":
             _require("source inventory:" in human and "queue E2E compact:" in human and "Safety:" in human,
                      "operator cache dashboard human output must summarize cache layers and safety")
+        if command == "operator-qa-check":
+            _require("status:" in human and "highest ROI next fix:" in human and "safety:" in human,
+                     "operator QA check human output must summarize status, issues, next fix, and safety")
         if command == "concept-calibration-report":
             _require("mode:" in human and "reuse:" in human,
                      "concept calibration report human output must summarize mode and reuse")
