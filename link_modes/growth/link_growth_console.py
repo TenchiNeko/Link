@@ -10949,6 +10949,7 @@ GROWTH_SOURCE_QUEUE_E2E_CACHE_RECORD_VERSION = "link-growth-source-queue-e2e-cac
 REPO_CONCEPT_CALIBRATION_REPORT_VERSION = "link-repo-concept-calibration-report-v1"
 GROWTH_DIRECT_UPGRADE_EVAL_VERSION = "link-growth-direct-upgrade-eval-v1"
 GROWTH_DIRECT_EVAL_CACHE_PLAN_VERSION = "link-growth-direct-eval-cache-plan-v1"
+GROWTH_OPERATOR_CACHE_DASHBOARD_VERSION = "link-growth-operator-cache-dashboard-v1"
 PERSISTENT_SOURCE_INVENTORY_COLLECTOR_VERSION = "link-source-inventory-collector-v1"
 PERSISTENT_SOURCE_INVENTORY_PROVENANCE_SCHEMA_VERSION = "link-source-provenance-schema-v1"
 PERSISTENT_SOURCE_INVENTORY_CACHE_SCHEMA_VERSION = "link-source-inventory-cache-schema-v1"
@@ -18754,6 +18755,342 @@ def parse_growth_direct_eval_cache_plan_json(text: str) -> dict[str, Any]:
     import json as _json
     payload = _json.loads(text)
     validate_growth_direct_eval_cache_plan(payload)
+    return payload
+
+
+def _growth_operator_cache_dashboard_source_inventory_summary(status: dict[str, Any], queue: dict[str, Any]) -> dict[str, Any]:
+    sources: list[dict[str, Any]] = []
+    total_size = 0
+    ages: list[int] = []
+    for item in status.get("source_statuses", []):
+        age = item.get("cache_age_seconds")
+        if isinstance(age, int):
+            ages.append(age)
+        total_size += int(item.get("cached_size_bytes", 0) or 0)
+        action_required = "none" if item.get("cache_hit") else "warm_source_inventory_cache"
+        sources.append({
+            "source_path": item.get("source_path", ""),
+            "source_name": str(item.get("source_path", "")).rsplit("/", 1)[-1],
+            "suitability_status": item.get("suitability_status", "unknown"),
+            "quarantine_status": item.get("quarantine_status", "unknown"),
+            "cache_status": item.get("cache_status", "unknown"),
+            "cache_hit": bool(item.get("cache_hit", False)),
+            "cache_valid": bool(item.get("cache_valid", False)),
+            "cache_age_seconds": age,
+            "cached_size_bytes": int(item.get("cached_size_bytes", 0) or 0),
+            "invalidation_reasons": _normalize_implementation_branch_refs(list(item.get("invalidation_reasons", []))),
+            "stale_reasons": _normalize_implementation_branch_refs(list(item.get("stale_reasons", []))),
+            "action_required": action_required,
+            "refresh_command": f"python3 link.py growth source-cache-persistent --source {item.get('source_path', '')} --write-cache --json",
+            "clear_command": f"python3 link.py growth source-cache-clear --source {item.get('source_path', '')} --json",
+        })
+    skipped_count = int(queue.get("skipped_source_count", 0) or 0)
+    ready_count = sum(1 for item in sources if item["cache_hit"] and item["cache_valid"])
+    source_count = len(sources)
+    ready = source_count > 0 and ready_count == source_count
+    return {
+        "cache_root": status.get("cache_root", ""),
+        "source_count": source_count,
+        "hit_count": int(status.get("cache_hit_count", 0) or 0),
+        "miss_count": int(status.get("cache_miss_count", 0) or 0),
+        "stale_count": int(status.get("stale_count", 0) or 0),
+        "invalid_count": int(status.get("invalid_count", 0) or 0),
+        "skipped_count": skipped_count,
+        "ready_count": ready_count,
+        "ready_for_hot_path": ready,
+        "total_cached_size_bytes": total_size,
+        "oldest_cache_age_seconds": max(ages) if ages else None,
+        "newest_cache_age_seconds": min(ages) if ages else None,
+        "sources": sources,
+        "refresh_command": "python3 link.py growth source-queue-warm --write-cache --json",
+        "clear_command": "python3 link.py growth source-cache-clear --all --json",
+        "recommended_next_action": "Source inventory cache is hot for all selected sources." if ready else "Run growth source-queue-warm --write-cache --json to warm selected source inventory caches.",
+    }
+
+
+def _growth_operator_cache_dashboard_queue_e2e_summary(record: dict[str, Any]) -> dict[str, Any]:
+    compact = record.get("compact_queue_e2e_summary", {}) if record.get("cache_hit") else {}
+    best = compact.get("best_overall_opportunity", {}) if isinstance(compact, dict) else {}
+    quality = compact.get("calibration_quality_score") if isinstance(compact, dict) else None
+    if quality is None and isinstance(compact, dict):
+        quality = compact.get("operator_decision_summary", {}).get("calibration_quality_score")
+    if record.get("cache_hit"):
+        source = "compact_cache"
+    elif record.get("cache_file_exists") and record.get("invalidation_reasons"):
+        source = "invalid"
+    elif record.get("cache_file_exists"):
+        source = "stale"
+    else:
+        source = "missing"
+    return {
+        "cache_key_id": record.get("cache_key_id", ""),
+        "cache_record_id": record.get("growth_source_queue_e2e_cache_record_id", ""),
+        "cache_root": record.get("cache_root", ""),
+        "cache_file_path": record.get("cache_file_path", ""),
+        "cache_file_exists": bool(record.get("cache_file_exists", False)),
+        "cache_hit": bool(record.get("cache_hit", False)),
+        "cache_valid": bool(record.get("cache_valid", False)),
+        "cache_age_seconds": record.get("cache_age_seconds"),
+        "cached_size_bytes": int(record.get("cached_size_bytes", 0) or 0),
+        "selected_source_count": int(record.get("source_count", 0) or 0),
+        "skipped_source_count": len(record.get("skipped_sources", [])),
+        "summary_source": source,
+        "best_cached_opportunity_title": str(best.get("title") or ""),
+        "calibration_quality_score": quality,
+        "invalidation_reasons": _normalize_implementation_branch_refs(list(record.get("invalidation_reasons", []))),
+        "stale_reasons": _normalize_implementation_branch_refs(list(record.get("stale_reasons", []))),
+        "ready_for_fast_queue_e2e": bool(record.get("cache_hit") and record.get("cache_valid")),
+        "refresh_command": record.get("refresh_command", "python3 link.py growth source-queue-e2e-cache --write-cache --json"),
+        "clear_command": record.get("clear_command", "python3 link.py growth source-queue-e2e-cache --clear --json"),
+        "recommended_next_action": record.get("recommended_next_action", "Run growth source-queue-e2e-cache --write-cache --json to populate compact queue E2E cache."),
+    }
+
+
+def _growth_operator_cache_dashboard_command_hints() -> dict[str, str]:
+    return {
+        "inspect_dashboard": "python3 link.py growth operator-cache-dashboard --json",
+        "warm_source_inventory": "python3 link.py growth source-queue-warm --write-cache --json",
+        "write_queue_e2e_cache": "python3 link.py growth source-queue-e2e-cache --write-cache --json",
+        "warm_full_hot_path": "python3 link.py growth direct-upgrade-eval --write-cache --json",
+        "run_direct_upgrade_eval_hot": "python3 link.py growth direct-upgrade-eval --json",
+        "run_concept_calibration_fast": "python3 link.py growth concept-calibration-report --mode fast --json",
+        "run_queue_e2e_fast": "python3 link.py growth source-queue-e2e --mode fast --json",
+        "clear_source_inventory_cache": "python3 link.py growth source-cache-clear --all --json",
+        "clear_queue_e2e_cache": "python3 link.py growth source-queue-e2e-cache --clear --json",
+        "run_deep_verification": "python3 tests/test_growth_pipeline.py --suite planning-deterministic",
+    }
+
+
+def _growth_operator_cache_dashboard_issues(
+    source_summary: dict[str, Any],
+    queue_summary: dict[str, Any],
+    queue: dict[str, Any],
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    if source_summary["miss_count"] or source_summary["stale_count"] or source_summary["invalid_count"]:
+        issues.append({
+            "issue_id": "source_inventory_cache_missing",
+            "severity": "high" if source_summary["hit_count"] == 0 else "medium",
+            "category": "cache",
+            "title": "Source inventory cache is not fully hot",
+            "observed_behavior": f"{source_summary['hit_count']} hits, {source_summary['miss_count']} misses, {source_summary['stale_count']} stale, {source_summary['invalid_count']} invalid.",
+            "expected_behavior": "All suitable selected sources should have valid source inventory cache entries before repeated operator reports.",
+            "recommended_fix": source_summary["refresh_command"],
+            "evidence_scope": "current_dashboard",
+            "implement_now_candidate": False,
+        })
+    if not queue_summary["cache_hit"]:
+        issues.append({
+            "issue_id": "queue_e2e_compact_cache_missing",
+            "severity": "high",
+            "category": "cache",
+            "title": "Compact queue E2E summary cache is not ready",
+            "observed_behavior": f"Queue E2E compact cache status is {queue_summary['summary_source']}.",
+            "expected_behavior": "A valid compact queue E2E cache should exist before hot direct-upgrade-eval and concept-calibration-report fast runs.",
+            "recommended_fix": queue_summary["refresh_command"],
+            "evidence_scope": "current_dashboard",
+            "implement_now_candidate": False,
+        })
+    for item in queue.get("quarantine_records", []):
+        if item.get("quarantine_status") != "not_quarantined":
+            issues.append({
+                "issue_id": "activepieces_quarantined" if item.get("source_path", "").endswith("activepieces-main.zip") else "source_quarantined_" + _research_target_hash_text(item.get("source_path", ""))[:8],
+                "severity": "medium",
+                "category": "queue",
+                "title": f"{item.get('source_path', 'source')} is quarantined",
+                "observed_behavior": item.get("quarantine_reason") or item.get("failure_category") or "source is excluded from default queue",
+                "expected_behavior": "Unsuitable optional sources should be skipped without breaking the operator cache dashboard.",
+                "recommended_fix": item.get("recommended_fix") or "Keep skipped until deterministic suitability is fixed.",
+                "evidence_scope": "current_dashboard",
+                "implement_now_candidate": False,
+            })
+    quality = queue_summary.get("calibration_quality_score")
+    if isinstance(quality, int | float) and quality < 70:
+        issues.append({
+            "issue_id": "calibration_quality_weak",
+            "severity": "medium",
+            "category": "idea_quality",
+            "title": "Cached calibration quality remains weak",
+            "observed_behavior": f"Cached calibration quality score is {quality}.",
+            "expected_behavior": "Role/concept calibration should expose weak sources and avoid overconfident ideas.",
+            "recommended_fix": "Review concept-calibration-report --mode fast output and add source-specific fixtures in a separate batch.",
+            "evidence_scope": "cached_summary",
+            "implement_now_candidate": False,
+        })
+    issues.append({
+        "issue_id": "execution_deterministic_checkpoint_prior_observed",
+        "severity": "low",
+        "category": "test_coverage",
+        "title": "execution-deterministic is now the largest normal base component",
+        "observed_behavior": "Prior measured execution-deterministic runtime is about 17.5s.",
+        "expected_behavior": "Normal checkpoint tiers should remain small enough for frequent use.",
+        "recommended_fix": "Profile execution-deterministic per-check timing in a separate test-speed batch.",
+        "evidence_scope": "prior_observed",
+        "implement_now_candidate": False,
+    })
+    return issues
+
+
+def collect_growth_operator_cache_dashboard(*, sources: list[str] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    import datetime as _dt
+    explicit_sources = [str(item).strip() for item in (sources or []) if str(item).strip()]
+    queue = collect_growth_source_queue(sources=explicit_sources or None)
+    policy = collect_growth_source_queue_policy()
+    status = collect_growth_source_queue_cache_status(sources=explicit_sources or None)
+    queue_cache = collect_growth_source_queue_e2e_summary_cache_record(sources=explicit_sources or None)
+    source_summary = _growth_operator_cache_dashboard_source_inventory_summary(status, queue)
+    queue_summary = _growth_operator_cache_dashboard_queue_e2e_summary(queue_cache)
+    source_ready = bool(source_summary["ready_for_hot_path"])
+    queue_ready = bool(queue_summary["ready_for_fast_queue_e2e"])
+    command_hints = _growth_operator_cache_dashboard_command_hints()
+    direct_ready = source_ready and queue_ready
+    concept_ready = queue_ready
+    if direct_ready:
+        operator_status = "ready"
+        reason = "Both source inventory and compact queue E2E caches are ready."
+        next_command = command_hints["run_direct_upgrade_eval_hot"]
+    elif source_ready or queue_ready:
+        operator_status = "partial"
+        reason = "One cache layer is ready and one cache layer needs refresh."
+        next_command = command_hints["write_queue_e2e_cache"] if source_ready else command_hints["warm_source_inventory"]
+    else:
+        operator_status = "cold"
+        reason = "Source inventory and compact queue E2E caches need warming."
+        next_command = command_hints["warm_full_hot_path"]
+    issues = _growth_operator_cache_dashboard_issues(source_summary, queue_summary, queue)
+    stale_or_missing = []
+    if not source_ready:
+        stale_or_missing.append("source inventory cache is not ready for all selected sources")
+    if not queue_ready:
+        stale_or_missing.append("compact queue E2E cache is missing, stale, or invalid")
+    payload = {
+        "growth_operator_cache_dashboard_version": GROWTH_OPERATOR_CACHE_DASHBOARD_VERSION,
+        "dashboard_version": GROWTH_OPERATOR_CACHE_DASHBOARD_VERSION,
+        "growth_operator_cache_dashboard_id": "growth-operator-cache-dashboard-" + _research_target_hash_text({
+            "queue": queue["growth_source_queue_id"],
+            "status": status["growth_source_queue_cache_status_id"],
+            "queue_cache": queue_cache["growth_source_queue_e2e_cache_record_id"],
+            "version": GROWTH_OPERATOR_CACHE_DASHBOARD_VERSION,
+        })[:12],
+        "generated_at": _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "source_queue_id": queue["growth_source_queue_id"],
+        "source_queue_policy_id": policy["growth_source_queue_policy_id"],
+        "cache_root": source_summary["cache_root"],
+        "selected_sources": queue["selected_sources"],
+        "skipped_sources": queue["skipped_sources"],
+        "quarantined_sources": [item for item in queue.get("quarantine_records", []) if item.get("quarantine_status") != "not_quarantined"],
+        "source_inventory_cache_summary": source_summary,
+        "queue_e2e_cache_summary": queue_summary,
+        "direct_upgrade_eval_hot_path": {
+            "ready": direct_ready,
+            "source_inventory_ready": source_ready,
+            "queue_e2e_compact_ready": queue_ready,
+            "expected_cache_layers": ["source_inventory", "queue_e2e_compact"],
+            "missing_cache_layers": [name for name, ready in (("source_inventory", source_ready), ("queue_e2e_compact", queue_ready)) if not ready],
+            "cold_path_command": command_hints["warm_full_hot_path"],
+            "warm_path_command": command_hints["warm_full_hot_path"],
+            "hot_path_command": command_hints["run_direct_upgrade_eval_hot"],
+            "expected_behavior": "Hot direct-upgrade-eval should avoid full queue E2E compute and per-target archive touches when both cache layers are ready.",
+            "recommended_next_action": command_hints["run_direct_upgrade_eval_hot"] if direct_ready else command_hints["warm_full_hot_path"],
+        },
+        "concept_calibration_hot_path": {
+            "ready": concept_ready,
+            "queue_e2e_compact_ready": queue_ready,
+            "fast_mode_available": True,
+            "deep_mode_available": True,
+            "hot_path_command": command_hints["run_concept_calibration_fast"],
+            "deep_command": "python3 link.py growth concept-calibration-report --mode deep --json",
+            "recommended_next_action": command_hints["run_concept_calibration_fast"] if concept_ready else command_hints["write_queue_e2e_cache"],
+        },
+        "operator_readiness": {
+            "status": operator_status,
+            "reason": reason,
+            "next_command": next_command,
+            "safe_to_run_direct_eval": True,
+            "safe_to_run_concept_report_fast": True,
+            "cache_refresh_required": not direct_ready,
+            "clear_required": False,
+            "warnings": _normalize_implementation_branch_refs(stale_or_missing),
+        },
+        "recommended_next_action": next_command,
+        "command_hints": command_hints,
+        "stale_or_missing_reasons": _normalize_implementation_branch_refs(stale_or_missing),
+        "broken_unoptimized_items": issues,
+        "fallback_allowed": False,
+        "model_used": False,
+        "external_network_used": False,
+        "safety_metadata": _read_only_safety_metadata(),
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "metadata": dict(metadata or {}),
+        "writes": [],
+    }
+    validate_growth_operator_cache_dashboard(payload)
+    return payload
+
+
+def validate_growth_operator_cache_dashboard(payload: dict[str, Any]) -> None:
+    required = (
+        "growth_operator_cache_dashboard_version", "dashboard_version",
+        "growth_operator_cache_dashboard_id", "generated_at", "source_queue_id",
+        "source_queue_policy_id", "cache_root", "selected_sources", "skipped_sources",
+        "quarantined_sources", "source_inventory_cache_summary", "queue_e2e_cache_summary",
+        "direct_upgrade_eval_hot_path", "concept_calibration_hot_path", "operator_readiness",
+        "recommended_next_action", "command_hints", "stale_or_missing_reasons",
+        "broken_unoptimized_items", "fallback_allowed", "model_used", "external_network_used",
+        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
+    )
+    for key in required:
+        if key not in payload:
+            raise ValueError(f"growth operator cache dashboard missing {key}")
+    if payload["growth_operator_cache_dashboard_version"] != GROWTH_OPERATOR_CACHE_DASHBOARD_VERSION or payload["dashboard_version"] != GROWTH_OPERATOR_CACHE_DASHBOARD_VERSION:
+        raise ValueError("invalid growth operator cache dashboard version")
+    if not payload["growth_operator_cache_dashboard_id"].startswith("growth-operator-cache-dashboard-"):
+        raise ValueError("invalid growth operator cache dashboard id")
+    source_summary = payload["source_inventory_cache_summary"]
+    for key in ("cache_root", "source_count", "hit_count", "miss_count", "stale_count", "invalid_count", "skipped_count", "ready_count", "ready_for_hot_path", "total_cached_size_bytes", "oldest_cache_age_seconds", "newest_cache_age_seconds", "sources", "refresh_command", "clear_command", "recommended_next_action"):
+        if key not in source_summary:
+            raise ValueError(f"source inventory cache summary missing {key}")
+    for item in source_summary["sources"]:
+        for key in ("source_path", "source_name", "suitability_status", "quarantine_status", "cache_status", "cache_hit", "cache_valid", "cache_age_seconds", "cached_size_bytes", "invalidation_reasons", "stale_reasons", "action_required", "refresh_command", "clear_command"):
+            if key not in item:
+                raise ValueError(f"source inventory cache source summary missing {key}")
+    queue_summary = payload["queue_e2e_cache_summary"]
+    for key in ("cache_key_id", "cache_record_id", "cache_root", "cache_file_path", "cache_file_exists", "cache_hit", "cache_valid", "cache_age_seconds", "cached_size_bytes", "selected_source_count", "skipped_source_count", "summary_source", "best_cached_opportunity_title", "calibration_quality_score", "invalidation_reasons", "stale_reasons", "ready_for_fast_queue_e2e", "refresh_command", "clear_command", "recommended_next_action"):
+        if key not in queue_summary:
+            raise ValueError(f"queue E2E cache summary missing {key}")
+    if queue_summary["summary_source"] not in {"compact_cache", "missing", "stale", "invalid"}:
+        raise ValueError("invalid queue E2E cache summary source")
+    for section in ("direct_upgrade_eval_hot_path", "concept_calibration_hot_path", "operator_readiness"):
+        if not isinstance(payload[section], dict):
+            raise TypeError(f"{section} must be a dict")
+    for key, command in payload["command_hints"].items():
+        if not isinstance(key, str) or not isinstance(command, str) or not command.startswith("python3 "):
+            raise ValueError("growth operator cache dashboard command hints must be python commands")
+    for item in payload["broken_unoptimized_items"]:
+        for key in ("issue_id", "severity", "category", "title", "observed_behavior", "expected_behavior", "recommended_fix", "evidence_scope", "implement_now_candidate"):
+            if key not in item:
+                raise ValueError(f"growth operator cache dashboard issue missing {key}")
+        if item["evidence_scope"] not in {"current_dashboard", "cached_summary", "prior_observed"}:
+            raise ValueError("invalid growth operator cache dashboard issue evidence scope")
+    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
+        raise ValueError("growth operator cache dashboard must avoid model/network/fallback")
+    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False:
+        raise ValueError("growth operator cache dashboard must be read-only")
+    if payload["writes"] != []:
+        raise ValueError("growth operator cache dashboard must not report writes")
+
+
+def stable_growth_operator_cache_dashboard_json(payload: dict[str, Any]) -> str:
+    validate_growth_operator_cache_dashboard(payload)
+    return _stable_ruflo_json(payload, indent=2) + "\n"
+
+
+def parse_growth_operator_cache_dashboard_json(text: str) -> dict[str, Any]:
+    import json as _json
+    payload = _json.loads(text)
+    validate_growth_operator_cache_dashboard(payload)
     return payload
 
 
@@ -27124,6 +27461,39 @@ def _growth_print_direct_upgrade_eval(payload: dict[str, Any]) -> None:
     print(f"  next: {payload['recommended_next_action']}")
 
 
+def _growth_print_operator_cache_dashboard(payload: dict[str, Any]) -> None:
+    source = payload["source_inventory_cache_summary"]
+    queue = payload["queue_e2e_cache_summary"]
+    readiness = payload["operator_readiness"]
+    print("Growth Operator Cache Dashboard")
+    print("  source inventory:")
+    source_status = "hot" if source["ready_for_hot_path"] else ("cold" if source["hit_count"] == 0 else "partial")
+    print(f"    status: {source_status}")
+    print(f"    hits/misses/stale: {source['hit_count']}/{source['miss_count']}/{source['stale_count']}")
+    print(f"    next: {source['recommended_next_action']}")
+    print("  queue E2E compact:")
+    print(f"    status: {queue['summary_source']}")
+    print(f"    best cached opportunity: {queue['best_cached_opportunity_title'] or 'none'}")
+    print(f"    next: {queue['recommended_next_action']}")
+    print("  hot paths:")
+    print(f"    direct-upgrade-eval: {'ready' if payload['direct_upgrade_eval_hot_path']['ready'] else 'not ready'}")
+    print(f"    concept-calibration-report fast: {'ready' if payload['concept_calibration_hot_path']['ready'] else 'not ready'}")
+    print("  skipped/quarantined:")
+    for item in payload["quarantined_sources"][:6] or [{"source_path": "none", "quarantine_reason": ""}]:
+        reason = item.get("quarantine_reason") or item.get("failure_category") or "none"
+        print(f"    - {item['source_path']}: {reason}")
+    print("  issues:")
+    for item in payload["broken_unoptimized_items"][:5]:
+        print(f"    - {item['severity']}/{item['category']}: {item['title']}")
+    print("  next command:")
+    print(f"    {readiness['next_command']}")
+    print("Safety:")
+    print("  model used: no")
+    print("  OpenRouter: no")
+    print(f"  network: {'yes' if payload['external_network_used'] else 'no'}")
+    print("  read-only: yes")
+
+
 def _growth_print_source_suitability(payload: dict[str, Any]) -> None:
     print("Source Suitability")
     print(f"  source: {payload['source_path']}")
@@ -27442,6 +27812,27 @@ def growth_direct_upgrade_eval_main(argv: list[str] | None = None) -> int:
         print(stable_growth_direct_upgrade_eval_json(payload), end="")
     else:
         _growth_print_direct_upgrade_eval(payload)
+    return 0
+
+
+def growth_operator_cache_dashboard_main(argv: list[str] | None = None) -> int:
+    args = _research_target_normalize_args(argv)
+    if any(arg in {"-h", "--help", "help"} for arg in args):
+        print("Link growth operator-cache-dashboard: read-only cache readiness dashboard")
+        print("  python3 link.py growth operator-cache-dashboard [--source <path> ...] --json")
+        return 0
+    if "--write" in args or "--write-cache" in args:
+        print("error: operator-cache-dashboard is read-only", file=sys.stderr)
+        return 2
+    try:
+        payload = collect_growth_operator_cache_dashboard(sources=_growth_extract_source_args(args))
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if "--json" in args:
+        print(stable_growth_operator_cache_dashboard_json(payload), end="")
+    else:
+        _growth_print_operator_cache_dashboard(payload)
     return 0
 
 

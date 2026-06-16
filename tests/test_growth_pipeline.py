@@ -19137,6 +19137,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         collect_growth_direct_eval_cache_plan,
         collect_growth_direct_upgrade_eval,
         collect_growth_opportunity_decision_score,
+        collect_growth_operator_cache_dashboard,
         collect_growth_source_queue,
         collect_growth_source_queue_cache_status,
         collect_growth_source_queue_e2e_cache_key,
@@ -19163,6 +19164,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         parse_growth_direct_eval_cache_plan_json,
         parse_growth_direct_upgrade_eval_json,
         parse_growth_opportunity_decision_score_json,
+        parse_growth_operator_cache_dashboard_json,
         parse_growth_source_queue_cache_status_json,
         parse_growth_source_queue_e2e_cache_key_json,
         parse_growth_source_queue_e2e_summary_json,
@@ -19191,6 +19193,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         stable_growth_direct_eval_cache_plan_json,
         stable_growth_direct_upgrade_eval_json,
         stable_growth_opportunity_decision_score_json,
+        stable_growth_operator_cache_dashboard_json,
         stable_growth_source_queue_cache_status_json,
         stable_growth_source_queue_e2e_cache_key_json,
         stable_growth_source_queue_e2e_summary_json,
@@ -19217,6 +19220,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         validate_growth_direct_eval_cache_plan,
         validate_growth_direct_upgrade_eval,
         validate_growth_opportunity_decision_score,
+        validate_growth_operator_cache_dashboard,
         validate_growth_source_queue,
         validate_growth_source_queue_cache_status,
         validate_growth_source_queue_e2e_cache_key,
@@ -19368,6 +19372,31 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         _require(parse_growth_source_queue_cache_status_json(stable_growth_source_queue_cache_status_json(queue_status_missing)) == queue_status_missing,
                  "growth source queue cache status JSON must round trip")
 
+        cache_dashboard_cold = collect_growth_operator_cache_dashboard(sources=[headroom_source, crawler_source, missing_source])
+        _require(cache_dashboard_cold["source_inventory_cache_summary"]["miss_count"] == 2,
+                 "operator cache dashboard cold state must report source inventory misses")
+        _require(cache_dashboard_cold["queue_e2e_cache_summary"]["cache_hit"] is False,
+                 "operator cache dashboard cold state must report missing compact queue E2E cache")
+        _require(cache_dashboard_cold["direct_upgrade_eval_hot_path"]["ready"] is False,
+                 "operator cache dashboard cold state must mark direct eval hot path not ready")
+        _require(cache_dashboard_cold["concept_calibration_hot_path"]["ready"] is False,
+                 "operator cache dashboard cold state must mark concept fast path not ready")
+        _require(cache_dashboard_cold["operator_readiness"]["status"] in {"cold", "partial"},
+                 "operator cache dashboard cold state must report cold or partial readiness")
+        _require("direct-upgrade-eval --write-cache" in cache_dashboard_cold["command_hints"]["warm_full_hot_path"],
+                 "operator cache dashboard must hint direct-upgrade-eval --write-cache")
+        _require(cache_dashboard_cold["model_used"] is False and cache_dashboard_cold["external_network_used"] is False and cache_dashboard_cold["fallback_allowed"] is False,
+                 "operator cache dashboard must avoid model/network/fallback")
+        _require(cache_dashboard_cold["writes"] == [] and cache_dashboard_cold["write_allowed"] is False,
+                 "operator cache dashboard must be read-only by default")
+        _require(cache_dashboard_cold["quarantined_sources"],
+                 "operator cache dashboard must list skipped/quarantined explicit sources")
+        _require(any(item["issue_id"] == "source_inventory_cache_missing" for item in cache_dashboard_cold["broken_unoptimized_items"]),
+                 "operator cache dashboard must include missing source inventory issue")
+        validate_growth_operator_cache_dashboard(cache_dashboard_cold)
+        _require(parse_growth_operator_cache_dashboard_json(stable_growth_operator_cache_dashboard_json(cache_dashboard_cold)) == cache_dashboard_cold,
+                 "operator cache dashboard JSON must round trip")
+
         direct_cache_plan_missing = collect_growth_direct_eval_cache_plan(sources=[headroom_source, crawler_source])
         _require(direct_cache_plan_missing["source_inventory_cache_miss_count"] == 2 and direct_cache_plan_missing["source_inventory_warm_required"] is True,
                  "direct eval cache plan must detect missing source inventory cache")
@@ -19426,6 +19455,14 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         _require(queue_status_warm["cache_hit_count"] == 2 and queue_status_warm["queue_ready_for_e2e"] is True,
                  "queue cache status must report ready after queue warmup")
 
+        cache_dashboard_source_warm = collect_growth_operator_cache_dashboard(sources=[headroom_source, crawler_source])
+        _require(cache_dashboard_source_warm["source_inventory_cache_summary"]["hit_count"] == 2,
+                 "operator cache dashboard must report source inventory hits after warmup")
+        _require(cache_dashboard_source_warm["queue_e2e_cache_summary"]["cache_hit"] is False,
+                 "operator cache dashboard must remain partial until compact queue E2E cache is written")
+        _require(cache_dashboard_source_warm["operator_readiness"]["status"] == "partial",
+                 "operator cache dashboard must report partial readiness after source inventory warm only")
+
         queue_e2e_cache_key = collect_growth_source_queue_e2e_cache_key(sources=[headroom_source, crawler_source])
         _require(queue_e2e_cache_key["selected_sources"] == [headroom_source, crawler_source] and queue_e2e_cache_key["source_manifest_ids"],
                  "queue E2E cache key must include selected source manifests")
@@ -19464,6 +19501,22 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         hot_queue_e2e_cache = collect_growth_source_queue_e2e_summary_cache_record(sources=[headroom_source, crawler_source])
         _require(hot_queue_e2e_cache["cache_hit"] is True and hot_queue_e2e_cache["cache_valid"] is True,
                  "queue E2E cache status must hit after write")
+        cache_dashboard_hot = collect_growth_operator_cache_dashboard(sources=[headroom_source, crawler_source])
+        _require(cache_dashboard_hot["source_inventory_cache_summary"]["ready_for_hot_path"] is True,
+                 "operator cache dashboard hot state must report source inventory ready")
+        _require(cache_dashboard_hot["queue_e2e_cache_summary"]["cache_hit"] is True and cache_dashboard_hot["queue_e2e_cache_summary"]["ready_for_fast_queue_e2e"] is True,
+                 "operator cache dashboard hot state must report compact queue E2E cache hit")
+        _require(cache_dashboard_hot["queue_e2e_cache_summary"]["best_cached_opportunity_title"],
+                 "operator cache dashboard hot state must include best cached opportunity title")
+        _require(cache_dashboard_hot["direct_upgrade_eval_hot_path"]["ready"] is True,
+                 "operator cache dashboard hot state must mark direct eval hot path ready")
+        _require(cache_dashboard_hot["concept_calibration_hot_path"]["ready"] is True,
+                 "operator cache dashboard hot state must mark concept fast path ready")
+        _require(cache_dashboard_hot["operator_readiness"]["status"] == "ready",
+                 "operator cache dashboard hot state must report ready")
+        _require("concept-calibration-report --mode fast" in cache_dashboard_hot["command_hints"]["run_concept_calibration_fast"],
+                 "operator cache dashboard must hint concept calibration fast command")
+        validate_growth_operator_cache_dashboard(cache_dashboard_hot)
         hot_queue_e2e = collect_growth_source_queue_e2e_summary(sources=[headroom_source, crawler_source], mode="fast")
         _require(hot_queue_e2e["queue_e2e_cache_used"] is True and hot_queue_e2e["queue_e2e_summary_reuse_source"] == "compact_cache",
                  "queue E2E fast mode must use valid compact cache")
@@ -19750,6 +19803,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         ("source-queue-e2e", parse_growth_source_queue_e2e_summary_json, "growth_source_queue_e2e_summary_id"),
         ("direct-upgrade-eval-cache-plan", parse_growth_direct_eval_cache_plan_json, "growth_direct_eval_cache_plan_id"),
         ("direct-upgrade-eval", parse_growth_direct_upgrade_eval_json, "growth_direct_upgrade_eval_id"),
+        ("operator-cache-dashboard", parse_growth_operator_cache_dashboard_json, "growth_operator_cache_dashboard_id"),
         ("concept-calibration-report", parse_repo_concept_calibration_report_json, "repo_concept_calibration_report_id"),
     ):
         out = io.StringIO()
@@ -19803,6 +19857,7 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         ("source-queue-warm", "Queue Warmup"),
         ("source-queue-e2e", "Queue E2E"),
         ("direct-upgrade-eval", "Growth Direct Upgrade Eval"),
+        ("operator-cache-dashboard", "Growth Operator Cache Dashboard"),
         ("concept-calibration-report", "Calibration Report"),
     ):
         human_out = io.StringIO()
@@ -19815,6 +19870,9 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
         if command == "direct-upgrade-eval":
             _require("reuse:" in human and "queue E2E reused" in human,
                      "direct upgrade eval human output must summarize reuse")
+        if command == "operator-cache-dashboard":
+            _require("source inventory:" in human and "queue E2E compact:" in human and "Safety:" in human,
+                     "operator cache dashboard human output must summarize cache layers and safety")
         if command == "concept-calibration-report":
             _require("mode:" in human and "reuse:" in human,
                      "concept calibration report human output must summarize mode and reuse")
