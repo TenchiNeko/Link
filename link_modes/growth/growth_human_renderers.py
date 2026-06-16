@@ -184,3 +184,43 @@ def render_growth_direct_upgrade_eval_text(payload: dict[str, Any]) -> str:
 def print_growth_direct_upgrade_eval(payload: dict[str, Any]) -> None:
     """Print the direct-upgrade-eval human summary."""
     print(render_growth_direct_upgrade_eval_text(payload), end="")
+
+
+def render_growth_concept_calibration_report_text(payload: dict[str, Any]) -> str:
+    """Render a compact concept-calibration-report operator summary."""
+    best = payload["best_calibrated_opportunities"][0] if payload["best_calibrated_opportunities"] else {}
+    reuse = payload["request_reuse_summary"]
+    perf = payload["performance_summary"]
+    lines = [
+        "Concept Calibration Report",
+        f"  mode: {payload['report_mode']}",
+        f"  sources: {len(payload['sources'])}",
+        f"  calibration quality: {payload['calibration_quality_score']}",
+        (
+            "  queue E2E cache: "
+            f"hit {payload.get('queue_e2e_cache_hit', False)} / "
+            f"used {payload.get('queue_e2e_cache_used', False)} / "
+            f"source {payload.get('queue_e2e_summary_source', 'computed')}"
+        ),
+        f"  best classified: {best.get('source_path', 'none')} {best.get('primary_role', '')}",
+        "  weak classifications:",
+    ]
+    for item in payload["needs_profile_work"][:5] or [{"source_path": "none", "primary_role": ""}]:
+        lines.append(f"    - {item['source_path']}: {item.get('primary_role', 'unknown')}")
+    lines.extend([
+        f"  false positives: {payload['false_positive_summary']['compression_false_positive_count']}",
+        "  reuse:",
+        (
+            f"    queue E2E reused for {reuse['queue_e2e_sources_reused_count']} sources; "
+            f"recomputed {reuse['source_entries_recomputed_count']} source summaries; "
+            f"avoided {reuse['avoided_source_recompute_count']}"
+        ),
+        f"  performance: total {perf['total_runtime_ms']}ms; queue E2E {perf['queue_e2e_runtime_ms']}ms",
+        f"  next: {payload['recommended_next_action']}",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def print_growth_concept_calibration_report(payload: dict[str, Any]) -> None:
+    """Print the concept-calibration-report human summary."""
+    print(render_growth_concept_calibration_report_text(payload), end="")

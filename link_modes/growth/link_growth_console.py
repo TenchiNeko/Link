@@ -22,6 +22,7 @@ import sys
 from typing import Any
 
 from link_modes.growth.growth_human_renderers import (
+    print_growth_concept_calibration_report as _print_growth_concept_calibration_report_impl,
     print_growth_direct_upgrade_eval as _print_growth_direct_upgrade_eval_impl,
     print_growth_operator_cache_dashboard as _print_growth_operator_cache_dashboard_impl,
     print_growth_operator_qa_check as _print_growth_operator_qa_check_impl,
@@ -27894,32 +27895,8 @@ def _research_print_concept_confidence(payload: dict[str, Any]) -> None:
 
 
 def _growth_print_concept_calibration_report(payload: dict[str, Any]) -> None:
-    print("Concept Calibration Report")
-    best = payload["best_calibrated_opportunities"][0] if payload["best_calibrated_opportunities"] else {}
-    reuse = payload["request_reuse_summary"]
-    perf = payload["performance_summary"]
-    print(f"  mode: {payload['report_mode']}")
-    print(f"  sources: {len(payload['sources'])}")
-    print(f"  calibration quality: {payload['calibration_quality_score']}")
-    print(
-        "  queue E2E cache: "
-        f"hit {payload.get('queue_e2e_cache_hit', False)} / "
-        f"used {payload.get('queue_e2e_cache_used', False)} / "
-        f"source {payload.get('queue_e2e_summary_source', 'computed')}"
-    )
-    print(f"  best classified: {best.get('source_path', 'none')} {best.get('primary_role', '')}")
-    print("  weak classifications:")
-    for item in payload["needs_profile_work"][:5] or [{"source_path": "none", "primary_role": ""}]:
-        print(f"    - {item['source_path']}: {item.get('primary_role', 'unknown')}")
-    print(f"  false positives: {payload['false_positive_summary']['compression_false_positive_count']}")
-    print("  reuse:")
-    print(
-        f"    queue E2E reused for {reuse['queue_e2e_sources_reused_count']} sources; "
-        f"recomputed {reuse['source_entries_recomputed_count']} source summaries; "
-        f"avoided {reuse['avoided_source_recompute_count']}"
-    )
-    print(f"  performance: total {perf['total_runtime_ms']}ms; queue E2E {perf['queue_e2e_runtime_ms']}ms")
-    print(f"  next: {payload['recommended_next_action']}")
+    # Compatibility wrapper; implementation lives in growth_human_renderers.py.
+    _print_growth_concept_calibration_report_impl(payload)
 
 
 def research_repo_role_policy_main(argv: list[str] | None = None) -> int:

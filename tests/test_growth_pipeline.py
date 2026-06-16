@@ -13296,6 +13296,74 @@ def check_growth_direct_upgrade_eval_renderer_extraction() -> None:
     print("growth direct upgrade eval renderer extraction OK")
 
 
+def check_growth_concept_calibration_report_renderer_extraction() -> None:
+    """Extracted concept-calibration-report renderer preserves the human contract."""
+    from link_modes.growth.growth_human_renderers import render_growth_concept_calibration_report_text
+    from link_modes.growth.link_growth_console import _growth_print_concept_calibration_report
+
+    payload = {
+        "report_mode": "fast",
+        "sources": [
+            {"source_path": "research/headroom-main.zip"},
+            {"source_path": "research/gpt-crawler-main.zip"},
+        ],
+        "calibration_quality_score": 85,
+        "queue_e2e_cache_hit": True,
+        "queue_e2e_cache_used": True,
+        "queue_e2e_summary_source": "compact_cache",
+        "best_calibrated_opportunities": [
+            {
+                "source_path": "research/headroom-main.zip",
+                "primary_role": "compression_context",
+            }
+        ],
+        "needs_profile_work": [
+            {
+                "source_path": "research/gpt-crawler-main.zip",
+                "primary_role": "crawler_context",
+            }
+        ],
+        "false_positive_summary": {
+            "compression_false_positive_count": 1,
+        },
+        "request_reuse_summary": {
+            "queue_e2e_sources_reused_count": 2,
+            "source_entries_recomputed_count": 0,
+            "avoided_source_recompute_count": 2,
+        },
+        "performance_summary": {
+            "total_runtime_ms": 42,
+            "queue_e2e_runtime_ms": 9,
+        },
+        "recommended_next_action": "python3 link.py growth concept-calibration-report --mode fast --json",
+    }
+    rendered = render_growth_concept_calibration_report_text(payload)
+    _require(rendered.startswith("Concept Calibration Report"),
+             "extracted concept calibration renderer must include title")
+    for expected in (
+        "mode: fast",
+        "sources: 2",
+        "calibration quality: 85",
+        "queue E2E cache:",
+        "best classified:",
+        "weak classifications:",
+        "false positives: 1",
+        "reuse:",
+        "performance:",
+        "next:",
+    ):
+        _require(expected in rendered, f"extracted concept calibration renderer missing {expected}")
+    _require(not rendered.lstrip().startswith("{"),
+             "extracted concept calibration renderer must not return raw JSON")
+
+    wrapper_out = io.StringIO()
+    with contextlib.redirect_stdout(wrapper_out):
+        _growth_print_concept_calibration_report(payload)
+    _require(wrapper_out.getvalue() == rendered,
+             "concept calibration compatibility wrapper must delegate to extracted renderer")
+    print("growth concept calibration renderer extraction OK")
+
+
 # ---------------------------------------------------------------------------
 # 62j. Growth campaign governance and Business Development boundary
 # ---------------------------------------------------------------------------
@@ -22082,6 +22150,7 @@ PLANNING_CORE_CHECKS = (
     check_growth_operator_cache_dashboard_renderer_extraction,
     check_growth_operator_qa_renderer_extraction,
     check_growth_direct_upgrade_eval_renderer_extraction,
+    check_growth_concept_calibration_report_renderer_extraction,
     check_business_development_source_governance_helpers,
     check_business_development_source_governance_clis,
     check_business_development_collection_planning_helpers,
