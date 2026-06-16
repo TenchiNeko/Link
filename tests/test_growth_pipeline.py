@@ -13638,6 +13638,195 @@ def check_growth_source_cache_module_extraction() -> None:
     print("growth source cache module extraction OK")
 
 
+def check_growth_queue_e2e_cache_module_extraction() -> None:
+    """Compact queue E2E cache helpers live in the extracted module behind wrappers."""
+    import link_modes.growth.growth_queue_e2e_cache as queue_cache_module
+    import link_modes.growth.link_growth_console as growth_console
+    from link_modes.growth.link_growth_console import (
+        _growth_source_queue_e2e_cache_file_path,
+        collect_growth_source_queue,
+        collect_growth_source_queue_e2e_cache_key,
+        collect_growth_source_queue_e2e_summary,
+        collect_growth_source_queue_e2e_summary_cache_record,
+        collect_persistent_source_inventory_cache_manifest,
+        collect_persistent_source_inventory_cache_policy,
+        parse_growth_source_queue_e2e_cache_key_json,
+        parse_growth_source_queue_e2e_summary_cache_record_json,
+        read_growth_source_queue_e2e_cache,
+        stable_growth_source_queue_e2e_cache_key_json,
+        stable_growth_source_queue_e2e_summary_cache_record_json,
+        validate_growth_source_queue_e2e_cache_payload,
+        write_growth_source_queue_e2e_cache,
+        _growth_source_queue_e2e_cache_payload,
+    )
+
+    expected_exports = (
+        "collect_growth_source_queue_e2e_cache_key",
+        "collect_growth_source_queue_e2e_summary_cache_record",
+        "growth_source_queue_e2e_cache_file_path",
+        "read_growth_source_queue_e2e_cache",
+        "write_growth_source_queue_e2e_cache",
+    )
+    for name in expected_exports:
+        _require(callable(getattr(queue_cache_module, name, None)),
+                 f"growth_queue_e2e_cache must expose {name}")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in queue_cache_module.__dict__.values()),
+             "growth_queue_e2e_cache must not import the Growth monolith")
+
+    headroom_source = make_headroom_like_fixture()
+    crawler_source = make_crawler_like_fixture()
+    old_cache_root = os.environ.get("LINK_SOURCE_CACHE_ROOT")
+    with tempfile.TemporaryDirectory(prefix="link-queue-e2e-cache-module-test-") as cache_root:
+        os.environ["LINK_SOURCE_CACHE_ROOT"] = cache_root
+        try:
+            sources = [headroom_source, crawler_source]
+            key = collect_growth_source_queue_e2e_cache_key(sources=sources)
+            module_key = queue_cache_module.collect_growth_source_queue_e2e_cache_key(
+                sources=sources,
+                collect_queue=collect_growth_source_queue,
+                collect_policy=collect_persistent_source_inventory_cache_policy,
+                collect_manifest=collect_persistent_source_inventory_cache_manifest,
+            )
+            _require(key == module_key,
+                     "queue E2E cache key wrapper must delegate to extracted module")
+            _require(key["cache_file_path"].startswith(cache_root),
+                     "queue E2E cache key must honor temp LINK_SOURCE_CACHE_ROOT")
+            _require(_growth_source_queue_e2e_cache_file_path(key["cache_root"], key["cache_key"]) == key["cache_file_path"],
+                     "queue E2E cache file path wrapper must delegate to extracted module")
+            _require(parse_growth_source_queue_e2e_cache_key_json(stable_growth_source_queue_e2e_cache_key_json(key)) == key,
+                     "queue E2E cache key JSON must round trip after extraction")
+
+            record = collect_growth_source_queue_e2e_summary_cache_record(sources=sources)
+            module_record = queue_cache_module.collect_growth_source_queue_e2e_summary_cache_record(
+                sources=sources,
+                collect_cache_key=collect_growth_source_queue_e2e_cache_key,
+                read_cache=read_growth_source_queue_e2e_cache,
+                build_payload=_growth_source_queue_e2e_cache_payload,
+                write_cache_file=write_growth_source_queue_e2e_cache,
+                collect_deep_summary=collect_growth_source_queue_e2e_summary,
+            )
+            _require(record == module_record and record["cache_hit"] is False and record["cache_write_performed"] is False,
+                     "queue E2E cold cache record wrapper must delegate to extracted module without writing")
+            _require(record["writes"] == [] and record["write_allowed"] is False,
+                     "queue E2E cold cache record must remain read-only")
+            _require(parse_growth_source_queue_e2e_summary_cache_record_json(stable_growth_source_queue_e2e_summary_cache_record_json(record)) == record,
+                     "queue E2E cache record JSON must round trip after extraction")
+
+            missing_read = read_growth_source_queue_e2e_cache(key["cache_file_path"])
+            _require(missing_read["ok"] is False and "missing" in missing_read["error"],
+                     "queue E2E cache read wrapper must report missing cache without crashing")
+
+            _require(callable(validate_growth_source_queue_e2e_cache_payload),
+                     "queue E2E cache payload validator wrapper must remain available")
+        finally:
+            growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
+            if old_cache_root is None:
+                os.environ.pop("LINK_SOURCE_CACHE_ROOT", None)
+            else:
+                os.environ["LINK_SOURCE_CACHE_ROOT"] = old_cache_root
+
+    print("growth queue E2E cache module extraction OK")
+
+
+def check_growth_source_suitability_module_extraction() -> None:
+    """Source suitability/quarantine helpers live in the extracted module behind wrappers."""
+    import link_modes.growth.growth_source_suitability as suitability_module
+    import link_modes.growth.link_growth_console as growth_console
+    from link_modes.growth.link_growth_console import (
+        _growth_guess_concept_family,
+        _growth_queue_source_entry,
+        _growth_source_type,
+        classify_source_archive_failure,
+        collect_growth_source_queue_policy,
+        collect_persistent_source_inventory_cache_manifest,
+        collect_source_archive_intake_cache_key,
+        collect_source_archive_suitability_assessment,
+        collect_source_queue_quarantine_record,
+        parse_growth_source_queue_policy_json,
+        parse_source_archive_suitability_assessment_json,
+        parse_source_queue_quarantine_record_json,
+        stable_growth_source_queue_policy_json,
+        stable_source_archive_suitability_assessment_json,
+        stable_source_queue_quarantine_record_json,
+        summarize_source_archive_failure_for_operator,
+    )
+
+    expected_exports = (
+        "collect_growth_source_queue_policy",
+        "collect_source_archive_suitability_assessment",
+        "collect_source_queue_quarantine_record",
+        "queue_source_entry",
+        "classify_source_archive_failure",
+    )
+    for name in expected_exports:
+        _require(callable(getattr(suitability_module, name, None)),
+                 f"growth_source_suitability must expose {name}")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in suitability_module.__dict__.values()),
+             "growth_source_suitability must not import the Growth monolith")
+
+    headroom_source = make_headroom_like_fixture()
+    missing_source = "research/missing-source-fixture.zip"
+    old_cache_root = os.environ.get("LINK_SOURCE_CACHE_ROOT")
+    with tempfile.TemporaryDirectory(prefix="link-source-suitability-module-test-") as cache_root:
+        os.environ["LINK_SOURCE_CACHE_ROOT"] = cache_root
+        try:
+            _require(_growth_source_type(headroom_source) == suitability_module.source_type(headroom_source),
+                     "source type wrapper must delegate to extracted module")
+            _require(_growth_guess_concept_family(headroom_source) == suitability_module.guess_concept_family(headroom_source),
+                     "concept family wrapper must delegate to extracted module")
+            _require(_growth_queue_source_entry(headroom_source, priority=1, reason_selected="test")
+                     == suitability_module.queue_source_entry(headroom_source, priority=1, reason_selected="test"),
+                     "queue source entry wrapper must delegate to extracted module")
+
+            policy = collect_growth_source_queue_policy()
+            module_policy = suitability_module.collect_growth_source_queue_policy()
+            _require(policy == module_policy,
+                     "source queue policy wrapper must delegate to extracted module")
+            _require(parse_growth_source_queue_policy_json(stable_growth_source_queue_policy_json(policy)) == policy,
+                     "source queue policy JSON must round trip after extraction")
+
+            headroom = collect_source_archive_suitability_assessment(source_path=headroom_source)
+            module_headroom = suitability_module.collect_source_archive_suitability_assessment(
+                source_path=headroom_source,
+                collect_cache_key=collect_source_archive_intake_cache_key,
+                collect_manifest=collect_persistent_source_inventory_cache_manifest,
+            )
+            _require(headroom == module_headroom and headroom["queue_eligible"] is True,
+                     "source suitability wrapper must delegate to extracted module for eligible source")
+            _require(parse_source_archive_suitability_assessment_json(stable_source_archive_suitability_assessment_json(headroom)) == headroom,
+                     "source suitability JSON must round trip after extraction")
+
+            missing = collect_source_archive_suitability_assessment(source_path=missing_source)
+            _require(missing["queue_eligible"] is False and missing["failure_category"] == "source_missing",
+                     "source suitability wrapper must preserve fail-closed missing source behavior")
+            quarantine = collect_source_queue_quarantine_record(source_path=missing_source)
+            module_quarantine = suitability_module.collect_source_queue_quarantine_record(
+                source_path=missing_source,
+                collect_suitability=collect_source_archive_suitability_assessment,
+            )
+            _require(quarantine == module_quarantine and quarantine["quarantine_status"] == "quarantined",
+                     "source quarantine wrapper must delegate to extracted module")
+            _require(parse_source_queue_quarantine_record_json(stable_source_queue_quarantine_record_json(quarantine)) == quarantine,
+                     "source quarantine JSON must round trip after extraction")
+
+            classification = classify_source_archive_failure(source_path=missing_source, source_exists=False)
+            _require(classification == suitability_module.classify_source_archive_failure(source_path=missing_source, source_exists=False),
+                     "source failure classifier wrapper must delegate to extracted module")
+            _require(summarize_source_archive_failure_for_operator(classification)
+                     == suitability_module.summarize_source_archive_failure_for_operator(classification),
+                     "source failure summary wrapper must delegate to extracted module")
+        finally:
+            growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
+            if old_cache_root is None:
+                os.environ.pop("LINK_SOURCE_CACHE_ROOT", None)
+            else:
+                os.environ["LINK_SOURCE_CACHE_ROOT"] = old_cache_root
+
+    print("growth source suitability module extraction OK")
+
+
 # ---------------------------------------------------------------------------
 # 62j. Growth campaign governance and Business Development boundary
 # ---------------------------------------------------------------------------
@@ -22579,6 +22768,8 @@ SOURCE_CORE_CHECKS = (
     check_source_aware_downstream_binding_clis,
     check_source_aware_archive_concept_extractor_helpers,
     check_growth_source_cache_module_extraction,
+    check_growth_queue_e2e_cache_module_extraction,
+    check_growth_source_suitability_module_extraction,
 )
 
 
