@@ -21,7 +21,10 @@ import json
 import sys
 from typing import Any
 
-from link_modes.growth.growth_human_renderers import print_growth_operator_cache_dashboard as _print_growth_operator_cache_dashboard_impl
+from link_modes.growth.growth_human_renderers import (
+    print_growth_operator_cache_dashboard as _print_growth_operator_cache_dashboard_impl,
+    print_growth_operator_qa_check as _print_growth_operator_qa_check_impl,
+)
 
 CONSOLE_VERSION = "link-growth-console-v1"
 _GROWTH_COMMAND = "growth"
@@ -28357,40 +28360,8 @@ def _growth_print_operator_cache_dashboard(payload: dict[str, Any]) -> None:
 
 
 def _growth_print_operator_qa_check(payload: dict[str, Any]) -> None:
-    highest = payload["highest_roi_next_fix"]
-    cache = {item["check_id"]: item for item in payload["cache_readiness_checks"]}
-    hot = {item["check_id"]: item for item in payload["hot_path_checks"]}
-    print("Growth Operator QA Check")
-    print(f"  status: {payload['operator_qa_status']}")
-    print(f"  mode: {payload['mode']}")
-    print("  readiness:")
-    print(f"    Growth: {payload['operator_readiness_status']}")
-    print(f"    direct-upgrade-eval: {hot.get('direct_upgrade_eval_hot_path_ready_or_warm_command', {}).get('observed', 'unknown')}")
-    print(f"    concept-calibration fast: {hot.get('concept_calibration_fast_ready_or_warm_command', {}).get('observed', 'unknown')}")
-    print("  cache:")
-    print(f"    source inventory: {cache.get('source_inventory_cache_status_known', {}).get('observed', 'unknown')}")
-    print(f"    queue E2E compact: {cache.get('queue_e2e_compact_cache_status_known', {}).get('observed', 'unknown')}")
-    print("  alignment:")
-    alignment_statuses = [item["status"] for item in payload["alignment_checks"]]
-    print(f"    task draft: {'checked' if any(item['check_id'] == 'task_draft_alignment_source_present' for item in payload['alignment_checks']) else 'skipped'}")
-    print(f"    best opportunity: {'checked' if any(item['check_id'] == 'direct_eval_best_direct_upgrade_present' for item in payload['alignment_checks']) else 'skipped'}")
-    if payload["skipped_checks"] or "skipped" in alignment_statuses:
-        print("  skipped:")
-        for item in (payload["skipped_checks"][:4] or [item for item in payload["alignment_checks"] if item["status"] == "skipped"][:4]):
-            print(f"    - {item['check_id']}: {item.get('reason') or item.get('observed')}")
-    print("  issues:")
-    for item in payload["issue_inventory"][:6] or [{"severity": "low", "category": "none", "issue_id": "none", "observed_behavior": "none"}]:
-        print(f"    - {item['severity']}/{item['category']}: {item['issue_id']}")
-    print("  highest ROI next fix:")
-    print(f"    title: {highest['title']}")
-    print(f"    why: {highest['rationale']}")
-    print(f"    slice: {highest['recommended_implementation_slice']}")
-    print(f"  next command: {payload['recommended_next_action']}")
-    print("  safety:")
-    print(f"    model used: {'yes' if payload['model_used'] else 'no'}")
-    print("    OpenRouter: no")
-    print(f"    network: {'yes' if payload['external_network_used'] else 'no'}")
-    print("    read-only: yes")
+    # Compatibility wrapper; implementation lives in growth_human_renderers.py.
+    _print_growth_operator_qa_check_impl(payload)
 
 
 def _growth_print_source_suitability(payload: dict[str, Any]) -> None:

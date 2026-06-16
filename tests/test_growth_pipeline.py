@@ -13152,6 +13152,69 @@ def check_growth_operator_cache_dashboard_renderer_extraction() -> None:
     print("growth operator cache dashboard renderer extraction OK")
 
 
+def check_growth_operator_qa_renderer_extraction() -> None:
+    """Extracted operator QA renderer preserves the human contract."""
+    from link_modes.growth.growth_human_renderers import render_growth_operator_qa_check_text
+    from link_modes.growth.link_growth_console import _growth_print_operator_qa_check
+
+    payload = {
+        "highest_roi_next_fix": {
+            "title": "Extract operator QA renderer",
+            "rationale": "Pure human renderer can move behind a compatibility wrapper.",
+            "recommended_implementation_slice": "Move formatter only; keep collector in monolith.",
+        },
+        "cache_readiness_checks": [
+            {"check_id": "source_inventory_cache_status_known", "observed": "source inventory cache status known"},
+            {"check_id": "queue_e2e_compact_cache_status_known", "observed": "queue compact cache status known"},
+        ],
+        "hot_path_checks": [
+            {"check_id": "direct_upgrade_eval_hot_path_ready_or_warm_command", "observed": "direct eval ready"},
+            {"check_id": "concept_calibration_fast_ready_or_warm_command", "observed": "concept fast ready"},
+        ],
+        "alignment_checks": [
+            {"check_id": "task_draft_alignment_source_present", "status": "pass"},
+            {"check_id": "direct_eval_best_direct_upgrade_present", "status": "pass"},
+        ],
+        "skipped_checks": [],
+        "issue_inventory": [
+            {"severity": "low", "category": "testing", "issue_id": "renderer_extraction_smoke"},
+        ],
+        "operator_qa_status": "pass",
+        "mode": "fast",
+        "operator_readiness_status": "ready",
+        "recommended_next_action": "python3 link.py growth operator-qa-check --json",
+        "model_used": False,
+        "external_network_used": False,
+    }
+    rendered = render_growth_operator_qa_check_text(payload)
+    _require(rendered.startswith("Growth Operator QA Check"),
+             "extracted operator QA renderer must include title")
+    for expected in (
+        "status:",
+        "readiness:",
+        "cache:",
+        "alignment:",
+        "issues:",
+        "highest ROI next fix:",
+        "next command:",
+        "safety:",
+        "model used: no",
+        "OpenRouter: no",
+        "network: no",
+        "read-only: yes",
+    ):
+        _require(expected in rendered, f"extracted operator QA renderer missing {expected}")
+    _require(not rendered.lstrip().startswith("{"),
+             "extracted operator QA renderer must not return raw JSON")
+
+    wrapper_out = io.StringIO()
+    with contextlib.redirect_stdout(wrapper_out):
+        _growth_print_operator_qa_check(payload)
+    _require(wrapper_out.getvalue() == rendered,
+             "operator QA compatibility wrapper must delegate to extracted renderer")
+    print("growth operator QA renderer extraction OK")
+
+
 # ---------------------------------------------------------------------------
 # 62j. Growth campaign governance and Business Development boundary
 # ---------------------------------------------------------------------------
@@ -21936,6 +21999,7 @@ PLANNING_CORE_CHECKS = (
     check_link_module_boundary_registry_cli,
     check_growth_console_audit_helper_and_cli,
     check_growth_operator_cache_dashboard_renderer_extraction,
+    check_growth_operator_qa_renderer_extraction,
     check_business_development_source_governance_helpers,
     check_business_development_source_governance_clis,
     check_business_development_collection_planning_helpers,

@@ -54,3 +54,52 @@ def render_growth_operator_cache_dashboard_text(payload: dict[str, Any]) -> str:
 def print_growth_operator_cache_dashboard(payload: dict[str, Any]) -> None:
     """Print the operator cache dashboard human summary."""
     print(render_growth_operator_cache_dashboard_text(payload), end="")
+
+
+def render_growth_operator_qa_check_text(payload: dict[str, Any]) -> str:
+    """Render a compact operator QA check summary."""
+    highest = payload["highest_roi_next_fix"]
+    cache = {item["check_id"]: item for item in payload["cache_readiness_checks"]}
+    hot = {item["check_id"]: item for item in payload["hot_path_checks"]}
+    lines = [
+        "Growth Operator QA Check",
+        f"  status: {payload['operator_qa_status']}",
+        f"  mode: {payload['mode']}",
+        "  readiness:",
+        f"    Growth: {payload['operator_readiness_status']}",
+        f"    direct-upgrade-eval: {hot.get('direct_upgrade_eval_hot_path_ready_or_warm_command', {}).get('observed', 'unknown')}",
+        f"    concept-calibration fast: {hot.get('concept_calibration_fast_ready_or_warm_command', {}).get('observed', 'unknown')}",
+        "  cache:",
+        f"    source inventory: {cache.get('source_inventory_cache_status_known', {}).get('observed', 'unknown')}",
+        f"    queue E2E compact: {cache.get('queue_e2e_compact_cache_status_known', {}).get('observed', 'unknown')}",
+        "  alignment:",
+    ]
+    alignment_statuses = [item["status"] for item in payload["alignment_checks"]]
+    lines.append(f"    task draft: {'checked' if any(item['check_id'] == 'task_draft_alignment_source_present' for item in payload['alignment_checks']) else 'skipped'}")
+    lines.append(f"    best opportunity: {'checked' if any(item['check_id'] == 'direct_eval_best_direct_upgrade_present' for item in payload['alignment_checks']) else 'skipped'}")
+    if payload["skipped_checks"] or "skipped" in alignment_statuses:
+        lines.append("  skipped:")
+        skipped = payload["skipped_checks"][:4] or [item for item in payload["alignment_checks"] if item["status"] == "skipped"][:4]
+        for item in skipped:
+            lines.append(f"    - {item['check_id']}: {item.get('reason') or item.get('observed')}")
+    lines.append("  issues:")
+    for item in payload["issue_inventory"][:6] or [{"severity": "low", "category": "none", "issue_id": "none", "observed_behavior": "none"}]:
+        lines.append(f"    - {item['severity']}/{item['category']}: {item['issue_id']}")
+    lines.extend([
+        "  highest ROI next fix:",
+        f"    title: {highest['title']}",
+        f"    why: {highest['rationale']}",
+        f"    slice: {highest['recommended_implementation_slice']}",
+        f"  next command: {payload['recommended_next_action']}",
+        "  safety:",
+        f"    model used: {'yes' if payload['model_used'] else 'no'}",
+        "    OpenRouter: no",
+        f"    network: {'yes' if payload['external_network_used'] else 'no'}",
+        "    read-only: yes",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def print_growth_operator_qa_check(payload: dict[str, Any]) -> None:
+    """Print the operator QA check human summary."""
+    print(render_growth_operator_qa_check_text(payload), end="")
