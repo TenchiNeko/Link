@@ -13095,6 +13095,63 @@ def check_growth_console_audit_helper_and_cli() -> None:
     print("growth console audit helper and CLI OK")
 
 
+def check_growth_operator_cache_dashboard_renderer_extraction() -> None:
+    """Extracted operator-cache-dashboard renderer preserves the human contract."""
+    from link_modes.growth.growth_human_renderers import render_growth_operator_cache_dashboard_text
+    from link_modes.growth.link_growth_console import _growth_print_operator_cache_dashboard
+
+    payload = {
+        "source_inventory_cache_summary": {
+            "ready_for_hot_path": True,
+            "hit_count": 2,
+            "miss_count": 0,
+            "stale_count": 0,
+            "recommended_next_action": "python3 link.py growth direct-upgrade-eval --json",
+        },
+        "queue_e2e_cache_summary": {
+            "summary_source": "compact_cache",
+            "best_cached_opportunity_title": "Extract renderer cluster",
+            "recommended_next_action": "python3 link.py growth source-queue-e2e --mode fast --json",
+        },
+        "operator_readiness": {
+            "next_command": "python3 link.py growth direct-upgrade-eval --json",
+        },
+        "direct_upgrade_eval_hot_path": {"ready": True},
+        "concept_calibration_hot_path": {"ready": True},
+        "quarantined_sources": [
+            {"source_path": "research/activepieces-main.zip", "quarantine_reason": "source refs incomplete"},
+        ],
+        "broken_unoptimized_items": [
+            {"severity": "low", "category": "test_coverage", "title": "renderer extraction smoke"},
+        ],
+        "external_network_used": False,
+    }
+    rendered = render_growth_operator_cache_dashboard_text(payload)
+    _require(rendered.startswith("Growth Operator Cache Dashboard"),
+             "extracted operator cache dashboard renderer must include title")
+    for expected in (
+        "source inventory:",
+        "queue E2E compact:",
+        "hot paths:",
+        "skipped/quarantined:",
+        "Safety:",
+        "model used: no",
+        "OpenRouter: no",
+        "network: no",
+        "read-only: yes",
+    ):
+        _require(expected in rendered, f"extracted operator cache dashboard renderer missing {expected}")
+    _require(not rendered.lstrip().startswith("{"),
+             "extracted operator cache dashboard renderer must not return raw JSON")
+
+    wrapper_out = io.StringIO()
+    with contextlib.redirect_stdout(wrapper_out):
+        _growth_print_operator_cache_dashboard(payload)
+    _require(wrapper_out.getvalue() == rendered,
+             "operator cache dashboard compatibility wrapper must delegate to extracted renderer")
+    print("growth operator cache dashboard renderer extraction OK")
+
+
 # ---------------------------------------------------------------------------
 # 62j. Growth campaign governance and Business Development boundary
 # ---------------------------------------------------------------------------
@@ -21878,6 +21935,7 @@ PLANNING_CORE_CHECKS = (
     check_link_module_boundary_registry_helper,
     check_link_module_boundary_registry_cli,
     check_growth_console_audit_helper_and_cli,
+    check_growth_operator_cache_dashboard_renderer_extraction,
     check_business_development_source_governance_helpers,
     check_business_development_source_governance_clis,
     check_business_development_collection_planning_helpers,

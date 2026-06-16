@@ -21,6 +21,8 @@ import json
 import sys
 from typing import Any
 
+from link_modes.growth.growth_human_renderers import print_growth_operator_cache_dashboard as _print_growth_operator_cache_dashboard_impl
+
 CONSOLE_VERSION = "link-growth-console-v1"
 _GROWTH_COMMAND = "growth"
 
@@ -28350,36 +28352,8 @@ def _growth_print_direct_upgrade_eval(payload: dict[str, Any]) -> None:
 
 
 def _growth_print_operator_cache_dashboard(payload: dict[str, Any]) -> None:
-    source = payload["source_inventory_cache_summary"]
-    queue = payload["queue_e2e_cache_summary"]
-    readiness = payload["operator_readiness"]
-    print("Growth Operator Cache Dashboard")
-    print("  source inventory:")
-    source_status = "hot" if source["ready_for_hot_path"] else ("cold" if source["hit_count"] == 0 else "partial")
-    print(f"    status: {source_status}")
-    print(f"    hits/misses/stale: {source['hit_count']}/{source['miss_count']}/{source['stale_count']}")
-    print(f"    next: {source['recommended_next_action']}")
-    print("  queue E2E compact:")
-    print(f"    status: {queue['summary_source']}")
-    print(f"    best cached opportunity: {queue['best_cached_opportunity_title'] or 'none'}")
-    print(f"    next: {queue['recommended_next_action']}")
-    print("  hot paths:")
-    print(f"    direct-upgrade-eval: {'ready' if payload['direct_upgrade_eval_hot_path']['ready'] else 'not ready'}")
-    print(f"    concept-calibration-report fast: {'ready' if payload['concept_calibration_hot_path']['ready'] else 'not ready'}")
-    print("  skipped/quarantined:")
-    for item in payload["quarantined_sources"][:6] or [{"source_path": "none", "quarantine_reason": ""}]:
-        reason = item.get("quarantine_reason") or item.get("failure_category") or "none"
-        print(f"    - {item['source_path']}: {reason}")
-    print("  issues:")
-    for item in payload["broken_unoptimized_items"][:5]:
-        print(f"    - {item['severity']}/{item['category']}: {item['title']}")
-    print("  next command:")
-    print(f"    {readiness['next_command']}")
-    print("Safety:")
-    print("  model used: no")
-    print("  OpenRouter: no")
-    print(f"  network: {'yes' if payload['external_network_used'] else 'no'}")
-    print("  read-only: yes")
+    # Compatibility wrapper; implementation lives in growth_human_renderers.py.
+    _print_growth_operator_cache_dashboard_impl(payload)
 
 
 def _growth_print_operator_qa_check(payload: dict[str, Any]) -> None:
