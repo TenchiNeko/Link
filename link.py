@@ -1139,6 +1139,7 @@ def _cmd_growth(argv: list[str]) -> int:
       reject     Reject a pending proposal.
       e2e-summary Build a compact deterministic source-aware Growth decision.
       operator-qa-check Run a read-only deterministic Growth operator QA report.
+      console-audit Static audit of the Growth console monolith.
     """
     subcommand = argv[0] if argv else ""
     if subcommand in ("status", "--json", ""):
@@ -1265,6 +1266,10 @@ def _cmd_growth(argv: list[str]) -> int:
         from link_modes.growth.link_growth_console import growth_operator_qa_check_main as _growth_operator_qa_check_main
 
         return _growth_operator_qa_check_main(argv[1:] if len(argv) > 1 else [])
+    if subcommand == "console-audit":
+        from link_modes.growth.growth_console_audit import main as _growth_console_audit_main
+
+        return _growth_console_audit_main(argv[1:] if len(argv) > 1 else [])
     if subcommand == "concept-calibration-report":
         from link_modes.growth.link_growth_console import growth_concept_calibration_report_main as _growth_concept_calibration_report_main
 

@@ -13038,6 +13038,63 @@ def check_link_module_boundary_registry_cli() -> None:
     print("link module boundary registry CLI OK")
 
 
+def check_growth_console_audit_helper_and_cli() -> None:
+    """Growth console audit is static, deterministic, and does not import the monolith."""
+    from link import _cmd_growth
+    from link_modes.growth.growth_console_audit import (
+        collect_growth_console_audit,
+        parse_growth_console_audit_json,
+        stable_growth_console_audit_json,
+        validate_growth_console_audit,
+    )
+
+    audit_module_source = (ROOT / "link_modes/growth/growth_console_audit.py").read_text(encoding="utf-8")
+    _require("import link_modes.growth.link_growth_console" not in audit_module_source,
+             "growth console audit module must not import link_growth_console")
+    _require("from link_modes.growth.link_growth_console" not in audit_module_source,
+             "growth console audit module must not import symbols from link_growth_console")
+
+    payload = collect_growth_console_audit(top=12)
+    validate_growth_console_audit(payload)
+    decoded = parse_growth_console_audit_json(stable_growth_console_audit_json(payload))
+    _require(decoded == payload, "growth console audit JSON must round trip")
+    _require(payload["source_file"] == "link_modes/growth/link_growth_console.py",
+             "growth console audit must default to the Growth console monolith")
+    _require(payload["source_file_lines"] > 50000 and payload["function_count"] > 1000,
+             "growth console audit must report monolith scale")
+    _require(payload["largest_functions"], "growth console audit must include largest functions")
+    _require(any(item["proposed_module"] == "growth_operator_qa.py" for item in payload["module_boundary_candidates"]),
+             "growth console audit must propose operator QA module boundary")
+    _require(any(item["proposed_module"] == "growth_source_cache.py" for item in payload["module_boundary_candidates"]),
+             "growth console audit must propose source cache module boundary")
+    _require(payload["deletion_candidates"] == [],
+             "growth console audit must not recommend deletion candidates")
+    _require(payload["fallback_allowed"] is False and payload["model_used"] is False and payload["external_network_used"] is False,
+             "growth console audit must avoid fallback/model/network")
+    _require((ROOT / "LINK_GROWTH_CONSOLE_MODULARIZATION.md").exists(),
+             "growth console modularization documentation must exist")
+
+    json_out = io.StringIO()
+    with contextlib.redirect_stdout(json_out):
+        json_rc = _cmd_growth(["console-audit", "--top", "8", "--json"])
+    _require(json_rc == 0, "growth console-audit --json must return 0")
+    cli_payload = parse_growth_console_audit_json(json_out.getvalue())
+    _require(cli_payload["growth_console_audit_id"] == payload["growth_console_audit_id"],
+             "growth console-audit CLI must preserve deterministic audit id")
+
+    human_out = io.StringIO()
+    with contextlib.redirect_stdout(human_out):
+        human_rc = _cmd_growth(["console-audit", "--top", "5"])
+    human = human_out.getvalue()
+    _require(human_rc == 0, "growth console-audit human mode must return 0")
+    _require("Growth Console Audit" in human and "module boundaries:" in human and "safety:" in human,
+             "growth console-audit human output must summarize audit, boundaries, and safety")
+    _require(not human.lstrip().startswith("{"), "growth console-audit human output must not be raw JSON")
+    _require(len(human.splitlines()) <= 60, "growth console-audit human output must stay compact")
+
+    print("growth console audit helper and CLI OK")
+
+
 # ---------------------------------------------------------------------------
 # 62j. Growth campaign governance and Business Development boundary
 # ---------------------------------------------------------------------------
@@ -21820,6 +21877,7 @@ PLANNING_CORE_CHECKS = (
     check_growth_opportunity_review_package_helper,
     check_link_module_boundary_registry_helper,
     check_link_module_boundary_registry_cli,
+    check_growth_console_audit_helper_and_cli,
     check_business_development_source_governance_helpers,
     check_business_development_source_governance_clis,
     check_business_development_collection_planning_helpers,
