@@ -24,10 +24,11 @@ Known gap (documented, not fixed here):
 Style: if condition: raise AssertionError(msg) -- no bare assert statements.
 No forbidden legacy tokens. No network. No subprocess calls.
 
-Source-aware Growth coverage defaults to tiny runtime zip fixtures so normal
-checkpoints stay fast. Real research archive integration is still available with
-LINK_RUN_SLOW_GROWTH_ARCHIVE_TESTS=1 and uses LINK_SOURCE_CACHE_ROOT/temp roots
-for persistent cache writes.
+Source-aware Growth coverage uses tiny runtime zip fixtures. The default
+checkpoint runs only source-core; broader tiny-fixture source coverage remains
+available through source-extended/source-fast. Real research archive integration
+is still available with LINK_RUN_SLOW_GROWTH_ARCHIVE_TESTS=1 and uses
+LINK_SOURCE_CACHE_ROOT/temp roots for persistent cache writes.
 """
 
 from __future__ import annotations
@@ -87,6 +88,8 @@ SUITE_TIMING_ORDER = (
     "execution-deep",
     "execution-deterministic",
     "base",
+    "source-core",
+    "source-extended",
     "source-fast",
     "source-slow",
 )
@@ -101,7 +104,9 @@ SUITE_TIMING_THRESHOLDS = {
     "execution-deep": 45.0,
     "execution-deterministic": 45.0,
     "base": 30.0,
-    "source-fast": 60.0,
+    "source-core": 3.0,
+    "source-extended": 8.0,
+    "source-fast": 8.0,
     "source-slow": 180.0,
 }
 
@@ -19583,6 +19588,10 @@ def check_source_aware_growth_e2e_summary_cache_helpers() -> None:
                  "operator QA hot check must verify task draft alignment source")
         _require(qa_hot["highest_roi_next_fix"]["candidate_id"] != "add_or_improve_operator_qa_check",
                  "operator QA check should not recommend itself as the top next fix after implementation")
+        _require(all(item["candidate_id"] != "optimize_source_fast" for item in qa_hot["candidate_roi_scores"]),
+                 "operator QA check must not keep stale source-fast-as-default recommendation after source-core split")
+        _require(any(item["candidate_id"] == "optimize_source_core" for item in qa_hot["candidate_roi_scores"]),
+                 "operator QA check must use source-core wording after source-core/source-extended split")
         validate_growth_operator_qa_check(qa_hot)
         _require(parse_growth_operator_qa_check_json(stable_growth_operator_qa_check_json(qa_hot)) == qa_hot,
                  "hot operator QA check JSON must round trip")
@@ -21953,6 +21962,32 @@ EXECUTION_DEEP_CHECKS = (
 EXECUTION_DETERMINISTIC_CHECKS = EXECUTION_FAST_CHECKS + EXECUTION_DEEP_CHECKS
 
 
+SOURCE_CORE_CHECKS = (
+    check_growth_suite_selector_boundaries,
+    check_research_target_intake_helpers,
+    check_research_target_clis,
+    check_source_aware_downstream_binding_helpers,
+    check_source_aware_downstream_binding_clis,
+    check_source_aware_archive_concept_extractor_helpers,
+)
+
+
+SOURCE_EXTENDED_CHECKS = (
+    check_source_aware_operator_report_and_sandbox_helpers,
+    check_source_aware_operator_report_and_sandbox_clis,
+    check_source_aware_control_plane_dashboard_helpers,
+    check_source_aware_growth_e2e_summary_cache_helpers,
+    check_source_aware_control_plane_dashboard_clis,
+    check_source_aware_human_summary_clis,
+    check_source_aware_provenance_specificity_helpers,
+    check_source_aware_provenance_specificity_clis,
+    check_source_aware_cross_target_specificity,
+)
+
+
+SOURCE_FAST_CHECKS = SOURCE_CORE_CHECKS + SOURCE_EXTENDED_CHECKS
+
+
 def run_foundation_fast_suite() -> None:
     _ensure_growth_test_setup()
     with time_section("foundation-fast"):
@@ -22026,26 +22061,25 @@ def run_base_suite() -> None:
     print("Growth pipeline base suite passed")
 
 
+def run_source_core_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("source-core", slow_threshold_seconds=3.0):
+        _run_check_group(SOURCE_CORE_CHECKS)
+    print("Growth pipeline source-core suite passed")
+
+
+def run_source_extended_suite() -> None:
+    _ensure_growth_test_setup()
+    with time_section("source-extended", slow_threshold_seconds=8.0):
+        _run_check_group(SOURCE_EXTENDED_CHECKS)
+    print("Growth pipeline source-extended suite passed")
+
+
 def run_source_fast_suite() -> None:
     _ensure_growth_test_setup()
-    with time_section("source-fast"):
-        _run_check_group((
-            check_growth_suite_selector_boundaries,
-            check_research_target_intake_helpers,
-            check_research_target_clis,
-            check_source_aware_downstream_binding_helpers,
-            check_source_aware_downstream_binding_clis,
-            check_source_aware_operator_report_and_sandbox_helpers,
-            check_source_aware_operator_report_and_sandbox_clis,
-            check_source_aware_control_plane_dashboard_helpers,
-            check_source_aware_archive_concept_extractor_helpers,
-            check_source_aware_growth_e2e_summary_cache_helpers,
-            check_source_aware_control_plane_dashboard_clis,
-            check_source_aware_human_summary_clis,
-            check_source_aware_provenance_specificity_helpers,
-            check_source_aware_provenance_specificity_clis,
-            check_source_aware_cross_target_specificity,
-        ))
+    with time_section("source-fast", slow_threshold_seconds=8.0):
+        run_source_core_suite()
+        run_source_extended_suite()
     print("Growth pipeline source-fast suite passed")
 
 
@@ -22061,7 +22095,9 @@ def run_source_slow_suite() -> None:
 def run_default_suite() -> None:
     started = time.perf_counter()
     run_base_suite()
-    run_source_fast_suite()
+    run_source_core_suite()
+    _GROWTH_TEST_SKIPPED_SUITES.add("source-extended")
+    print("source-extended: skipped; run --suite source-extended or --suite source-fast for broader source-aware tiny-fixture checks")
     if _run_extended_growth_planning_tests():
         run_planning_extended_suite()
     else:
@@ -22110,7 +22146,9 @@ def _print_suite_list() -> None:
     print("  execution-deep           Deeper deterministic execution/fork/transcript checks.")
     print("  execution-deterministic  execution-fast + execution-deep.")
     print("  base                     foundation-fast + planning-core + execution-fast.")
-    print("  source-fast              Tiny fixture source-aware checks.")
+    print("  source-core              Fastest source-aware tiny-fixture checks.")
+    print("  source-extended          Broader source-aware tiny-fixture checks.")
+    print("  source-fast              source-core + source-extended.")
     print("  source-slow              Real archive integration checks.")
     print("  all                      base + planning-extended + planning-deep + execution-deep + source-fast + source-slow.")
     print("Recommended commands:")
@@ -22119,12 +22157,14 @@ def _print_suite_list() -> None:
     print("  python3 tests/test_growth_pipeline.py --suite planning-fast")
     print("  python3 tests/test_growth_pipeline.py --suite execution-fast")
     print("  python3 tests/test_growth_pipeline.py --suite base")
+    print("  python3 tests/test_growth_pipeline.py --suite source-core")
+    print("  python3 tests/test_growth_pipeline.py --suite source-fast")
     print("  python3 tests/test_growth_pipeline.py --suite all")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run deterministic Growth pipeline smoke test suites.")
-    parser.add_argument("--suite", choices=("foundation-fast", "planning-core", "planning-extended", "planning-fast", "planning-deep", "planning-deterministic", "execution-fast", "execution-deep", "execution-deterministic", "base", "source-fast", "source-slow", "all"), help="suite to run")
+    parser.add_argument("--suite", choices=("foundation-fast", "planning-core", "planning-extended", "planning-fast", "planning-deep", "planning-deterministic", "execution-fast", "execution-deep", "execution-deterministic", "base", "source-core", "source-extended", "source-fast", "source-slow", "all"), help="suite to run")
     parser.add_argument("--list-suites", action="store_true", help="list available suites and recommended commands")
     args = parser.parse_args(argv)
     if args.list_suites:
@@ -22170,6 +22210,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if suite == "base":
         run_base_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "source-core":
+        run_source_core_suite()
+        _print_growth_test_timing_summary(time.perf_counter() - started)
+        return 0
+    if suite == "source-extended":
+        run_source_extended_suite()
         _print_growth_test_timing_summary(time.perf_counter() - started)
         return 0
     if suite == "source-fast":
