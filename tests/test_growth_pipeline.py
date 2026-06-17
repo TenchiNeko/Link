@@ -13934,6 +13934,200 @@ def check_growth_source_queue_module_extraction() -> None:
     print("growth source queue module extraction OK")
 
 
+def check_growth_repo_role_calibration_module_extraction() -> None:
+    """Repo-role calibration helpers live in the extracted module behind wrappers."""
+    import link_modes.growth.growth_repo_role_calibration as role_module
+    import link_modes.growth.link_growth_console as growth_console
+    from link_modes.growth.link_growth_console import (
+        collect_calibrated_repo_role_classification,
+        collect_repo_role_calibration_fixtures,
+        collect_repo_role_calibration_policy,
+        collect_source_aware_archive_concepts,
+        collect_source_queue_quarantine_record,
+        parse_calibrated_repo_role_classification_json,
+        parse_repo_role_calibration_fixtures_json,
+        parse_repo_role_calibration_policy_json,
+        stable_calibrated_repo_role_classification_json,
+        stable_repo_role_calibration_fixtures_json,
+        stable_repo_role_calibration_policy_json,
+        validate_source_aware_archive_concepts,
+    )
+
+    expected_exports = (
+        "collect_repo_role_calibration_policy",
+        "collect_repo_role_calibration_fixtures",
+        "collect_calibrated_repo_role_classification",
+        "stable_calibrated_repo_role_classification_json",
+    )
+    for name in expected_exports:
+        _require(callable(getattr(role_module, name, None)),
+                 f"growth_repo_role_calibration must expose {name}")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in role_module.__dict__.values()),
+             "growth_repo_role_calibration must not import the Growth monolith")
+
+    policy = collect_repo_role_calibration_policy()
+    module_policy = role_module.collect_repo_role_calibration_policy()
+    _require(policy == module_policy,
+             "repo role policy wrapper must delegate to extracted module")
+    _require(parse_repo_role_calibration_policy_json(stable_repo_role_calibration_policy_json(policy)) == policy,
+             "repo role policy JSON must round trip after extraction")
+
+    fixtures = collect_repo_role_calibration_fixtures()
+    module_fixtures = role_module.collect_repo_role_calibration_fixtures(
+        collect_quarantine=collect_source_queue_quarantine_record,
+    )
+    _require(fixtures == module_fixtures,
+             "repo role fixture wrapper must delegate to extracted module")
+    _require(parse_repo_role_calibration_fixtures_json(stable_repo_role_calibration_fixtures_json(fixtures)) == fixtures,
+             "repo role fixtures JSON must round trip after extraction")
+
+    headroom_source = make_headroom_like_fixture()
+    concepts = collect_source_aware_archive_concepts(source_path=headroom_source)
+    role = collect_calibrated_repo_role_classification(concepts)
+    module_role = role_module.collect_calibrated_repo_role_classification(
+        concepts,
+        collect_concepts=collect_source_aware_archive_concepts,
+        validate_concepts=validate_source_aware_archive_concepts,
+    )
+    _require(role == module_role and role["primary_role"] == "compression_context",
+             "calibrated repo role wrapper must delegate to extracted module")
+    _require(parse_calibrated_repo_role_classification_json(stable_calibrated_repo_role_classification_json(role)) == role,
+             "calibrated repo role JSON must round trip after extraction")
+
+    source_bound_role = collect_calibrated_repo_role_classification(source_path=headroom_source)
+    module_source_bound_role = role_module.collect_calibrated_repo_role_classification(
+        source_path=headroom_source,
+        collect_concepts=collect_source_aware_archive_concepts,
+        validate_concepts=validate_source_aware_archive_concepts,
+    )
+    _require(source_bound_role == module_source_bound_role,
+             "source-bound calibrated role wrapper must supply collector callback")
+
+    growth_console._SOURCE_AWARE_ARCHIVE_CONCEPTS_REQUEST_CACHE.clear()
+    print("growth repo role calibration module extraction OK")
+
+
+def check_growth_concept_confidence_module_extraction() -> None:
+    """Concept confidence calibration helpers live in the extracted module."""
+    import link_modes.growth.growth_concept_confidence as confidence_module
+    import link_modes.growth.link_growth_console as growth_console
+    from link_modes.growth.link_growth_console import (
+        collect_calibrated_repo_role_classification,
+        collect_concept_confidence_calibration,
+        collect_source_aware_archive_concepts,
+        parse_concept_confidence_calibration_json,
+        stable_concept_confidence_calibration_json,
+        validate_calibrated_repo_role_classification,
+        validate_source_aware_archive_concepts,
+    )
+
+    expected_exports = (
+        "collect_concept_confidence_calibration",
+        "role_supports_concept",
+        "concept_confidence_label",
+        "stable_concept_confidence_calibration_json",
+    )
+    for name in expected_exports:
+        _require(callable(getattr(confidence_module, name, None)),
+                 f"growth_concept_confidence must expose {name}")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in confidence_module.__dict__.values()),
+             "growth_concept_confidence must not import the Growth monolith")
+
+    headroom_source = make_headroom_like_fixture()
+    concepts = collect_source_aware_archive_concepts(source_path=headroom_source)
+    role = collect_calibrated_repo_role_classification(concepts)
+    confidence = collect_concept_confidence_calibration(concepts, role)
+    module_confidence = confidence_module.collect_concept_confidence_calibration(
+        concepts,
+        role,
+        collect_concepts=collect_source_aware_archive_concepts,
+        validate_concepts=validate_source_aware_archive_concepts,
+        collect_repo_role=collect_calibrated_repo_role_classification,
+        validate_repo_role=validate_calibrated_repo_role_classification,
+    )
+    _require(confidence == module_confidence
+             and any(item["concept_family"] == "compression" for item in confidence["concept_calibrations"]),
+             "concept confidence wrapper must delegate to extracted module")
+    _require(parse_concept_confidence_calibration_json(stable_concept_confidence_calibration_json(confidence)) == confidence,
+             "concept confidence JSON must round trip after extraction")
+
+    source_bound = collect_concept_confidence_calibration(source_path=headroom_source)
+    module_source_bound = confidence_module.collect_concept_confidence_calibration(
+        source_path=headroom_source,
+        collect_concepts=collect_source_aware_archive_concepts,
+        validate_concepts=validate_source_aware_archive_concepts,
+        collect_repo_role=collect_calibrated_repo_role_classification,
+        validate_repo_role=validate_calibrated_repo_role_classification,
+    )
+    _require(source_bound == module_source_bound,
+             "source-bound concept confidence wrapper must supply callbacks")
+
+    growth_console._SOURCE_AWARE_ARCHIVE_CONCEPTS_REQUEST_CACHE.clear()
+    print("growth concept confidence module extraction OK")
+
+
+def check_growth_opportunity_scoring_module_extraction() -> None:
+    """Growth opportunity score helpers live in the extracted module behind wrappers."""
+    import link_modes.growth.growth_opportunity_scoring as scoring_module
+    import link_modes.growth.link_growth_console as growth_console
+    from link_modes.growth.link_growth_console import (
+        _role_supports_concept,
+        collect_calibrated_repo_role_classification,
+        collect_concept_confidence_calibration,
+        collect_growth_opportunity_decision_score,
+        collect_source_aware_growth_e2e_summary,
+        parse_growth_opportunity_decision_score_json,
+        stable_growth_opportunity_decision_score_json,
+        validate_source_aware_growth_e2e_summary,
+    )
+
+    expected_exports = (
+        "collect_growth_opportunity_decision_score",
+        "validate_growth_opportunity_decision_score",
+        "stable_growth_opportunity_decision_score_json",
+    )
+    for name in expected_exports:
+        _require(callable(getattr(scoring_module, name, None)),
+                 f"growth_opportunity_scoring must expose {name}")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in scoring_module.__dict__.values()),
+             "growth_opportunity_scoring must not import the Growth monolith")
+
+    headroom_source = make_headroom_like_fixture()
+    summary = collect_source_aware_growth_e2e_summary(source_path=headroom_source)
+    score = collect_growth_opportunity_decision_score(source_path=headroom_source, summary=summary)
+    module_score = scoring_module.collect_growth_opportunity_decision_score(
+        source_path=headroom_source,
+        summary=summary,
+        collect_summary=collect_source_aware_growth_e2e_summary,
+        validate_summary=validate_source_aware_growth_e2e_summary,
+        collect_repo_role=collect_calibrated_repo_role_classification,
+        collect_concept_confidence=collect_concept_confidence_calibration,
+        role_supports_concept=_role_supports_concept,
+    )
+    _require(score == module_score and score["growth_opportunity_decision_score_id"].startswith("growth-opportunity-decision-score-"),
+             "growth opportunity score wrapper must delegate to extracted module")
+    _require(parse_growth_opportunity_decision_score_json(stable_growth_opportunity_decision_score_json(score)) == score,
+             "growth opportunity score JSON must round trip after extraction")
+
+    source_bound_score = collect_growth_opportunity_decision_score(source_path=headroom_source)
+    module_source_bound_score = scoring_module.collect_growth_opportunity_decision_score(
+        source_path=headroom_source,
+        collect_summary=collect_source_aware_growth_e2e_summary,
+        validate_summary=validate_source_aware_growth_e2e_summary,
+        collect_repo_role=collect_calibrated_repo_role_classification,
+        collect_concept_confidence=collect_concept_confidence_calibration,
+        role_supports_concept=_role_supports_concept,
+    )
+    _require(source_bound_score == module_source_bound_score,
+             "source-bound opportunity score wrapper must supply summary callback")
+
+    growth_console._SOURCE_AWARE_ARCHIVE_CONCEPTS_REQUEST_CACHE.clear()
+    print("growth opportunity scoring module extraction OK")
+
+
 # ---------------------------------------------------------------------------
 # 62j. Growth campaign governance and Business Development boundary
 # ---------------------------------------------------------------------------
@@ -22878,6 +23072,9 @@ SOURCE_CORE_CHECKS = (
     check_growth_queue_e2e_cache_module_extraction,
     check_growth_source_suitability_module_extraction,
     check_growth_source_queue_module_extraction,
+    check_growth_repo_role_calibration_module_extraction,
+    check_growth_concept_confidence_module_extraction,
+    check_growth_opportunity_scoring_module_extraction,
 )
 
 

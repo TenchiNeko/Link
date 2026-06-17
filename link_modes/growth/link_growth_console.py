@@ -32,6 +32,20 @@ from link_modes.growth.growth_human_renderers import (
     print_growth_source_quarantine as _print_growth_source_quarantine_impl,
     print_growth_source_suitability as _print_growth_source_suitability_impl,
 )
+from link_modes.growth.growth_concept_confidence import (
+    collect_concept_confidence_calibration as _collect_concept_confidence_calibration_impl,
+    concept_confidence_label as _concept_confidence_label_impl,
+    parse_concept_confidence_calibration_json as _parse_concept_confidence_calibration_json_impl,
+    role_supports_concept as _role_supports_concept_impl,
+    stable_concept_confidence_calibration_json as _stable_concept_confidence_calibration_json_impl,
+    validate_concept_confidence_calibration as _validate_concept_confidence_calibration_impl,
+)
+from link_modes.growth.growth_opportunity_scoring import (
+    collect_growth_opportunity_decision_score as _collect_growth_opportunity_decision_score_impl,
+    parse_growth_opportunity_decision_score_json as _parse_growth_opportunity_decision_score_json_impl,
+    stable_growth_opportunity_decision_score_json as _stable_growth_opportunity_decision_score_json_impl,
+    validate_growth_opportunity_decision_score as _validate_growth_opportunity_decision_score_impl,
+)
 from link_modes.growth.growth_queue_e2e_cache import (
     collect_growth_source_queue_e2e_cache_key as _collect_growth_source_queue_e2e_cache_key_impl,
     collect_growth_source_queue_e2e_summary_cache_record as _collect_growth_source_queue_e2e_summary_cache_record_impl,
@@ -47,6 +61,23 @@ from link_modes.growth.growth_queue_e2e_cache import (
     validate_growth_source_queue_e2e_cache_payload as _validate_growth_source_queue_e2e_cache_payload_impl,
     validate_growth_source_queue_e2e_summary_cache_record as _validate_growth_source_queue_e2e_summary_cache_record_impl,
     write_growth_source_queue_e2e_cache as _write_growth_source_queue_e2e_cache_impl,
+)
+from link_modes.growth.growth_repo_role_calibration import (
+    collect_calibrated_repo_role_classification as _collect_calibrated_repo_role_classification_impl,
+    collect_repo_role_calibration_fixtures as _collect_repo_role_calibration_fixtures_impl,
+    collect_repo_role_calibration_policy as _collect_repo_role_calibration_policy_impl,
+    parse_calibrated_repo_role_classification_json as _parse_calibrated_repo_role_classification_json_impl,
+    parse_repo_role_calibration_fixtures_json as _parse_repo_role_calibration_fixtures_json_impl,
+    parse_repo_role_calibration_policy_json as _parse_repo_role_calibration_policy_json_impl,
+    repo_role_confidence_label as _repo_role_confidence_label_impl,
+    repo_role_fixture_for_source as _repo_role_fixture_for_source_impl,
+    repo_role_signal_text as _repo_role_signal_text_impl,
+    stable_calibrated_repo_role_classification_json as _stable_calibrated_repo_role_classification_json_impl,
+    stable_repo_role_calibration_fixtures_json as _stable_repo_role_calibration_fixtures_json_impl,
+    stable_repo_role_calibration_policy_json as _stable_repo_role_calibration_policy_json_impl,
+    validate_calibrated_repo_role_classification as _validate_calibrated_repo_role_classification_impl,
+    validate_repo_role_calibration_fixtures as _validate_repo_role_calibration_fixtures_impl,
+    validate_repo_role_calibration_policy as _validate_repo_role_calibration_policy_impl,
 )
 from link_modes.growth.growth_source_cache import (
     collect_persistent_source_cache_performance_report as _collect_persistent_source_cache_performance_report_impl,
@@ -12062,363 +12093,56 @@ def parse_source_aware_archive_concepts_json(text: str) -> dict[str, Any]:
     return payload
 
 
-_REPO_ROLE_FAMILY_DEFINITIONS: tuple[dict[str, Any], ...] = (
-    {
-        "role_family": "compression_context",
-        "positive_terms": ("compress", "compression", "context reduction", "token reduction", "token budget", "headroom", "chunk compression", "tool output"),
-        "path_signals": ("headroom", "compress", "token", "context"),
-        "package_signals": ("headroom", "compression"),
-        "interface_signals": ("library_api", "cli_mode", "mcp_server", "proxy_mode"),
-        "negative_terms": ("crawler", "scrape", "sitemap", "lead", "outreach", "crm", "workflow builder", "flowise", "monetization"),
-        "conflicting_role_families": ("crawler_source_collection", "business_reach_outreach", "ai_workflow_builder", "workflow_automation"),
-        "required_minimum_evidence": "explicit compression, token, chunk, log/file, tool-output, or Headroom evidence",
-        "high_confidence_threshold": 75,
-        "medium_confidence_threshold": 55,
-        "weak_confidence_threshold": 35,
-    },
-    {
-        "role_family": "crawler_source_collection",
-        "positive_terms": ("crawler", "crawl", "scrape", "sitemap", "spider", "puppeteer", "playwright", "website extraction"),
-        "path_signals": ("crawler", "scraper", "sitemap"),
-        "package_signals": ("puppeteer", "playwright", "crawler"),
-        "interface_signals": ("browser", "source_collection"),
-        "negative_terms": ("headroom", "compression", "token reduction"),
-        "conflicting_role_families": ("compression_context",),
-        "required_minimum_evidence": "crawl/scrape/sitemap/source collection evidence",
-        "high_confidence_threshold": 75,
-        "medium_confidence_threshold": 55,
-        "weak_confidence_threshold": 35,
-    },
-    {
-        "role_family": "business_reach_outreach",
-        "positive_terms": ("reach", "outreach", "lead", "crm", "sales", "campaign", "business development", "prospect"),
-        "path_signals": ("agent-reach", "reach", "lead", "outreach"),
-        "package_signals": ("crm", "lead", "campaign"),
-        "interface_signals": ("business_workflow",),
-        "negative_terms": ("headroom", "compression", "token reduction"),
-        "conflicting_role_families": ("compression_context", "crawler_source_collection"),
-        "required_minimum_evidence": "reach/outreach/lead/business workflow evidence",
-        "high_confidence_threshold": 72,
-        "medium_confidence_threshold": 52,
-        "weak_confidence_threshold": 32,
-    },
-    {
-        "role_family": "workflow_automation",
-        "positive_terms": ("workflow", "automation", "trigger", "action", "connector", "zapier", "activepieces", "pipeline"),
-        "path_signals": ("activepieces", "workflow", "automation", "aitoearn"),
-        "package_signals": ("trigger", "connector", "workflow"),
-        "interface_signals": ("workflow", "pipeline"),
-        "negative_terms": ("headroom", "token reduction"),
-        "conflicting_role_families": ("compression_context",),
-        "required_minimum_evidence": "workflow/trigger/action/automation evidence",
-        "high_confidence_threshold": 72,
-        "medium_confidence_threshold": 52,
-        "weak_confidence_threshold": 32,
-    },
-    {
-        "role_family": "ai_workflow_builder",
-        "positive_terms": ("flowise", "flow", "node", "builder", "chatflow", "agentflow", "canvas"),
-        "path_signals": ("flowise", "flow"),
-        "package_signals": ("react", "node", "builder"),
-        "interface_signals": ("dashboard_ui", "workflow"),
-        "negative_terms": ("headroom", "token reduction"),
-        "conflicting_role_families": ("compression_context",),
-        "required_minimum_evidence": "flow/node/builder/chatflow evidence",
-        "high_confidence_threshold": 72,
-        "medium_confidence_threshold": 52,
-        "weak_confidence_threshold": 32,
-    },
-    {
-        "role_family": "agent_memory_retrieval",
-        "positive_terms": ("memory", "retrieval", "recall", "embedding", "vector", "conversation history", "agentmemory"),
-        "path_signals": ("agentmemory", "memory", "retrieval"),
-        "package_signals": ("vector", "embedding", "memory"),
-        "interface_signals": ("memory_store", "retrieval"),
-        "negative_terms": ("crawler", "lead", "outreach"),
-        "conflicting_role_families": ("crawler_source_collection", "business_reach_outreach"),
-        "required_minimum_evidence": "memory/retrieval/vector/recall evidence",
-        "high_confidence_threshold": 72,
-        "medium_confidence_threshold": 52,
-        "weak_confidence_threshold": 32,
-    },
-    {
-        "role_family": "chatbot_companion",
-        "positive_terms": ("chatbot", "assistant", "conversation", "chat interface"),
-        "path_signals": ("chat", "bot", "assistant"),
-        "package_signals": ("chat", "assistant"),
-        "interface_signals": ("chatbot"),
-        "negative_terms": ("headroom", "crawler"),
-        "conflicting_role_families": (),
-        "required_minimum_evidence": "chatbot/conversation interface evidence",
-        "high_confidence_threshold": 70,
-        "medium_confidence_threshold": 50,
-        "weak_confidence_threshold": 30,
-    },
-    {
-        "role_family": "dashboard_ui",
-        "positive_terms": ("dashboard", "admin ui", "web ui", "frontend", "react", "vite"),
-        "path_signals": ("dashboard", "frontend", "ui"),
-        "package_signals": ("react", "vite", "next"),
-        "interface_signals": ("dashboard_ui",),
-        "negative_terms": (),
-        "conflicting_role_families": (),
-        "required_minimum_evidence": "dashboard/frontend/operator UI evidence",
-        "high_confidence_threshold": 70,
-        "medium_confidence_threshold": 50,
-        "weak_confidence_threshold": 30,
-    },
-    {
-        "role_family": "api_server",
-        "positive_terms": ("api server", "fastapi", "express", "rest api", "openapi", "http server"),
-        "path_signals": ("api", "server"),
-        "package_signals": ("fastapi", "express", "openapi"),
-        "interface_signals": ("api_server",),
-        "negative_terms": (),
-        "conflicting_role_families": (),
-        "required_minimum_evidence": "API/server evidence",
-        "high_confidence_threshold": 70,
-        "medium_confidence_threshold": 50,
-        "weak_confidence_threshold": 30,
-    },
-    {
-        "role_family": "data_pipeline",
-        "positive_terms": ("pipeline", "ingestion", "etl", "dataset", "transform", "loader"),
-        "path_signals": ("pipeline", "ingest", "dataset"),
-        "package_signals": ("loader", "etl", "dataset"),
-        "interface_signals": ("data_pipeline",),
-        "negative_terms": (),
-        "conflicting_role_families": (),
-        "required_minimum_evidence": "pipeline/ingestion/data transformation evidence",
-        "high_confidence_threshold": 70,
-        "medium_confidence_threshold": 50,
-        "weak_confidence_threshold": 30,
-    },
-    {
-        "role_family": "unknown",
-        "positive_terms": (),
-        "path_signals": (),
-        "package_signals": (),
-        "interface_signals": (),
-        "negative_terms": (),
-        "conflicting_role_families": (),
-        "required_minimum_evidence": "no calibrated role reaches weak confidence",
-        "high_confidence_threshold": 100,
-        "medium_confidence_threshold": 100,
-        "weak_confidence_threshold": 1,
-    },
-)
+# Repo-role calibration lives in growth_repo_role_calibration.py.
+# These wrappers preserve the monolith's public function names and callback
+# boundaries for source concept collection and quarantine checks.
 
 
 def collect_repo_role_calibration_policy(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    payload = {
-        "repo_role_calibration_policy_version": REPO_ROLE_CALIBRATION_POLICY_VERSION,
-        "repo_role_calibration_policy_id": "repo-role-calibration-policy-" + _research_target_hash_text({"version": REPO_ROLE_CALIBRATION_POLICY_VERSION, "roles": [item["role_family"] for item in _REPO_ROLE_FAMILY_DEFINITIONS]})[:12],
-        "policy_version": REPO_ROLE_CALIBRATION_POLICY_VERSION,
-        "role_families": [
-            {key: list(value) if isinstance(value, tuple) else value for key, value in item.items()}
-            for item in _REPO_ROLE_FAMILY_DEFINITIONS
-        ],
-        "confidence_thresholds": {"high": 75, "medium": 55, "weak": 35, "low": 1},
-        "overclassification_guardrails": [
-            "compression_context requires explicit compression/token/chunk/log/tool-output evidence",
-            "MCP/proxy alone must not imply compression_context",
-            "agent, workflow, AI, chat, flow, memory, or context alone must not imply compression_context",
-            "crawler, reach/outreach, and workflow-builder evidence conflict with compression_context by default",
-            "unknown/weak confidence is valid when evidence is thin",
-        ],
-        "negative_signal_policy": "Negative and conflicting role signals reduce calibrated score before primary role selection.",
-        "contrast_fixture_policy": "Known local fixtures provide expected positive and negative role checks without overriding evidence.",
-        "recommended_next_action": "Run research repo-role --source <path> before scoring Growth opportunities.",
-        "fallback_allowed": False,
-        "model_used": False,
-        "external_network_used": False,
-        "safety_metadata": _read_only_safety_metadata(),
-        "dry_run": True,
-        "write_allowed": False,
-        "automation_allowed": False,
-        "metadata": dict(metadata or {}),
-        "writes": [],
-    }
-    validate_repo_role_calibration_policy(payload)
-    return payload
+    return _collect_repo_role_calibration_policy_impl(metadata=metadata)
 
 
 def validate_repo_role_calibration_policy(payload: dict[str, Any]) -> None:
-    required = ("repo_role_calibration_policy_version", "repo_role_calibration_policy_id", "policy_version", "role_families", "confidence_thresholds", "overclassification_guardrails", "negative_signal_policy", "contrast_fixture_policy", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
-    for key in required:
-        if key not in payload:
-            raise ValueError(f"repo role calibration policy missing field: {key}")
-    if payload["repo_role_calibration_policy_version"] != REPO_ROLE_CALIBRATION_POLICY_VERSION:
-        raise ValueError("invalid repo role calibration policy version")
-    families = payload["role_families"]
-    if not isinstance(families, list) or not families:
-        raise ValueError("repo role calibration policy requires role families")
-    by_role = {item.get("role_family"): item for item in families if isinstance(item, dict)}
-    for role in ("compression_context", "crawler_source_collection", "business_reach_outreach", "workflow_automation", "ai_workflow_builder", "agent_memory_retrieval", "chatbot_companion", "dashboard_ui", "api_server", "data_pipeline", "unknown"):
-        if role not in by_role:
-            raise ValueError(f"repo role calibration policy missing role: {role}")
-    compression = by_role["compression_context"]
-    if not compression.get("negative_terms") or not compression.get("conflicting_role_families"):
-        raise ValueError("compression role requires negative/conflicting signals")
-    for item in families:
-        for key in ("role_family", "positive_terms", "path_signals", "package_signals", "interface_signals", "negative_terms", "conflicting_role_families", "required_minimum_evidence", "high_confidence_threshold", "medium_confidence_threshold", "weak_confidence_threshold"):
-            if key not in item:
-                raise ValueError(f"repo role family missing field: {key}")
-    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
-        raise ValueError("repo role calibration policy must be deterministic/no-model/no-network")
-    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
-        raise ValueError("repo role calibration policy must remain read-only")
+    return _validate_repo_role_calibration_policy_impl(payload)
 
 
 def stable_repo_role_calibration_policy_json(payload: dict[str, Any]) -> str:
-    validate_repo_role_calibration_policy(payload)
-    return _stable_ruflo_json(payload, indent=2) + "\n"
+    return _stable_repo_role_calibration_policy_json_impl(payload)
 
 
 def parse_repo_role_calibration_policy_json(text: str) -> dict[str, Any]:
-    import json as _json
-    payload = _json.loads(text)
-    validate_repo_role_calibration_policy(payload)
-    return payload
+    return _parse_repo_role_calibration_policy_json_impl(text)
 
 
 def collect_repo_role_calibration_fixtures(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    from pathlib import Path as _Path
-
-    fixture_specs = [
-        ("research/headroom-main.zip", "compression_context", ["compression_context"], ["crawler_source_collection"], ["api_server", "dashboard_ui"], "", "Headroom is the positive compression/context reduction fixture."),
-        ("research/agentmemory-main.zip", "agent_memory_retrieval", ["agent_memory_retrieval"], ["crawler_source_collection"], ["compression_context"], "", "agentmemory is memory/retrieval first; compression is adjacent only with direct evidence."),
-        ("research/gpt-crawler-main.zip", "crawler_source_collection", ["crawler_source_collection"], ["compression_context"], ["data_pipeline"], "", "gpt-crawler is a crawler/source collection contrast fixture."),
-        ("research/Agent-Reach-main.zip", "business_reach_outreach", ["business_reach_outreach"], ["compression_context"], ["workflow_automation"], "", "Agent-Reach should calibrate toward reach/outreach/business workflow evidence."),
-        ("research/Flowise-main.zip", "ai_workflow_builder", ["ai_workflow_builder", "workflow_automation"], ["compression_context"], ["dashboard_ui", "api_server"], "", "Flowise is an AI workflow builder contrast fixture."),
-        ("research/AiToEarn-main.zip", "workflow_automation", ["workflow_automation", "business_reach_outreach"], ["compression_context"], ["dashboard_ui"], "", "AiToEarn should not be forced into compression without direct evidence."),
-        ("research/activepieces-main.zip", "workflow_automation", ["workflow_automation"], ["compression_context"], ["api_server"], "skipped_or_quarantined", "activepieces is optional and may be quarantined by source suitability."),
-    ]
-    fixtures: list[dict[str, Any]] = []
-    missing: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    for source_path, primary, positive, negative, secondary, quarantine_status, reason in fixture_specs:
-        path = _Path(source_path)
-        if not path.exists():
-            missing.append({"source_path": source_path, "reason": "fixture source not present locally"})
-            continue
-        actual_quarantine = "not_checked"
-        try:
-            quarantine = collect_source_queue_quarantine_record(source_path=source_path)
-            actual_quarantine = quarantine["quarantine_status"]
-        except Exception as exc:
-            actual_quarantine = "needs_review"
-            skipped.append({"source_path": source_path, "reason": _source_aware_text(str(exc), max_chars=180)})
-        fixtures.append({
-            "source_path": source_path,
-            "expected_primary_role": primary,
-            "expected_positive_roles": positive,
-            "expected_negative_roles": negative,
-            "allowed_secondary_roles": secondary,
-            "expected_quarantine_status": quarantine_status,
-            "actual_quarantine_status": actual_quarantine,
-            "reason": reason,
-        })
-    payload = {
-        "repo_role_calibration_fixtures_version": REPO_ROLE_CALIBRATION_FIXTURES_VERSION,
-        "repo_role_calibration_fixtures_id": "repo-role-calibration-fixtures-" + _research_target_hash_text({"version": REPO_ROLE_CALIBRATION_FIXTURES_VERSION, "fixtures": fixture_specs})[:12],
-        "fixture_version": REPO_ROLE_CALIBRATION_FIXTURES_VERSION,
-        "fixtures": fixtures,
-        "missing_fixtures": missing,
-        "skipped_fixtures": skipped,
-        "recommended_next_action": "Run research repo-role against fixture sources and inspect mismatch warnings.",
-        "fallback_allowed": False,
-        "model_used": False,
-        "external_network_used": False,
-        "safety_metadata": _read_only_safety_metadata(),
-        "dry_run": True,
-        "write_allowed": False,
-        "automation_allowed": False,
-        "metadata": dict(metadata or {}),
-        "writes": [],
-    }
-    validate_repo_role_calibration_fixtures(payload)
-    return payload
+    return _collect_repo_role_calibration_fixtures_impl(
+        metadata=metadata,
+        collect_quarantine=collect_source_queue_quarantine_record,
+    )
 
 
 def validate_repo_role_calibration_fixtures(payload: dict[str, Any]) -> None:
-    required = ("repo_role_calibration_fixtures_version", "repo_role_calibration_fixtures_id", "fixture_version", "fixtures", "missing_fixtures", "skipped_fixtures", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
-    for key in required:
-        if key not in payload:
-            raise ValueError(f"repo role calibration fixtures missing field: {key}")
-    if payload["repo_role_calibration_fixtures_version"] != REPO_ROLE_CALIBRATION_FIXTURES_VERSION:
-        raise ValueError("invalid repo role calibration fixtures version")
-    for item in payload["fixtures"]:
-        for key in ("source_path", "expected_primary_role", "expected_positive_roles", "expected_negative_roles", "allowed_secondary_roles", "expected_quarantine_status", "reason"):
-            if key not in item:
-                raise ValueError(f"repo role calibration fixture missing field: {key}")
-    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
-        raise ValueError("repo role calibration fixtures must be deterministic/no-model/no-network")
-    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
-        raise ValueError("repo role calibration fixtures must remain read-only")
+    return _validate_repo_role_calibration_fixtures_impl(payload)
 
 
 def stable_repo_role_calibration_fixtures_json(payload: dict[str, Any]) -> str:
-    validate_repo_role_calibration_fixtures(payload)
-    return _stable_ruflo_json(payload, indent=2) + "\n"
+    return _stable_repo_role_calibration_fixtures_json_impl(payload)
 
 
 def parse_repo_role_calibration_fixtures_json(text: str) -> dict[str, Any]:
-    import json as _json
-    payload = _json.loads(text)
-    validate_repo_role_calibration_fixtures(payload)
-    return payload
+    return _parse_repo_role_calibration_fixtures_json_impl(text)
 
 
 def _repo_role_signal_text(concepts: dict[str, Any]) -> str:
-    parts: list[str] = [
-        concepts.get("source_path", ""),
-        concepts.get("source_name", ""),
-        concepts.get("repo_role_summary", ""),
-        " ".join(concepts.get("concept_families", [])),
-    ]
-    for item in concepts.get("detected_concepts", []):
-        parts.extend([item.get("concept_id", ""), item.get("concept_name", ""), item.get("concept_family", ""), item.get("reason", "")])
-    for item in concepts.get("concept_evidence", []):
-        parts.extend([item.get("signal_type", ""), item.get("signal_value", ""), item.get("source_ref", ""), item.get("evidence_ref", "")])
-    parts.extend(concepts.get("source_refs", []))
-    parts.extend(concepts.get("evidence_refs", []))
-    return " ".join(str(item) for item in parts if item).lower()
+    return _repo_role_signal_text_impl(concepts)
 
 
 def _repo_role_confidence_label(score: int, family: dict[str, Any]) -> str:
-    if score >= int(family["high_confidence_threshold"]):
-        return "high"
-    if score >= int(family["medium_confidence_threshold"]):
-        return "medium"
-    if score >= int(family["weak_confidence_threshold"]):
-        return "weak"
-    return "low"
+    return _repo_role_confidence_label_impl(score, family)
 
 
 def _repo_role_fixture_for_source(source_path: str) -> dict[str, Any] | None:
-    static_fixtures = {
-        "research/headroom-main.zip": ("compression_context", ["compression_context"], ["crawler_source_collection"], ["api_server", "dashboard_ui"], "", "Headroom is the positive compression/context reduction fixture."),
-        "research/agentmemory-main.zip": ("agent_memory_retrieval", ["agent_memory_retrieval"], ["crawler_source_collection"], ["compression_context"], "", "agentmemory is memory/retrieval first; compression is adjacent only with direct evidence."),
-        "research/gpt-crawler-main.zip": ("crawler_source_collection", ["crawler_source_collection"], ["compression_context"], ["data_pipeline"], "", "gpt-crawler is a crawler/source collection contrast fixture."),
-        "research/Agent-Reach-main.zip": ("business_reach_outreach", ["business_reach_outreach"], ["compression_context"], ["workflow_automation"], "", "Agent-Reach should calibrate toward reach/outreach/business workflow evidence."),
-        "research/Flowise-main.zip": ("ai_workflow_builder", ["ai_workflow_builder", "workflow_automation"], ["compression_context"], ["dashboard_ui", "api_server"], "", "Flowise is an AI workflow builder contrast fixture."),
-        "research/AiToEarn-main.zip": ("workflow_automation", ["workflow_automation", "business_reach_outreach"], ["compression_context"], ["dashboard_ui"], "", "AiToEarn should not be forced into compression without direct evidence."),
-        "research/activepieces-main.zip": ("workflow_automation", ["workflow_automation"], ["compression_context"], ["api_server"], "skipped_or_quarantined", "activepieces is optional and may be quarantined by source suitability."),
-    }
-    item = static_fixtures.get(source_path)
-    if not item:
-        return None
-    primary, positive, negative, secondary, quarantine_status, reason = item
-    return {
-        "source_path": source_path,
-        "expected_primary_role": primary,
-        "expected_positive_roles": positive,
-        "expected_negative_roles": negative,
-        "allowed_secondary_roles": secondary,
-        "expected_quarantine_status": quarantine_status,
-        "reason": reason,
-    }
+    return _repo_role_fixture_for_source_impl(source_path)
 
 
 def collect_calibrated_repo_role_classification(
@@ -12427,243 +12151,32 @@ def collect_calibrated_repo_role_classification(
     source_path: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    concepts = archive_concepts or collect_source_aware_archive_concepts(source_path=source_path)
-    validate_source_aware_archive_concepts(concepts)
-    policy = collect_repo_role_calibration_policy()
-    fixture = _repo_role_fixture_for_source(concepts["source_path"])
-    haystack = _repo_role_signal_text(concepts)
-    concept_families = set(concepts.get("concept_families", []))
-    concept_ids = {item.get("concept_id") for item in concepts.get("detected_concepts", [])}
-    scores: list[dict[str, Any]] = []
-    role_raw: dict[str, int] = {}
-    role_positive_counts: dict[str, int] = {}
-    role_negative_counts: dict[str, int] = {}
-    compression_explicit = bool(concept_ids.intersection({"compression_library", "token_reduction", "rag_chunk_compression", "tool_output_compression"}))
-    if "log_file_compression" in concept_ids:
-        log_concept = next((item for item in concepts.get("detected_concepts", []) if item.get("concept_id") == "log_file_compression"), {})
-        log_reason = str(log_concept.get("reason", "")).lower()
-        if int(log_concept.get("confidence", 0) or 0) >= 75 or "file compression" in log_reason:
-            compression_explicit = True
-    for family in policy["role_families"]:
-        role = family["role_family"]
-        if role == "unknown":
-            continue
-        positive_hits = [term for term in family["positive_terms"] if term and term in haystack]
-        path_hits = [term for term in family["path_signals"] if term and term in haystack]
-        package_hits = [term for term in family["package_signals"] if term and term in haystack]
-        interface_hits = [term for term in family["interface_signals"] if term and term in haystack]
-        negative_hits = [term for term in family["negative_terms"] if term and term in haystack]
-        raw = 10 + min(45, len(positive_hits) * 8) + min(20, len(path_hits) * 6) + min(15, len(package_hits) * 5) + min(10, len(interface_hits) * 4)
-        if role == "compression_context" and ("compression" in concept_families or "rag" in concept_families):
-            raw += 18
-        if role == "crawler_source_collection" and ("crawler" in concept_families or "scraper" in concept_families):
-            raw += 24
-        if role == "business_reach_outreach" and "business_growth" in concept_families:
-            raw += 18
-        if role == "workflow_automation" and ("workflow_automation" in concept_families or "data_pipeline" in concept_families):
-            raw += 18
-        if role == "ai_workflow_builder" and "dashboard_ui" in concept_families and any(term in haystack for term in ("flowise", "chatflow", "agentflow", "builder")):
-            raw += 20
-        if role == "agent_memory_retrieval" and "agent_memory" in concept_families:
-            raw += 24
-        raw = min(100, raw)
-        calibrated = max(0, raw - min(45, len(negative_hits) * 10))
-        reasons = []
-        warnings = []
-        if positive_hits:
-            reasons.append("positive terms: " + ", ".join(positive_hits[:6]))
-        if path_hits:
-            reasons.append("path signals: " + ", ".join(path_hits[:4]))
-        if negative_hits:
-            warnings.append("negative terms: " + ", ".join(negative_hits[:5]))
-        if role == "compression_context" and not compression_explicit:
-            calibrated = min(calibrated, 34)
-            warnings.append("compression downranked: no explicit compression/token/chunk/log/tool-output evidence")
-        role_raw[role] = raw
-        role_positive_counts[role] = len(positive_hits) + len(path_hits) + len(package_hits) + len(interface_hits)
-        role_negative_counts[role] = len(negative_hits)
-        scores.append({
-            "role_family": role,
-            "raw_score": raw,
-            "calibrated_score": calibrated,
-            "confidence_label": _repo_role_confidence_label(calibrated, family),
-            "positive_signal_count": role_positive_counts[role],
-            "negative_signal_count": role_negative_counts[role],
-            "evidence_refs": concepts["evidence_refs"][:5],
-            "source_refs": concepts["source_refs"][:5],
-            "reasons": reasons or ["no strong calibrated signal"],
-            "warnings": warnings,
-        })
-    score_by_role = {item["role_family"]: item for item in scores}
-    adjustments: list[str] = []
-    if fixture:
-        families_by_role = {item["role_family"]: item for item in policy["role_families"]}
-        expected = fixture["expected_primary_role"]
-        if expected in score_by_role:
-            target = score_by_role[expected]
-            old = target["calibrated_score"]
-            target["calibrated_score"] = min(92, max(target["calibrated_score"], target["calibrated_score"] + 45))
-            target["confidence_label"] = _repo_role_confidence_label(target["calibrated_score"], families_by_role[expected])
-            target["reasons"].append(f"contrast fixture expects {expected}")
-            adjustments.append(f"{expected} {old}->{target['calibrated_score']} due contrast fixture")
-        for negative_role in fixture["expected_negative_roles"]:
-            if negative_role in score_by_role:
-                target = score_by_role[negative_role]
-                old = target["calibrated_score"]
-                target["calibrated_score"] = min(target["calibrated_score"], 30)
-                target["confidence_label"] = _repo_role_confidence_label(target["calibrated_score"], families_by_role[negative_role])
-                target["warnings"].append(f"downranked by contrast fixture negative role {negative_role}")
-                adjustments.append(f"{negative_role} {old}->{target['calibrated_score']} due contrast fixture")
-    conflict_pairs = (
-        ("compression_context", "crawler_source_collection"),
-        ("compression_context", "business_reach_outreach"),
-        ("compression_context", "ai_workflow_builder"),
-        ("compression_context", "workflow_automation"),
+    return _collect_calibrated_repo_role_classification_impl(
+        archive_concepts,
+        source_path=source_path,
+        metadata=metadata,
+        collect_concepts=collect_source_aware_archive_concepts,
+        validate_concepts=validate_source_aware_archive_concepts,
     )
-    for compression_role, other_role in conflict_pairs:
-        comp = score_by_role.get(compression_role)
-        other = score_by_role.get(other_role)
-        if comp and other and other["calibrated_score"] >= 55 and comp["calibrated_score"] < 75:
-            old = comp["calibrated_score"]
-            comp["calibrated_score"] = min(comp["calibrated_score"], 30)
-            comp["confidence_label"] = "low"
-            comp["warnings"].append(f"compression downranked by stronger {other_role} evidence")
-            adjustments.append(f"compression_context {old}->{comp['calibrated_score']} due {other_role}")
-    if score_by_role.get("agent_memory_retrieval", {}).get("calibrated_score", 0) >= 60 and score_by_role.get("compression_context", {}).get("calibrated_score", 0) < 75:
-        comp = score_by_role["compression_context"]
-        old = comp["calibrated_score"]
-        comp["calibrated_score"] = min(comp["calibrated_score"], 52)
-        comp["confidence_label"] = _repo_role_confidence_label(comp["calibrated_score"], next(item for item in policy["role_families"] if item["role_family"] == "compression_context"))
-        comp["warnings"].append("compression kept adjacent to memory/retrieval instead of primary")
-        adjustments.append(f"compression_context {old}->{comp['calibrated_score']} as memory-adjacent")
-    scores = sorted(scores, key=lambda item: (-int(item["calibrated_score"]), item["role_family"]))
-    primary = scores[0] if scores and scores[0]["calibrated_score"] >= 30 else {
-        "role_family": "unknown",
-        "calibrated_score": 20,
-        "confidence_label": "weak",
-    }
-    if primary["role_family"] == "unknown":
-        scores.insert(0, {
-            "role_family": "unknown",
-            "raw_score": 20,
-            "calibrated_score": 20,
-            "confidence_label": "weak",
-            "positive_signal_count": 0,
-            "negative_signal_count": 0,
-            "evidence_refs": concepts["evidence_refs"][:3],
-            "source_refs": concepts["source_refs"][:3],
-            "reasons": ["no calibrated role reached weak confidence"],
-            "warnings": [],
-        })
-    fixture_status = "not_matched"
-    if fixture:
-        if primary["role_family"] == fixture["expected_primary_role"]:
-            fixture_status = "matched"
-        elif primary["role_family"] in fixture["allowed_secondary_roles"]:
-            fixture_status = "allowed_secondary"
-        else:
-            fixture_status = "mismatch"
-            adjustments.append(f"fixture expected {fixture['expected_primary_role']} but classifier selected {primary['role_family']}")
-    overclassification_warnings = _normalize_implementation_branch_refs([
-        warning
-        for item in scores
-        for warning in item.get("warnings", [])
-        if "compression" in warning.lower() or "downranked" in warning.lower()
-    ])
-    payload = {
-        "calibrated_repo_role_classification_version": CALIBRATED_REPO_ROLE_CLASSIFICATION_VERSION,
-        "calibrated_repo_role_classification_id": "calibrated-repo-role-classification-" + _research_target_hash_text({"concepts_id": concepts["source_aware_archive_concepts_id"], "primary": primary["role_family"], "version": CALIBRATED_REPO_ROLE_CLASSIFICATION_VERSION})[:12],
-        "source_path": concepts["source_path"],
-        "source_name": concepts["source_name"],
-        "archive_concepts_id": concepts["source_aware_archive_concepts_id"],
-        "repo_role_policy_id": policy["repo_role_calibration_policy_id"],
-        "primary_role": primary["role_family"],
-        "primary_role_confidence": primary["confidence_label"],
-        "role_scores": scores,
-        "positive_evidence": _normalize_implementation_branch_refs([reason for item in scores[:3] for reason in item.get("reasons", [])])[:8],
-        "negative_evidence": _normalize_implementation_branch_refs([warning for item in scores for warning in item.get("warnings", [])])[:8],
-        "conflicting_signals": _normalize_implementation_branch_refs([item for item in adjustments if "due" in item or "expected" in item]),
-        "overclassification_warnings": overclassification_warnings,
-        "fixture_expectation": fixture or {},
-        "fixture_match_status": fixture_status,
-        "calibration_adjustments": _normalize_implementation_branch_refs(adjustments),
-        "recommended_next_action": "Use calibrated role and concept confidence before selecting Growth implementation work.",
-        "fallback_allowed": False,
-        "model_used": False,
-        "external_network_used": False,
-        "safety_metadata": _read_only_safety_metadata(),
-        "dry_run": True,
-        "write_allowed": False,
-        "automation_allowed": False,
-        "metadata": dict(metadata or {}),
-        "writes": [],
-    }
-    validate_calibrated_repo_role_classification(payload, concepts)
-    return payload
 
 
 def validate_calibrated_repo_role_classification(payload: dict[str, Any], archive_concepts: dict[str, Any] | None = None) -> None:
-    required = ("calibrated_repo_role_classification_version", "calibrated_repo_role_classification_id", "source_path", "source_name", "archive_concepts_id", "repo_role_policy_id", "primary_role", "primary_role_confidence", "role_scores", "positive_evidence", "negative_evidence", "conflicting_signals", "overclassification_warnings", "fixture_expectation", "fixture_match_status", "calibration_adjustments", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
-    for key in required:
-        if key not in payload:
-            raise ValueError(f"calibrated repo role classification missing field: {key}")
-    if payload["calibrated_repo_role_classification_version"] != CALIBRATED_REPO_ROLE_CLASSIFICATION_VERSION:
-        raise ValueError("invalid calibrated repo role classification version")
-    if payload["primary_role_confidence"] not in {"high", "medium", "weak", "low"}:
-        raise ValueError("invalid calibrated repo role confidence")
-    if not isinstance(payload["role_scores"], list) or not payload["role_scores"]:
-        raise ValueError("calibrated repo role classification requires role scores")
-    for item in payload["role_scores"]:
-        for key in ("role_family", "raw_score", "calibrated_score", "confidence_label", "positive_signal_count", "negative_signal_count", "evidence_refs", "source_refs", "reasons", "warnings"):
-            if key not in item:
-                raise ValueError(f"repo role score missing field: {key}")
-        for score_key in ("raw_score", "calibrated_score"):
-            if not isinstance(item[score_key], int) or not 0 <= item[score_key] <= 100:
-                raise ValueError(f"repo role {score_key} must be 0..100")
-    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
-        raise ValueError("calibrated repo role classification must be deterministic/no-model/no-network")
-    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
-        raise ValueError("calibrated repo role classification must remain read-only")
-    if archive_concepts is not None and payload["archive_concepts_id"] != archive_concepts["source_aware_archive_concepts_id"]:
-        raise ValueError("calibrated repo role concepts id mismatch")
+    return _validate_calibrated_repo_role_classification_impl(payload, archive_concepts)
 
 
 def stable_calibrated_repo_role_classification_json(payload: dict[str, Any]) -> str:
-    validate_calibrated_repo_role_classification(payload)
-    return _stable_ruflo_json(payload, indent=2) + "\n"
+    return _stable_calibrated_repo_role_classification_json_impl(payload)
 
 
 def parse_calibrated_repo_role_classification_json(text: str) -> dict[str, Any]:
-    import json as _json
-    payload = _json.loads(text)
-    validate_calibrated_repo_role_classification(payload)
-    return payload
-
+    return _parse_calibrated_repo_role_classification_json_impl(text)
 
 def _concept_confidence_label(score: int) -> str:
-    if score >= 75:
-        return "high"
-    if score >= 55:
-        return "medium"
-    if score >= 35:
-        return "weak"
-    return "low"
+    return _concept_confidence_label_impl(score)
 
 
 def _role_supports_concept(primary_role: str, concept_family: str) -> bool:
-    supported = {
-        "compression_context": {"compression", "rag", "cli", "library", "mcp", "proxy"},
-        "crawler_source_collection": {"crawler", "scraper", "data_pipeline"},
-        "business_reach_outreach": {"business_growth", "workflow_automation"},
-        "workflow_automation": {"workflow_automation", "data_pipeline", "api_server"},
-        "ai_workflow_builder": {"workflow_automation", "dashboard_ui", "chatbot", "api_server", "data_pipeline"},
-        "agent_memory_retrieval": {"agent_memory", "rag", "data_pipeline"},
-        "chatbot_companion": {"chatbot", "api_server", "dashboard_ui"},
-        "dashboard_ui": {"dashboard_ui"},
-        "api_server": {"api_server"},
-        "data_pipeline": {"data_pipeline"},
-    }
-    return concept_family in supported.get(primary_role, set())
+    return _role_supports_concept_impl(primary_role, concept_family)
 
 
 def collect_concept_confidence_calibration(
@@ -12673,138 +12186,28 @@ def collect_concept_confidence_calibration(
     source_path: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    concepts = archive_concepts or collect_source_aware_archive_concepts(source_path=source_path)
-    validate_source_aware_archive_concepts(concepts)
-    role = repo_role_classification or collect_calibrated_repo_role_classification(concepts)
-    validate_calibrated_repo_role_classification(role, concepts)
-    primary_role = role["primary_role"]
-    calibrations: list[dict[str, Any]] = []
-    overconfident: list[dict[str, Any]] = []
-    downranked: list[dict[str, Any]] = []
-    promoted: list[dict[str, Any]] = []
-    for concept in concepts["detected_concepts"]:
-        original = int(concept["confidence"])
-        calibrated = original
-        reasons: list[str] = []
-        status = "unchanged"
-        family = concept["concept_family"]
-        if family in {"compression", "rag"} and primary_role != "compression_context":
-            calibrated = min(calibrated, 34 if primary_role in {"crawler_source_collection", "business_reach_outreach", "ai_workflow_builder", "workflow_automation"} else 52)
-            reasons.append(f"downranked because primary repo role is {primary_role}, not compression_context")
-        elif _role_supports_concept(primary_role, family):
-            calibrated = min(95, calibrated + 8)
-            reasons.append(f"kept/promoted because concept family aligns with {primary_role}")
-        if len(concept.get("source_refs", [])) <= 1 or len(concept.get("evidence_refs", [])) <= 1:
-            calibrated = min(calibrated, original - 8 if original >= 45 else original)
-            reasons.append("thin evidence refs limited confidence")
-        calibrated = max(0, min(100, calibrated))
-        adjustment = calibrated - original
-        if calibrated < 35:
-            status = "rejected"
-        elif adjustment < 0:
-            status = "downranked"
-        elif adjustment > 0:
-            status = "promoted"
-        entry = {
-            "concept_id": concept["concept_id"],
-            "concept_name": concept["concept_name"],
-            "concept_family": family,
-            "original_confidence": original,
-            "calibrated_confidence": calibrated,
-            "confidence_label": _concept_confidence_label(calibrated),
-            "adjustment": adjustment,
-            "adjustment_reasons": reasons or ["no calibration adjustment"],
-            "positive_evidence_refs": concept["evidence_refs"][:4] if adjustment >= 0 else [],
-            "negative_evidence_refs": concept["evidence_refs"][:4] if adjustment < 0 else [],
-            "source_refs": concept["source_refs"][:4],
-            "status": status,
-        }
-        calibrations.append(entry)
-        if original >= 75 and calibrated < 55:
-            overconfident.append(entry)
-        if status in {"downranked", "rejected"}:
-            downranked.append(entry)
-        if status == "promoted":
-            promoted.append(entry)
-    expected_family_by_role = {
-        "compression_context": "compression",
-        "crawler_source_collection": "crawler",
-        "business_reach_outreach": "business_growth",
-        "workflow_automation": "workflow_automation",
-        "ai_workflow_builder": "workflow_automation",
-        "agent_memory_retrieval": "agent_memory",
-    }
-    expected_family = expected_family_by_role.get(primary_role)
-    missing_expected = []
-    if expected_family and not any(item["concept_family"] == expected_family and item["calibrated_confidence"] >= 35 for item in calibrations):
-        missing_expected.append({
-            "expected_concept_family": expected_family,
-            "reason": f"primary role {primary_role} lacks medium calibrated concept support",
-        })
-    payload = {
-        "concept_confidence_calibration_version": CONCEPT_CONFIDENCE_CALIBRATION_VERSION,
-        "concept_confidence_calibration_id": "concept-confidence-calibration-" + _research_target_hash_text({"concepts_id": concepts["source_aware_archive_concepts_id"], "role_id": role["calibrated_repo_role_classification_id"], "version": CONCEPT_CONFIDENCE_CALIBRATION_VERSION})[:12],
-        "source_path": concepts["source_path"],
-        "archive_concepts_id": concepts["source_aware_archive_concepts_id"],
-        "repo_role_classification_id": role["calibrated_repo_role_classification_id"],
-        "concept_calibrations": calibrations,
-        "overconfident_concepts": overconfident,
-        "downranked_concepts": downranked,
-        "promoted_concepts": promoted,
-        "missing_expected_concepts": missing_expected,
-        "recommended_next_action": "Use calibrated concept confidence for profile and opportunity scoring.",
-        "fallback_allowed": False,
-        "model_used": False,
-        "external_network_used": False,
-        "safety_metadata": _read_only_safety_metadata(),
-        "dry_run": True,
-        "write_allowed": False,
-        "automation_allowed": False,
-        "metadata": dict(metadata or {}),
-        "writes": [],
-    }
-    validate_concept_confidence_calibration(payload, concepts, role)
-    return payload
+    return _collect_concept_confidence_calibration_impl(
+        archive_concepts,
+        repo_role_classification,
+        source_path=source_path,
+        metadata=metadata,
+        collect_concepts=collect_source_aware_archive_concepts,
+        validate_concepts=validate_source_aware_archive_concepts,
+        collect_repo_role=collect_calibrated_repo_role_classification,
+        validate_repo_role=validate_calibrated_repo_role_classification,
+    )
 
 
 def validate_concept_confidence_calibration(payload: dict[str, Any], archive_concepts: dict[str, Any] | None = None, repo_role_classification: dict[str, Any] | None = None) -> None:
-    required = ("concept_confidence_calibration_version", "concept_confidence_calibration_id", "source_path", "archive_concepts_id", "repo_role_classification_id", "concept_calibrations", "overconfident_concepts", "downranked_concepts", "promoted_concepts", "missing_expected_concepts", "recommended_next_action", "fallback_allowed", "model_used", "external_network_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes")
-    for key in required:
-        if key not in payload:
-            raise ValueError(f"concept confidence calibration missing field: {key}")
-    if payload["concept_confidence_calibration_version"] != CONCEPT_CONFIDENCE_CALIBRATION_VERSION:
-        raise ValueError("invalid concept confidence calibration version")
-    if not isinstance(payload["concept_calibrations"], list):
-        raise TypeError("concept confidence calibrations must be a list")
-    for item in payload["concept_calibrations"]:
-        for key in ("concept_id", "concept_name", "concept_family", "original_confidence", "calibrated_confidence", "confidence_label", "adjustment", "adjustment_reasons", "positive_evidence_refs", "negative_evidence_refs", "source_refs", "status"):
-            if key not in item:
-                raise ValueError(f"concept calibration missing field: {key}")
-        if not 0 <= int(item["calibrated_confidence"]) <= 100:
-            raise ValueError("calibrated concept confidence must be 0..100")
-        if item["status"] not in {"promoted", "unchanged", "downranked", "rejected", "needs_more_evidence"}:
-            raise ValueError("invalid concept calibration status")
-    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
-        raise ValueError("concept confidence calibration must be deterministic/no-model/no-network")
-    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
-        raise ValueError("concept confidence calibration must remain read-only")
-    if archive_concepts is not None and payload["archive_concepts_id"] != archive_concepts["source_aware_archive_concepts_id"]:
-        raise ValueError("concept confidence archive concepts id mismatch")
-    if repo_role_classification is not None and payload["repo_role_classification_id"] != repo_role_classification["calibrated_repo_role_classification_id"]:
-        raise ValueError("concept confidence role id mismatch")
+    return _validate_concept_confidence_calibration_impl(payload, archive_concepts, repo_role_classification)
 
 
 def stable_concept_confidence_calibration_json(payload: dict[str, Any]) -> str:
-    validate_concept_confidence_calibration(payload)
-    return _stable_ruflo_json(payload, indent=2) + "\n"
+    return _stable_concept_confidence_calibration_json_impl(payload)
 
 
 def parse_concept_confidence_calibration_json(text: str) -> dict[str, Any]:
-    import json as _json
-    payload = _json.loads(text)
-    validate_concept_confidence_calibration(payload)
-    return payload
-
+    return _parse_concept_confidence_calibration_json_impl(text)
 
 def collect_compression_repo_concept_profile(
     archive_concepts: dict[str, Any] | None = None,
@@ -16817,158 +16220,28 @@ def parse_source_aware_growth_e2e_summary_json(text: str) -> dict[str, Any]:
 
 
 def collect_growth_opportunity_decision_score(*, source_path: str, summary: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    e2e = summary or collect_source_aware_growth_e2e_summary(source_path=source_path)
-    validate_source_aware_growth_e2e_summary(e2e)
-    best = e2e["best_growth_opportunity"]
-    role = collect_calibrated_repo_role_classification(source_path=e2e["source_path"])
-    concept_confidence = collect_concept_confidence_calibration(source_path=e2e["source_path"], repo_role_classification=role)
-    source_specificity = 9 if best["source_specific"] else 4
-    evidence_support = 8 if best["evidence_refs"] and best["source_refs"] else 4
-    feasibility = 8 if len(best["expected_files_to_touch"]) <= 4 else 6
-    growth_value = 9 if best["concept_supported"] else 5
-    safety_risk = min(10, max(1, int(best["safety_risk"]) // 10))
-    operator_confidence = int(best["operator_confidence"])
-    title_text = (best["title"] + " " + best.get("why_good", "") + " " + best.get("recommended_next_slice", "")).lower()
-    compression_specific = any(term in title_text for term in ("compression", "compress", "token", "context reduction"))
-    crawler_specific = any(term in title_text for term in ("crawler", "crawl", "source", "sitemap"))
-    business_specific = any(term in title_text for term in ("reach", "outreach", "lead", "business", "growth"))
-    role_alignment = 7
-    calibration_warnings: list[str] = []
-    rejected_due_to_role_mismatch: list[dict[str, Any]] = []
-    false_positive_penalty = 0
-    overclassification_penalty = 0
-    primary_role = role["primary_role"]
-    if compression_specific and primary_role != "compression_context":
-        role_alignment = 3
-        false_positive_penalty = 3
-        overclassification_penalty = 2 if role["overclassification_warnings"] else 1
-        calibration_warnings.append(f"compression-specific opportunity mismatches primary role {primary_role}")
-        rejected_due_to_role_mismatch.append({"opportunity_id": best["opportunity_id"], "title": best["title"], "primary_role": primary_role, "reason": "compression opportunity requires compression_context primary role"})
-    elif crawler_specific and primary_role == "crawler_source_collection":
-        role_alignment = 9
-        growth_value = max(growth_value, 8)
-    elif business_specific and primary_role == "business_reach_outreach":
-        role_alignment = 9
-        growth_value = max(growth_value, 8)
-    elif _role_supports_concept(primary_role, e2e["top_concept_families"][0] if e2e["top_concept_families"] else "unknown"):
-        role_alignment = 8
-    concept_confidence_score = max([item["calibrated_confidence"] for item in concept_confidence["concept_calibrations"][:5]] or [0])
-    concept_confidence_0_10 = max(1, min(10, concept_confidence_score // 10))
-    direct_usefulness = max(0, min(10, int(round((source_specificity + evidence_support + feasibility + growth_value + role_alignment + concept_confidence_0_10 - safety_risk - false_positive_penalty - overclassification_penalty) / 5))))
-    if false_positive_penalty:
-        growth_value = max(3, growth_value - false_positive_penalty)
-        operator_confidence = min(operator_confidence, 5)
-    if source_specificity >= 7 and evidence_support >= 6 and feasibility >= 6 and growth_value >= 7 and safety_risk <= 5 and operator_confidence >= 7:
-        decision = "accept"
-        reason = "Opportunity is source-specific, evidence-backed, feasible, and bounded by read-only safety constraints."
-    elif evidence_support < 6:
-        decision = "needs_more_evidence"
-        reason = "Evidence support is too weak for implementation planning."
-    elif source_specificity < 7:
-        decision = "too_generic"
-        reason = "Opportunity is not specific enough to the selected source concepts."
-    elif safety_risk > 5:
-        decision = "blocked"
-        reason = "Safety risk is too high for the next implementation slice."
-    elif rejected_due_to_role_mismatch:
-        decision = "needs_more_evidence"
-        reason = "Opportunity is source-backed but mismatches the calibrated primary repo role."
-    else:
-        decision = "needs_more_evidence"
-        reason = "Opportunity needs stronger operator confidence before implementation."
-    payload = {
-        "growth_opportunity_decision_score_version": GROWTH_OPPORTUNITY_DECISION_SCORE_VERSION,
-        "growth_opportunity_decision_score_id": "growth-opportunity-decision-score-" + _research_target_hash_text({"summary_id": e2e["source_aware_growth_e2e_summary_id"], "decision": decision, "version": GROWTH_OPPORTUNITY_DECISION_SCORE_VERSION})[:12],
-        "source_path": e2e["source_path"],
-        "e2e_summary_id": e2e["source_aware_growth_e2e_summary_id"],
-        "source_archive_intake_cache_id": e2e["source_archive_intake_cache_id"],
-        "cache_key_id": e2e["cache_key_id"],
-        "persistent_cache_policy_id": e2e.get("persistent_cache_policy_id", ""),
-        "persistent_cache_manifest_id": e2e.get("persistent_cache_manifest_id", ""),
-        "persistent_cache_record_id": e2e.get("persistent_cache_record_id", ""),
-        "persistent_cache_hit": bool(e2e.get("persistent_cache_hit", False)),
-        "persistent_cache_valid": bool(e2e.get("persistent_cache_valid", False)),
-        "persistent_cache_write_performed": bool(e2e.get("persistent_cache_write_performed", False)),
-        "cache_source": e2e.get("cache_source", "computed"),
-        "invalidation_reasons": e2e.get("invalidation_reasons", []),
-        "best_opportunity_id": best["opportunity_id"],
-        "source_specificity_score": source_specificity,
-        "evidence_support_score": evidence_support,
-        "implementation_feasibility_score": feasibility,
-        "link_growth_value_score": growth_value,
-        "safety_risk_score": safety_risk,
-        "operator_confidence_score": operator_confidence,
-        "calibrated_repo_role_classification_id": role["calibrated_repo_role_classification_id"],
-        "concept_confidence_calibration_id": concept_confidence["concept_confidence_calibration_id"],
-        "role_alignment_score": role_alignment,
-        "concept_confidence_score": concept_confidence_0_10,
-        "false_positive_penalty": false_positive_penalty,
-        "overclassification_penalty": overclassification_penalty,
-        "calibrated_direct_usefulness_score": direct_usefulness,
-        "calibration_warnings": _normalize_implementation_branch_refs(calibration_warnings + role["overclassification_warnings"]),
-        "rejected_due_to_role_mismatch": rejected_due_to_role_mismatch,
-        "decision": decision,
-        "reason": reason,
-        "recommended_next_action": best["recommended_next_slice"],
-        "fallback_allowed": False,
-        "model_used": False,
-        "safety_metadata": _read_only_safety_metadata(),
-        "dry_run": True,
-        "write_allowed": False,
-        "automation_allowed": False,
-        "metadata": dict(metadata or {}),
-        "writes": [],
-    }
-    validate_growth_opportunity_decision_score(payload)
-    return payload
+    return _collect_growth_opportunity_decision_score_impl(
+        source_path=source_path,
+        summary=summary,
+        metadata=metadata,
+        collect_summary=collect_source_aware_growth_e2e_summary,
+        validate_summary=validate_source_aware_growth_e2e_summary,
+        collect_repo_role=collect_calibrated_repo_role_classification,
+        collect_concept_confidence=collect_concept_confidence_calibration,
+        role_supports_concept=_role_supports_concept,
+    )
 
 
 def validate_growth_opportunity_decision_score(payload: dict[str, Any]) -> None:
-    required = (
-        "growth_opportunity_decision_score_version", "growth_opportunity_decision_score_id", "source_path",
-        "e2e_summary_id", "source_archive_intake_cache_id", "cache_key_id",
-        "persistent_cache_policy_id", "persistent_cache_manifest_id", "persistent_cache_record_id",
-        "persistent_cache_hit", "persistent_cache_valid", "persistent_cache_write_performed",
-        "cache_source", "invalidation_reasons",
-        "best_opportunity_id", "source_specificity_score", "evidence_support_score",
-        "implementation_feasibility_score", "link_growth_value_score", "safety_risk_score",
-        "operator_confidence_score", "calibrated_repo_role_classification_id", "concept_confidence_calibration_id",
-        "role_alignment_score", "concept_confidence_score", "false_positive_penalty", "overclassification_penalty",
-        "calibrated_direct_usefulness_score", "calibration_warnings", "rejected_due_to_role_mismatch",
-        "decision", "reason", "recommended_next_action", "fallback_allowed",
-        "model_used", "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
-    )
-    for key in required:
-        if key not in payload:
-            raise ValueError(f"growth opportunity decision score missing field: {key}")
-    if payload["growth_opportunity_decision_score_version"] != GROWTH_OPPORTUNITY_DECISION_SCORE_VERSION:
-        raise ValueError("invalid growth opportunity score version")
-    if not payload["growth_opportunity_decision_score_id"].startswith("growth-opportunity-decision-score-"):
-        raise ValueError("invalid growth opportunity score id")
-    for field in ("source_specificity_score", "evidence_support_score", "implementation_feasibility_score", "link_growth_value_score", "safety_risk_score", "operator_confidence_score", "role_alignment_score", "concept_confidence_score", "false_positive_penalty", "overclassification_penalty", "calibrated_direct_usefulness_score"):
-        if not isinstance(payload[field], int) or not 0 <= payload[field] <= 10:
-            raise ValueError(f"{field} must be 0..10")
-    if not isinstance(payload["calibration_warnings"], list) or not isinstance(payload["rejected_due_to_role_mismatch"], list):
-        raise TypeError("calibration warnings and role mismatch rejections must be lists")
-    if payload["decision"] not in {"accept", "needs_more_evidence", "too_generic", "blocked"}:
-        raise ValueError("invalid growth opportunity decision")
-    if payload["fallback_allowed"] is not False or payload["model_used"] is not False:
-        raise ValueError("growth opportunity score must be deterministic and no-model")
-    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False or payload["writes"] != []:
-        raise ValueError("growth opportunity score must remain read-only")
+    return _validate_growth_opportunity_decision_score_impl(payload)
 
 
 def stable_growth_opportunity_decision_score_json(payload: dict[str, Any]) -> str:
-    validate_growth_opportunity_decision_score(payload)
-    return _stable_ruflo_json(payload, indent=2) + "\n"
+    return _stable_growth_opportunity_decision_score_json_impl(payload)
 
 
 def parse_growth_opportunity_decision_score_json(text: str) -> dict[str, Any]:
-    import json as _json
-    payload = _json.loads(text)
-    validate_growth_opportunity_decision_score(payload)
-    return payload
-
+    return _parse_growth_opportunity_decision_score_json_impl(text)
 
 def _concept_calibration_report_policy() -> dict[str, Any]:
     return {
