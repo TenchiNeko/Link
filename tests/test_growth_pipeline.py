@@ -13827,6 +13827,113 @@ def check_growth_source_suitability_module_extraction() -> None:
     print("growth source suitability module extraction OK")
 
 
+def check_growth_source_queue_module_extraction() -> None:
+    """Source queue helpers live in the extracted module behind callback wrappers."""
+    import link_modes.growth.growth_source_queue as source_queue_module
+    import link_modes.growth.link_growth_console as growth_console
+    from link_modes.growth.link_growth_console import (
+        _growth_queue_source_entry,
+        collect_growth_source_queue,
+        collect_growth_source_queue_cache_status,
+        collect_growth_source_queue_policy,
+        collect_growth_source_queue_warmup_plan,
+        collect_persistent_source_inventory_cache_manifest,
+        collect_persistent_source_inventory_cache_policy,
+        collect_persistent_source_inventory_cache_record,
+        collect_source_archive_suitability_assessment,
+        collect_source_cache_observability_card,
+        collect_source_queue_quarantine_record,
+        parse_growth_source_queue_cache_status_json,
+        parse_growth_source_queue_json,
+        parse_growth_source_queue_warmup_plan_json,
+        stable_growth_source_queue_cache_status_json,
+        stable_growth_source_queue_json,
+        stable_growth_source_queue_warmup_plan_json,
+    )
+
+    expected_exports = (
+        "collect_growth_source_queue",
+        "collect_growth_source_queue_cache_status",
+        "collect_growth_source_queue_warmup_plan",
+        "stable_growth_source_queue_json",
+    )
+    for name in expected_exports:
+        _require(callable(getattr(source_queue_module, name, None)),
+                 f"growth_source_queue must expose {name}")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in source_queue_module.__dict__.values()),
+             "growth_source_queue must not import the Growth monolith")
+
+    headroom_source = make_headroom_like_fixture()
+    crawler_source = make_crawler_like_fixture()
+    missing_source = "research/missing-source-fixture.zip"
+    old_cache_root = os.environ.get("LINK_SOURCE_CACHE_ROOT")
+    with tempfile.TemporaryDirectory(prefix="link-source-queue-module-test-") as cache_root:
+        os.environ["LINK_SOURCE_CACHE_ROOT"] = cache_root
+        try:
+            sources = [headroom_source, crawler_source, missing_source]
+            queue = collect_growth_source_queue(sources=sources)
+            module_queue = source_queue_module.collect_growth_source_queue(
+                sources=sources,
+                collect_policy=collect_growth_source_queue_policy,
+                queue_source_entry=_growth_queue_source_entry,
+                collect_suitability=collect_source_archive_suitability_assessment,
+                collect_quarantine=collect_source_queue_quarantine_record,
+            )
+            _require(queue == module_queue and queue["source_count"] == 2 and queue["skipped_sources"],
+                     "source queue wrapper must delegate to extracted module")
+            _require(parse_growth_source_queue_json(stable_growth_source_queue_json(queue)) == queue,
+                     "source queue JSON must round trip after extraction")
+
+            status = collect_growth_source_queue_cache_status(sources=[headroom_source, crawler_source])
+            module_status = source_queue_module.collect_growth_source_queue_cache_status(
+                sources=[headroom_source, crawler_source],
+                collect_queue=collect_growth_source_queue,
+                collect_cache_policy=collect_persistent_source_inventory_cache_policy,
+                collect_observability_card=collect_source_cache_observability_card,
+            )
+            _require(status == module_status and status["cache_miss_count"] == 2,
+                     "source queue status wrapper must delegate to extracted module while cold")
+            _require(status["cache_root"] == cache_root,
+                     "source queue status must honor temp LINK_SOURCE_CACHE_ROOT")
+            _require(parse_growth_source_queue_cache_status_json(stable_growth_source_queue_cache_status_json(status)) == status,
+                     "source queue status JSON must round trip after extraction")
+
+            warm_preview = collect_growth_source_queue_warmup_plan(sources=sources)
+            module_warm_preview = source_queue_module.collect_growth_source_queue_warmup_plan(
+                sources=sources,
+                collect_queue=collect_growth_source_queue,
+                collect_status=collect_growth_source_queue_cache_status,
+                collect_manifest=collect_persistent_source_inventory_cache_manifest,
+                collect_cache_record=collect_persistent_source_inventory_cache_record,
+            )
+            _require(warm_preview["write_cache_requested"] is False
+                     and module_warm_preview["write_cache_requested"] is False
+                     and warm_preview["estimated_work_count"] == module_warm_preview["estimated_work_count"]
+                     and warm_preview["sources_to_warm"] == module_warm_preview["sources_to_warm"]
+                     and warm_preview["sources_skipped"] == module_warm_preview["sources_skipped"],
+                     "source queue warmup preview wrapper must delegate without writes")
+            _require(warm_preview["writes"] == [] and warm_preview["write_allowed"] is False,
+                     "source queue warmup preview must remain read-only")
+            _require(parse_growth_source_queue_warmup_plan_json(stable_growth_source_queue_warmup_plan_json(warm_preview)) == warm_preview,
+                     "source queue warmup JSON must round trip after extraction")
+
+            warm_write = collect_growth_source_queue_warmup_plan(sources=[headroom_source, crawler_source], write_cache=True)
+            _require(warm_write["write_cache_requested"] is True and warm_write["failed_count"] == 0,
+                     "source queue warmup write must still work through extracted module")
+            _require(all(Path(item["cache_file_path"]).resolve().parent == Path(cache_root).resolve()
+                         for item in warm_write["warmed_sources"]),
+                     "source queue warmup writes must stay under temp cache root")
+        finally:
+            growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
+            if old_cache_root is None:
+                os.environ.pop("LINK_SOURCE_CACHE_ROOT", None)
+            else:
+                os.environ["LINK_SOURCE_CACHE_ROOT"] = old_cache_root
+
+    print("growth source queue module extraction OK")
+
+
 # ---------------------------------------------------------------------------
 # 62j. Growth campaign governance and Business Development boundary
 # ---------------------------------------------------------------------------
@@ -22770,6 +22877,7 @@ SOURCE_CORE_CHECKS = (
     check_growth_source_cache_module_extraction,
     check_growth_queue_e2e_cache_module_extraction,
     check_growth_source_suitability_module_extraction,
+    check_growth_source_queue_module_extraction,
 )
 
 
