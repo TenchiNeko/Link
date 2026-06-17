@@ -40,11 +40,37 @@ from link_modes.growth.growth_concept_confidence import (
     stable_concept_confidence_calibration_json as _stable_concept_confidence_calibration_json_impl,
     validate_concept_confidence_calibration as _validate_concept_confidence_calibration_impl,
 )
+from link_modes.growth.growth_direct_upgrade_eval import (
+    build_queue_e2e_source_summary_index as _build_queue_e2e_source_summary_index_impl,
+    collect_growth_direct_eval_cache_plan as _collect_growth_direct_eval_cache_plan_impl,
+    get_queue_e2e_source_summary_for_source as _get_queue_e2e_source_summary_for_source_impl,
+    growth_direct_eval_candidate as _growth_direct_eval_candidate_impl,
+    growth_direct_eval_normalized_source_path as _growth_direct_eval_normalized_source_path_impl,
+    parse_growth_direct_eval_cache_plan_json as _parse_growth_direct_eval_cache_plan_json_impl,
+    rank_growth_direct_eval_candidates as _rank_growth_direct_eval_candidates_impl,
+    source_inventory_cache_status_summary as _source_inventory_cache_status_summary_impl,
+    stable_growth_direct_eval_cache_plan_json as _stable_growth_direct_eval_cache_plan_json_impl,
+    summarize_queue_e2e_source_for_direct_eval as _summarize_queue_e2e_source_for_direct_eval_impl,
+    validate_growth_direct_eval_cache_plan as _validate_growth_direct_eval_cache_plan_impl,
+)
 from link_modes.growth.growth_opportunity_scoring import (
     collect_growth_opportunity_decision_score as _collect_growth_opportunity_decision_score_impl,
     parse_growth_opportunity_decision_score_json as _parse_growth_opportunity_decision_score_json_impl,
     stable_growth_opportunity_decision_score_json as _stable_growth_opportunity_decision_score_json_impl,
     validate_growth_opportunity_decision_score as _validate_growth_opportunity_decision_score_impl,
+)
+from link_modes.growth.growth_operator_cache_dashboard import (
+    operator_cache_dashboard_command_hints as _operator_cache_dashboard_command_hints_impl,
+    operator_cache_dashboard_issues as _operator_cache_dashboard_issues_impl,
+    operator_cache_dashboard_queue_e2e_summary as _operator_cache_dashboard_queue_e2e_summary_impl,
+    operator_cache_dashboard_source_inventory_summary as _operator_cache_dashboard_source_inventory_summary_impl,
+)
+from link_modes.growth.growth_operator_qa import (
+    operator_qa_candidate as _operator_qa_candidate_impl,
+    operator_qa_candidate_scores as _operator_qa_candidate_scores_impl,
+    operator_qa_check_item as _operator_qa_check_item_impl,
+    operator_qa_check_status as _operator_qa_check_status_impl,
+    operator_qa_issue as _operator_qa_issue_impl,
 )
 from link_modes.growth.growth_queue_e2e_cache import (
     collect_growth_source_queue_e2e_cache_key as _collect_growth_source_queue_e2e_cache_key_impl,
@@ -141,6 +167,9 @@ from link_modes.growth.growth_source_queue import (
     validate_growth_source_queue as _validate_growth_source_queue_impl,
     validate_growth_source_queue_cache_status as _validate_growth_source_queue_cache_status_impl,
     validate_growth_source_queue_warmup_plan as _validate_growth_source_queue_warmup_plan_impl,
+)
+from link_modes.growth.growth_task_draft_alignment import (
+    select_source_aware_operator_task_candidate as _select_source_aware_operator_task_candidate_impl,
 )
 
 CONSOLE_VERSION = "link-growth-console-v1"
@@ -13499,31 +13528,7 @@ def _select_source_aware_operator_task_candidate(
     decision: dict[str, Any],
     source_context: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], str, list[str]]:
-    ranked_top = next(item for item in decision["candidate_set"]["candidates"] if item["decision_candidate_id"] == decision["ranking"]["top_candidate_id"])
-    if source_context is None:
-        return ranked_top, "decision_ranking", []
-    calibrated_task = source_context.get("research_target_operator_task_draft")
-    if not isinstance(calibrated_task, dict):
-        return ranked_top, "decision_ranking", []
-    selected_id = calibrated_task.get("selected_upgrade_candidate_id")
-    if not isinstance(selected_id, str) or not selected_id:
-        return ranked_top, "decision_ranking", []
-    aligned = next(
-        (
-            item for item in decision["candidate_set"]["candidates"]
-            if item.get("selected_upgrade_candidate_id") == selected_id
-        ),
-        None,
-    )
-    if not isinstance(aligned, dict):
-        return ranked_top, "decision_ranking", [
-            "calibrated task candidate was not present in the decision candidate set",
-        ]
-    if aligned["decision_candidate_id"] == ranked_top["decision_candidate_id"]:
-        return aligned, "decision_ranking", []
-    return aligned, "calibrated_task_candidate", [
-        f"task draft aligned to calibrated candidate {selected_id} instead of raw decision ranking {ranked_top.get('selected_upgrade_candidate_id', '')}",
-    ]
+    return _select_source_aware_operator_task_candidate_impl(decision, source_context)
 
 
 def _source_aware_operator_chain(source_path: str | None = None, *, source_context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -16710,335 +16715,86 @@ def _growth_direct_eval_candidate(
     reused_queue_score: bool = False,
     recompute_reason: str = "",
 ) -> dict[str, Any]:
-    scores = [direct_value, friction, test_speed, source_specificity, confidence, safety, verification]
-    direct_value, friction, test_speed, source_specificity, confidence, safety, verification = [max(0, min(10, int(item))) for item in scores]
-    maintenance = max(0, min(10, int(maintenance)))
-    total = max(0, direct_value * 3 + friction * 2 + test_speed + source_specificity * 2 + confidence * 2 + safety + verification * 2 - maintenance)
-    return {
-        "candidate_id": candidate_id,
-        "source_path": source_path,
-        "title": _source_aware_text(title, max_chars=160),
-        "candidate_type": candidate_type,
-        "direct_growth_functionality_value": direct_value,
-        "operator_friction_reduction": friction,
-        "test_checkpoint_speed_value": test_speed,
-        "source_specificity": source_specificity,
-        "implementation_confidence": confidence,
-        "safety_score": safety,
-        "verification_clarity": verification,
-        "expected_maintenance_burden": maintenance,
-        "total_roi_score": total,
-        "decision": "blocked" if blocked else "needs_more_evidence",
-        "rejection_reason": _source_aware_text(rejection_reason, max_chars=180),
-        "evidence_summary": _source_aware_text(evidence, max_chars=260),
-        "recommended_implementation_slice": _source_aware_text(next_slice, max_chars=240),
-        "candidate_source_artifact": candidate_source_artifact,
-        "reused_queue_score": bool(reused_queue_score),
-        "recompute_reason": _source_aware_text(recompute_reason, max_chars=180),
-    }
+    return _growth_direct_eval_candidate_impl(
+        candidate_id=candidate_id,
+        source_path=source_path,
+        title=title,
+        candidate_type=candidate_type,
+        direct_value=direct_value,
+        friction=friction,
+        test_speed=test_speed,
+        source_specificity=source_specificity,
+        confidence=confidence,
+        safety=safety,
+        verification=verification,
+        maintenance=maintenance,
+        evidence=evidence,
+        next_slice=next_slice,
+        blocked=blocked,
+        rejection_reason=rejection_reason,
+        candidate_source_artifact=candidate_source_artifact,
+        reused_queue_score=reused_queue_score,
+        recompute_reason=recompute_reason,
+    )
 
 
 def _growth_direct_eval_rank_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    ranked = sorted(candidates, key=lambda item: (item["total_roi_score"], item["direct_growth_functionality_value"], item["source_specificity"], item["implementation_confidence"], item["title"]), reverse=True)
-    for index, candidate in enumerate(ranked):
-        if candidate["decision"] == "blocked":
-            continue
-        if index == 0 and candidate["total_roi_score"] >= 60:
-            candidate["decision"] = "accept"
-            candidate["rejection_reason"] = ""
-        elif index <= 3:
-            candidate["decision"] = "runner_up"
-            candidate["rejection_reason"] = "lower deterministic ROI than the best candidate"
-        else:
-            candidate["decision"] = "reject"
-            candidate["rejection_reason"] = "lower deterministic ROI for this implementation cycle"
-    return ranked
+    return _rank_growth_direct_eval_candidates_impl(candidates)
 
 
 def _growth_direct_eval_normalized_source_path(source_path: str) -> str:
-    return str(source_path or "").strip()
+    return _growth_direct_eval_normalized_source_path_impl(source_path)
 
 
 def build_queue_e2e_source_summary_index(queue_e2e: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    index: dict[str, dict[str, Any]] = {}
-    for item in queue_e2e.get("source_summaries", []):
-        source_path = _growth_direct_eval_normalized_source_path(str(item.get("source_path", "")))
-        if source_path:
-            index[source_path] = item
-    return index
+    return _build_queue_e2e_source_summary_index_impl(queue_e2e)
 
 
 def get_queue_e2e_source_summary_for_source(index: dict[str, dict[str, Any]], source_path: str) -> dict[str, Any]:
-    return dict(index.get(_growth_direct_eval_normalized_source_path(source_path), {}))
+    return _get_queue_e2e_source_summary_for_source_impl(index, source_path)
 
 
 def summarize_queue_e2e_source_for_direct_eval(source_path: str, queue_e2e: dict[str, Any]) -> dict[str, Any]:
-    index = build_queue_e2e_source_summary_index(queue_e2e)
-    item = get_queue_e2e_source_summary_for_source(index, source_path)
-    if not item:
-        return {
-            "reuse_status": "missing_from_queue_e2e",
-            "source_path": source_path,
-            "reused_fields": [],
-            "missing_fields": ["best_growth_opportunity_title", "primary_repo_role", "calibrated_direct_usefulness_score"],
-            "summary": {},
-        }
-    required_fields = (
-        "best_growth_opportunity_title", "primary_repo_role", "primary_repo_role_confidence",
-        "calibrated_top_concepts", "calibrated_direct_usefulness_score", "role_alignment_score",
-        "evidence_support_score", "safety_risk_score", "operator_confidence_score",
-    )
-    missing = [field for field in required_fields if field not in item]
-    reuse_status = "reused_from_queue_e2e" if not missing else "incomplete_queue_e2e_summary"
-    return {
-        "reuse_status": reuse_status,
-        "source_path": source_path,
-        "reused_fields": [field for field in required_fields if field in item],
-        "missing_fields": missing,
-        "summary": item,
-    }
+    return _summarize_queue_e2e_source_for_direct_eval_impl(source_path, queue_e2e)
 
 
 def _growth_source_inventory_cache_status_summary(status: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "growth_source_queue_cache_status_id": status.get("growth_source_queue_cache_status_id", ""),
-        "cache_root": status.get("cache_root", ""),
-        "cache_hit_count": int(status.get("cache_hit_count", 0) or 0),
-        "cache_miss_count": int(status.get("cache_miss_count", 0) or 0),
-        "stale_count": int(status.get("stale_count", 0) or 0),
-        "invalid_count": int(status.get("invalid_count", 0) or 0),
-        "queue_ready_for_e2e": bool(status.get("queue_ready_for_e2e", False)),
-    }
+    return _source_inventory_cache_status_summary_impl(status)
 
 
 def collect_growth_direct_eval_cache_plan(*, sources: list[str] | None = None, write_cache_requested: bool = False, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    explicit_sources = [str(item).strip() for item in (sources or []) if str(item).strip()]
-    queue = collect_growth_source_queue(sources=explicit_sources or None)
-    source_status = collect_growth_source_queue_cache_status(sources=explicit_sources or None)
-    queue_cache = collect_growth_source_queue_e2e_summary_cache_record(sources=explicit_sources or None)
-    planned_actions: list[dict[str, Any]] = []
-    planned_actions.append({
-        "action_type": "observe_source_inventory_cache",
-        "source_path": "",
-        "reason": "direct-upgrade-eval checks persistent source inventory cache before per-target summaries",
-        "command_hint": "python3 link.py growth source-queue-status --json",
-    })
-    for skipped in queue.get("skipped_sources", []):
-        planned_actions.append({
-            "action_type": "skip_quarantined_source",
-            "source_path": skipped.get("source_path", ""),
-            "reason": skipped.get("skip_reason") or skipped.get("quarantine_status") or "source skipped by queue policy",
-            "command_hint": "python3 link.py growth source-quarantine --source <source> --json",
-        })
-    for item in source_status.get("source_statuses", []):
-        if item.get("source_path") and not item.get("cache_hit"):
-            planned_actions.append({
-                "action_type": "warm_source_inventory_cache",
-                "source_path": item["source_path"],
-                "reason": item.get("recommended_action") or item.get("cache_status") or "source inventory cache is not hot",
-                "command_hint": "python3 link.py growth direct-upgrade-eval --write-cache --json",
-            })
-    planned_actions.append({
-        "action_type": "observe_queue_e2e_cache",
-        "source_path": "",
-        "reason": "direct-upgrade-eval checks the compact queue E2E cache before full queue E2E compute",
-        "command_hint": "python3 link.py growth source-queue-e2e-cache-status --json",
-    })
-    if write_cache_requested or not queue_cache.get("cache_valid"):
-        planned_actions.append({
-            "action_type": "write_queue_e2e_cache",
-            "source_path": "",
-            "reason": "compact queue E2E cache is missing or write-cache was requested",
-            "command_hint": "python3 link.py growth source-queue-e2e-cache --write-cache --json",
-        })
-    payload = {
-        "growth_direct_eval_cache_plan_version": GROWTH_DIRECT_EVAL_CACHE_PLAN_VERSION,
-        "growth_direct_eval_cache_plan_id": "growth-direct-eval-cache-plan-" + _research_target_hash_text({
-            "queue": queue["growth_source_queue_id"],
-            "status": source_status["growth_source_queue_cache_status_id"],
-            "queue_cache": queue_cache["growth_source_queue_e2e_cache_record_id"],
-            "write": bool(write_cache_requested),
-            "version": GROWTH_DIRECT_EVAL_CACHE_PLAN_VERSION,
-        })[:12],
-        "source_queue_id": queue["growth_source_queue_id"],
-        "source_inventory_cache_status_id": source_status["growth_source_queue_cache_status_id"],
-        "queue_e2e_cache_status_id": queue_cache["growth_source_queue_e2e_cache_record_id"],
-        "write_cache_requested": bool(write_cache_requested),
-        "source_inventory_cache_hit_count": source_status["cache_hit_count"],
-        "source_inventory_cache_miss_count": source_status["cache_miss_count"],
-        "source_inventory_cache_stale_count": source_status["stale_count"],
-        "queue_e2e_cache_hit": bool(queue_cache.get("cache_hit", False)),
-        "queue_e2e_cache_valid": bool(queue_cache.get("cache_valid", False)),
-        "source_inventory_warm_required": bool(source_status["cache_miss_count"] or source_status["stale_count"] or source_status["invalid_count"]),
-        "queue_e2e_compact_cache_write_required": bool(write_cache_requested or not queue_cache.get("cache_valid")),
-        "planned_cache_actions": planned_actions,
-        "skipped_sources": queue["skipped_sources"],
-        "recommended_next_action": "Run growth direct-upgrade-eval --write-cache --json to prepare both cache layers." if write_cache_requested or source_status["cache_miss_count"] or not queue_cache.get("cache_valid") else "Both cache layers appear ready for a hot direct-upgrade-eval run.",
-        "fallback_allowed": False,
-        "model_used": False,
-        "external_network_used": False,
-        "safety_metadata": _read_only_safety_metadata(),
-        "dry_run": True,
-        "write_allowed": False,
-        "automation_allowed": False,
-        "metadata": dict(metadata or {}),
-        "writes": [],
-    }
-    validate_growth_direct_eval_cache_plan(payload)
-    return payload
+    return _collect_growth_direct_eval_cache_plan_impl(
+        sources=sources,
+        write_cache_requested=write_cache_requested,
+        metadata=metadata,
+        collect_queue=collect_growth_source_queue,
+        collect_source_status=collect_growth_source_queue_cache_status,
+        collect_queue_cache=collect_growth_source_queue_e2e_summary_cache_record,
+    )
 
 
 def validate_growth_direct_eval_cache_plan(payload: dict[str, Any]) -> None:
-    required = (
-        "growth_direct_eval_cache_plan_version", "growth_direct_eval_cache_plan_id",
-        "source_queue_id", "source_inventory_cache_status_id", "queue_e2e_cache_status_id",
-        "write_cache_requested", "source_inventory_cache_hit_count",
-        "source_inventory_cache_miss_count", "source_inventory_cache_stale_count",
-        "queue_e2e_cache_hit", "queue_e2e_cache_valid", "source_inventory_warm_required",
-        "queue_e2e_compact_cache_write_required", "planned_cache_actions", "skipped_sources",
-        "recommended_next_action", "fallback_allowed", "model_used", "external_network_used",
-        "safety_metadata", "dry_run", "write_allowed", "automation_allowed", "writes",
-    )
-    for key in required:
-        if key not in payload:
-            raise ValueError(f"growth direct eval cache plan missing {key}")
-    if payload["growth_direct_eval_cache_plan_version"] != GROWTH_DIRECT_EVAL_CACHE_PLAN_VERSION:
-        raise ValueError("invalid growth direct eval cache plan version")
-    if not payload["growth_direct_eval_cache_plan_id"].startswith("growth-direct-eval-cache-plan-"):
-        raise ValueError("invalid growth direct eval cache plan id")
-    for action in payload["planned_cache_actions"]:
-        for key in ("action_type", "source_path", "reason", "command_hint"):
-            if key not in action:
-                raise ValueError(f"growth direct eval cache action missing {key}")
-        if action["action_type"] not in {
-            "observe_source_inventory_cache",
-            "warm_source_inventory_cache",
-            "observe_queue_e2e_cache",
-            "write_queue_e2e_cache",
-            "skip_quarantined_source",
-        }:
-            raise ValueError("invalid growth direct eval cache action type")
-    if payload["fallback_allowed"] is not False or payload["model_used"] is not False or payload["external_network_used"] is not False:
-        raise ValueError("growth direct eval cache plan must avoid model/network/fallback")
-    if payload["safety_metadata"] != _read_only_safety_metadata() or payload["dry_run"] is not True or payload["write_allowed"] is not False or payload["automation_allowed"] is not False:
-        raise ValueError("growth direct eval cache plan must remain read-only")
-    if payload["writes"] != []:
-        raise ValueError("growth direct eval cache plan must not report writes")
+    _validate_growth_direct_eval_cache_plan_impl(payload)
 
 
 def stable_growth_direct_eval_cache_plan_json(payload: dict[str, Any]) -> str:
-    validate_growth_direct_eval_cache_plan(payload)
-    return _stable_ruflo_json(payload, indent=2) + "\n"
+    return _stable_growth_direct_eval_cache_plan_json_impl(payload)
 
 
 def parse_growth_direct_eval_cache_plan_json(text: str) -> dict[str, Any]:
-    import json as _json
-    payload = _json.loads(text)
-    validate_growth_direct_eval_cache_plan(payload)
-    return payload
+    return _parse_growth_direct_eval_cache_plan_json_impl(text)
 
 
 def _growth_operator_cache_dashboard_source_inventory_summary(status: dict[str, Any], queue: dict[str, Any]) -> dict[str, Any]:
-    sources: list[dict[str, Any]] = []
-    total_size = 0
-    ages: list[int] = []
-    for item in status.get("source_statuses", []):
-        age = item.get("cache_age_seconds")
-        if isinstance(age, int):
-            ages.append(age)
-        total_size += int(item.get("cached_size_bytes", 0) or 0)
-        action_required = "none" if item.get("cache_hit") else "warm_source_inventory_cache"
-        sources.append({
-            "source_path": item.get("source_path", ""),
-            "source_name": str(item.get("source_path", "")).rsplit("/", 1)[-1],
-            "suitability_status": item.get("suitability_status", "unknown"),
-            "quarantine_status": item.get("quarantine_status", "unknown"),
-            "cache_status": item.get("cache_status", "unknown"),
-            "cache_hit": bool(item.get("cache_hit", False)),
-            "cache_valid": bool(item.get("cache_valid", False)),
-            "cache_age_seconds": age,
-            "cached_size_bytes": int(item.get("cached_size_bytes", 0) or 0),
-            "invalidation_reasons": _normalize_implementation_branch_refs(list(item.get("invalidation_reasons", []))),
-            "stale_reasons": _normalize_implementation_branch_refs(list(item.get("stale_reasons", []))),
-            "action_required": action_required,
-            "refresh_command": f"python3 link.py growth source-cache-persistent --source {item.get('source_path', '')} --write-cache --json",
-            "clear_command": f"python3 link.py growth source-cache-clear --source {item.get('source_path', '')} --json",
-        })
-    skipped_count = int(queue.get("skipped_source_count", 0) or 0)
-    ready_count = sum(1 for item in sources if item["cache_hit"] and item["cache_valid"])
-    source_count = len(sources)
-    ready = source_count > 0 and ready_count == source_count
-    return {
-        "cache_root": status.get("cache_root", ""),
-        "source_count": source_count,
-        "hit_count": int(status.get("cache_hit_count", 0) or 0),
-        "miss_count": int(status.get("cache_miss_count", 0) or 0),
-        "stale_count": int(status.get("stale_count", 0) or 0),
-        "invalid_count": int(status.get("invalid_count", 0) or 0),
-        "skipped_count": skipped_count,
-        "ready_count": ready_count,
-        "ready_for_hot_path": ready,
-        "total_cached_size_bytes": total_size,
-        "oldest_cache_age_seconds": max(ages) if ages else None,
-        "newest_cache_age_seconds": min(ages) if ages else None,
-        "sources": sources,
-        "refresh_command": "python3 link.py growth source-queue-warm --write-cache --json",
-        "clear_command": "python3 link.py growth source-cache-clear --all --json",
-        "recommended_next_action": "Source inventory cache is hot for all selected sources." if ready else "Run growth source-queue-warm --write-cache --json to warm selected source inventory caches.",
-    }
+    return _operator_cache_dashboard_source_inventory_summary_impl(status, queue)
 
 
 def _growth_operator_cache_dashboard_queue_e2e_summary(record: dict[str, Any]) -> dict[str, Any]:
-    compact = record.get("compact_queue_e2e_summary", {}) if record.get("cache_hit") else {}
-    best = compact.get("best_overall_opportunity", {}) if isinstance(compact, dict) else {}
-    quality = compact.get("calibration_quality_score") if isinstance(compact, dict) else None
-    if quality is None and isinstance(compact, dict):
-        quality = compact.get("operator_decision_summary", {}).get("calibration_quality_score")
-    if record.get("cache_hit"):
-        source = "compact_cache"
-    elif record.get("cache_file_exists") and record.get("invalidation_reasons"):
-        source = "invalid"
-    elif record.get("cache_file_exists"):
-        source = "stale"
-    else:
-        source = "missing"
-    return {
-        "cache_key_id": record.get("cache_key_id", ""),
-        "cache_record_id": record.get("growth_source_queue_e2e_cache_record_id", ""),
-        "cache_root": record.get("cache_root", ""),
-        "cache_file_path": record.get("cache_file_path", ""),
-        "cache_file_exists": bool(record.get("cache_file_exists", False)),
-        "cache_hit": bool(record.get("cache_hit", False)),
-        "cache_valid": bool(record.get("cache_valid", False)),
-        "cache_age_seconds": record.get("cache_age_seconds"),
-        "cached_size_bytes": int(record.get("cached_size_bytes", 0) or 0),
-        "selected_source_count": int(record.get("source_count", 0) or 0),
-        "skipped_source_count": len(record.get("skipped_sources", [])),
-        "summary_source": source,
-        "best_cached_opportunity_title": str(best.get("title") or ""),
-        "calibration_quality_score": quality,
-        "invalidation_reasons": _normalize_implementation_branch_refs(list(record.get("invalidation_reasons", []))),
-        "stale_reasons": _normalize_implementation_branch_refs(list(record.get("stale_reasons", []))),
-        "ready_for_fast_queue_e2e": bool(record.get("cache_hit") and record.get("cache_valid")),
-        "refresh_command": record.get("refresh_command", "python3 link.py growth source-queue-e2e-cache --write-cache --json"),
-        "clear_command": record.get("clear_command", "python3 link.py growth source-queue-e2e-cache --clear --json"),
-        "recommended_next_action": record.get("recommended_next_action", "Run growth source-queue-e2e-cache --write-cache --json to populate compact queue E2E cache."),
-    }
+    return _operator_cache_dashboard_queue_e2e_summary_impl(record)
 
 
 def _growth_operator_cache_dashboard_command_hints() -> dict[str, str]:
-    return {
-        "inspect_dashboard": "python3 link.py growth operator-cache-dashboard --json",
-        "warm_source_inventory": "python3 link.py growth source-queue-warm --write-cache --json",
-        "write_queue_e2e_cache": "python3 link.py growth source-queue-e2e-cache --write-cache --json",
-        "warm_full_hot_path": "python3 link.py growth direct-upgrade-eval --write-cache --json",
-        "run_direct_upgrade_eval_hot": "python3 link.py growth direct-upgrade-eval --json",
-        "run_concept_calibration_fast": "python3 link.py growth concept-calibration-report --mode fast --json",
-        "run_queue_e2e_fast": "python3 link.py growth source-queue-e2e --mode fast --json",
-        "clear_source_inventory_cache": "python3 link.py growth source-cache-clear --all --json",
-        "clear_queue_e2e_cache": "python3 link.py growth source-queue-e2e-cache --clear --json",
-        "run_deep_verification": "python3 tests/test_growth_pipeline.py --suite planning-deterministic",
-    }
+    return _operator_cache_dashboard_command_hints_impl()
 
 
 def _growth_operator_cache_dashboard_issues(
@@ -17046,69 +16802,7 @@ def _growth_operator_cache_dashboard_issues(
     queue_summary: dict[str, Any],
     queue: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    issues: list[dict[str, Any]] = []
-    if source_summary["miss_count"] or source_summary["stale_count"] or source_summary["invalid_count"]:
-        issues.append({
-            "issue_id": "source_inventory_cache_missing",
-            "severity": "high" if source_summary["hit_count"] == 0 else "medium",
-            "category": "cache",
-            "title": "Source inventory cache is not fully hot",
-            "observed_behavior": f"{source_summary['hit_count']} hits, {source_summary['miss_count']} misses, {source_summary['stale_count']} stale, {source_summary['invalid_count']} invalid.",
-            "expected_behavior": "All suitable selected sources should have valid source inventory cache entries before repeated operator reports.",
-            "recommended_fix": source_summary["refresh_command"],
-            "evidence_scope": "current_dashboard",
-            "implement_now_candidate": False,
-        })
-    if not queue_summary["cache_hit"]:
-        issues.append({
-            "issue_id": "queue_e2e_compact_cache_missing",
-            "severity": "high",
-            "category": "cache",
-            "title": "Compact queue E2E summary cache is not ready",
-            "observed_behavior": f"Queue E2E compact cache status is {queue_summary['summary_source']}.",
-            "expected_behavior": "A valid compact queue E2E cache should exist before hot direct-upgrade-eval and concept-calibration-report fast runs.",
-            "recommended_fix": queue_summary["refresh_command"],
-            "evidence_scope": "current_dashboard",
-            "implement_now_candidate": False,
-        })
-    for item in queue.get("quarantine_records", []):
-        if item.get("quarantine_status") != "not_quarantined":
-            issues.append({
-                "issue_id": "activepieces_quarantined" if item.get("source_path", "").endswith("activepieces-main.zip") else "source_quarantined_" + _research_target_hash_text(item.get("source_path", ""))[:8],
-                "severity": "medium",
-                "category": "queue",
-                "title": f"{item.get('source_path', 'source')} is quarantined",
-                "observed_behavior": item.get("quarantine_reason") or item.get("failure_category") or "source is excluded from default queue",
-                "expected_behavior": "Unsuitable optional sources should be skipped without breaking the operator cache dashboard.",
-                "recommended_fix": item.get("recommended_fix") or "Keep skipped until deterministic suitability is fixed.",
-                "evidence_scope": "current_dashboard",
-                "implement_now_candidate": False,
-            })
-    quality = queue_summary.get("calibration_quality_score")
-    if isinstance(quality, int | float) and quality < 70:
-        issues.append({
-            "issue_id": "calibration_quality_weak",
-            "severity": "medium",
-            "category": "idea_quality",
-            "title": "Cached calibration quality remains weak",
-            "observed_behavior": f"Cached calibration quality score is {quality}.",
-            "expected_behavior": "Role/concept calibration should expose weak sources and avoid overconfident ideas.",
-            "recommended_fix": "Review concept-calibration-report --mode fast output and add source-specific fixtures in a separate batch.",
-            "evidence_scope": "cached_summary",
-            "implement_now_candidate": False,
-        })
-    issues.append({
-        "issue_id": "planning_extended_checkpoint_current_observed",
-        "severity": "low",
-        "category": "test_coverage",
-        "title": "planning-fast umbrella coverage is split from normal base",
-        "observed_behavior": "Current normal base runs foundation-fast, planning-core, and execution-fast; broader planning-fast coverage remains explicit through planning-fast/planning-extended.",
-        "expected_behavior": "Normal checkpoint tiers should remain small enough for frequent use while deep planning/execution coverage stays explicit.",
-        "recommended_fix": "Use planning-core for normal checkpoints and run planning-fast or planning-extended when broader deterministic planning coverage is needed.",
-        "evidence_scope": "prior_observed",
-        "implement_now_candidate": False,
-    })
-    return issues
+    return _operator_cache_dashboard_issues_impl(source_summary, queue_summary, queue)
 
 
 def collect_growth_operator_cache_dashboard(*, sources: list[str] | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -17286,19 +16980,18 @@ def _growth_operator_qa_check_item(
     command_hint: str = "",
     **extra: Any,
 ) -> dict[str, Any]:
-    item = {
-        "check_id": check_id,
-        "check_name": check_name,
-        "status": status,
-        "severity": severity,
-        "observed": observed,
-        "expected": expected,
-        "evidence_summary": evidence_summary,
-        "recommended_fix": recommended_fix,
-        "command_hint": command_hint,
-    }
-    item.update(extra)
-    return item
+    return _operator_qa_check_item_impl(
+        check_id,
+        check_name,
+        status,
+        severity,
+        observed,
+        expected,
+        evidence_summary,
+        recommended_fix,
+        command_hint,
+        **extra,
+    )
 
 
 def _growth_operator_qa_issue(
@@ -17313,17 +17006,17 @@ def _growth_operator_qa_issue(
     implement_now: bool = False,
     blocked_reason: str = "",
 ) -> dict[str, Any]:
-    return {
-        "issue_id": issue_id,
-        "severity": severity,
-        "category": category,
-        "observed_behavior": observed,
-        "expected_behavior": expected,
-        "evidence_summary": evidence,
-        "recommended_fix": fix,
-        "implement_now_candidate": bool(implement_now),
-        "blocked_reason": blocked_reason,
-    }
+    return _operator_qa_issue_impl(
+        issue_id,
+        severity,
+        category,
+        observed,
+        expected,
+        evidence,
+        fix,
+        implement_now=implement_now,
+        blocked_reason=blocked_reason,
+    )
 
 
 def _growth_operator_qa_candidate(
@@ -17341,161 +17034,32 @@ def _growth_operator_qa_candidate(
     rationale: str,
     slice_text: str,
 ) -> dict[str, Any]:
-    total = direct_value + friction + confidence + testability + safety + runtime + schema - burden
-    return {
-        "candidate_id": candidate_id,
-        "title": title,
-        "decision": decision,
-        "direct_growth_functionality_value": direct_value,
-        "operator_friction_reduction": friction,
-        "implementation_confidence": confidence,
-        "testability": testability,
-        "safety": safety,
-        "expected_runtime_improvement": runtime,
-        "schema_output_value": schema,
-        "maintenance_burden": burden,
-        "total_roi_score": total,
-        "rationale": rationale,
-        "recommended_implementation_slice": slice_text,
-    }
+    return _operator_qa_candidate_impl(
+        candidate_id,
+        title,
+        decision,
+        direct_value,
+        friction,
+        confidence,
+        testability,
+        safety,
+        runtime,
+        schema,
+        burden,
+        rationale,
+        slice_text,
+    )
 
 
 def _growth_operator_qa_check_status(checks: list[dict[str, Any]], issues: list[dict[str, Any]]) -> str:
-    if any(item.get("status") == "fail" for item in checks):
-        return "fail"
-    if any(item.get("severity") == "critical" for item in issues):
-        return "fail"
-    if any(item.get("status") in {"warn", "skipped"} for item in checks):
-        return "warn"
-    if any(item.get("severity") in {"high", "medium"} for item in issues):
-        return "warn"
-    return "pass"
+    return _operator_qa_check_status_impl(checks, issues)
 
 
 def _growth_operator_qa_candidate_scores(
     dashboard: dict[str, Any],
     direct_eval: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    readiness = dashboard["operator_readiness"]
-    cache_ready = readiness["status"] == "ready"
-    direct_issues = direct_eval.get("broken_unoptimized_items", []) if direct_eval else []
-    has_score_spread_issue = any(item.get("issue_id") == "score-spread-too-tight" for item in direct_issues)
-    has_activepieces = any(
-        item.get("source_path", "").endswith("activepieces-main.zip")
-        for item in dashboard.get("quarantined_sources", [])
-    )
-    candidates = [
-        _growth_operator_qa_candidate(
-            "add_or_improve_operator_qa_check",
-            "Keep improving deterministic Growth operator QA checks",
-            "report_only",
-            4,
-            5,
-            8,
-            8,
-            10,
-            1,
-            8,
-            5,
-            "The command now exists; future work should add checks only when a concrete operator gap is observed.",
-            "Extend growth operator-qa-check with one focused new check after evidence from an operator run.",
-        ),
-        _growth_operator_qa_candidate(
-            "optimize_source_core",
-            "Monitor or optimize the source-core default checkpoint",
-            "needs_more_evidence",
-            5,
-            5,
-            8,
-            9,
-            10,
-            5,
-            3,
-            4,
-            "source-fast has been split from the default path; optimize source-core only if it becomes the largest remaining normal checkpoint component.",
-            "Measure default no-args after the source-core/source-extended split, then optimize repeated source-core setup only if needed.",
-        ),
-        _growth_operator_qa_candidate(
-            "superset_cache_reuse_for_explicit_sources",
-            "Reuse superset compact queue cache for explicit-source subsets",
-            "needs_more_evidence",
-            7,
-            7,
-            5,
-            6,
-            8,
-            8,
-            7,
-            6,
-            "Could reduce explicit-source operator friction, but this run did not prove the miss pattern enough for an immediate patch.",
-            "Measure explicit-source subset cache behavior, then add deterministic cache-key subset reuse only if valid.",
-        ),
-        _growth_operator_qa_candidate(
-            "clarify_activepieces_quarantine",
-            "Clarify activepieces quarantine output",
-            "report_only" if has_activepieces else "needs_more_evidence",
-            5,
-            4,
-            7,
-            7,
-            9,
-            2,
-            6,
-            4,
-            "Activepieces is safely skipped, but source-ref failure language is still technical.",
-            "Add a plain-language quarantine summary for deterministic source-ref generation failures.",
-        ),
-        _growth_operator_qa_candidate(
-            "improve_score_spread",
-            "Improve direct-eval score spread and candidate ranking clarity",
-            "needs_more_evidence",
-            7,
-            5,
-            4,
-            6,
-            7,
-            1,
-            7,
-            6,
-            "Ranking quality matters, but score-spread changes are judgment logic and need a dedicated calibration slice.",
-            "Add deterministic score-spread guardrails only after fixture-backed calibration examples.",
-        ),
-        _growth_operator_qa_candidate(
-            "improve_operator_dashboard_next_actions",
-            "Improve Growth operator dashboard next actions",
-            "report_only" if not cache_ready else "reject",
-            5,
-            6,
-            8,
-            8,
-            10,
-            1,
-            6,
-            3,
-            "Dashboard next commands are currently clear; only refine if QA finds a stale or missing command hint.",
-            "Patch the dashboard hint text only for a concrete observed mismatch.",
-        ),
-        _growth_operator_qa_candidate(
-            "optimize_hidden_cold_path",
-            "Optimize remaining hidden cold path",
-            "needs_more_evidence",
-            7,
-            6,
-            5,
-            6,
-            8,
-            8 if not cache_ready else 4,
-            5,
-            6,
-            "Cold warm remains expensive, but the dashboard now makes that cost explicit and the hot path is fast.",
-            "Profile slow source inventory and queue E2E cache writes in a focused performance batch.",
-        ),
-    ]
-    if has_score_spread_issue:
-        for item in candidates:
-            if item["candidate_id"] == "improve_score_spread":
-                item["rationale"] += " Current direct-eval issues still flag tight score spread."
-    return sorted(candidates, key=lambda item: item["total_roi_score"], reverse=True)
+    return _operator_qa_candidate_scores_impl(dashboard, direct_eval)
 
 
 def collect_growth_operator_qa_check(

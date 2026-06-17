@@ -14128,6 +14128,331 @@ def check_growth_opportunity_scoring_module_extraction() -> None:
     print("growth opportunity scoring module extraction OK")
 
 
+def check_growth_task_draft_alignment_module_extraction() -> None:
+    """Task draft alignment helper lives in an extracted module behind a wrapper."""
+    import link_modes.growth.growth_task_draft_alignment as alignment_module
+    from link_modes.growth.link_growth_console import _select_source_aware_operator_task_candidate
+
+    _require(callable(getattr(alignment_module, "select_source_aware_operator_task_candidate", None)),
+             "growth_task_draft_alignment must expose select_source_aware_operator_task_candidate")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in alignment_module.__dict__.values()),
+             "growth_task_draft_alignment must not import the Growth monolith")
+
+    decision = {
+        "candidate_set": {
+            "candidates": [
+                {
+                    "decision_candidate_id": "decision-a",
+                    "selected_upgrade_candidate_id": "selected-a",
+                    "title": "Ranked decision candidate",
+                },
+                {
+                    "decision_candidate_id": "decision-b",
+                    "selected_upgrade_candidate_id": "selected-b",
+                    "title": "Calibrated task candidate",
+                },
+            ],
+        },
+        "ranking": {"top_candidate_id": "decision-a"},
+    }
+    no_context = alignment_module.select_source_aware_operator_task_candidate(decision, None)
+    _require(no_context == _select_source_aware_operator_task_candidate(decision, None),
+             "task alignment wrapper must delegate no-context case")
+    _require(no_context[0]["decision_candidate_id"] == "decision-a" and no_context[1] == "decision_ranking",
+             "task alignment must keep ranked top without calibrated context")
+
+    source_context = {
+        "research_target_operator_task_draft": {
+            "selected_upgrade_candidate_id": "selected-b",
+        },
+    }
+    aligned = alignment_module.select_source_aware_operator_task_candidate(decision, source_context)
+    _require(aligned == _select_source_aware_operator_task_candidate(decision, source_context),
+             "task alignment wrapper must delegate calibrated context case")
+    _require(aligned[0]["decision_candidate_id"] == "decision-b"
+             and aligned[1] == "calibrated_task_candidate"
+             and aligned[2],
+             "task alignment must select calibrated task candidate and report warning")
+
+    missing_context = {
+        "research_target_operator_task_draft": {
+            "selected_upgrade_candidate_id": "selected-missing",
+        },
+    }
+    missing = alignment_module.select_source_aware_operator_task_candidate(decision, missing_context)
+    _require(missing[0]["decision_candidate_id"] == "decision-a"
+             and missing[1] == "decision_ranking"
+             and "not present" in missing[2][0],
+             "task alignment must fall back when calibrated candidate is missing")
+
+    print("growth task draft alignment module extraction OK")
+
+
+def check_growth_direct_upgrade_eval_module_extraction() -> None:
+    """Direct-eval deterministic helpers live in the extracted module behind wrappers."""
+    import link_modes.growth.growth_direct_upgrade_eval as direct_module
+    import link_modes.growth.link_growth_console as growth_console
+    from link_modes.growth.link_growth_console import (
+        _growth_direct_eval_candidate,
+        _growth_direct_eval_rank_candidates,
+        _growth_source_inventory_cache_status_summary,
+        build_queue_e2e_source_summary_index,
+        collect_growth_direct_eval_cache_plan,
+        collect_growth_source_queue,
+        collect_growth_source_queue_cache_status,
+        collect_growth_source_queue_e2e_summary_cache_record,
+        get_queue_e2e_source_summary_for_source,
+        parse_growth_direct_eval_cache_plan_json,
+        stable_growth_direct_eval_cache_plan_json,
+        summarize_queue_e2e_source_for_direct_eval,
+    )
+
+    expected_exports = (
+        "growth_direct_eval_candidate",
+        "rank_growth_direct_eval_candidates",
+        "collect_growth_direct_eval_cache_plan",
+        "stable_growth_direct_eval_cache_plan_json",
+    )
+    for name in expected_exports:
+        _require(callable(getattr(direct_module, name, None)),
+                 f"growth_direct_upgrade_eval must expose {name}")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in direct_module.__dict__.values()),
+             "growth_direct_upgrade_eval must not import the Growth monolith")
+
+    candidate_args = dict(
+        candidate_id="candidate-a",
+        source_path="research/headroom-main.zip",
+        title="Improve deterministic direct evaluator",
+        candidate_type="source_growth_upgrade",
+        direct_value=8,
+        friction=7,
+        test_speed=5,
+        source_specificity=9,
+        confidence=8,
+        safety=9,
+        verification=8,
+        maintenance=3,
+        evidence="source role and queue evidence",
+        next_slice="Extract one deterministic helper",
+    )
+    wrapper_candidate = _growth_direct_eval_candidate(**candidate_args)
+    module_candidate = direct_module.growth_direct_eval_candidate(**candidate_args)
+    _require(wrapper_candidate == module_candidate,
+             "direct-eval candidate wrapper must delegate to extracted module")
+
+    candidate_b = dict(wrapper_candidate, candidate_id="candidate-b", title="Lower score", total_roi_score=30)
+    ranked_wrapper = _growth_direct_eval_rank_candidates([dict(candidate_b), dict(wrapper_candidate)])
+    ranked_module = direct_module.rank_growth_direct_eval_candidates([dict(candidate_b), dict(wrapper_candidate)])
+    _require(ranked_wrapper == ranked_module and ranked_wrapper[0]["decision"] == "accept",
+             "direct-eval ranking wrapper must delegate to extracted module")
+
+    queue_e2e = {
+        "source_summaries": [
+            {
+                "source_path": "research/headroom-main.zip",
+                "best_growth_opportunity_title": "Improve Headroom compression profile",
+                "primary_repo_role": "compression_context",
+                "primary_repo_role_confidence": "high",
+                "calibrated_top_concepts": ["compression"],
+                "calibrated_direct_usefulness_score": 8,
+                "role_alignment_score": 9,
+                "evidence_support_score": 8,
+                "safety_risk_score": 2,
+                "operator_confidence_score": 8,
+            },
+        ],
+    }
+    index = build_queue_e2e_source_summary_index(queue_e2e)
+    _require(index == direct_module.build_queue_e2e_source_summary_index(queue_e2e),
+             "queue E2E summary index wrapper must delegate")
+    _require(get_queue_e2e_source_summary_for_source(index, "research/headroom-main.zip")
+             == direct_module.get_queue_e2e_source_summary_for_source(index, "research/headroom-main.zip"),
+             "queue E2E source lookup wrapper must delegate")
+    _require(summarize_queue_e2e_source_for_direct_eval("research/headroom-main.zip", queue_e2e)
+             == direct_module.summarize_queue_e2e_source_for_direct_eval("research/headroom-main.zip", queue_e2e),
+             "direct-eval queue summary wrapper must delegate")
+
+    status = {
+        "growth_source_queue_cache_status_id": "status-a",
+        "cache_root": "/tmp/cache-root",
+        "cache_hit_count": 1,
+        "cache_miss_count": 2,
+        "stale_count": 0,
+        "invalid_count": 0,
+        "queue_ready_for_e2e": False,
+    }
+    _require(_growth_source_inventory_cache_status_summary(status)
+             == direct_module.source_inventory_cache_status_summary(status),
+             "source inventory cache summary wrapper must delegate")
+
+    old_cache_root = os.environ.get("LINK_SOURCE_CACHE_ROOT")
+    with tempfile.TemporaryDirectory(prefix="link-direct-eval-module-test-") as cache_root:
+        os.environ["LINK_SOURCE_CACHE_ROOT"] = cache_root
+        try:
+            wrapper_plan = collect_growth_direct_eval_cache_plan()
+            module_plan = direct_module.collect_growth_direct_eval_cache_plan(
+                collect_queue=collect_growth_source_queue,
+                collect_source_status=collect_growth_source_queue_cache_status,
+                collect_queue_cache=collect_growth_source_queue_e2e_summary_cache_record,
+            )
+            _require(wrapper_plan == module_plan,
+                     "direct-eval cache plan wrapper must supply callbacks to extracted module")
+            _require(parse_growth_direct_eval_cache_plan_json(stable_growth_direct_eval_cache_plan_json(wrapper_plan)) == wrapper_plan,
+                     "direct-eval cache plan JSON must round trip after extraction")
+        finally:
+            growth_console._SOURCE_ARCHIVE_INTAKE_REQUEST_CACHE.clear()
+            if old_cache_root is None:
+                os.environ.pop("LINK_SOURCE_CACHE_ROOT", None)
+            else:
+                os.environ["LINK_SOURCE_CACHE_ROOT"] = old_cache_root
+
+    print("growth direct upgrade eval module extraction OK")
+
+
+def check_growth_operator_qa_module_extraction() -> None:
+    """Operator QA deterministic payload helpers live in the extracted module."""
+    import link_modes.growth.growth_operator_qa as qa_module
+    from link_modes.growth.link_growth_console import (
+        _growth_operator_qa_candidate,
+        _growth_operator_qa_candidate_scores,
+        _growth_operator_qa_check_item,
+        _growth_operator_qa_check_status,
+        _growth_operator_qa_issue,
+    )
+
+    expected_exports = (
+        "operator_qa_check_item",
+        "operator_qa_issue",
+        "operator_qa_candidate",
+        "operator_qa_candidate_scores",
+    )
+    for name in expected_exports:
+        _require(callable(getattr(qa_module, name, None)),
+                 f"growth_operator_qa must expose {name}")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in qa_module.__dict__.values()),
+             "growth_operator_qa must not import the Growth monolith")
+
+    item_args = ("check-a", "Check A", "pass", "high", "observed", "expected", "evidence", "fix", "python3 link.py growth operator-qa-check --json")
+    _require(_growth_operator_qa_check_item(*item_args, source_path="research/headroom-main.zip")
+             == qa_module.operator_qa_check_item(*item_args, source_path="research/headroom-main.zip"),
+             "operator QA check item wrapper must delegate")
+    _require(_growth_operator_qa_issue("issue-a", "medium", "cache", "observed", "expected", "evidence", "fix", implement_now=True)
+             == qa_module.operator_qa_issue("issue-a", "medium", "cache", "observed", "expected", "evidence", "fix", implement_now=True),
+             "operator QA issue wrapper must delegate")
+    candidate_args = ("candidate-a", "Improve QA", "report_only", 4, 5, 8, 8, 10, 1, 8, 5, "reason", "slice")
+    _require(_growth_operator_qa_candidate(*candidate_args) == qa_module.operator_qa_candidate(*candidate_args),
+             "operator QA candidate wrapper must delegate")
+    checks = [_growth_operator_qa_check_item(*item_args)]
+    issues = [_growth_operator_qa_issue("issue-b", "low", "cache", "observed", "expected", "evidence", "fix")]
+    _require(_growth_operator_qa_check_status(checks, issues) == qa_module.operator_qa_check_status(checks, issues) == "pass",
+             "operator QA status wrapper must delegate")
+
+    dashboard = {
+        "operator_readiness": {"status": "cold"},
+        "quarantined_sources": [{"source_path": "research/activepieces-main.zip"}],
+    }
+    direct_eval = {"broken_unoptimized_items": [{"issue_id": "score-spread-too-tight"}]}
+    _require(_growth_operator_qa_candidate_scores(dashboard, direct_eval)
+             == qa_module.operator_qa_candidate_scores(dashboard, direct_eval),
+             "operator QA candidate score wrapper must delegate")
+
+    print("growth operator QA module extraction OK")
+
+
+def check_growth_operator_cache_dashboard_module_extraction() -> None:
+    """Operator cache dashboard deterministic helpers live in the extracted module."""
+    import link_modes.growth.growth_operator_cache_dashboard as dashboard_module
+    from link_modes.growth.link_growth_console import (
+        _growth_operator_cache_dashboard_command_hints,
+        _growth_operator_cache_dashboard_issues,
+        _growth_operator_cache_dashboard_queue_e2e_summary,
+        _growth_operator_cache_dashboard_source_inventory_summary,
+    )
+
+    expected_exports = (
+        "operator_cache_dashboard_source_inventory_summary",
+        "operator_cache_dashboard_queue_e2e_summary",
+        "operator_cache_dashboard_command_hints",
+        "operator_cache_dashboard_issues",
+    )
+    for name in expected_exports:
+        _require(callable(getattr(dashboard_module, name, None)),
+                 f"growth_operator_cache_dashboard must expose {name}")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in dashboard_module.__dict__.values()),
+             "growth_operator_cache_dashboard must not import the Growth monolith")
+
+    status = {
+        "cache_root": "/tmp/cache-root",
+        "cache_hit_count": 1,
+        "cache_miss_count": 0,
+        "stale_count": 0,
+        "invalid_count": 0,
+        "source_statuses": [
+            {
+                "source_path": "research/headroom-main.zip",
+                "suitability_status": "suitable",
+                "quarantine_status": "not_quarantined",
+                "cache_status": "hit",
+                "cache_hit": True,
+                "cache_valid": True,
+                "cache_age_seconds": 4,
+                "cached_size_bytes": 10,
+                "invalidation_reasons": [],
+                "stale_reasons": [],
+            },
+        ],
+    }
+    queue = {
+        "skipped_source_count": 0,
+        "quarantine_records": [
+            {
+                "source_path": "research/activepieces-main.zip",
+                "quarantine_status": "quarantined",
+                "quarantine_reason": "unsupported shape",
+                "failure_category": "unsupported",
+                "recommended_fix": "Keep skipped.",
+            },
+        ],
+    }
+    source_summary = _growth_operator_cache_dashboard_source_inventory_summary(status, queue)
+    _require(source_summary == dashboard_module.operator_cache_dashboard_source_inventory_summary(status, queue),
+             "operator cache dashboard source summary wrapper must delegate")
+
+    record = {
+        "cache_key_id": "key-a",
+        "growth_source_queue_e2e_cache_record_id": "record-a",
+        "cache_root": "/tmp/cache-root",
+        "cache_file_path": "/tmp/cache-root/record.json",
+        "cache_file_exists": True,
+        "cache_hit": True,
+        "cache_valid": True,
+        "cache_age_seconds": 5,
+        "cached_size_bytes": 30,
+        "source_count": 1,
+        "skipped_sources": [],
+        "compact_queue_e2e_summary": {
+            "best_overall_opportunity": {"title": "Improve Headroom"},
+            "operator_decision_summary": {"calibration_quality_score": 82},
+        },
+        "invalidation_reasons": [],
+        "stale_reasons": [],
+    }
+    queue_summary = _growth_operator_cache_dashboard_queue_e2e_summary(record)
+    _require(queue_summary == dashboard_module.operator_cache_dashboard_queue_e2e_summary(record),
+             "operator cache dashboard queue summary wrapper must delegate")
+    _require(_growth_operator_cache_dashboard_command_hints() == dashboard_module.operator_cache_dashboard_command_hints(),
+             "operator cache dashboard command hints wrapper must delegate")
+    _require(_growth_operator_cache_dashboard_issues(source_summary, queue_summary, queue)
+             == dashboard_module.operator_cache_dashboard_issues(source_summary, queue_summary, queue),
+             "operator cache dashboard issues wrapper must delegate")
+
+    print("growth operator cache dashboard module extraction OK")
+
+
 # ---------------------------------------------------------------------------
 # 62j. Growth campaign governance and Business Development boundary
 # ---------------------------------------------------------------------------
@@ -23075,6 +23400,10 @@ SOURCE_CORE_CHECKS = (
     check_growth_repo_role_calibration_module_extraction,
     check_growth_concept_confidence_module_extraction,
     check_growth_opportunity_scoring_module_extraction,
+    check_growth_task_draft_alignment_module_extraction,
+    check_growth_direct_upgrade_eval_module_extraction,
+    check_growth_operator_qa_module_extraction,
+    check_growth_operator_cache_dashboard_module_extraction,
 )
 
 
