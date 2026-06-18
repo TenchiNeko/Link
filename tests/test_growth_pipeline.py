@@ -14189,12 +14189,45 @@ def check_growth_task_draft_alignment_module_extraction() -> None:
     print("growth task draft alignment module extraction OK")
 
 
+def check_growth_schema_helpers_module_extraction() -> None:
+    """Small deterministic schema helpers live outside the Growth monolith."""
+    import link_modes.growth.growth_schema_helpers as schema_module
+    from link_modes.growth.link_growth_console import _normalize_implementation_branch_refs
+
+    _require(callable(getattr(schema_module, "normalize_implementation_branch_refs", None)),
+             "growth_schema_helpers must expose normalize_implementation_branch_refs")
+    _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
+                     for value in schema_module.__dict__.values()),
+             "growth_schema_helpers must not import the Growth monolith")
+
+    refs = ["feature/b", "feature/a", "feature/a"]
+    expected = ["feature/a", "feature/b"]
+    _require(schema_module.normalize_implementation_branch_refs(refs) == expected,
+             "schema helper must normalize implementation branch refs")
+    _require(_normalize_implementation_branch_refs(refs) == expected,
+             "schema helper compatibility wrapper must delegate")
+    _require(schema_module.normalize_implementation_branch_refs("feature/c") == ["feature/c"],
+             "schema helper must preserve string input behavior")
+    try:
+        schema_module.normalize_implementation_branch_refs(["../bad"])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("schema helper must reject unsafe relative branch refs")
+
+    print("growth schema helpers module extraction OK")
+
+
 def check_growth_direct_upgrade_eval_module_extraction() -> None:
     """Direct-eval deterministic helpers live in the extracted module behind wrappers."""
     import link_modes.growth.growth_direct_upgrade_eval as direct_module
     import link_modes.growth.link_growth_console as growth_console
     from link_modes.growth.link_growth_console import (
         _growth_direct_eval_candidate,
+        _growth_direct_eval_build_candidates,
+        _growth_direct_eval_build_issues,
+        _growth_direct_eval_issue,
+        _growth_direct_eval_per_target_summary,
         _growth_direct_eval_rank_candidates,
         _growth_source_inventory_cache_status_summary,
         build_queue_e2e_source_summary_index,
@@ -14210,6 +14243,10 @@ def check_growth_direct_upgrade_eval_module_extraction() -> None:
 
     expected_exports = (
         "growth_direct_eval_candidate",
+        "growth_direct_eval_issue",
+        "growth_direct_eval_per_target_summary",
+        "build_growth_direct_eval_candidates",
+        "build_growth_direct_eval_issues",
         "rank_growth_direct_eval_candidates",
         "collect_growth_direct_eval_cache_plan",
         "stable_growth_direct_eval_cache_plan_json",
@@ -14286,6 +14323,125 @@ def check_growth_direct_upgrade_eval_module_extraction() -> None:
     _require(_growth_source_inventory_cache_status_summary(status)
              == direct_module.source_inventory_cache_status_summary(status),
              "source inventory cache summary wrapper must delegate")
+
+    issue_args = (
+        "issue-a",
+        "medium",
+        "cache",
+        "Cache is cold",
+        "observed",
+        "expected",
+        "evidence",
+        "fix",
+    )
+    _require(_growth_direct_eval_issue(*issue_args, implement_now=True)
+             == direct_module.growth_direct_eval_issue(*issue_args, implement_now=True),
+             "direct-eval issue wrapper must delegate")
+
+    no_touch_queue = {
+        "selected_sources": [
+            {
+                "source_path": "research/headroom-main.zip",
+                "source_name": "headroom-main.zip",
+                "suitability_status": "suitable",
+                "quarantine_status": "not_quarantined",
+            },
+        ],
+    }
+    no_touch_status = {
+        "source_statuses": [
+            {
+                "source_path": "research/headroom-main.zip",
+                "cache_status": "hit",
+                "cache_hit": True,
+                "cache_observability_card_id": "cache-card-a",
+            },
+        ],
+    }
+    no_touch_queue_e2e = {
+        "queue_e2e_cache_used": True,
+        "source_summaries": [
+            {
+                "source_path": "research/headroom-main.zip",
+                "best_growth_opportunity_title": "Improve Headroom compression profile",
+                "primary_repo_role": "compression_context",
+                "primary_repo_role_confidence": "high",
+                "calibrated_top_concepts": ["compression"],
+                "calibrated_direct_usefulness_score": 8,
+                "role_alignment_score": 9,
+                "evidence_support_score": 8,
+                "safety_risk_score": 2,
+                "operator_confidence_score": 8,
+                "recommended_next_action": "Extract one deterministic helper.",
+            },
+        ],
+    }
+
+    def _unexpected_collect(**_kwargs):
+        raise AssertionError("queue E2E summary should avoid archive callbacks")
+
+    def _unexpected_cache(_source_path):
+        raise AssertionError("queue E2E summary should avoid source archive cache callbacks")
+
+    per_target_wrapper = _growth_direct_eval_per_target_summary(
+        "research/headroom-main.zip",
+        no_touch_queue,
+        no_touch_status,
+        no_touch_queue_e2e,
+    )
+    per_target_module = direct_module.growth_direct_eval_per_target_summary(
+        "research/headroom-main.zip",
+        no_touch_queue,
+        no_touch_status,
+        no_touch_queue_e2e,
+        collect_summary=_unexpected_collect,
+        collect_score=_unexpected_collect,
+        get_or_collect_cache=_unexpected_cache,
+    )
+    _require(per_target_wrapper == per_target_module
+             and per_target_wrapper["summary_reuse_source"] == "queue_e2e_compact_cache",
+             "direct-eval per-target summary wrapper must delegate and reuse queue summaries")
+
+    warmup = {
+        "estimated_work_count": 1,
+    }
+    issue_status = {
+        "cache_hit_count": 1,
+        "cache_miss_count": 1,
+    }
+    issue_queue_e2e = {
+        "performance_summary": {
+            "total_runtime_ms": 1,
+            "slowest_sources": [],
+        },
+    }
+    calibration = {
+        "calibration_quality_score": 80,
+        "needs_profile_work": [],
+    }
+    issue_queue = {"quarantine_records": []}
+    issues_wrapper = _growth_direct_eval_build_issues(
+        issue_status,
+        warmup,
+        issue_queue_e2e,
+        calibration,
+        [per_target_wrapper],
+        issue_queue,
+    )
+    issues_module = direct_module.build_growth_direct_eval_issues(
+        issue_status,
+        warmup,
+        issue_queue_e2e,
+        calibration,
+        [per_target_wrapper],
+        issue_queue,
+    )
+    _require(issues_wrapper == issues_module
+             and any(item["issue_id"] == "manual-operator-chain-recomputation" for item in issues_wrapper),
+             "direct-eval issue builder wrapper must delegate")
+    _require(_growth_direct_eval_build_candidates([per_target_wrapper], issues_wrapper)
+             == direct_module.build_growth_direct_eval_candidates([per_target_wrapper], issues_wrapper),
+             "direct-eval candidate builder wrapper must delegate")
 
     old_cache_root = os.environ.get("LINK_SOURCE_CACHE_ROOT")
     with tempfile.TemporaryDirectory(prefix="link-direct-eval-module-test-") as cache_root:
@@ -23401,6 +23557,7 @@ SOURCE_CORE_CHECKS = (
     check_growth_concept_confidence_module_extraction,
     check_growth_opportunity_scoring_module_extraction,
     check_growth_task_draft_alignment_module_extraction,
+    check_growth_schema_helpers_module_extraction,
     check_growth_direct_upgrade_eval_module_extraction,
     check_growth_operator_qa_module_extraction,
     check_growth_operator_cache_dashboard_module_extraction,
