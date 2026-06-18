@@ -11,6 +11,15 @@ from __future__ import annotations
 from typing import Any
 
 
+def read_only_safety_metadata() -> dict[str, Any]:
+    return {
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+    }
+
+
 def normalize_implementation_branch_refs(values: Any) -> list[str]:
     if values is None:
         return []

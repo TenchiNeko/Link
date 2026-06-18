@@ -78,6 +78,7 @@ from link_modes.growth.growth_operator_qa import (
 )
 from link_modes.growth.growth_schema_helpers import (
     normalize_implementation_branch_refs as _normalize_implementation_branch_refs_impl,
+    read_only_safety_metadata as _read_only_safety_metadata_impl,
 )
 from link_modes.growth.growth_queue_e2e_cache import (
     collect_growth_source_queue_e2e_cache_key as _collect_growth_source_queue_e2e_cache_key_impl,
@@ -10482,12 +10483,7 @@ BUSINESS_DEVELOPMENT_FORBIDDEN_HANDOFF_ARTIFACTS = (
 
 
 def _read_only_safety_metadata() -> dict[str, Any]:
-    return {
-        "dry_run": True,
-        "write_allowed": False,
-        "automation_allowed": False,
-        "writes": [],
-    }
+    return _read_only_safety_metadata_impl()
 
 
 def make_growth_campaign_evidence_contract_id(

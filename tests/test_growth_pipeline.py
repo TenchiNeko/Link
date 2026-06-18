@@ -14192,10 +14192,15 @@ def check_growth_task_draft_alignment_module_extraction() -> None:
 def check_growth_schema_helpers_module_extraction() -> None:
     """Small deterministic schema helpers live outside the Growth monolith."""
     import link_modes.growth.growth_schema_helpers as schema_module
-    from link_modes.growth.link_growth_console import _normalize_implementation_branch_refs
+    from link_modes.growth.link_growth_console import (
+        _normalize_implementation_branch_refs,
+        _read_only_safety_metadata,
+    )
 
     _require(callable(getattr(schema_module, "normalize_implementation_branch_refs", None)),
              "growth_schema_helpers must expose normalize_implementation_branch_refs")
+    _require(callable(getattr(schema_module, "read_only_safety_metadata", None)),
+             "growth_schema_helpers must expose read_only_safety_metadata")
     _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
                      for value in schema_module.__dict__.values()),
              "growth_schema_helpers must not import the Growth monolith")
@@ -14208,6 +14213,16 @@ def check_growth_schema_helpers_module_extraction() -> None:
              "schema helper compatibility wrapper must delegate")
     _require(schema_module.normalize_implementation_branch_refs("feature/c") == ["feature/c"],
              "schema helper must preserve string input behavior")
+    expected_safety = {
+        "dry_run": True,
+        "write_allowed": False,
+        "automation_allowed": False,
+        "writes": [],
+    }
+    _require(schema_module.read_only_safety_metadata() == expected_safety,
+             "schema helper must preserve read-only safety metadata")
+    _require(_read_only_safety_metadata() == expected_safety,
+             "schema helper safety metadata compatibility wrapper must delegate")
     try:
         schema_module.normalize_implementation_branch_refs(["../bad"])
     except ValueError:
