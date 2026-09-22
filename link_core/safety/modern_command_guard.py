@@ -189,7 +189,7 @@ class CommandRiskAssessment:
 
 
 _DANGEROUS_PATTERNS = [
-    # rm -rf against root/home/user paths. Conservative on purpose.
+    # rm -rf against root or absolute paths. Conservative on purpose.
     (r"\brm\s+-[^\n\s]*(?:r[^\n\s]*f|f[^\n\s]*r)[^\n]*\s+(?:/|~(?:/|$)|\$home(?:/|$))", "destructive recursive delete against root/home"),
     (r"\bsudo\s+rm\b", "sudo rm is destructive"),
 
