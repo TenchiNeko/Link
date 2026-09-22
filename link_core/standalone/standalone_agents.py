@@ -37,7 +37,8 @@ logger = logging.getLogger(__name__)
 # Context Budget Utilities
 # ============================================================
 
-# v1.1: Flask implementation guidance — inject verbatim into build prompts
+# Flask implementation guidance is intentionally descriptive rather than copied
+# sample code. Generated projects must supply their own reviewed implementation.
 FLASK_IMPLEMENTATION_GUIDANCE = (
     \"Use a Link-specific Flask app factory, a maintained authentication library, and
 \"
@@ -3021,7 +3022,7 @@ Import from these modules as needed. Use the exact class/function names shown ab
         if kb_context:
             kb_section = kb_context
 
-        # v1.1: Flask golden snippet injection
+        # Add Link's concise Flask implementation guidance when relevant.
         flask_section = ""
         goal_lower = (state.goal or "").lower()
         file_lower = filename.lower()
@@ -3132,13 +3133,13 @@ Now write the complete `{filename}` between the markers:
                 feedback_section += f"\n{fb}\n"
             feedback_section += "\nFix these matching issues in your new SEARCH blocks.\n"
 
-        # v1.1: Flask implementation guidance for edit repair (was only in build)
+        # Include the same concise Flask guidance during edit repair.
         flask_section = ""
         goal_lower = (state.goal or "").lower()
         file_lower = filename.lower()
         if any(kw in goal_lower or kw in file_lower
                for kw in ['flask', 'api', 'rest api', 'endpoint', 'route', 'jwt', 'auth', 'app.py']):
-            flask_section = f"\n## Flask Reference Patterns\n{FLASK_IMPLEMENTATION_GUIDANCE}\n"
+            flask_section = f"\n{FLASK_IMPLEMENTATION_GUIDANCE}\n"
 
         user_prompt = f"""## Task
 {state.goal}
@@ -3217,7 +3218,7 @@ Produce SEARCH/REPLACE edits to fix the failing tests.
         file_lower = filename.lower()
         if any(kw in goal_lower or kw in file_lower
                for kw in ['flask', 'api', 'rest api', 'endpoint', 'route', 'jwt', 'auth', 'app.py']):
-            flask_section = f"\n## Flask Reference Patterns\n{FLASK_IMPLEMENTATION_GUIDANCE}\n"
+            flask_section = f"\n{FLASK_IMPLEMENTATION_GUIDANCE}\n"
 
         messages = [
             {"role": "system", "content": (
