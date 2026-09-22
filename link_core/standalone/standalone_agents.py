@@ -40,12 +40,9 @@ logger = logging.getLogger(__name__)
 # Flask implementation guidance is intentionally descriptive rather than copied
 # sample code. Generated projects must supply their own reviewed implementation.
 FLASK_IMPLEMENTATION_GUIDANCE = (
-    \"Use a Link-specific Flask app factory, a maintained authentication library, and
-\"
-    \"configuration supplied through an environment or secret manager.
-\"
-    \"Do not copy reference applications, invent data interfaces, or use development fallback keys.
-\"
+    "Use a Link-specific Flask app factory, a maintained authentication library, and\n"
+    "configuration supplied through an environment or secret manager.\n"
+    "Do not copy reference applications, invent data interfaces, or use development fallback keys.\n"
 )
 
 
