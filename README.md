@@ -1,78 +1,159 @@
-# Link
+<p align="center">
+  <img src="docs/assets/link-banner.svg" alt="Link — supervised agent workflows, evidence before execution" width="100%">
+</p>
 
-[![CI](https://github.com/TenchiNeko/Link/actions/workflows/ci.yml/badge.svg)](https://github.com/TenchiNeko/Link/actions/workflows/ci.yml)
+<p align="center">
+  <a href="https://github.com/TenchiNeko/Link/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/TenchiNeko/Link/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Python 3.11 or newer" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-22c55e.svg"></a>
+  <img alt="Local-first" src="https://img.shields.io/badge/runtime-local--first-0891b2">
+  <img alt="Supervised execution" src="https://img.shields.io/badge/execution-supervised-7c3aed">
+</p>
 
-Link is a local-first Python toolkit for supervised agent workflows, guarded research intake, and evidence-backed upgrade planning.
+<p align="center"><strong>A local-first Python toolkit for agent workflows that keeps routing, approvals, and evidence visible.</strong></p>
 
-## What is Link?
+<p align="center">
+  <a href="#why-link">Why Link</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#cli-tour">CLI tour</a> ·
+  <a href="#development">Development</a>
+</p>
 
-Link provides one CLI for running bounded agent and operating-mode workflows. It keeps model routing, approval gates, execution receipts, health checks, and research-derived proposals in explicit, inspectable data structures.
+Link brings model routing, bounded worker roles, approval gates, execution receipts, diagnostics, and research-derived proposals behind one inspectable command-line interface. It is designed for supervised work on your own machine: preview first, make state changes explicitly, and leave evidence behind.
 
-The repository currently exposes three operating modes:
+> [!IMPORTANT]
+> Link is under active development. Its CLI and deterministic smoke suites are functional, but packaged releases and long-term compatibility guarantees are not available yet. Treat it as an engineering toolkit, not an unattended production service.
 
-- **Base** — canonical routing, roles, safety, diagnostics, and receipts.
-- **Growth** — read-only research intake and proposal planning with approval boundaries.
-- **Business** — governed business-development and operations previews.
+## Why Link?
 
-Link is designed for supervised local use. Commands that can write state or apply changes are explicit and approval-gated; previews are the default for research and planning paths.
+Agent workflows become difficult to trust when routing is implicit, permissions are broad, and results disappear into chat history. Link makes those boundaries concrete:
+
+| Principle | What it means in Link |
+| --- | --- |
+| **Local-first** | Loopback model endpoints are the default; cloud-advisor paths require an explicit opt-in. |
+| **Supervised** | Writes, patch application, approvals, and workspace actions live behind named commands and guards. |
+| **Inspectable** | Roles, routes, configuration, receipts, and proposals use explicit data structures. |
+| **Evidence-backed** | Research intake produces sourced observations and upgrade proposals before implementation. |
+| **Composable** | A canonical CLI coordinates shared core services and focused operating modes. |
+
+## Operating modes
+
+| Mode | Purpose | Default boundary |
+| --- | --- | --- |
+| **Base** | Plan, route, patch, verify, diagnose, and produce execution evidence | Supervised execution |
+| **Growth** | Inspect user-supplied research and turn observations into Link-native upgrade proposals | Read-only intake and previews |
+| **Business** | Build governed work orders and business-development or operations previews | Preview and approval gates |
+
+The modes share one safety and routing foundation while keeping their domain-specific configuration separate.
 
 ## Quick start
 
+### Requirements
+
+- Python 3.11+
+- Git
+- A POSIX-compatible shell for the examples below
+
+### Install and verify
+
 ```bash
+git clone https://github.com/TenchiNeko/Link.git
+cd Link
+
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 
-python3 link.py --help
-python3 link.py config
-python3 link.py modes
 python3 link.py self-test
+python3 link.py config
 ```
 
-Python 3.11 or newer is recommended. The default model configuration uses loopback endpoints and does not require credentials for CLI smoke checks.
+No provider credential or running model is required for the CLI smoke checks.
 
-## Common commands
+### Explore the toolkit
 
 ```bash
-python3 link.py status --json       # inspect local runtime endpoints
-python3 link.py doctor              # run diagnostics
-python3 link.py roles               # list worker profiles
-python3 link.py growth --help       # inspect Growth commands
-python3 link.py business --help     # inspect Business commands
-python3 tests/test_profile_gate.py
-python3 tests/test_canonical_architecture.py
-python3 tests/test_growth_pipeline.py --suite base
+python3 link.py modes          # inspect the three operating modes
+python3 link.py roles          # list bounded worker profiles
+python3 link.py route --help   # inspect deterministic routing
+python3 link.py doctor         # run local diagnostics
+python3 link.py growth --help  # explore research-to-proposal workflows
 ```
-
-Growth research commands accept user-supplied files or directories. External repositories and downloaded archives are intentionally not bundled with Link; use a disposable, local input directory and keep provenance in the resulting review data.
-
-## Configuration
-
-The checked-in configuration surface is in [`configs/`](configs/). Start with [`configs/models.yaml`](configs/models.yaml) and [`configs/teams/`](configs/teams/). Environment-specific values belong in a local `.env` file or the shell environment; `.env` files are ignored by Git.
-
-Useful variables include:
-
-- `OLLAMA_HOST` or `OLLAMA_BASE_URL` for status checks.
-- `OLLAMA_PRIMARY_URL` for the primary OpenAI-compatible local model endpoint.
-- `LINK_LOCAL_FAST_MODEL` and `LINK_LOCAL_DEEP_MODEL` for local model selection.
-- `OPENROUTER_API_KEY` or `LINK_OPENROUTER_API_KEY` for explicitly enabled cloud-advisor paths.
-- `LINK_ALLOW_OPENROUTER_ADVISOR=1` to opt into those paths.
-
-See [`.env.example`](.env.example) and [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for safe placeholders and the current configuration boundaries.
 
 ## Architecture
 
-```text
-link.py              canonical command-line entrypoint
-link_core/           routing, roles, safety, receipts, diagnostics
-link_modes/          Growth and Business operating modes
-factory/             reusable workflow and team configuration helpers
-configs/             model and team configuration
-tools/research/      Link-native file/research inspection tools
-tests/               standalone deterministic smoke suites
+```mermaid
+flowchart TD
+    Operator["Operator"] --> CLI["link.py · canonical CLI"]
+    CLI --> Core["Routing · roles · safety gates"]
+    Core --> Base["Base mode"]
+    Core --> Growth["Growth mode"]
+    Core --> Business["Business mode"]
+    Base --> Evidence["Receipts · diagnostics · proposals"]
+    Growth --> Evidence
+    Business --> Evidence
 ```
 
-The architecture is intentionally conservative: source intake produces evidence and proposals, while implementation remains a separate, human-approved step. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the supported boundaries.
+The architectural rule is deliberate: research and planning may generate evidence and proposals, but implementation remains a separate, human-approved step.
+
+| Path | Responsibility |
+| --- | --- |
+| `link.py` | Canonical command dispatcher |
+| `link_core/` | Routing, roles, safety, receipts, diagnostics, and control-plane contracts |
+| `link_modes/` | Growth and Business operating modes |
+| `factory/` | Reusable team, approval, and workflow helpers |
+| `configs/` | Checked-in model-routing and team defaults |
+| `tools/research/` | Link-native inspection utilities |
+| `tests/` | Deterministic standalone smoke suites |
+
+Read the [architecture guide](docs/ARCHITECTURE.md) for the complete module and safety boundaries.
+
+## CLI tour
+
+| Command | Use it to |
+| --- | --- |
+| `status` | Inspect configured local runtime, model, and web endpoints |
+| `doctor` | Run the diagnostics dashboard |
+| `agents` / `roles` | Inspect agent sources and bounded worker profiles |
+| `route` | Preview deterministic pre-run routing |
+| `engine` | Enter the supervised run engine |
+| `research` | Inspect a user-supplied local research target |
+| `governance` | Preview unified governance state |
+| `control-plane` | Inspect control-plane health and stages |
+| `self-test` | Verify canonical architecture contracts |
+| `healthcheck` | Run the broader Link healthcheck |
+
+Run `python3 link.py --help` for the complete command list and `python3 link.py <command> --help` for command-specific options.
+
+## Configuration
+
+Safe defaults live in [`configs/models.yaml`](configs/models.yaml) and [`configs/teams/`](configs/teams/). Machine-specific endpoints, model IDs, and credentials belong in the environment or a local `.env` file, which Git ignores.
+
+```bash
+cp .env.example .env
+python3 link.py config
+```
+
+Common variables:
+
+- `OLLAMA_HOST` or `OLLAMA_BASE_URL` — status-check endpoint
+- `OLLAMA_PRIMARY_URL` — primary OpenAI-compatible local endpoint
+- `LINK_LOCAL_FAST_MODEL` and `LINK_LOCAL_DEEP_MODEL` — local routing choices
+- `LINK_ALLOW_OPENROUTER_ADVISOR=1` — explicit cloud-advisor opt-in
+- `OPENROUTER_API_KEY` or `LINK_OPENROUTER_API_KEY` — optional advisor credential
+
+See the [configuration guide](docs/CONFIGURATION.md) and [`.env.example`](.env.example) for the supported surface and safe placeholders.
+
+## Safety model
+
+- Preview and read-only behavior is the default for research and planning paths.
+- Provider use, writes, approvals, patch application, and workspace lifecycle actions are explicit.
+- External research repositories and downloaded archives are inputs, not bundled dependencies.
+- Runtime receipts, local agent state, credentials, browser profiles, and model artifacts stay out of source control.
+- Reporting paths are designed to redact sensitive values.
+
+See [SECURITY.md](SECURITY.md) for reporting guidance. Never place a live provider key in source, YAML, documentation, fixtures, or issues.
 
 ## Development
 
@@ -83,16 +164,12 @@ make lint
 make typecheck
 ```
 
-The test files are standalone smoke suites rather than pytest-discovered unit tests. `make test` invokes the supported commands directly. Some source-archive integration checks require private, user-supplied archives and are opt-in; they are not part of a clean checkout.
-
-## Security
-
-Never commit credentials, browser state, private keys, model dumps, or local runtime receipts. Link reads provider credentials from environment variables and redacts sensitive values in reporting paths. Please see [SECURITY.md](SECURITY.md) for reporting guidance.
+The test files are deterministic standalone smoke suites rather than pytest-discovered unit tests. `make test` invokes the supported suites directly. Some source-archive integration checks require private, user-supplied inputs and remain opt-in.
 
 ## Contributing
 
-Small, focused changes are easiest to review. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+Contributions should be focused, reproducible, and honest about what was tested. Start with [CONTRIBUTING.md](CONTRIBUTING.md), and use the repository's issue and pull-request templates when proposing a change.
 
 ## License
 
-Link is released under the [MIT License](LICENSE).
+Link is available under the [MIT License](LICENSE).
