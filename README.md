@@ -95,4 +95,4 @@ Small, focused changes are easiest to review. Read [CONTRIBUTING.md](CONTRIBUTIN
 
 ## License
 
-No project license has been selected in this repository yet. Until the owner adds one, the code is not granted for reuse. See [LICENSE-NEEDS-OWNER-DECISION.md](LICENSE-NEEDS-OWNER-DECISION.md).
+Link is released under the [MIT License](LICENSE).
