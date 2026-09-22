@@ -1,8 +1,8 @@
 """
 Playbook Reader — Orchestrator-side integration.
 
-This module runs on the MAIN NODE and reads the playbook
-maintained by the background learning process on the [private-node] node.
+This module reads the shared playbook maintained by the background
+learning process.
 It injects the most relevant bullets into agent system prompts.
 
 Usage in standalone_orchestrator.py:

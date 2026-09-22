@@ -1,11 +1,11 @@
 """
 Configuration for the standalone orchestrator.
 
-v0.8.0: Dual Ollama instance architecture.
-  - Instance 1 (port 11434): Qwen2.5-Coder 32B on GPUs 1,2,3 — plan + build
-  - Instance 2 (port 11436): Qwen 2.5 Coder 14B on GPU 0 (5060 Ti) — init, explore, test
-  - No model swapping — both run simultaneously
-  - RAG Knowledge Base on port 8787
+ v0.8.0: Dual local-model endpoint architecture.
+  - A primary endpoint handles planning and build work.
+  - A secondary endpoint can handle lightweight initialization, exploration, and tests.
+  - No model swapping is required when both endpoints are available.
+  - An optional knowledge-base service can be configured separately.
 
 Defines model routing via direct Ollama/API HTTP endpoints.
 No CLI tool dependencies.
@@ -81,36 +81,16 @@ def default_config() -> Config:
     """
     Default configuration using local Ollama endpoints.
 
-    v0.8.0 Dual-Instance Architecture:
-    ===================================
-    [private-device] ([private-device]): 4x GPU — 64GB VRAM total
-      Instance 1 (port 11434): Qwen2.5-Coder 32B (~40GB VRAM)
-        - GPUs: 1 (RTX 3090 24GB) + 2 (RTX 4070 Super 12GB) + 3 (RTX 4070 Super 12GB)
-        - Roles: plan, build (heavy reasoning)
-        - CUDA_VISIBLE_DEVICES=1,2,3
-
-      Instance 2 (port 11436): Qwen 2.5 Coder 14B (~9GB VRAM)
-        - GPU: 0 (RTX 5060 Ti 16GB)
-        - Roles: initializer, explore, test (fast, lightweight)
-        - CUDA_VISIBLE_DEVICES=0
-
-    Both instances run simultaneously — NO model swapping.
-    The 5060 Ti was previously idle during 32B inference.
-
-    RAG Knowledge Base: port 8787 (systemd service: rag-kb)
-      - Tier 1: 60+ error→solution patterns
-      - Tier 2: 15,500+ documentation chunks (CPython, Flask, pytest, etc.)
-
-    Optional [private-node] Node (fallback if [private-device] GPU 0 is needed):
-      - Endpoint: http://[private-address]:11434
-      - Model: Qwen 2.5 Coder 7B
+    The defaults intentionally use loopback endpoints. Deployment-specific hosts,
+    models, ports, and hardware belong in local environment configuration rather
+    than in source control.
     """
 
     # --- Model definitions ---
 
     # PRIMARY (Instance 1, port 11434): Qwen2.5-Coder 32B — heavy reasoning
     llama_70b = ModelConfig(
-        name="Qwen2.5-Coder 32B ([private-device] Instance 1)",
+        name="Qwen2.5-Coder 32B (primary local endpoint)",
         provider="openai",
         endpoint=os.environ.get("OLLAMA_PRIMARY_URL", "http://127.0.0.1:8090"),
         model_id="qwen-agent.gguf",
@@ -125,10 +105,9 @@ def default_config() -> Config:
         top_p=0.95,
     )
 
-    # SECONDARY (Instance 2, port 11436): Qwen 2.5 Coder 14B — fast agent work
-    # Runs on dedicated GPU 0 (5060 Ti 16GB) — always loaded, no swapping
+    # SECONDARY: a smaller local model for fast agent work.
     qwen_14b = ModelConfig(
-        name="Qwen 2.5 Coder 14B ([private-device] Instance 2)",
+        name="Qwen 2.5 Coder 14B (secondary local endpoint)",
         provider="openai",
         endpoint=os.environ.get("OLLAMA_PRIMARY_URL", "http://127.0.0.1:8090"),
         model_id="qwen-agent.gguf",
@@ -142,7 +121,7 @@ def default_config() -> Config:
     )
 
     qwen_14b_testgen = ModelConfig(
-        name="Qwen 2.5 Coder 14B LoRA Test-Gen ([private-device] Instance 2)",
+        name="Qwen 2.5 Coder 14B LoRA Test-Gen (secondary local endpoint)",
         provider="openai",
         endpoint=os.environ.get("OLLAMA_PRIMARY_URL", "http://127.0.0.1:8090"),
         model_id="qwen-agent.gguf",
@@ -155,24 +134,12 @@ def default_config() -> Config:
         thinking_mode="disabled",  # Test gen doesn't need extended reasoning
     )
 
-    # FALLBACK: [private-node] Node 7B (if GPU 0 is reclaimed for 32B)
-    # qwen_7b_runtime = ModelConfig(
-    #     name="Qwen 2.5 Coder 7B ([private-node] Node)",
-    #     provider="openai",
-    #     endpoint="http://127.0.0.1:8090",
-    #     model_id="qwen-agent.gguf",
-    #     temperature=0.0,
-    #     max_tokens=16384,
-    #     context_window=32768,
-    #     supports_tools=True,
-    # )
-
     # --- Qwen3 alternatives (native tool calling) ---
     # Uncomment and swap into agent assignments when available.
 
     # Qwen3 30B-A3B (MoE, only 3B active)
     # qwen3_30b = ModelConfig(
-    #     name="Qwen3 30B-A3B ([private-device])",
+    #     name="Qwen3 30B-A3B (local)",
     #     provider="openai",
     #     endpoint=os.environ.get("OLLAMA_PRIMARY_URL", "http://127.0.0.1:8090"),
     #     model_id="qwen-agent.gguf",
@@ -185,12 +152,12 @@ def default_config() -> Config:
     # )
 
     # --- Agent role assignments ---
-    # Instance 1 (32B, port 11434): plan + build — best reasoning for code generation
-    # Instance 2 (14B, port 11436): initializer + explore + test — fast, co-located
+    # Primary endpoint: plan + build — best reasoning for code generation.
+    # Secondary endpoint: initializer + explore + test — fast, lightweight work.
 
     # v0.9.0: Librarian model — uses Instance 2 (same as init/explore/test)
     # Runs post-session curation: error patterns, journal entries, code snippets.
-    # Can also point to [private-node] node 7B to offload: http://[private-address]:11434
+    # Can also point to another endpoint by changing the local configuration.
     librarian_model = ModelConfig(
         name="Qwen3.5-35B-A3B Q8 (llama.cpp Integrator)",
         provider="openai",

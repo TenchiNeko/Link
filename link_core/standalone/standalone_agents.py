@@ -1378,7 +1378,7 @@ class AgentRunner:
         self._llm_clients: Dict[str, LLMClient] = {}
 
         # ACE playbook integration — inject learned patterns into agent prompts
-        _pb_path = "/home/user/link/playbook.json"
+        _pb_path = str(working_dir / "playbook.json")
         if not Path(_pb_path).exists():
             _pb_path = str(working_dir.parent / "playbook.json")
         self._playbook = PlaybookReader(playbook_path=_pb_path) if os.environ.get("ORCH_ENABLE_PLAYBOOK") == "1" else None
@@ -1637,7 +1637,8 @@ class AgentRunner:
             duration = time.time() - start_time
 
             if round_count >= max_rounds:
-                if 'progress' in locals():
+                progress = locals().get("progress")
+                if progress is not None:
                     progress.update("failed", f"hit max rounds {max_rounds}", "agent exceeded tool round budget")
                     logger.warning(f"  Agent progress: {progress.role} {progress.status} — {progress.current_step}")
                 else:

@@ -1,0 +1,7 @@
+# Runtime
+httpx>=0.24.0,<1.0
+PyYAML>=6.0,<7.0
+
+# Development and release checks
+ruff>=0.4.0
+mypy>=1.10.0

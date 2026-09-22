@@ -240,7 +240,7 @@ class Orchestrator:
                 if _stats.get('available'):
                     logger.info(f"Playbook: ✅ {_stats['total_bullets']} bullets loaded")
                 else:
-                    logger.info("Playbook: 📝 no playbook.json yet (will be created by background learning process)")
+                    logger.info("Playbook: 📝 no playbook.json yet (will be created by the background learning process)")
             except Exception as e:
                 logger.warning(f"Playbook: ⚠️ init failed: {e}")
 
@@ -275,8 +275,8 @@ class Orchestrator:
         except Exception as e:
             logger.debug(f"Playbook feedback error: {e}")
 
-    def _sync_session_to_runtime(self):
-        """Auto-sync completed session to [private-node] node for subconscious analysis."""
+    def _sync_session_for_analysis(self):
+        """Optionally sync a completed session for background analysis."""
         sync_script = Path(__file__).parent / 'sync-session.sh'
         if not sync_script.exists():
             return
@@ -287,7 +287,7 @@ class Orchestrator:
                 capture_output=True, text=True, timeout=60
             )
             if result.returncode == 0:
-                logger.info("📤 Session synced to [private-node] node for subconscious analysis")
+                logger.info("📤 Session synced for background analysis")
             else:
                 logger.debug(f"Session sync failed: {result.stderr[:200]}")
         except Exception as e:
@@ -6027,7 +6027,7 @@ Do NOT rewrite from scratch. Start from this code and fix the failing parts.
             return
         task_state._finalized = True
         self._report_playbook_feedback(was_successful=success)
-        self._sync_session_to_runtime()
+        self._sync_session_for_analysis()
 
         worktree_info = getattr(task_state, "_worktree_info", None)
         original_working_dir = getattr(task_state, "_original_working_dir", None)
@@ -6117,9 +6117,7 @@ Do NOT rewrite from scratch. Start from this code and fix the failing parts.
                 "ik_llama.cpp", ("sub" + "conscious-daemon"),
             }
             files_to_ingest = getattr(task_state, "changed_files", [])
-            if not files_to_ingest and trivial_file_task:
-                files_to_ingest = []
-            elif not files_to_ingest:
+            if not files_to_ingest:
                 files_to_ingest = [f.name for f in self.working_dir.glob("*.py")]
             for filename in files_to_ingest:
                 py_file = self.working_dir / filename

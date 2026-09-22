@@ -292,7 +292,7 @@ def check_cli_dispatcher() -> None:
 
     commands = link._DELEGATED_COMMANDS
     for required in (
-        "status", "doctor", "agents", "engine", "route", "control-plane", "grade",
+        "status", "doctor", "agents", "engine", "route", "grade",
     ):
         if required not in commands:
             raise AssertionError(f"link.py CLI is missing delegated command: {required}")
@@ -303,12 +303,17 @@ def check_cli_dispatcher() -> None:
     local = getattr(link, "_LOCAL_COMMANDS", None)
     if local is None:
         raise AssertionError("link.py is missing _LOCAL_COMMANDS")
-    for required in ("modes", "roles", "dashboard", "self-test", "config"):
+    for required in ("modes", "roles", "dashboard", "control-plane", "self-test", "config"):
         if required not in local:
             raise AssertionError(f"link.py CLI is missing local command: {required}")
         func, help_text = local[required]
         if not callable(func) or not help_text:
             raise AssertionError(f"link.py local command {required} has incomplete metadata")
+
+    from link_status import _ollama_tcp_target
+
+    if _ollama_tcp_target("http://model-host:11436/api") != ("model-host", 11436):
+        raise AssertionError("status endpoint parsing must honor configured host and port")
 
     # --help and no args are zero-exit no-ops.
     if link.main(["--help"]) != 0:

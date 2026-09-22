@@ -20,6 +20,15 @@ def read_only_safety_metadata() -> dict[str, Any]:
     }
 
 
+def normalized_non_empty_keys(*values: Any) -> list[str]:
+    keys: list[str] = []
+    for value in values:
+        text = str(value or "").strip().lower()
+        if text and text not in keys:
+            keys.append(text)
+    return keys
+
+
 def normalize_implementation_branch_refs(values: Any) -> list[str]:
     if values is None:
         return []

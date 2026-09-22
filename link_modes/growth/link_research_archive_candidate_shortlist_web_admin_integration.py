@@ -8,8 +8,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-import link_research_archive_candidate_shortlist_web_admin_route as route
-from link_research_archive_candidate_shortlist_exporter import _write_self_test_intake
+from . import link_research_archive_candidate_shortlist_web_admin_route as route
+from .link_research_archive_candidate_shortlist_exporter import _write_self_test_intake
 
 
 MARKER = "research archive candidate shortlist web admin integration OK"

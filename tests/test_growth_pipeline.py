@@ -171,9 +171,11 @@ def _run_deep_growth_execution_tests() -> bool:
 def _tiny_source_archive_fixture_root() -> Path:
     global _TINY_SOURCE_ARCHIVE_FIXTURE_DIR
     if _TINY_SOURCE_ARCHIVE_FIXTURE_DIR is None:
+        fixture_parent = ROOT / "research"
+        fixture_parent.mkdir(parents=True, exist_ok=True)
         _TINY_SOURCE_ARCHIVE_FIXTURE_DIR = tempfile.TemporaryDirectory(
             prefix=".growth-test-fixtures-",
-            dir=str(ROOT / "research"),
+            dir=str(fixture_parent),
         )
     return Path(_TINY_SOURCE_ARCHIVE_FIXTURE_DIR.name)
 
@@ -13071,8 +13073,8 @@ def check_growth_console_audit_helper_and_cli() -> None:
              "growth console audit must not recommend deletion candidates")
     _require(payload["fallback_allowed"] is False and payload["model_used"] is False and payload["external_network_used"] is False,
              "growth console audit must avoid fallback/model/network")
-    _require((ROOT / "LINK_GROWTH_CONSOLE_MODULARIZATION.md").exists(),
-             "growth console modularization documentation must exist")
+    _require((ROOT / "docs/ARCHITECTURE.md").exists(),
+             "public architecture documentation must exist")
 
     json_out = io.StringIO()
     with contextlib.redirect_stdout(json_out):
@@ -14193,6 +14195,7 @@ def check_growth_schema_helpers_module_extraction() -> None:
     """Small deterministic schema helpers live outside the Growth monolith."""
     import link_modes.growth.growth_schema_helpers as schema_module
     from link_modes.growth.link_growth_console import (
+        _normalized_non_empty_keys,
         _normalize_implementation_branch_refs,
         _read_only_safety_metadata,
     )
@@ -14201,6 +14204,8 @@ def check_growth_schema_helpers_module_extraction() -> None:
              "growth_schema_helpers must expose normalize_implementation_branch_refs")
     _require(callable(getattr(schema_module, "read_only_safety_metadata", None)),
              "growth_schema_helpers must expose read_only_safety_metadata")
+    _require(callable(getattr(schema_module, "normalized_non_empty_keys", None)),
+             "growth_schema_helpers must expose normalized_non_empty_keys")
     _require(not any(getattr(value, "__name__", "") == "link_modes.growth.link_growth_console"
                      for value in schema_module.__dict__.values()),
              "growth_schema_helpers must not import the Growth monolith")
@@ -14223,6 +14228,12 @@ def check_growth_schema_helpers_module_extraction() -> None:
              "schema helper must preserve read-only safety metadata")
     _require(_read_only_safety_metadata() == expected_safety,
              "schema helper safety metadata compatibility wrapper must delegate")
+    keys = (" Candidate-A ", "", "candidate-a", None, "Proposal-B")
+    expected_keys = ["candidate-a", "proposal-b"]
+    _require(schema_module.normalized_non_empty_keys(*keys) == expected_keys,
+             "schema helper must normalize non-empty keys")
+    _require(_normalized_non_empty_keys(*keys) == expected_keys,
+             "schema helper non-empty key compatibility wrapper must delegate")
     try:
         schema_module.normalize_implementation_branch_refs(["../bad"])
     except ValueError:
@@ -19656,11 +19667,20 @@ def check_growth_opportunity_review_package_helper() -> None:
 
 def _research_target_test_paths() -> tuple[str, str, str]:
     zip_source = make_crawler_like_fixture()
-    folder_source = "research/_extracted/sota-scan-master/sota-scan-master"
-    file_source = "research/hermes_upgrade_actionable_shortlist.md"
-    for source in (zip_source, folder_source, file_source):
-        _require((ROOT / source).exists(), f"research target test fixture must exist: {source}")
-    return zip_source, folder_source, file_source
+    folder_path = ROOT / "research" / "_extracted" / "synthetic-source"
+    folder_path.mkdir(parents=True, exist_ok=True)
+    (folder_path / "README.md").write_text(
+        "Synthetic source-folder fixture for Link research intake tests.\n",
+        encoding="utf-8",
+    )
+    file_path = ROOT / "research" / "synthetic-source-notes.md"
+    file_path.write_text(
+        "Synthetic source notes for Link research intake tests.\n",
+        encoding="utf-8",
+    )
+    for source in (zip_source, str(folder_path), str(file_path)):
+        _require(Path(source).exists(), f"research target test fixture must exist: {source}")
+    return zip_source, "research/_extracted/synthetic-source", "research/synthetic-source-notes.md"
 
 
 def check_research_target_intake_helpers() -> None:
@@ -20571,12 +20591,18 @@ def check_source_aware_archive_concept_extractor_helpers() -> None:
              "repo role policy JSON must round trip")
 
     role_fixtures = collect_repo_role_calibration_fixtures()
-    _require(next(item for item in role_fixtures["fixtures"] if item["source_path"] == real_headroom_source)["expected_primary_role"] == "compression_context",
-             "Headroom fixture must expect compression role")
-    _require(next(item for item in role_fixtures["fixtures"] if item["source_path"] == real_crawler_source)["expected_primary_role"] == "crawler_source_collection",
-             "gpt-crawler fixture must expect crawler role")
-    _require("compression_context" in next(item for item in role_fixtures["fixtures"] if item["source_path"] == real_agent_reach_source)["expected_negative_roles"],
-             "Agent-Reach fixture must reject compression role")
+    available_fixtures = {item["source_path"]: item for item in role_fixtures["fixtures"]}
+    if available_fixtures:
+        _require(available_fixtures[real_headroom_source]["expected_primary_role"] == "compression_context",
+                 "Headroom fixture must expect compression role")
+        _require(available_fixtures[real_crawler_source]["expected_primary_role"] == "crawler_source_collection",
+                 "gpt-crawler fixture must expect crawler role")
+        _require("compression_context" in available_fixtures[real_agent_reach_source]["expected_negative_roles"],
+                 "Agent-Reach fixture must reject compression role")
+    else:
+        missing_sources = {item["source_path"] for item in role_fixtures["missing_fixtures"]}
+        _require({real_headroom_source, real_crawler_source, real_agent_reach_source}.issubset(missing_sources),
+                 "clean checkouts must report unavailable external role fixtures")
     validate_repo_role_calibration_fixtures(role_fixtures)
     _require(parse_repo_role_calibration_fixtures_json(stable_repo_role_calibration_fixtures_json(role_fixtures)) == role_fixtures,
              "repo role fixtures JSON must round trip")

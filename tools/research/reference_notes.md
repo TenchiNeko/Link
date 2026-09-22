@@ -1,25 +1,11 @@
-# Link Research Tools Reference Notes
+# Link research tools
 
-This folder is the proper home for Link-native research/code search tools.
+This directory contains Link-native helpers for inspecting user-supplied research inputs. They report bounded `path:line` evidence and do not bundle or vendor external repositories.
 
-Raw imported TypeScript tool source stays in the research intake archive:
+Use the file-tools CLI with an input directory supplied at runtime:
 
-`.link_research_intake/research-mining-20260524T153654Z-2772421/extracted/Research/Research/src/tools/`
+```bash
+python3 tools/research/link_research_file_tools.py grep "PATTERN" --root /path/to/research-input
+```
 
-Use these as references only:
-
-- `GrepTool/GrepTool.ts`
-- `GrepTool/prompt.ts`
-- `GlobTool/GlobTool.ts`
-- `GlobTool/prompt.ts`
-- `FileReadTool/FileReadTool.ts`
-- `FileReadTool/limits.ts`
-- `BashTool/readOnlyValidation.ts`
-- `BashTool/pathValidation.ts`
-- `BashTool/bashSecurity.ts`
-
-Primary Link-native CLI:
-
-`python3 tools/research/link_research_file_tools.py grep "PATTERN" --root research`
-
-Return `path:line` evidence whenever possible.
+Downloaded archives and extracted source trees belong outside the repository. Keep any resulting proposal or review data redacted and preserve enough provenance for a contributor to understand where an observation came from.

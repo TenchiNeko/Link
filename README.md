@@ -1,219 +1,98 @@
 # Link
 
-Link is the working repository for building and improving Brandon's own local agent/orchestration system.
+[![CI](https://github.com/TenchiNeko/Link/actions/workflows/ci.yml/badge.svg)](https://github.com/TenchiNeko/Link/actions/workflows/ci.yml)
 
-The Hermes Agent package in `research/agent_research.zip` was used as research material to mine for useful architecture ideas, safety patterns, tool-handling concepts, and possible upgrades. It is not being adopted wholesale as Link.
+Link is a local-first Python toolkit for supervised agent workflows, guarded research intake, and evidence-backed upgrade planning.
 
-This repository is being used to keep research notes, smoke test results, integration findings, and safety observations so useful ideas can be selectively adapted into Link.
+## What is Link?
 
-## Current status
+Link provides one CLI for running bounded agent and operating-mode workflows. It keeps model routing, approval gates, execution receipts, health checks, and research-derived proposals in explicit, inspectable data structures.
 
-The Hermes Agent source was extracted and tested in an isolated temporary directory, not directly inside the Link repo.
+The repository currently exposes three operating modes:
 
-Tested source:
+- **Base** — canonical routing, roles, safety, diagnostics, and receipts.
+- **Growth** — read-only research intake and proposal planning with approval boundaries.
+- **Business** — governed business-development and operations previews.
 
-- `research/agent_research.zip`
+Link is designed for supervised local use. Commands that can write state or apply changes are explicit and approval-gated; previews are the default for research and planning paths.
 
-Extracted test path:
+## Quick start
 
-- `/tmp/link-hermes-agent-test.t4WUtf/hermes-agent-main`
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
 
-Smoke test report:
+python3 link.py --help
+python3 link.py config
+python3 link.py modes
+python3 link.py self-test
+```
 
-- `research/hermes_agent_smoke_test_result.md`
+Python 3.11 or newer is recommended. The default model configuration uses loopback endpoints and does not require credentials for CLI smoke checks.
 
-The initial Hermes Agent smoke test result has been committed and pushed.
+## Common commands
 
-Current pushed commit:
+```bash
+python3 link.py status --json       # inspect local runtime endpoints
+python3 link.py doctor              # run diagnostics
+python3 link.py roles               # list worker profiles
+python3 link.py growth --help       # inspect Growth commands
+python3 link.py business --help     # inspect Business commands
+python3 tests/test_profile_gate.py
+python3 tests/test_canonical_architecture.py
+python3 tests/test_growth_pipeline.py --suite base
+```
 
-- `2dc7876 docs: add Hermes agent smoke test result`
+Growth research commands accept user-supplied files or directories. External repositories and downloaded archives are intentionally not bundled with Link; use a disposable, local input directory and keep provenance in the resulting review data.
 
-## What was verified
+## Configuration
 
-The Hermes Agent package was tested in an isolated Python virtual environment.
+The checked-in configuration surface is in [`configs/`](configs/). Start with [`configs/models.yaml`](configs/models.yaml) and [`configs/teams/`](configs/teams/). Environment-specific values belong in a local `.env` file or the shell environment; `.env` files are ignored by Git.
 
-Verified items:
+Useful variables include:
 
-- Python virtual environment creation worked.
-- Core and dev dependency install worked inside the extracted Hermes project.
-- `run_agent.py --help` worked after dependencies were installed.
-- A small safe pytest batch passed.
-- File toolset smoke test worked.
-- Terminal toolset smoke test worked.
-- Combined file plus terminal toolset worked when the comma-separated toolset argument was quoted.
+- `OLLAMA_HOST` or `OLLAMA_BASE_URL` for status checks.
+- `OLLAMA_PRIMARY_URL` for the primary OpenAI-compatible local model endpoint.
+- `LINK_LOCAL_FAST_MODEL` and `LINK_LOCAL_DEEP_MODEL` for local model selection.
+- `OPENROUTER_API_KEY` or `LINK_OPENROUTER_API_KEY` for explicitly enabled cloud-advisor paths.
+- `LINK_ALLOW_OPENROUTER_ADVISOR=1` to opt into those paths.
 
-Selected test result:
+See [`.env.example`](.env.example) and [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for safe placeholders and the current configuration boundaries.
 
-    113 passed in 1.70s
+## Architecture
 
-## Important findings
+```text
+link.py              canonical command-line entrypoint
+link_core/           routing, roles, safety, receipts, diagnostics
+link_modes/          Growth and Business operating modes
+factory/             reusable workflow and team configuration helpers
+configs/             model and team configuration
+tools/research/      Link-native file/research inspection tools
+tests/               standalone deterministic smoke suites
+```
 
-### 1. Keep Hermes isolated for now
+The architecture is intentionally conservative: source intake produces evidence and proposals, while implementation remains a separate, human-approved step. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the supported boundaries.
 
-Hermes was tested from the extracted temp path, not installed into the Link repo.
+## Development
 
-Do not run Hermes install commands from `~/link`, because Link itself is not the Hermes Python project.
+```bash
+make install
+make test
+make lint
+make typecheck
+```
 
-This command failed when accidentally run from `~/link`:
+The test files are standalone smoke suites rather than pytest-discovered unit tests. `make test` invokes the supported commands directly. Some source-archive integration checks require private, user-supplied archives and are opt-in; they are not part of a clean checkout.
 
-    python -m pip install -e .[dev]
+## Security
 
-Reason:
+Never commit credentials, browser state, private keys, model dumps, or local runtime receipts. Link reads provider credentials from environment variables and redacts sensitive values in reporting paths. Please see [SECURITY.md](SECURITY.md) for reporting guidance.
 
-    ~/link does not contain setup.py or pyproject.toml
+## Contributing
 
-### 2. Missing websockets dependency
+Small, focused changes are easiest to review. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
-During tool listing, this warning appeared:
+## License
 
-    Could not import tool module tools.browser_dialog_tool: No module named websockets
-
-Installing websockets inside the temp Hermes virtual environment fixed that import warning:
-
-    python -m pip install websockets
-
-This suggests `websockets` may need to be added to the correct Hermes dependency group if browser dialog support is expected.
-
-### 3. Safe toolset is non-writing and non-terminal
-
-The safe toolset loaded only `vision_analyze` in the tested environment because other safe tools failed requirement checks.
-
-The agent could not write files or run shell commands under the safe toolset.
-
-That is expected and useful from a safety standpoint.
-
-### 4. File toolset works
-
-The file toolset loaded:
-
-- `patch`
-- `read_file`
-- `search_files`
-- `write_file`
-
-It successfully created:
-
-    /tmp/hermes-agent-sandbox/hello.txt
-
-With content:
-
-    Hermes smoke test passed
-
-### 5. Terminal toolset works
-
-The terminal toolset loaded:
-
-- `process`
-- `terminal`
-
-It successfully printed the current directory and created:
-
-    /tmp/hermes-agent-sandbox/terminal-test.txt
-
-With content:
-
-    Terminal tool worked.
-
-### 6. Combined file and terminal toolsets need quoting
-
-This failed:
-
-    python run_agent.py --enabled_toolsets=file,terminal
-
-Error:
-
-    AttributeError: tuple object has no attribute split
-
-This worked:
-
-    python run_agent.py --enabled_toolsets="file,terminal"
-
-Likely issue:
-
-- Python Fire parses the unquoted comma-separated value into a tuple.
-- `run_agent.py` expects a string and calls `.split(",")`.
-
-Suggested future patch:
-
-- Normalize `enabled_toolsets` and `disabled_toolsets` if they arrive as tuple or list before calling `.split(",")`.
-
-## Reproduction notes
-
-From the extracted Hermes project directory:
-
-    cd /tmp/link-hermes-agent-test.t4WUtf/hermes-agent-main
-    python -m venv .venv
-    source .venv/bin/activate
-    python -m pip install --upgrade pip setuptools wheel
-    python -m pip install -e .[dev]
-    python -m pip install websockets
-
-Run help:
-
-    PYTHONDONTWRITEBYTECODE=1 python run_agent.py --help | head -80
-
-Run safe tool listing:
-
-    PYTHONDONTWRITEBYTECODE=1 python run_agent.py --list_tools=True --enabled_toolsets=safe --max_turns=1
-
-Run file smoke test:
-
-    mkdir -p /tmp/hermes-agent-sandbox
-
-    PYTHONDONTWRITEBYTECODE=1 python run_agent.py \
-      --query="Create /tmp/hermes-agent-sandbox/hello.txt with exactly this text: Hermes smoke test passed" \
-      --enabled_toolsets=file \
-      --max_turns=4 \
-      --verbose=True
-
-    cat /tmp/hermes-agent-sandbox/hello.txt
-
-Run terminal smoke test:
-
-    PYTHONDONTWRITEBYTECODE=1 python run_agent.py \
-      --query="Run a harmless command to print the current directory, then create /tmp/hermes-agent-sandbox/terminal-test.txt containing Terminal tool worked." \
-      --enabled_toolsets=terminal \
-      --max_turns=4 \
-      --verbose=True
-
-    cat /tmp/hermes-agent-sandbox/terminal-test.txt
-
-Run combined file plus terminal smoke test:
-
-    rm -rf /tmp/hermes-agent-sandbox/combo-test
-    mkdir -p /tmp/hermes-agent-sandbox/combo-test
-
-    PYTHONDONTWRITEBYTECODE=1 python run_agent.py \
-      --query="Use only /tmp/hermes-agent-sandbox/combo-test. Create a file named input.txt with the text alpha, read it back, then create summary.txt saying read succeeded. Do not touch any other folder." \
-      --enabled_toolsets="file,terminal" \
-      --max_turns=6 \
-      --verbose=True
-
-    find /tmp/hermes-agent-sandbox/combo-test -maxdepth 1 -type f -print -exec cat {} \;
-
-## Safety notes before deeper integration
-
-Before integrating Hermes into Link more directly:
-
-1. Review command execution boundaries.
-2. Review file write and patch permissions.
-3. Confirm how tools are gated by toolset.
-4. Confirm whether terminal commands run in the intended sandbox or host context.
-5. Confirm credential redaction and logging behavior.
-6. Patch the comma-separated toolset tuple issue.
-7. Add any missing dependencies, including `websockets`, to the right dependency group.
-8. Keep all experiments isolated until the security model is understood.
-
-## GitHub
-
-Remote:
-
-    git@github.com:TenchiNeko/Link.git
-
-Main branch:
-
-    main
-
-Future pushes should work with:
-
-    git push
+No project license has been selected in this repository yet. Until the owner adds one, the code is not granted for reuse. See [LICENSE-NEEDS-OWNER-DECISION.md](LICENSE-NEEDS-OWNER-DECISION.md).

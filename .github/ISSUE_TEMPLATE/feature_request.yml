@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest a focused improvement to Link
+title: "feature: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What user problem would this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful change and its safety boundaries.
+    validations:
+      required: true

@@ -9,8 +9,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from link_research_archive_candidate_shortlist_exporter import _write_self_test_intake
-from link_research_archive_candidate_shortlist_web_admin_integration import (
+from .link_research_archive_candidate_shortlist_exporter import _write_self_test_intake
+from .link_research_archive_candidate_shortlist_web_admin_integration import (
     build_research_candidate_shortlist_web_admin_integration_response,
 )
 
@@ -614,8 +614,23 @@ def _lu56_repair4_force_all_html_fields(response: dict[str, Any]) -> dict[str, A
     return response
 
 
-def build_research_candidate_shortlist_dashboard_response(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    response = _lu56_repair4_previous_build_research_candidate_shortlist_dashboard_response(*args, **kwargs)
+def build_research_candidate_shortlist_dashboard_response(
+    prompt: str = "",
+    intake_dir: Path | str = DEFAULT_INTAKE_DIR,
+    *,
+    limit: int = 10,
+    preview_limit: int = 400,
+    write_outputs: bool = True,
+    json_requested: bool = False,
+) -> dict[str, Any]:
+    response = _lu56_repair4_previous_build_research_candidate_shortlist_dashboard_response(
+        prompt,
+        intake_dir=intake_dir,
+        limit=limit,
+        preview_limit=preview_limit,
+        write_outputs=write_outputs,
+        json_requested=json_requested,
+    )
     return _lu56_repair4_force_all_html_fields(response)
 
 

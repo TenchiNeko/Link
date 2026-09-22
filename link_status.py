@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from urllib.parse import urlparse
 import urllib.request
 from typing import Any
 
@@ -23,11 +24,25 @@ def http_json(url: str, timeout: float = 2.0) -> dict[str, Any]:
         return {"ok": False, "url": url, "error": str(exc)}
 
 
+def _ollama_tcp_target(raw_endpoint: str) -> tuple[str, int]:
+    """Return the host and port represented by an Ollama base URL."""
+    endpoint = raw_endpoint if "://" in raw_endpoint else f"http://{raw_endpoint}"
+    parsed = urlparse(endpoint)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return host, port
+
+
 def collect_endpoints() -> dict[str, Any]:
     endpoints: dict[str, Any] = {}
 
-    ollama_host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
-    endpoints["ollama_tcp"] = tcp_check("127.0.0.1", 11434)
+    raw_ollama_host = (
+        os.environ.get("OLLAMA_HOST")
+        or os.environ.get("OLLAMA_BASE_URL")
+        or "http://127.0.0.1:11434"
+    )
+    ollama_host = raw_ollama_host.rstrip("/")
+    endpoints["ollama_tcp"] = tcp_check(*_ollama_tcp_target(ollama_host))
     endpoints["ollama_tags"] = http_json(f"{ollama_host}/api/tags")
 
     configured = []

@@ -43,10 +43,6 @@ TEXT_EXTS = {
 }
 
 DEFAULT_PROJECT_ROOTS = [
-    "/".join(["research", "Research", "Research"]),
-    "factory/projects/link_upgrade_research",
-    "factory/projects/growth_lab",
-    "/".join(["factory", "projects", "fran" "cesca_growth"]),
     "factory/projects",
     "research",
     ".link_research_intake",
@@ -141,31 +137,9 @@ def classify_project(rel: str) -> tuple[str, list[str]]:
     notes: list[str] = []
     rel_slash = rel.replace("\\", "/")
 
-    if rel_slash == "/".join(["research", "Research", "Research"]):
-        return "canonical_research_codebase", [
-            "Likely the main extracted research/code project.",
-            "Prioritize this over duplicate extracted copies.",
-        ]
-
-    if rel_slash == "/".join(["factory", "projects", "fran" "cesca_growth"]):
-        return "factory_project", [
-            "Concrete multi-agent project history; useful for workflow and delegation mining.",
-        ]
-
-    if rel_slash == "factory/projects/growth_lab":
-        return "factory_project", [
-            "Small but distinct project folder; likely one of the remembered research projects.",
-        ]
-
-    if rel_slash == "factory/projects/link_upgrade_research":
-        return "link_upgrade_research_project", [
-            "Useful for Link-specific upgrade planning.",
-        ]
-
     if ".link_research_intake" in rel_slash:
         return "duplicate_or_provenance_archive", [
-            "Treat as provenance/intake evidence unless a newer unique file is needed.",
-            "Prefer canonical {canonical_research_root} when content overlaps.",
+            "Treat as local provenance/intake evidence; it is not a source dependency.",
         ]
 
     if "__MACOSX" in rel_slash:
@@ -177,8 +151,8 @@ def classify_project(rel: str) -> tuple[str, list[str]]:
         ]
 
     if rel_slash == "research":
-        return "research_collection", [
-            "Container for research reports and imported research projects.",
+        return "external_research_input", [
+            "Optional user-supplied research input; no external project is bundled.",
         ]
 
     notes.append("General project-like source.")
@@ -264,11 +238,7 @@ def build_inventory(
             )
         )
 
-    canonical = [item.path for item in inventories if item.exists and item.role in {
-        "canonical_research_codebase",
-        "factory_project",
-        "link_upgrade_research_project",
-    }]
+    canonical = [item.path for item in inventories if item.exists and item.role == "external_research_input"]
     noisy = [item.path for item in inventories if item.exists and item.role in {
         "duplicate_or_provenance_archive",
         "noise",
@@ -282,8 +252,8 @@ def build_inventory(
         "noisy_or_duplicate_sources": noisy,
         "inventory": [asdict(item) for item in inventories],
         "recommendation": [
-            "Mine canonical/project sources first.",
-            "Treat .link_research_intake as provenance unless a unique newer source is needed.",
+            "Supply research inputs outside the repository when a mining workflow needs them.",
+            "Treat .link_research_intake as local provenance, not as a committed dependency.",
             "Ignore __MACOSX folders.",
             "Use this inventory before broad mining runs to reduce duplicate source noise.",
         ],

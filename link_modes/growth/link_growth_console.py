@@ -18,7 +18,9 @@ No file writes. No network. No subprocess. No mutation.
 from __future__ import annotations
 
 import json
+import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from link_modes.growth.growth_human_renderers import (
@@ -77,6 +79,7 @@ from link_modes.growth.growth_operator_qa import (
     operator_qa_issue as _operator_qa_issue_impl,
 )
 from link_modes.growth.growth_schema_helpers import (
+    normalized_non_empty_keys as _normalized_non_empty_keys_impl,
     normalize_implementation_branch_refs as _normalize_implementation_branch_refs_impl,
     read_only_safety_metadata as _read_only_safety_metadata_impl,
 )
@@ -691,7 +694,12 @@ def propose_main(argv: list[str] | None = None) -> int:
         print(json.dumps(data, indent=2, default=str))
         return 0
 
-    render_propose(data)
+    try:
+        import rich  # noqa: F401
+    except ImportError:
+        render_propose_plain(data)
+    else:
+        render_propose_with_rich(data)
     return 0
 
 
@@ -6389,12 +6397,7 @@ def _self_learning_feedback_keys(receipt: dict[str, Any]) -> list[str]:
 
 
 def _normalized_non_empty_keys(*values: Any) -> list[str]:
-    keys: list[str] = []
-    for value in values:
-        text = str(value or "").strip().lower()
-        if text and text not in keys:
-            keys.append(text)
-    return keys
+    return _normalized_non_empty_keys_impl(*values)
 
 
 def _build_self_learning_next_step(
@@ -20044,8 +20047,11 @@ def _detect_local_context_compressor_candidate() -> dict[str, Any]:
     """Return a redacted local compressor candidate summary without importing or executing it."""
     from pathlib import Path as _Path
 
-    tokentrim_path = _Path("/home/user/venv/lib/python3.12/site-packages/tokentrim")
-    tokentrim_metadata = _Path("/home/user/venv/lib/python3.12/site-packages/tokentrim-0.1.13.dist-info/METADATA")
+    import importlib.util as _importlib_util
+
+    tokentrim_spec = _importlib_util.find_spec("tokentrim")
+    tokentrim_path = _Path(tokentrim_spec.origin).parent if tokentrim_spec and tokentrim_spec.origin else _Path()
+    tokentrim_metadata = next(tokentrim_path.parent.glob("tokentrim-*.dist-info/METADATA"), _Path()) if tokentrim_path else _Path()
     if tokentrim_path.exists():
         return {
             "candidate_name": "tokentrim",
@@ -20304,7 +20310,10 @@ def parse_advisor_context_compression_preview_json(text: str) -> dict[str, Any]:
 
 
 
-HEADROOM_COMPRESSION_REPO_PATH = "/home/user/link/research/headroom-main.zip"
+HEADROOM_COMPRESSION_REPO_PATH = os.environ.get(
+    "LINK_HEADROOM_COMPRESSION_ARCHIVE",
+    str(Path(__file__).resolve().parents[2] / "research" / "headroom-main.zip"),
+)
 
 
 def _headroom_zip_names(repo_path: str = HEADROOM_COMPRESSION_REPO_PATH) -> list[str]:
@@ -43153,8 +43162,8 @@ def make_execution_workspace_plan_id(review_bundle: dict[str, Any], execution_pa
 def collect_execution_workspace_plan(
     chain: dict[str, Any] | None = None,
     *,
-    repo_path: str = "/home/user/link",
-    base_branch: str = "mine-hermes-upgrades-20260524",
+    repo_path: str = ".",
+    base_branch: str = "current",
     base_ref: str = "safe-link-latest",
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:

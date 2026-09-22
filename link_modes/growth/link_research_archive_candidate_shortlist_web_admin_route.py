@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from link_research_archive_candidate_shortlist_exporter import (
+from .link_research_archive_candidate_shortlist_exporter import (
     DEFAULT_INTAKE_DIR,
     _write_self_test_intake,
     build_research_archive_candidate_shortlist_response,
