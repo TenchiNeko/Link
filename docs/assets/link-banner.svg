@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-labelledby="title desc">
+  <title id="title">Link</title>
+  <desc id="desc">Link is a local-first toolkit for supervised agent workflows.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.58" stop-color="#0b1830"/>
+      <stop offset="1" stop-color="#111b35"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="0.48" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#9fb5d1" stroke-opacity="0.07"/>
+    </pattern>
+    <filter id="soft-glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="400" rx="26" fill="url(#background)"/>
+  <rect width="1280" height="400" rx="26" fill="url(#grid)"/>
+  <circle cx="225" cy="190" r="220" fill="url(#glow)"/>
+  <circle cx="1160" cy="40" r="220" fill="url(#glow)" opacity="0.45"/>
+
+  <g opacity="0.38" stroke="#6ee7f9" stroke-width="2">
+    <path d="M78 86L145 132L93 213L166 292" fill="none"/>
+    <path d="M1105 82L1170 132L1128 209L1205 272" fill="none"/>
+  </g>
+  <g fill="#dbeafe">
+    <circle cx="78" cy="86" r="5" opacity="0.55"/>
+    <circle cx="145" cy="132" r="7" opacity="0.8"/>
+    <circle cx="93" cy="213" r="5" opacity="0.55"/>
+    <circle cx="166" cy="292" r="7" opacity="0.8"/>
+    <circle cx="1105" cy="82" r="5" opacity="0.55"/>
+    <circle cx="1170" cy="132" r="7" opacity="0.8"/>
+    <circle cx="1128" cy="209" r="5" opacity="0.55"/>
+    <circle cx="1205" cy="272" r="7" opacity="0.8"/>
+  </g>
+
+  <g transform="translate(128 104)" filter="url(#soft-glow)">
+    <path d="M55 105L94 66C112 48 141 48 159 66L174 81C192 99 192 128 174 146L145 175"
+          fill="none" stroke="url(#accent)" stroke-width="24" stroke-linecap="round"/>
+    <path d="M145 55L116 84C98 102 98 131 116 149L131 164C149 182 178 182 196 164L235 125"
+          fill="none" stroke="url(#accent)" stroke-width="24" stroke-linecap="round"/>
+    <circle cx="145" cy="115" r="8" fill="#f8fafc"/>
+  </g>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="430" y="157" fill="#f8fafc" font-size="86" font-weight="760" letter-spacing="8">LINK</text>
+    <text x="435" y="205" fill="#b8c7dc" font-size="25" font-weight="450" letter-spacing="0.5">Supervised agent workflows. Evidence before execution.</text>
+
+    <g transform="translate(435 250)" font-size="14" font-weight="700" letter-spacing="1.4">
+      <g>
+        <rect width="132" height="38" rx="19" fill="#0e7490" fill-opacity="0.28" stroke="#22d3ee" stroke-opacity="0.62"/>
+        <text x="66" y="24" fill="#a5f3fc" text-anchor="middle">LOCAL-FIRST</text>
+      </g>
+      <g transform="translate(148)">
+        <rect width="138" height="38" rx="19" fill="#0369a1" fill-opacity="0.25" stroke="#38bdf8" stroke-opacity="0.62"/>
+        <text x="69" y="24" fill="#bae6fd" text-anchor="middle">SUPERVISED</text>
+      </g>
+      <g transform="translate(302)">
+        <rect width="188" height="38" rx="19" fill="#6d28d9" fill-opacity="0.2" stroke="#a78bfa" stroke-opacity="0.62"/>
+        <text x="94" y="24" fill="#ddd6fe" text-anchor="middle">EVIDENCE-BACKED</text>
+      </g>
+    </g>
+  </g>
+
+  <path d="M28 350C240 308 394 376 610 337C836 296 986 360 1252 316" fill="none" stroke="url(#accent)" stroke-width="2" stroke-opacity="0.28"/>
+</svg>
