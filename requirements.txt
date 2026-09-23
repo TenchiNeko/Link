@@ -4,4 +4,4 @@ PyYAML>=6.0,<7.0
 
 # Development and release checks
 ruff>=0.4.0
-mypy>=1.10.0
+mypy>=2.3.1
